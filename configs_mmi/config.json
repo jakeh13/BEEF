@@ -1,0 +1,27 @@
+{
+    "geo": {
+        "waveguide_height": 0.16,
+        "waveguide_width": 0.35,
+        "mm_length": 4.0,
+        "mm_width": 2.0,
+        "taper_length": 1.0,
+        "taper_width": 0.8,
+        "waveguide_offset": 1.0
+    },
+    "sim": {
+        "oxide_height": 1.5,
+        "oxide_width": 5,
+        "res": 30,
+        "wavelength_min": 1.26,
+        "wavelength_max": 1.36,
+        "wavelength_pts": 3,
+        "num_modes_MMI": 15,
+        "dpml": 0.5,
+        "mm_sim_length": 1.0,
+        "waveguide_length": 0.5,
+        "source_position": 0.0,
+        "sm_monitor_position": 0.25,
+        "mm_monitor_position": 0.25
+    },
+    "outputfolder": "./out/test1"
+}
