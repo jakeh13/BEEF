@@ -14,14 +14,15 @@
         "res": 30,
         "wavelength_min": 1.26,
         "wavelength_max": 1.36,
-        "wavelength_pts": 3,
+        "wavelength_pts": 10,
         "num_modes_MMI": 15,
         "dpml": 0.5,
         "mm_sim_length": 1.0,
         "waveguide_length": 0.5,
         "source_position": 0.0,
         "sm_monitor_position": 0.25,
-        "mm_monitor_position": 0.25
+        "mm_monitor_position": 0.25,
+        "sim_type": "HYBRID"
     },
-    "outputfolder": "./out/test1"
+    "outputfolder": "./out/test_hybrid"
 }

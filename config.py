@@ -22,9 +22,10 @@ def create_config_MMI_1x2(folder: str = 'configs_mmi', name: str = 'config'):
             res=30,
             wavelength_min=1.26,
             wavelength_max=1.36,
-            wavelength_pts=3,
+            wavelength_pts=10,
+            sim_type = "HYBRID"
         ),
-        outputfolder="./out/test1"
+        outputfolder="./out/test_hybrid"
     )
     save(hp, folder, name)
 

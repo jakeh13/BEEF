@@ -54,7 +54,7 @@ def create_temp_gds_for_mmi_output(mm_length, taper_length, Sx, dpml, waveguide_
     temp.write_gds(gdsdir='gds')
 
 # Function to generate temp gds file for MMI geometry (to shift the MMI to the correct simulation coordinates)
-def create_temp_gds_for_mmi_input(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset):
+def create_temp_gds_for_full_mmi(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset):
     temp = create_MMI_1x2(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset/2,"temp_full")
     # save as temp.gds
     temp.write_gds(gdsdir='gds')

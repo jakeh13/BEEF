@@ -4,6 +4,9 @@ import numpy as np
 import logging
 from matplotlib import pyplot as plt
 import pickle
+import os
+import json
+from dataclasses import asdict
 
 import meow as mw
 import meep as mp
@@ -29,6 +32,11 @@ class MMI_1x2:
         self.config = args.config
         self.hp: HyperParams = dataconf.load(self.config, HyperParams)
         make_output_folders(self.hp.outputfolder)
+
+        # save config in output folder
+        s = json.dumps(asdict(self.hp), indent=4, default=lambda x: x.name)
+        with open(f"{self.hp.outputfolder}/config.json", "w") as f:
+            print(s, file=f)
 
         # Create logger
         handler = logging.FileHandler(f"{self.hp.outputfolder}/logs/master.log")
@@ -170,6 +178,21 @@ class MMI_1x2:
                 mm_coeffs_1_wl.append(S[mode_num,self.hp.sim.num_modes_MMI+mode_num])
                 self.master_logger.info(f"Mode {mode_num}, Power: {np.abs(S[mode_num,self.hp.sim.num_modes_MMI+mode_num])**2}, Angle: {np.angle(S[mode_num,self.hp.sim.num_modes_MMI+mode_num], deg=True)}")
             mm_coeffs.append(mm_coeffs_1_wl)
+
+            # Propagate the modes through the structure and visualize the field distribution
+            self.master_logger.info(f"Getting a field propigation plot")
+            z = np.linspace(cells[0].z_min, cells[-1].z_max, 500)
+            y = 0.0
+            field, x = mw.propagate_modes(modes, cells, y=y, z=z)
+            fig, ax = plt.subplots(figsize=(10, 4))
+            im = ax.pcolormesh(z, x, np.abs(field).T, shading="auto", cmap="jet")
+            ax.set_xlabel("z [um]")
+            ax.set_ylabel("x [um]")
+            ax.set_title("|Ex(x, z)| from mw.propagate_modes")
+            plt.colorbar(im, ax=ax, label="|Ex|")
+            plt.tight_layout()
+            plt.savefig(f'{self.hp.outputfolder}/EME_fields{int(wavelength*1000)}.png', dpi=300)
+
         return mm_coeffs
     
     def output_simulation(self,wavelengths):
@@ -187,6 +210,7 @@ class MMI_1x2:
 
         # Set waveguide geometry
         geometry = [mp.Block(center=mp.Vector3(Sx/2 - self.hp.sim.waveguide_length/2 - self.hp.sim.dpml/2,self.hp.geo.waveguide_offset/2,0), size=mp.Vector3(self.hp.sim.waveguide_length + self.hp.sim.dpml, self.hp.geo.waveguide_width, self.hp.geo.waveguide_height), material = Si)]
+        geometry += [mp.Block(center=mp.Vector3(Sx/2 - self.hp.sim.waveguide_length/2 - self.hp.sim.dpml/2,-self.hp.geo.waveguide_offset/2,0), size=mp.Vector3(self.hp.sim.waveguide_length + self.hp.sim.dpml, self.hp.geo.waveguide_width, self.hp.geo.waveguide_height), material = Si)]
 
         # Create temp gds file for MMI geometry
         create_temp_gds_for_mmi_output(self.hp.geo.mm_length, self.hp.geo.taper_length, Sx, self.hp.sim.dpml, self.hp.sim.waveguide_length, self.hp.geo.waveguide_width, self.hp.geo.mm_width, self.hp.geo.taper_width, self.hp.geo.waveguide_offset)
@@ -230,8 +254,8 @@ class MMI_1x2:
         out_flux = sim.add_mode_monitor(
             freqs,
             mp.FluxRegion(
-                center = mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.waveguide_length - self.hp.geo.taper_length - self.hp.sim.sm_monitor_position, 0, 0), 
-                size = mp.Vector3(0, Sy - 2*self.hp.sim.dpml,Sz - 2*self.hp.sim.dpml)
+                center = mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.waveguide_length - self.hp.geo.taper_length - self.hp.sim.sm_monitor_position, (Sy - 2*self.hp.sim.dpml)/4, 0), 
+                size = mp.Vector3(0, (Sy - 2*self.hp.sim.dpml)/2,Sz - 2*self.hp.sim.dpml)
             )
         )
 
@@ -312,6 +336,7 @@ class MMI_1x2:
         # Set waveguide geometry
         geometry = [mp.Block(center=mp.Vector3(-Sx/2 + self.hp.sim.waveguide_length/2 + self.hp.sim.dpml/2,0,0), size=mp.Vector3(self.hp.sim.waveguide_length + self.hp.sim.dpml, self.hp.geo.waveguide_width, self.hp.geo.waveguide_height), material = Si)]
         geometry += [mp.Block(center=mp.Vector3(Sx/2 - self.hp.sim.waveguide_length/2 - self.hp.sim.dpml/2,self.hp.geo.waveguide_offset/2,0), size=mp.Vector3(self.hp.sim.waveguide_length + self.hp.sim.dpml, self.hp.geo.waveguide_width, self.hp.geo.waveguide_height), material = Si)]
+        geometry += [mp.Block(center=mp.Vector3(Sx/2 - self.hp.sim.waveguide_length/2 - self.hp.sim.dpml/2,-self.hp.geo.waveguide_offset/2,0), size=mp.Vector3(self.hp.sim.waveguide_length + self.hp.sim.dpml, self.hp.geo.waveguide_width, self.hp.geo.waveguide_height), material = Si)]
 
         # Create temp gds file for MMI geometry
         create_temp_gds_for_full_mmi(self.hp.geo.mm_length, self.hp.geo.taper_length, self.hp.geo.waveguide_width, self.hp.geo.mm_width, self.hp.geo.taper_width, self.hp.geo.waveguide_offset)
@@ -355,8 +380,8 @@ class MMI_1x2:
         out_flux = sim.add_mode_monitor(
             freqs,
             mp.FluxRegion(
-                center = mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.sm_monitor_position, 0, 0), 
-                size = mp.Vector3(0, Sy - 2*self.hp.sim.dpml,Sz - 2*self.hp.sim.dpml)
+                center = mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.sm_monitor_position, (Sy - 2*self.hp.sim.dpml)/4, 0), 
+                size = mp.Vector3(0, (Sy - 2*self.hp.sim.dpml)/2,Sz - 2*self.hp.sim.dpml)
             )
         )
 
@@ -385,8 +410,8 @@ class MMI_1x2:
         powers = []
         angles = []
         for point in range(len(wavelengths)):
-            powers.append(np.abs(sum(s[point]))**2)
-            angles.append(np.angle(sum(s[point]), deg=True))
+            powers.append(np.abs(s[point])**2)
+            angles.append(np.angle(s[point], deg=True))
             self.master_logger.info(f"Power: {powers[point]}, Angle: {angles[point]}")
 
         data_to_save = {
@@ -401,6 +426,18 @@ class MMI_1x2:
 
         return powers, wavelengths
 
+    def run(self):
+        if self.hp.sim.sim_type == "HYBRID":
+            powers, wavelengths = self.hybrid_simulation()
+        elif self.hp.sim.sim_type == "FDTD":
+            powers, wavelengths = self.fdtd_simulation()
+
+        plt.figure()
+        plt.plot(wavelengths,powers)
+        plt.xlabel("Wavelength (micron)")
+        plt.ylabel("Transmission")
+        plt.savefig(f'{self.hp.outputfolder}/performance.png', dpi=300)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -408,4 +445,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     mmi = MMI_1x2(args)
 
-    mmi.hybrid_simulation()
+    mmi.run()

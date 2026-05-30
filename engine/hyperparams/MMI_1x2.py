@@ -28,6 +28,7 @@ class SimParams:
     source_position: float = 0.0      # x_position from the PML where the source is placed
     sm_monitor_position: float = 0.25 # x_position from the PML where the single-mode waveguide mode monitor is
     mm_monitor_position: float = 0.25 # x_position from the PML where the multi-mode waveguide mode monitor is
+    sim_type: str = "FDTD"
 
 @dataclass(eq=False, kw_only=True)
 class HyperParamsMMI:
