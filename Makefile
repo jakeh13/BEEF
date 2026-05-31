@@ -1,7 +1,6 @@
 seed_num ?= 1
-proc ?= 16
 ifeq ($(LMOD_SYSHOST), phoenix)
-	runner = srun -n
+	runner = srun
 	trash = ~/scratch
 	my_python = python3
 else
@@ -10,11 +9,17 @@ else
 	my_python = python
 endif
 
-pol_demux_gc:
-	$(runner) $(proc) $(my_python) src/pol_demux_grating.py -c my_configs/config_pol_demux_GC_$(seed_num).json -lv DEBUG -r opt
+mmi_cluster:
+	$(runner) $(my_python) mmi_1x2_master.py -c configs_mmi/config.json
 
 mmi:
 	$(my_python) mmi_1x2_master.py -c configs_mmi/config.json
 
+mmi_2x2:
+	$(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2.json
+
 config:
 	$(my_python) config.py
+
+config_cluster:
+	$(runner) -n 1 $(my_python) config.py

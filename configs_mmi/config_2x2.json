@@ -1,0 +1,30 @@
+{
+    "geo": {
+        "waveguide_height": 0.22,
+        "waveguide_width": 0.45,
+        "mm_length": 28,
+        "mm_width": 2.8,
+        "taper_length": 4,
+        "taper_width": 1.2999999999999998,
+        "waveguide_offset": 1.4999999999999998
+    },
+    "sim": {
+        "oxide_height": 1.5,
+        "oxide_width": 5,
+        "res": 20,
+        "wavelength_min": 1.535,
+        "wavelength_max": 1.565,
+        "wavelength_pts": 5,
+        "num_modes_MMI": 15,
+        "dpml": 0.5,
+        "mm_sim_length": 1.0,
+        "waveguide_length": 0.5,
+        "source_position": 0.0,
+        "sm_monitor_position": 0.25,
+        "mm_monitor_position": 0.25,
+        "sim_type": "HYBRID",
+        "num_cells_taper": 15,
+        "num_modes_taper": 7
+    },
+    "outputfolder": "./out/mmi_2x2_220/HYBRID_28_1"
+}

@@ -28,7 +28,9 @@ class SimParams:
     source_position: float = 0.0      # x_position from the PML where the source is placed
     sm_monitor_position: float = 0.25 # x_position from the PML where the single-mode waveguide mode monitor is
     mm_monitor_position: float = 0.25 # x_position from the PML where the multi-mode waveguide mode monitor is
-    sim_type: str = "FDTD"
+    sim_type: str = "FDTD"            # Simulation type: "FDTD", "EME", or "HYBRID"
+    num_cells_taper: int = 15         # Number of cells the taper regions are broken up into
+    num_modes_taper: int = 7          # Number of modes computed in the taper regions
 
 @dataclass(eq=False, kw_only=True)
 class HyperParamsMMI:

@@ -178,21 +178,6 @@ class MMI_1x2:
                 mm_coeffs_1_wl.append(S[mode_num,self.hp.sim.num_modes_MMI+mode_num])
                 self.master_logger.info(f"Mode {mode_num}, Power: {np.abs(S[mode_num,self.hp.sim.num_modes_MMI+mode_num])**2}, Angle: {np.angle(S[mode_num,self.hp.sim.num_modes_MMI+mode_num], deg=True)}")
             mm_coeffs.append(mm_coeffs_1_wl)
-
-            # Propagate the modes through the structure and visualize the field distribution
-            self.master_logger.info(f"Getting a field propigation plot")
-            z = np.linspace(cells[0].z_min, cells[-1].z_max, 500)
-            y = 0.0
-            field, x = mw.propagate_modes(modes, cells, y=y, z=z)
-            fig, ax = plt.subplots(figsize=(10, 4))
-            im = ax.pcolormesh(z, x, np.abs(field).T, shading="auto", cmap="jet")
-            ax.set_xlabel("z [um]")
-            ax.set_ylabel("x [um]")
-            ax.set_title("|Ex(x, z)| from mw.propagate_modes")
-            plt.colorbar(im, ax=ax, label="|Ex|")
-            plt.tight_layout()
-            plt.savefig(f'{self.hp.outputfolder}/EME_fields{int(wavelength*1000)}.png', dpi=300)
-
         return mm_coeffs
     
     def output_simulation(self,wavelengths):
@@ -226,8 +211,8 @@ class MMI_1x2:
                 eig_band=1,
                 direction=mp.NO_DIRECTION,
                 eig_kpoint=mp.Vector3(x=-1),
-                size=mp.Vector3(0, self.hp.sim.oxide_width, self.hp.sim.oxide_height),
-                center=[Sx/2-self.hp.sim.dpml-self.hp.sim.source_position, 0, 0],
+                size=mp.Vector3(0, self.hp.sim.oxide_width/2, self.hp.sim.oxide_height),
+                center=[Sx/2-self.hp.sim.dpml-self.hp.sim.source_position, self.hp.sim.oxide_width/4, 0],
             )
         ]
 
@@ -246,16 +231,16 @@ class MMI_1x2:
         in_flux = sim.add_mode_monitor(
             freqs,
             mp.FluxRegion(
-                center = mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.mm_monitor_position, 0, 0), 
-                size = mp.Vector3(0, Sy - 2*self.hp.sim.dpml,Sz - 2*self.hp.sim.dpml)
+                center = mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.mm_monitor_position, (Sy - 2*self.hp.sim.dpml)/4, 0), 
+                size = mp.Vector3(0, (Sy - 2*self.hp.sim.dpml)/2,Sz - 2*self.hp.sim.dpml)
             )
         )
 
         out_flux = sim.add_mode_monitor(
             freqs,
             mp.FluxRegion(
-                center = mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.waveguide_length - self.hp.geo.taper_length - self.hp.sim.sm_monitor_position, (Sy - 2*self.hp.sim.dpml)/4, 0), 
-                size = mp.Vector3(0, (Sy - 2*self.hp.sim.dpml)/2,Sz - 2*self.hp.sim.dpml)
+                center = mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.waveguide_length - self.hp.geo.taper_length - self.hp.sim.sm_monitor_position, 0, 0), 
+                size = mp.Vector3(0, Sy - 2*self.hp.sim.dpml,Sz - 2*self.hp.sim.dpml)
             )
         )
 
@@ -314,7 +299,7 @@ class MMI_1x2:
             'wavelengths': wavelengths,
         }
 
-        with open(f'{self.hp.outputfolder}/data/hybrid_sim_results.pkl', 'wb') as f:
+        with open(f'{self.hp.outputfolder}/data/sim_results.pkl', 'wb') as f:
             pickle.dump(data_to_save, f)
         
         return powers, wavelengths
@@ -421,9 +406,69 @@ class MMI_1x2:
             'wavelengths': wavelengths,
         }
 
-        with open(f'{self.hp.outputfolder}/data/hybrid_sim_results.pkl', 'wb') as f:
+        with open(f'{self.hp.outputfolder}/data/sim_results.pkl', 'wb') as f:
             pickle.dump(data_to_save, f)
 
+        return powers, wavelengths
+    
+    def eme_simulation(self):
+        wavelengths = np.linspace(self.hp.sim.wavelength_min,self.hp.sim.wavelength_max,self.hp.sim.wavelength_pts)
+        # Load the GDSII file for the MMI splitter
+        mmi_top = load_1x2_MMI(self.hp.geo.mm_length,self.hp.sim.waveguide_length,self.hp.geo.waveguide_width,self.hp.geo.waveguide_offset,self.hp.sim.oxide_width,0.0,self.hp.geo.taper_length,self.hp.geo.mm_width,self.hp.geo.taper_width)
+        plt.figure()
+        mmi_top.plot()
+        plt.savefig(f'{self.hp.outputfolder}/layout/eme_gds.png', dpi=300)
+
+        extrusion_rules = stack_extrusions_GF(self.hp.geo.waveguide_height, self.hp.sim.oxide_height)
+        structs = mw.extrude_gds(mmi_top, extrusion_rules)            
+        # EME cell for the MMI region
+        taper_Ls = np.array([self.hp.geo.taper_length / self.hp.sim.num_cells_taper for _ in range(self.hp.sim.num_cells_taper)])
+        Ls = np.concatenate(([self.hp.sim.waveguide_length], taper_Ls, [self.hp.geo.mm_length], taper_Ls, [self.hp.sim.waveguide_length]))
+        num_modes = [1] + [self.hp.sim.num_modes_taper for _ in range(self.hp.sim.num_cells_taper)] + [self.hp.sim.num_modes_MMI] + [self.hp.sim.num_modes_taper for _ in range(self.hp.sim.num_cells_taper)] + [1]
+        cells = mw.create_cells(
+            structures=structs,
+            mesh=mw.Mesh2D(
+                x=np.linspace(-self.hp.sim.oxide_width/2, self.hp.sim.oxide_width/2, int(self.hp.sim.res*self.hp.sim.oxide_width) + 1),
+                y=np.linspace(-self.hp.sim.oxide_height/2, self.hp.sim.oxide_height/2, int(self.hp.sim.res*self.hp.sim.oxide_height) + 1),
+            ),
+            Ls=Ls,
+        )
+        powers = []
+        coeffs = []
+        angles = []
+        for wavelength in wavelengths:
+            self.master_logger.info(f"Starting EME simulation at wavelength {wavelength}")
+            
+            gf_environment = mw.Environment(wl=wavelength, T=25.0)
+            css = [mw.CrossSection.from_cell(cell=cell, env=gf_environment) for cell in cells]
+
+            for cs_num, cs in enumerate(css):
+                plt.clf()
+                plt.figure()
+                mw.visualize(cs, show=False)
+                plt.savefig(f'{self.hp.outputfolder}/layout/cross_sections/cs_{cs_num}.png', dpi=300)
+
+
+            # Performe mode simulations
+            self.master_logger.info(f"Performing mode simulations")
+            modes = []
+            for cell_num, (cs, num_mode) in enumerate(zip(css,num_modes)):
+                self.master_logger.info(f"Computing mode {num_mode} of cell {cell_num}")
+                modes.append(mw.compute_modes_meep(cs, num_modes=num_mode))
+            S, port_map = mw.compute_s_matrix(modes, cells=cells)
+            coeffs.append(S[0,1])
+            powers.append(np.abs(S[0,1])**2)
+            angles.append(np.angle(S[0,1],deg=True))
+
+        data_to_save = {
+            'coeffs': coeffs,
+            'powers': powers,
+            'angles': angles,
+            'wavelengths': wavelengths,
+        }
+
+        with open(f'{self.hp.outputfolder}/data/sim_results.pkl', 'wb') as f:
+            pickle.dump(data_to_save, f)
         return powers, wavelengths
 
     def run(self):
@@ -431,6 +476,8 @@ class MMI_1x2:
             powers, wavelengths = self.hybrid_simulation()
         elif self.hp.sim.sim_type == "FDTD":
             powers, wavelengths = self.fdtd_simulation()
+        elif self.hp.sim.sim_type == "EME":
+            powers, wavelengths = self.eme_simulation()
 
         plt.figure()
         plt.plot(wavelengths,powers)
