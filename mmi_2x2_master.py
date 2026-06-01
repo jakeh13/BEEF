@@ -309,8 +309,8 @@ class MMI_2x2:
             'bot_coeffs': bot_coeffs,
             'powers_top': powers_top,
             'angles_top': angles_top,
-            'powers': powers_bot,
-            'angles': angles_bot,
+            'powers_bot': powers_bot,
+            'angles_bot': angles_bot,
             'wavelengths': wavelengths,
         }
 

@@ -14,18 +14,20 @@ def save(hp: HyperParamsMMI, config_folder: str, name: str) -> None:
         print(s, file=f)
 
 def create_config_MMI_1x2(folder: str = 'configs_mmi', name: str = 'config'):
+    res = 10
+    sim_type = "EME"
     hp = HyperParamsMMI(
         geo=GeoParamsMMI(
             taper_width=0.8
         ),
         sim=SimParams(
-            res=40,
+            res=res,
             wavelength_min=1.27,
             wavelength_max=1.33,
             wavelength_pts=20,
-            sim_type = "EME"
+            sim_type = sim_type
         ),
-        outputfolder="./out/mmi_1x2_eme_1"
+        outputfolder=f"./out/mmi_1x2/{sim_type}_{int(res)}_1"
     )
     save(hp, folder, name)
 
@@ -35,7 +37,8 @@ def create_config_MMI_2x2(folder: str = 'configs_mmi', name: str = 'config'):
     mm_length = 28
     taper_width = mm_width/2 - taper_spacing/2
     waveguide_offset = taper_width + taper_spacing
-    sim_type = "HYBRID"
+    sim_type = "EME"
+    res = 10
     hp = HyperParamsMMI(
         geo=GeoParamsMMI(
             waveguide_width=0.45, # NOTE: Needs to be fixed for EME simulation waveguides (gdsfactory cross-section issue)
@@ -47,14 +50,14 @@ def create_config_MMI_2x2(folder: str = 'configs_mmi', name: str = 'config'):
             waveguide_height=0.22
         ),
         sim=SimParams(
-            res=20,
+            res=res,
             wavelength_min=1.535,
             wavelength_max=1.565,
             wavelength_pts=5,
             sim_type = sim_type,
             mm_monitor_position=0.25
         ),
-        outputfolder=f"./out/mmi_2x2_220/{sim_type}_{int(mm_length)}_1"
+        outputfolder=f"./out/mmi_2x2_220/{sim_type}_{int(res)}_1"
     )
     save(hp, folder, name)
 

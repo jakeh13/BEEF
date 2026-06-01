@@ -26,6 +26,9 @@ from engine.helpers.meow import(
     load_1x2_MMI,
     stack_extrusions_GF
 )
+from engine.plotting.meow import(
+    plot_eme_fields
+)
 
 class MMI_1x2:
     def __init__(self,args):
@@ -459,6 +462,10 @@ class MMI_1x2:
             coeffs.append(S[0,1])
             powers.append(np.abs(S[0,1])**2)
             angles.append(np.angle(S[0,1],deg=True))
+
+            if wavelength == wavelengths[int(np.floor(len(wavelengths)/2))]:
+                plot_eme_fields(self.hp,cells,modes)
+                self.master_logger.info(f"Transmission at center wavelength: {powers[-1]}")
 
         data_to_save = {
             'coeffs': coeffs,
