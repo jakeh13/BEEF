@@ -14,8 +14,8 @@ def save(hp: HyperParamsMMI, config_folder: str, name: str) -> None:
         print(s, file=f)
 
 def create_config_MMI_1x2(folder: str = 'configs_mmi', name: str = 'config'):
-    res = 10
-    sim_type = "EME"
+    res = 20
+    sim_type = "FDTD"
     hp = HyperParamsMMI(
         geo=GeoParamsMMI(
             taper_width=0.8
@@ -37,7 +37,7 @@ def create_config_MMI_2x2(folder: str = 'configs_mmi', name: str = 'config'):
     mm_length = 28
     taper_width = mm_width/2 - taper_spacing/2
     waveguide_offset = taper_width + taper_spacing
-    sim_type = "EME"
+    sim_type = "FDTD"
     res = 10
     hp = HyperParamsMMI(
         geo=GeoParamsMMI(
