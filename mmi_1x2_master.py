@@ -55,7 +55,7 @@ class MMI_1x2:
         self.master_logger.setLevel("INFO")
 
     def input_simulation(self,wavelengths):
-        if mp.am_master: self.master_logger.info(f"Creating input FDTD simulation")
+        if mp.am_master(): self.master_logger.info(f"Creating input FDTD simulation")
         # Compute the simulation dimensions
         Sx = self.hp.geo.taper_length + self.hp.sim.waveguide_length + self.hp.sim.mm_sim_length + 2*self.hp.sim.dpml  
         Sy = self.hp.sim.oxide_width + 2*self.hp.sim.dpml  
@@ -118,30 +118,32 @@ class MMI_1x2:
         )
 
         # Plot simulation geometry
-        if mp.am_master: self.master_logger.info("Plotting input FDTD simulation geometry")
-        plt.figure()
-        sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, Sy, 0)))
-        plt.savefig(f'{self.hp.outputfolder}/layout/input_xy.png', dpi=300)
-        plt.figure()
-        sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, 0, Sz)))
-        plt.savefig(f'{self.hp.outputfolder}/layout/input_xz.png', dpi=300)
-        plt.figure()
-        sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(0, Sy, Sz)))
-        plt.savefig(f'{self.hp.outputfolder}/layout/input_yz.png', dpi=300)
+        if mp.am_master(): self.master_logger.info("Plotting input FDTD simulation geometry")
+        if mp.am_master():
+            plt.figure()
+            sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, Sy, 0)))
+            plt.savefig(f'{self.hp.outputfolder}/layout/input_xy.png', dpi=300)
+            plt.figure()
+            sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, 0, Sz)))
+            plt.savefig(f'{self.hp.outputfolder}/layout/input_xz.png', dpi=300)
+            plt.figure()
+            sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(0, Sy, Sz)))
+            plt.savefig(f'{self.hp.outputfolder}/layout/input_yz.png', dpi=300)
+            plt.close("all")
 
         # run simulation
-        if mp.am_master: self.master_logger.info("Running input FDTD simulation")
+        if mp.am_master(): self.master_logger.info("Running input FDTD simulation")
         sim.run(until_after_sources=mp.stop_when_dft_decayed(minimum_run_time=20, tol = 1e-11))
 
         # get eigenmode coefficients
-        if mp.am_master: self.master_logger.info("Getting input FDTD simulation eigenmode coefficients:")
+        if mp.am_master(): self.master_logger.info("Getting input FDTD simulation eigenmode coefficients:")
         src_coeff = sim.get_eigenmode_coefficients(in_flux,[1],eig_parity=mp.NO_PARITY, kpoint_func= lambda a, b: mp.Vector3(x=1))
         input_coeffs = []
         for mode_num in range(1,self.hp.sim.num_modes_MMI+1):
             coeff = sim.get_eigenmode_coefficients(out_flux,[mode_num],eig_parity=mp.NO_PARITY, kpoint_func= lambda a, b: mp.Vector3(x=1))
             s = coeff.alpha[:,:,0]/src_coeff.alpha[:,:,0]
             input_coeffs.append(s[0,:])
-            if mp.am_master: self.master_logger.info(f"Mode {mode_num}, Power: {np.abs(s[0,:])**2}, Angle: {np.angle(s[0,:], deg=True)}")
+            if mp.am_master(): self.master_logger.info(f"Mode {mode_num}, Power: {np.abs(s[0,:])**2}, Angle: {np.angle(s[0,:], deg=True)}")
         input_coeffs = np.asarray(input_coeffs)
         return input_coeffs.T.astype(list)
 
@@ -163,28 +165,28 @@ class MMI_1x2:
             Ls=Ls,
         )
         for wavelength in wavelengths.astype(list):
-            if mp.am_master: self.master_logger.info(f"Starting EME simulation for multimode section at wavelength {wavelength}")
+            if mp.am_master(): self.master_logger.info(f"Starting EME simulation for multimode section at wavelength {wavelength}")
             
             gf_environment = mw.Environment(wl=wavelength, T=25.0)
             css = [mw.CrossSection.from_cell(cell=cell, env=gf_environment) for cell in cells]
 
             # Performe mode simulations
-            if mp.am_master: self.master_logger.info(f"Performing mode simulations")
+            if mp.am_master(): self.master_logger.info(f"Performing mode simulations")
             modes = []
             for cell_num, (cs, num_mode) in enumerate(zip(css,num_modes)):
-                if mp.am_master: self.master_logger.info(f"Computing mode {num_mode} of cell {cell_num}")
+                if mp.am_master(): self.master_logger.info(f"Computing mode {num_mode} of cell {cell_num}")
                 modes.append(mw.compute_modes_meep(cs, num_modes=num_mode))
 
             S, port_map = mw.compute_s_matrix(modes, cells=cells)
             mm_coeffs_1_wl = []
             for mode_num in range(self.hp.sim.num_modes_MMI):
                 mm_coeffs_1_wl.append(S[mode_num,self.hp.sim.num_modes_MMI+mode_num])
-                if mp.am_master: self.master_logger.info(f"Mode {mode_num}, Power: {np.abs(S[mode_num,self.hp.sim.num_modes_MMI+mode_num])**2}, Angle: {np.angle(S[mode_num,self.hp.sim.num_modes_MMI+mode_num], deg=True)}")
+                if mp.am_master(): self.master_logger.info(f"Mode {mode_num}, Power: {np.abs(S[mode_num,self.hp.sim.num_modes_MMI+mode_num])**2}, Angle: {np.angle(S[mode_num,self.hp.sim.num_modes_MMI+mode_num], deg=True)}")
             mm_coeffs.append(mm_coeffs_1_wl)
         return mm_coeffs
     
     def output_simulation(self,wavelengths):
-        if mp.am_master: self.master_logger.info(f"Creating output FDTD simulation")
+        if mp.am_master(): self.master_logger.info(f"Creating output FDTD simulation")
         # Compute the simulation dimensions
         Sx = self.hp.geo.taper_length + self.hp.sim.waveguide_length + self.hp.sim.mm_sim_length + 2*self.hp.sim.dpml  
         Sy = self.hp.sim.oxide_width + 2*self.hp.sim.dpml  
@@ -248,30 +250,32 @@ class MMI_1x2:
         )
 
         # Plot simulation geometry
-        if mp.am_master: self.master_logger.info("Plotting output FDTD simulation geometry")
-        plt.figure()
-        sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, Sy, 0)))
-        plt.savefig(f'{self.hp.outputfolder}/layout/output_xy.png', dpi=300)
-        plt.figure()
-        sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, 0, Sz)))
-        plt.savefig(f'{self.hp.outputfolder}/layout/output_xz.png', dpi=300)
-        plt.figure()
-        sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(0, Sy, Sz)))
-        plt.savefig(f'{self.hp.outputfolder}/layout/output_yz.png', dpi=300)
+        if mp.am_master(): self.master_logger.info("Plotting output FDTD simulation geometry")
+        if mp.am_master():
+            plt.figure()
+            sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, Sy, 0)))
+            plt.savefig(f'{self.hp.outputfolder}/layout/output_xy.png', dpi=300)
+            plt.figure()
+            sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, 0, Sz)))
+            plt.savefig(f'{self.hp.outputfolder}/layout/output_xz.png', dpi=300)
+            plt.figure()
+            sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(0, Sy, Sz)))
+            plt.savefig(f'{self.hp.outputfolder}/layout/output_yz.png', dpi=300)
+            plt.close("all")
 
         # run simulation
-        if mp.am_master: self.master_logger.info("Running output FDTD simulation")
+        if mp.am_master(): self.master_logger.info("Running output FDTD simulation")
         sim.run(until_after_sources=mp.stop_when_dft_decayed(minimum_run_time=20, tol = 1e-11))
 
         # get eigenmode coefficients
-        if mp.am_master: self.master_logger.info("Getting output FDTD simulation eigenmode coefficients:")
+        if mp.am_master(): self.master_logger.info("Getting output FDTD simulation eigenmode coefficients:")
         src_coeff = sim.get_eigenmode_coefficients(in_flux,[1],eig_parity=mp.NO_PARITY, kpoint_func= lambda a, b: mp.Vector3(x=-1))
         output_coeffs = []
         for mode_num in range(1,self.hp.sim.num_modes_MMI+1):
             coeff = sim.get_eigenmode_coefficients(out_flux,[mode_num],eig_parity=mp.NO_PARITY, kpoint_func= lambda a, b: mp.Vector3(x=-1))
             s = coeff.alpha[:,:,1]/src_coeff.alpha[:,:,1]
             output_coeffs.append(s[0,:])
-            if mp.am_master: self.master_logger.info(f"Mode {mode_num}, Power: {np.abs(s[0,:])**2}, Angle: {np.angle(s[0,:], deg=True)}")
+            if mp.am_master(): self.master_logger.info(f"Mode {mode_num}, Power: {np.abs(s[0,:])**2}, Angle: {np.angle(s[0,:], deg=True)}")
 
         output_coeffs = np.asarray(output_coeffs)
         return output_coeffs.T.astype(list)
@@ -291,7 +295,7 @@ class MMI_1x2:
             propagated_coeffs = [x * y for x, y in zip(propagated_coeffs, output_coeff)]
             powers.append(np.abs(sum(propagated_coeffs))**2)
             angles.append(np.angle(sum(propagated_coeffs), deg=True))
-            if mp.am_master: self.master_logger.info(f"Power: {powers[point]}, Angle: {angles[point]}")
+            if mp.am_master(): self.master_logger.info(f"Power: {powers[point]}, Angle: {angles[point]}")
 
         data_to_save = {
             'input_coeffs': input_coeffs,
@@ -308,7 +312,7 @@ class MMI_1x2:
         return powers, wavelengths
 
     def fdtd_simulation(self):
-        if mp.am_master: self.master_logger.info(f"Creating full FDTD simulation")
+        if mp.am_master(): self.master_logger.info(f"Creating full FDTD simulation")
         # Compute the simulation dimensions
         Sx = 2*self.hp.geo.taper_length + 2*self.hp.sim.waveguide_length + self.hp.geo.mm_length + 2*self.hp.sim.dpml  
         Sy = self.hp.sim.oxide_width + 2*self.hp.sim.dpml  
@@ -374,23 +378,25 @@ class MMI_1x2:
         )
 
         # Plot simulation geometry
-        if mp.am_master: self.master_logger.info("Plotting FDTD simulation geometry")
-        plt.figure()
-        sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, Sy, 0)))
-        plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_xy.png', dpi=300)
-        plt.figure()
-        sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, 0, Sz)))
-        plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_xz.png', dpi=300)
-        plt.figure()
-        sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(0, Sy, Sz)))
-        plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_yz.png', dpi=300)
+        if mp.am_master(): self.master_logger.info("Plotting FDTD simulation geometry")
+        if mp.am_master():
+            plt.figure()
+            sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, Sy, 0)))
+            plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_xy.png', dpi=300)
+            plt.figure()
+            sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, 0, Sz)))
+            plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_xz.png', dpi=300)
+            plt.figure()
+            sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(0, Sy, Sz)))
+            plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_yz.png', dpi=300)
+            plt.close("all")
 
         # run simulation
-        if mp.am_master: self.master_logger.info("Running FDTD simulation")
+        if mp.am_master(): self.master_logger.info("Running FDTD simulation")
         sim.run(until_after_sources=mp.stop_when_dft_decayed(minimum_run_time=20, tol = 1e-11))
 
         # get eigenmode coefficients
-        if mp.am_master: self.master_logger.info("Getting input FDTD simulation eigenmode coefficients:")
+        if mp.am_master(): self.master_logger.info("Getting input FDTD simulation eigenmode coefficients:")
         src_coeff = sim.get_eigenmode_coefficients(in_flux,[1],eig_parity=mp.NO_PARITY, kpoint_func= lambda a, b: mp.Vector3(x=1))
         coeff = sim.get_eigenmode_coefficients(out_flux,[1],eig_parity=mp.NO_PARITY, kpoint_func= lambda a, b: mp.Vector3(x=1))
         s = coeff.alpha[:,:,0]/src_coeff.alpha[:,:,0]
@@ -400,7 +406,7 @@ class MMI_1x2:
         for point in range(len(wavelengths)):
             powers.append(np.abs(s[point])**2)
             angles.append(np.angle(s[point], deg=True))
-            if mp.am_master: self.master_logger.info(f"Power: {powers[point]}, Angle: {angles[point]}")
+            if mp.am_master(): self.master_logger.info(f"Power: {powers[point]}, Angle: {angles[point]}")
 
         data_to_save = {
             'coeffs': s,
@@ -418,9 +424,12 @@ class MMI_1x2:
         wavelengths = np.linspace(self.hp.sim.wavelength_min,self.hp.sim.wavelength_max,self.hp.sim.wavelength_pts)
         # Load the GDSII file for the MMI splitter
         mmi_top = load_1x2_MMI(self.hp.geo.mm_length,self.hp.sim.waveguide_length,self.hp.geo.waveguide_width,self.hp.geo.waveguide_offset,self.hp.sim.oxide_width,0.0,self.hp.geo.taper_length,self.hp.geo.mm_width,self.hp.geo.taper_width)
-        plt.figure()
-        mmi_top.plot()
-        plt.savefig(f'{self.hp.outputfolder}/layout/eme_gds.png', dpi=300)
+        if mp.am_master():
+            plt.figure()
+            mmi_top.plot()
+            plt.savefig(f'{self.hp.outputfolder}/layout/eme_gds.png', dpi=300)
+            plt.close("all")
+
 
         extrusion_rules = stack_extrusions_GF(self.hp.geo.waveguide_height, self.hp.sim.oxide_height)
         structs = mw.extrude_gds(mmi_top, extrusion_rules)            
@@ -440,23 +449,25 @@ class MMI_1x2:
         coeffs = []
         angles = []
         for wavelength in wavelengths:
-            if mp.am_master: self.master_logger.info(f"Starting EME simulation at wavelength {wavelength}")
+            if mp.am_master(): self.master_logger.info(f"Starting EME simulation at wavelength {wavelength}")
             
             gf_environment = mw.Environment(wl=wavelength, T=25.0)
             css = [mw.CrossSection.from_cell(cell=cell, env=gf_environment) for cell in cells]
 
-            for cs_num, cs in enumerate(css):
-                plt.clf()
-                plt.figure()
-                mw.visualize(cs, show=False)
-                plt.savefig(f'{self.hp.outputfolder}/layout/cross_sections/cs_{cs_num}.png', dpi=300)
+            if mp.am_master():
+                for cs_num, cs in enumerate(css):
+                    plt.clf()
+                    plt.figure()
+                    mw.visualize(cs, show=False)
+                    plt.savefig(f'{self.hp.outputfolder}/layout/cross_sections/cs_{cs_num}.png', dpi=300)
+                    plt.close("all")
 
 
             # Performe mode simulations
-            if mp.am_master: self.master_logger.info(f"Performing mode simulations")
+            if mp.am_master(): self.master_logger.info(f"Performing mode simulations")
             modes = []
             for cell_num, (cs, num_mode) in enumerate(zip(css,num_modes)):
-                if mp.am_master: self.master_logger.info(f"Computing mode {num_mode} of cell {cell_num}")
+                if mp.am_master(): self.master_logger.info(f"Computing mode {num_mode} of cell {cell_num}")
                 modes.append(mw.compute_modes_meep(cs, num_modes=num_mode))
             S, port_map = mw.compute_s_matrix(modes, cells=cells)
             coeffs.append(S[0,1])
@@ -465,7 +476,7 @@ class MMI_1x2:
 
             if wavelength == wavelengths[int(np.floor(len(wavelengths)/2))]:
                 plot_eme_fields(self.hp,cells,modes)
-                if mp.am_master: self.master_logger.info(f"Transmission at center wavelength: {powers[-1]}")
+                if mp.am_master(): self.master_logger.info(f"Transmission at center wavelength: {powers[-1]}")
 
         data_to_save = {
             'coeffs': coeffs,
@@ -486,11 +497,13 @@ class MMI_1x2:
         elif self.hp.sim.sim_type == "EME":
             powers, wavelengths = self.eme_simulation()
 
-        plt.figure()
-        plt.plot(wavelengths,powers)
-        plt.xlabel("Wavelength (micron)")
-        plt.ylabel("Transmission")
-        plt.savefig(f'{self.hp.outputfolder}/performance.png', dpi=300)
+        if mp.am_master():
+            plt.figure()
+            plt.plot(wavelengths,powers)
+            plt.xlabel("Wavelength (micron)")
+            plt.ylabel("Transmission")
+            plt.savefig(f'{self.hp.outputfolder}/performance.png', dpi=300)
+            plt.close("all")
 
 
 if __name__ == "__main__":

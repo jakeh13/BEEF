@@ -1,4 +1,5 @@
 from engine.hyperparams.MMI_1x2 import HyperParamsMMI, GeoParamsMMI, SimParams
+from engine.hyperparams.MMI_1x4 import HyperParamsMMI as HyperParamsMMI_1x4, GeoParamsMMI as GeoParamsMMI_1x4, SimParams as SimParams_1x4
 from dataclasses import asdict
 import json
 import os
@@ -14,8 +15,8 @@ def save(hp: HyperParamsMMI, config_folder: str, name: str) -> None:
         print(s, file=f)
 
 def create_config_MMI_1x2(folder: str = 'configs_mmi', name: str = 'config'):
-    res = 20
-    sim_type = "FDTD"
+    res = 10
+    sim_type = "EME"
     hp = HyperParamsMMI(
         geo=GeoParamsMMI(
             taper_width=0.8
@@ -24,10 +25,10 @@ def create_config_MMI_1x2(folder: str = 'configs_mmi', name: str = 'config'):
             res=res,
             wavelength_min=1.27,
             wavelength_max=1.33,
-            wavelength_pts=20,
+            wavelength_pts=1,
             sim_type = sim_type
         ),
-        outputfolder=f"./out/mmi_1x2/{sim_type}_{int(res)}_1"
+        outputfolder=f"./out/mmi_1x2/{sim_type}_{int(res)}_2"
     )
     save(hp, folder, name)
 
@@ -61,6 +62,32 @@ def create_config_MMI_2x2(folder: str = 'configs_mmi', name: str = 'config'):
     )
     save(hp, folder, name)
 
+def create_config_MMI_1x4(folder: str = 'configs_mmi', name: str = 'config_1x4'):
+    waveguide_offset = 1.0  # pitch between adjacent output waveguide centers
+    mm_width = 4.0          # needs to span 4 outputs: ~4 * waveguide_offset
+    mm_length = 7.0
+    taper_width = 0.8
+    sim_type = "EME"
+    res = 20
+    hp = HyperParamsMMI_1x4(
+        geo=GeoParamsMMI_1x4(
+            mm_width=mm_width,
+            mm_length=mm_length,
+            taper_width=taper_width,
+            waveguide_offset=waveguide_offset
+        ),
+        sim=SimParams_1x4(
+            res=res,
+            wavelength_min=1.27,
+            wavelength_max=1.33,
+            wavelength_pts=3,
+            sim_type=sim_type
+        ),
+        outputfolder=f"./out/mmi_1x4/{sim_type}_{int(res)}_2"
+    )
+    save(hp, folder, name)
+
 if __name__ == '__main__':
     create_config_MMI_1x2(name='config')
     create_config_MMI_2x2(name='config_2x2')
+    create_config_MMI_1x4(name='config_1x4')

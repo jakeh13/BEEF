@@ -1,0 +1,30 @@
+{
+    "geo": {
+        "waveguide_height": 0.16,
+        "waveguide_width": 0.35,
+        "mm_length": 7.0,
+        "mm_width": 4.0,
+        "taper_length": 1.0,
+        "taper_width": 0.8,
+        "waveguide_offset": 1.0
+    },
+    "sim": {
+        "oxide_height": 1.5,
+        "oxide_width": 8,
+        "res": 20,
+        "wavelength_min": 1.27,
+        "wavelength_max": 1.33,
+        "wavelength_pts": 3,
+        "num_modes_MMI": 15,
+        "dpml": 0.5,
+        "mm_sim_length": 1.0,
+        "waveguide_length": 0.5,
+        "source_position": 0.0,
+        "sm_monitor_position": 0.25,
+        "mm_monitor_position": 0.25,
+        "sim_type": "EME",
+        "num_cells_taper": 15,
+        "num_modes_taper": 7
+    },
+    "outputfolder": "./out/mmi_1x4/EME_20_2"
+}

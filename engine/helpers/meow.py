@@ -143,6 +143,39 @@ def load_2x2_MMI_top(mm_length,straight_length,waveguide_width,waveguide_offset,
     mmi_top.add_polygon([(x_offset,-oxide_width/2),(x_offset+mmi_length+2*straight_length,-oxide_width/2),(x_offset+mmi_length+2*straight_length,oxide_width/2),(x_offset,oxide_width/2)], layer=(1,0))
     return mmi_top
 
+def create_MMI_1x4(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset, name):
+    mmi = gf.Component(name)
+    mmi.add_polygon([(-mm_length/2,-mm_width/2),
+                     (mm_length/2,-mm_width/2),
+                     (mm_length/2,mm_width/2),
+                     (-mm_length/2,mm_width/2)],
+                     layer=(2,0))
+    mmi.add_polygon([(-mm_length/2-taper_length,-waveguide_width/2),
+                     (-mm_length/2,-taper_width/2),
+                     (-mm_length/2,taper_width/2),
+                     (-mm_length/2-taper_length,waveguide_width/2)],
+                     layer=(2,0))
+    for yo in [3*waveguide_offset/2, waveguide_offset/2, -waveguide_offset/2, -3*waveguide_offset/2]:
+        mmi.add_polygon([(mm_length/2,-taper_width/2+yo),
+                         (mm_length/2+taper_length,-waveguide_width/2+yo),
+                         (mm_length/2+taper_length,waveguide_width/2+yo),
+                         (mm_length/2,taper_width/2+yo)],
+                         layer=(2,0))
+    return mmi
+
+def load_1x4_MMI(mm_length, straight_length, waveguide_width, waveguide_offset, oxide_width, x_offset, taper_length, mm_width, taper_width, output_idx):
+    mmi_length = mm_length + 2*taper_length
+    output_offsets = [3*waveguide_offset/2, waveguide_offset/2, -waveguide_offset/2, -3*waveguide_offset/2]
+    yo = output_offsets[output_idx]
+    mmi = create_MMI_1x4(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset, f'mmi_1x4_{output_idx}')
+    mmi.move((x_offset+mmi_length/2 + straight_length, 0))
+    input_waveguide = mmi << gf.components.straight(length=straight_length, width=waveguide_width, cross_section=xs_so)
+    input_waveguide.move((x_offset, 0))
+    output_waveguide = mmi << gf.components.straight(length=straight_length, width=waveguide_width, cross_section=xs_so)
+    output_waveguide.move((x_offset+mmi_length+straight_length, yo))
+    mmi.add_polygon([(x_offset,-oxide_width/2),(x_offset+mmi_length+2*straight_length,-oxide_width/2),(x_offset+mmi_length+2*straight_length,oxide_width/2),(x_offset,oxide_width/2)], layer=(1,0))
+    return mmi
+
 def load_2x2_MMI_bot(mm_length,straight_length,waveguide_width,waveguide_offset,oxide_width,x_offset,taper_length,mm_width,taper_width):
     mmi_length = mm_length + 2*taper_length
     mmi_top = create_MMI_2x2(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset/2,"mmi_bot")

@@ -112,3 +112,39 @@ def create_temp_gds_for_full_mmi_2x2(mm_length, taper_length, waveguide_width, m
     temp = create_MMI_2x2(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset/2,"temp_full")
     # save as temp.gds
     temp.write_gds(gdsdir='gds')
+
+def create_MMI_1x4(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset, name):
+    mmi = gf.Component(name)
+    mmi.add_polygon([(-mm_length/2,-mm_width/2),
+                     (mm_length/2,-mm_width/2),
+                     (mm_length/2,mm_width/2),
+                     (-mm_length/2,mm_width/2)],
+                     layer=(2,0))
+    mmi.add_polygon([(-mm_length/2-taper_length,-waveguide_width/2),
+                     (-mm_length/2,-taper_width/2),
+                     (-mm_length/2,taper_width/2),
+                     (-mm_length/2-taper_length,waveguide_width/2)],
+                     layer=(2,0))
+    for yo in [3*waveguide_offset/2, waveguide_offset/2, -waveguide_offset/2, -3*waveguide_offset/2]:
+        mmi.add_polygon([(mm_length/2,-taper_width/2+yo),
+                         (mm_length/2+taper_length,-waveguide_width/2+yo),
+                         (mm_length/2+taper_length,waveguide_width/2+yo),
+                         (mm_length/2,taper_width/2+yo)],
+                         layer=(2,0))
+    return mmi
+
+def create_temp_gds_for_mmi_1x4_input(mm_length, taper_length, Sx, dpml, waveguide_length, waveguide_width, mm_width, taper_width, waveguide_offset):
+    mmi_total_length = mm_length + 2*taper_length
+    temp = create_MMI_1x4(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset, "temp")
+    temp.move((mmi_total_length/2 - Sx/2 + dpml + waveguide_length, 0))
+    temp.write_gds(gdsdir='gds')
+
+def create_temp_gds_for_mmi_1x4_output(mm_length, taper_length, Sx, dpml, waveguide_length, waveguide_width, mm_width, taper_width, waveguide_offset):
+    mmi_total_length = mm_length + 2*taper_length
+    temp = create_MMI_1x4(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset, "temp_out")
+    temp.move((-mmi_total_length/2 + Sx/2 - dpml - waveguide_length, 0))
+    temp.write_gds(gdsdir='gds')
+
+def create_temp_gds_for_full_mmi_1x4(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset):
+    temp = create_MMI_1x4(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset, "temp_full")
+    temp.write_gds(gdsdir='gds')

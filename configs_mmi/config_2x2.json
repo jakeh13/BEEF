@@ -22,9 +22,9 @@
         "source_position": 0.0,
         "sm_monitor_position": 0.25,
         "mm_monitor_position": 0.25,
-        "sim_type": "EME",
+        "sim_type": "FDTD",
         "num_cells_taper": 15,
         "num_modes_taper": 7
     },
-    "outputfolder": "./out/mmi_2x2_220/EME_10_1"
+    "outputfolder": "./out/mmi_2x2_220/FDTD_10_1"
 }
