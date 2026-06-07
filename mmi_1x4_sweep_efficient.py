@@ -223,18 +223,33 @@ def _save_results(sweep_dir, sweep_vals, wavelengths, hp, powers, angles, coeffs
 
 
 def _plot_summary(sweep_dir, sweep_vals, wavelengths, powers):
-    center_idx = int(np.floor(len(wavelengths) / 2))
-    plt.figure()
+    multi_wl = len(wavelengths) > 1
+    fig, ax = plt.subplots()
+
     for port_idx in range(4):
-        port_vals = [powers[v][port_idx][center_idx] for v in sweep_vals]
-        plt.plot(sweep_vals, port_vals, marker="o", label=f"Port {port_idx}")
-    plt.xlabel("mm_length (μm)")
-    plt.ylabel(f"Transmission at λ={wavelengths[center_idx]:.3f} μm")
-    plt.title("MMI 1x4 — mm_length sweep")
-    plt.legend()
-    plt.tight_layout()
+        vals = np.array([powers[v][port_idx] for v in sweep_vals])  # (n_sweep, n_wl)
+        if multi_wl:
+            mean = vals.mean(axis=1)
+            lo   = vals.min(axis=1)
+            hi   = vals.max(axis=1)
+            (line,) = ax.plot(sweep_vals, mean, marker="o", label=f"Port {port_idx}")
+            ax.fill_between(sweep_vals, lo, hi, alpha=0.25, color=line.get_color())
+        else:
+            ax.plot(sweep_vals, vals[:, 0], marker="o", label=f"Port {port_idx}")
+
+    ax.set_xlabel("mm_length (μm)")
+    if multi_wl:
+        ax.set_ylabel(
+            f"Transmission (λ = {wavelengths[0]:.3f}–{wavelengths[-1]:.3f} μm)\n"
+            "solid = mean, band = [min, max]"
+        )
+    else:
+        ax.set_ylabel(f"Transmission at λ={wavelengths[0]:.3f} μm")
+    ax.set_title("MMI 1x4 — mm_length sweep")
+    ax.legend()
+    fig.tight_layout()
     out_path = os.path.join(sweep_dir, "sweep_summary.png")
-    plt.savefig(out_path, dpi=300)
+    fig.savefig(out_path, dpi=300)
     plt.close("all")
     print(f"[sweep] Summary plot saved to {out_path}")
 

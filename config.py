@@ -38,7 +38,7 @@ def create_config_MMI_2x2(folder: str = 'configs_mmi', name: str = 'config'):
     mm_length = 28
     taper_width = mm_width/2 - taper_spacing/2
     waveguide_offset = taper_width + taper_spacing
-    sim_type = "FDTD"
+    sim_type = "HYBRID"
     res = 10
     hp = HyperParamsMMI(
         geo=GeoParamsMMI(
@@ -52,13 +52,13 @@ def create_config_MMI_2x2(folder: str = 'configs_mmi', name: str = 'config'):
         ),
         sim=SimParams(
             res=res,
-            wavelength_min=1.535,
+            wavelength_min=1.530,
             wavelength_max=1.565,
             wavelength_pts=5,
             sim_type = sim_type,
             mm_monitor_position=0.25
         ),
-        outputfolder=f"./out/mmi_2x2_220/{sim_type}_{int(res)}_1"
+        outputfolder=f"./out/mmi_2x2_sweep/{sim_type}_{int(res)}_1"
     )
     save(hp, folder, name)
 
@@ -83,7 +83,7 @@ def create_config_MMI_1x4(folder: str = 'configs_mmi', name: str = 'config_1x4')
             wavelength_pts=1,
             sim_type=sim_type
         ),
-        outputfolder=f"./out/mmi_1x4_sweep/{sim_type}_{int(res)}_4"
+        outputfolder=f"./out/mmi_1x4_sweep/{sim_type}_{int(res)}_5"
     )
     save(hp, folder, name)
 

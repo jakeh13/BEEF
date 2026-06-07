@@ -18,13 +18,15 @@ mmi:
 mmi_2x2:
 	$(runner) 4 $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2.json
 
+mmi_2x2_s:
+	$(runner) 4 $(my_python) mmi_2x2_sweep.py -c configs_mmi/config_2x2.json
+
+
 mmi_1x4:
 	$(runner) 2 $(my_python) mmi_1x4_master.py -c configs_mmi/config_1x4.json
 
 mmi_1x4_s:
 	$(runner) 2 $(my_python) mmi_1x4_sweep_efficient.py --config configs_mmi/config_1x4.json
-
-
 
 config:
 	$(my_python) config.py
