@@ -1,6 +1,6 @@
 seed_num ?= 1
 ifeq ($(LMOD_SYSHOST), phoenix)
-	runner = srun
+	runner = srun --mpi=pmi2
 	trash = ~/scratch
 	my_python = python3
 else
@@ -35,4 +35,4 @@ config:
 	$(my_python) config.py
 
 config_cluster:
-	$(runner) 1 $(my_python) config.py
+	$(runner) $(my_python) config.py

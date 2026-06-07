@@ -14,7 +14,7 @@
         "res": 10,
         "wavelength_min": 1.27,
         "wavelength_max": 1.33,
-        "wavelength_pts": 1,
+        "wavelength_pts": 3,
         "num_modes_MMI": 15,
         "dpml": 0.5,
         "mm_sim_length": 1.0,
