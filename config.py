@@ -38,7 +38,7 @@ def create_config_MMI_2x2(folder: str = 'configs_mmi', name: str = 'config'):
     mm_length = 28
     taper_width = mm_width/2 - taper_spacing/2
     waveguide_offset = taper_width + taper_spacing
-    sim_type = "HYBRID"
+    sim_type = "EME"
     res = 10
     hp = HyperParamsMMI(
         geo=GeoParamsMMI(
