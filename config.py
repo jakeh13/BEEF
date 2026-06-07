@@ -25,7 +25,7 @@ def create_config_MMI_1x2(folder: str = 'configs_mmi', name: str = 'config'):
             res=res,
             wavelength_min=1.27,
             wavelength_max=1.33,
-            wavelength_pts=1,
+            wavelength_pts=3,
             sim_type = sim_type
         ),
         outputfolder=f"./out/mmi_1x2/{sim_type}_{int(res)}_2"
@@ -65,10 +65,10 @@ def create_config_MMI_2x2(folder: str = 'configs_mmi', name: str = 'config'):
 def create_config_MMI_1x4(folder: str = 'configs_mmi', name: str = 'config_1x4'):
     waveguide_offset = 1.0  # pitch between adjacent output waveguide centers
     mm_width = 4.0          # needs to span 4 outputs: ~4 * waveguide_offset
-    mm_length = 7.0
+    mm_length = 7.3
     taper_width = 0.8
     sim_type = "EME"
-    res = 20
+    res = 40
     hp = HyperParamsMMI_1x4(
         geo=GeoParamsMMI_1x4(
             mm_width=mm_width,
@@ -78,12 +78,12 @@ def create_config_MMI_1x4(folder: str = 'configs_mmi', name: str = 'config_1x4')
         ),
         sim=SimParams_1x4(
             res=res,
-            wavelength_min=1.27,
-            wavelength_max=1.33,
-            wavelength_pts=3,
+            wavelength_min=1.30,
+            wavelength_max=1.30,
+            wavelength_pts=1,
             sim_type=sim_type
         ),
-        outputfolder=f"./out/mmi_1x4/{sim_type}_{int(res)}_2"
+        outputfolder=f"./out/mmi_1x4_sweep/{sim_type}_{int(res)}_4"
     )
     save(hp, folder, name)
 

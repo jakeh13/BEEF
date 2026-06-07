@@ -1,21 +1,26 @@
 import meow as mw
 import gdsfactory as gf
 
-gf.gpdk.PDK.activate()
+def reset_gf():
+    gf.clear_cache()
+    gf.gpdk.PDK.activate()
 
-# gdsfactory cross section for o-band waveguides on GF
-xs_so = gf.cross_section.cross_section(
-    width=0.35,
-    offset=0,
-    layer=(2,0)
-)
+    # gdsfactory cross section for o-band waveguides on GF
+    xs_so = gf.cross_section.cross_section(
+        width=0.35,
+        offset=0,
+        layer=(2,0)
+    )
 
-# gdsfactory cross section for c-band waveguide on .22 Si
-xs_sc = gf.cross_section.cross_section(
-    width=0.45,
-    offset=0,
-    layer=(2,0)
-)
+    # gdsfactory cross section for c-band waveguide on .22 Si
+    xs_sc = gf.cross_section.cross_section(
+        width=0.45,
+        offset=0,
+        layer=(2,0)
+    )
+    return xs_so, xs_sc
+
+xs_so, xs_sc = reset_gf()
 
 def stack_extrusions_GF(
     wg_height: float = 0.160,
@@ -86,6 +91,7 @@ def create_MMI_1x2(mm_length, taper_length, waveguide_width, mm_width, taper_wid
     return mmi
 
 def load_1x2_MMI(mm_length,straight_length,waveguide_width,waveguide_offset,oxide_width,x_offset,taper_length,mm_width,taper_width):
+    xs_so, xs_sc = reset_gf()
     mmi_length = mm_length + 2*taper_length
     mmi_top = create_MMI_1x2(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset/2)
     mmi_top.move((x_offset+mmi_length/2 + straight_length, 0))
@@ -131,6 +137,7 @@ def create_MMI_2x2(mm_length, taper_length, waveguide_width, mm_width, taper_wid
     return mmi
 
 def load_2x2_MMI_top(mm_length,straight_length,waveguide_width,waveguide_offset,oxide_width,x_offset,taper_length,mm_width,taper_width):
+    xs_so, xs_sc = reset_gf()
     mmi_length = mm_length + 2*taper_length
     mmi_top = create_MMI_2x2(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset/2,"mmi_top")
     mmi_top.move((x_offset+mmi_length/2 + straight_length, 0))
@@ -164,6 +171,7 @@ def create_MMI_1x4(mm_length, taper_length, waveguide_width, mm_width, taper_wid
     return mmi
 
 def load_1x4_MMI(mm_length, straight_length, waveguide_width, waveguide_offset, oxide_width, x_offset, taper_length, mm_width, taper_width, output_idx):
+    xs_so, xs_sc = reset_gf()
     mmi_length = mm_length + 2*taper_length
     output_offsets = [3*waveguide_offset/2, waveguide_offset/2, -waveguide_offset/2, -3*waveguide_offset/2]
     yo = output_offsets[output_idx]
@@ -177,6 +185,7 @@ def load_1x4_MMI(mm_length, straight_length, waveguide_width, waveguide_offset, 
     return mmi
 
 def load_2x2_MMI_bot(mm_length,straight_length,waveguide_width,waveguide_offset,oxide_width,x_offset,taper_length,mm_width,taper_width):
+    xs_so, xs_sc = reset_gf()
     mmi_length = mm_length + 2*taper_length
     mmi_top = create_MMI_2x2(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset/2,"mmi_bot")
     mmi_top.move((x_offset+mmi_length/2 + straight_length, 0))

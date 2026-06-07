@@ -11,6 +11,8 @@ from dataclasses import asdict
 import meow as mw
 import meep as mp
 
+from meow import compute_modes_tidy3d as compute_modes
+
 from engine.hyperparams.MMI_1x4 import HyperParamsMMI as HyperParams
 
 from engine.helpers.general import(
@@ -168,7 +170,7 @@ class MMI_1x4:
             modes = []
             for cell_num, (cs, num_mode) in enumerate(zip(css, num_modes)):
                 if mp.am_master(): self.master_logger.info(f"Computing mode {num_mode} of cell {cell_num}")
-                modes.append(mw.compute_modes_meep(cs, num_modes=num_mode))
+                modes.append(compute_modes(cs, num_modes=num_mode))
             S, port_map = mw.compute_s_matrix(modes, cells=cells)
             mm_coeffs_1_wl = []
             for mode_num in range(self.hp.sim.num_modes_MMI):
@@ -431,8 +433,8 @@ class MMI_1x4:
         Ls = np.concatenate(([self.hp.sim.waveguide_length], taper_Ls, [self.hp.geo.mm_length], taper_Ls, [self.hp.sim.waveguide_length]))
         num_modes = [1] + [self.hp.sim.num_modes_taper for _ in range(self.hp.sim.num_cells_taper)] + [self.hp.sim.num_modes_MMI] + [self.hp.sim.num_modes_taper for _ in range(self.hp.sim.num_cells_taper)] + [1]
 
-        # Build cells for each of the 4 output ports
-        all_cells = []
+        # Build ouput cells for each of the 4 output ports
+        output_cells = []
         for output_idx in range(4):
             mmi_gds = load_1x4_MMI(
                 self.hp.geo.mm_length, self.hp.sim.waveguide_length, self.hp.geo.waveguide_width,
@@ -453,7 +455,9 @@ class MMI_1x4:
                 ),
                 Ls=Ls,
             )
-            all_cells.append(cells)
+            if output_idx == 0:
+                input_cells = cells[0:-1]
+            output_cells.append(cells[-1])
 
         powers_ports = [[] for _ in range(4)]
         coeffs_ports = [[] for _ in range(4)]
@@ -462,31 +466,50 @@ class MMI_1x4:
         for wavelength in wavelengths:
             if mp.am_master(): self.master_logger.info(f"Starting EME simulation at wavelength {wavelength}")
             gf_environment = mw.Environment(wl=wavelength, T=25.0)
+            
+            css = [mw.CrossSection.from_cell(cell=cell, env=gf_environment) for cell in input_cells]
 
-            for output_idx, cells in enumerate(all_cells):
-                css = [mw.CrossSection.from_cell(cell=cell, env=gf_environment) for cell in cells]
+            if mp.am_master():
+                for cs_num, cs in enumerate(css):
+                    plt.clf()
+                    plt.figure()
+                    mw.visualize(cs, show=False)
+                    plt.savefig(f'{self.hp.outputfolder}/layout/cross_sections/cs_input_{cs_num}.png', dpi=300)
+                    plt.close("all")
 
-                if mp.am_master() and output_idx == 0:
+            if mp.am_master(): self.master_logger.info(f"Performing input mode simulations")
+            input_modes = []
+            for cell_num, (cs, num_mode) in enumerate(zip(css, num_modes)):
+                if mp.am_master(): self.master_logger.info(f"Computing mode {num_mode} of cell {cell_num}")
+                input_modes.append(compute_modes(cs, num_modes=num_mode))
+
+            output_modes = []
+            for output_idx, out_cell in enumerate(output_cells):
+                css = [mw.CrossSection.from_cell(cell=out_cell, env=gf_environment)]
+                if mp.am_master():
                     for cs_num, cs in enumerate(css):
                         plt.clf()
                         plt.figure()
                         mw.visualize(cs, show=False)
-                        plt.savefig(f'{self.hp.outputfolder}/layout/cross_sections/cs_{cs_num}.png', dpi=300)
+                        plt.savefig(f'{self.hp.outputfolder}/layout/cross_sections/cs_out_{output_idx}_{cs_num}.png', dpi=300)
                         plt.close("all")
 
-                if mp.am_master(): self.master_logger.info(f"Performing mode simulations for port {output_idx}")
-                modes = []
+                if mp.am_master(): self.master_logger.info(f"Performing output mode simulations for port {output_idx}")
+                
                 for cell_num, (cs, num_mode) in enumerate(zip(css, num_modes)):
                     if mp.am_master(): self.master_logger.info(f"Computing mode {num_mode} of cell {cell_num}")
-                    modes.append(mw.compute_modes_meep(cs, num_modes=num_mode))
+                    output_modes.append(compute_modes(cs, num_modes=num_mode))
 
-                S, port_map = mw.compute_s_matrix(modes, cells=cells)
+            for output_idx in range(4):
+                full_modes = input_modes + output_modes[output_idx:output_idx+1]
+                full_cells = input_cells + [output_cells[output_idx]]   
+                S, port_map = mw.compute_s_matrix(full_modes, cells=full_cells)
                 coeffs_ports[output_idx].append(S[0,1])
                 powers_ports[output_idx].append(np.abs(S[0,1])**2)
                 angles_ports[output_idx].append(np.angle(S[0,1], deg=True))
 
                 if wavelength == wavelengths[int(np.floor(len(wavelengths)/2))]:
-                    plot_eme_fields(self.hp, cells, modes)
+                    plot_eme_fields(self.hp, full_cells, full_modes, output_idx)
                     if mp.am_master(): self.master_logger.info(f"Port {output_idx} transmission at center wavelength: {powers_ports[output_idx][-1]}")
 
         data_to_save = {
@@ -517,7 +540,6 @@ class MMI_1x4:
             plt.legend()
             plt.savefig(f'{self.hp.outputfolder}/performance.png', dpi=300)
             plt.close("all")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

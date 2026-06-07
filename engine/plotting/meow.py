@@ -2,7 +2,7 @@ import numpy as np
 import meow as mw
 from matplotlib import pyplot as plt
 
-def plot_eme_fields(hp,cells,modes):
+def plot_eme_fields(hp,cells,modes,tag=1):
     # Propagate the modes through the structure and visualize the field distribution
     z = np.linspace(cells[0].z_min, cells[-1].z_max, 500)
     y = 0.0
@@ -14,4 +14,5 @@ def plot_eme_fields(hp,cells,modes):
     ax.set_title("|Ex(x, z)| from mw.propagate_modes")
     plt.colorbar(im, ax=ax, label="|Ex|")
     plt.tight_layout()
-    plt.savefig(f'{hp.outputfolder}/eme_fields.png', dpi=300)
+    plt.savefig(f'{hp.outputfolder}/eme_fields_{tag}.png', dpi=300)
+    plt.close("all")
