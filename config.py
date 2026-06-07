@@ -78,9 +78,9 @@ def create_config_MMI_1x4(folder: str = 'configs_mmi', name: str = 'config_1x4')
         ),
         sim=SimParams_1x4(
             res=res,
-            wavelength_min=1.30,
-            wavelength_max=1.30,
-            wavelength_pts=1,
+            wavelength_min=1.26,
+            wavelength_max=1.36,
+            wavelength_pts=5,
             sim_type=sim_type
         ),
         outputfolder=f"./out/mmi_1x4_sweep/{sim_type}_{int(res)}_5"
