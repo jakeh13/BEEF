@@ -18,6 +18,9 @@ mmi:
 mmi_2x2:
 	$(runner) 4 $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2.json
 
+mmi_2x2_gds:
+	$(runner) $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2_gds.json
+
 mmi_2x2_s_cluster::
 	$(runner) $(my_python) mmi_2x2_sweep.py -c configs_mmi/config_2x2.json
 

@@ -38,8 +38,8 @@ def create_config_MMI_2x2(folder: str = 'configs_mmi', name: str = 'config'):
     mm_length = 28
     taper_width = mm_width/2 - taper_spacing/2
     waveguide_offset = taper_width + taper_spacing
-    sim_type = "EME"
-    res = 10
+    sim_type = "HYBRID"
+    res = 40
     hp = HyperParamsMMI(
         geo=GeoParamsMMI(
             waveguide_width=0.45, # NOTE: Needs to be fixed for EME simulation waveguides (gdsfactory cross-section issue)
@@ -59,6 +59,37 @@ def create_config_MMI_2x2(folder: str = 'configs_mmi', name: str = 'config'):
             mm_monitor_position=0.25
         ),
         outputfolder=f"./out/mmi_2x2_sweep/{sim_type}_{int(res)}_1"
+    )
+    save(hp, folder, name)
+
+def create_config_MMI_2x2_gds(folder: str = 'configs_mmi', name: str = 'config_2x2_gds'):
+    taper_spacing = 0.2
+    mm_width = 1.6
+    mm_length = 10.8
+    taper_width = mm_width/2 - taper_spacing/2
+    waveguide_offset = taper_width + taper_spacing
+    sim_type = "FDTD_GDS"
+    res = 40
+    hp = HyperParamsMMI(
+        geo=GeoParamsMMI(
+            waveguide_width=0.5,
+            mm_width=mm_width,
+            mm_length=mm_length,
+            taper_length=4,
+            waveguide_offset=waveguide_offset,
+            taper_width=taper_width,
+            waveguide_height=0.215,
+            gds_file="gds/Splitter.gds"
+        ),
+        sim=SimParams(
+            res=res,
+            wavelength_min=1.520,
+            wavelength_max=1.580,
+            wavelength_pts=30,
+            sim_type=sim_type,
+            mm_monitor_position=0.25
+        ),
+        outputfolder=f"./out/mmi_2x2_gds/{sim_type}_{int(res)}_0"
     )
     save(hp, folder, name)
 
@@ -90,4 +121,5 @@ def create_config_MMI_1x4(folder: str = 'configs_mmi', name: str = 'config_1x4')
 if __name__ == '__main__':
     create_config_MMI_1x2(name='config')
     create_config_MMI_2x2(name='config_2x2')
+    create_config_MMI_2x2_gds(name='config_2x2_gds')
     create_config_MMI_1x4(name='config_1x4')

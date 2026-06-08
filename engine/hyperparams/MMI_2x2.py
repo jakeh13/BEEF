@@ -12,6 +12,7 @@ class GeoParamsMMI:
     taper_length: float = 1.0         # Length of input and output tapers
     taper_width: float = 0.8          # Width of taper at MMI interface
     waveguide_offset: float = 1.0     # Distance between centers of input and output waveguides
+    gds_file: str = ""                # Path to pre-existing GDS file; used when sim_type="FDTD_GDS"
 
 @dataclass(eq=False, kw_only=True)
 class SimParams:

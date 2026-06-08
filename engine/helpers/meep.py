@@ -113,6 +113,14 @@ def create_temp_gds_for_full_mmi_2x2(mm_length, taper_length, waveguide_width, m
     # save as temp.gds
     temp.write_gds(gdsdir='gds')
 
+def prepare_gds_for_meep(gds_path, output_path):
+    component = gf.import_gds(gds_path)
+    cx, cy = component.center
+    component.move((-cx, -cy))
+    component.write_gds(output_path)
+    bbox = component.bbox()
+    return float(bbox.right - bbox.left)
+
 def create_MMI_1x4(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset, name):
     mmi = gf.Component(name)
     mmi.add_polygon([(-mm_length/2,-mm_width/2),
