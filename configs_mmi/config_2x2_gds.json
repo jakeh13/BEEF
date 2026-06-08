@@ -1,0 +1,31 @@
+{
+    "geo": {
+        "waveguide_height": 0.215,
+        "waveguide_width": 0.5,
+        "mm_length": 10.8,
+        "mm_width": 1.6,
+        "taper_length": 4,
+        "taper_width": 0.7000000000000001,
+        "waveguide_offset": 0.9000000000000001,
+        "gds_file": "gds/Splitter.gds"
+    },
+    "sim": {
+        "oxide_height": 1.5,
+        "oxide_width": 5,
+        "res": 40,
+        "wavelength_min": 1.52,
+        "wavelength_max": 1.58,
+        "wavelength_pts": 30,
+        "num_modes_MMI": 15,
+        "dpml": 0.5,
+        "mm_sim_length": 1.0,
+        "waveguide_length": 0.5,
+        "source_position": 0.0,
+        "sm_monitor_position": 0.25,
+        "mm_monitor_position": 0.25,
+        "sim_type": "FDTD_GDS",
+        "num_cells_taper": 15,
+        "num_modes_taper": 7
+    },
+    "outputfolder": "./out/mmi_2x2_gds/FDTD_GDS_40_0"
+}
