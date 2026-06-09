@@ -11,7 +11,7 @@ from dataclasses import asdict
 import meow as mw
 import meep as mp
 
-from engine.hyperparams.MMI_1x2 import HyperParamsMMI as HyperParams
+from engine.hyperparams.MMI import HyperParamsMMI as HyperParams
 
 from engine.helpers.general import(
     make_output_folders

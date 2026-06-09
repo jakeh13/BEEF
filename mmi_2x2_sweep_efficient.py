@@ -24,7 +24,7 @@ from meow import compute_modes_tidy3d as compute_modes
 
 from engine.helpers.general import make_output_folders
 from engine.helpers.meow import load_2x2_MMI_bot, load_2x2_MMI_top, stack_extrusions_GF
-from engine.hyperparams.MMI_2x2 import HyperParamsMMI as HyperParams
+from engine.hyperparams.MMI import HyperParamsMMI as HyperParams
 from engine.plotting.meow import plot_eme_fields
 
 MM_LENGTH_SWEEP = np.arange(20.0, 36.5, 0.5)

@@ -21,6 +21,9 @@ mmi_2x2:
 mmi_2x2_gds:
 	$(runner) $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2_gds.json
 
+mmi_2x2_pol_splitter:
+	$(runner) $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2_pol_splitter.json
+
 mmi_2x2_s_cluster::
 	$(runner) $(my_python) mmi_2x2_sweep.py -c configs_mmi/config_2x2.json
 

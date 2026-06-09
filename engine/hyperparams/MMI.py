@@ -1,7 +1,5 @@
-import numpy as np
-from dataclasses import dataclass, field, asdict
-from enum import Enum, auto
-import json
+from dataclasses import dataclass, field
+from typing import List
 
 @dataclass(eq=False, kw_only=True)
 class GeoParamsMMI:
@@ -11,7 +9,7 @@ class GeoParamsMMI:
     mm_width: float = 2.0             # Width of multimode section
     taper_length: float = 1.0         # Length of input and output tapers
     taper_width: float = 0.8          # Width of taper at MMI interface
-    waveguide_offset: float = 1.0     # Distance between centers of output waveguides
+    waveguide_offset: float = 1.0     # Distance between centers of adjacent waveguides
     gds_file: str = ""                # Path to pre-existing GDS file; used when sim_type="FDTD_GDS"
 
 @dataclass(eq=False, kw_only=True)
@@ -29,13 +27,14 @@ class SimParams:
     source_position: float = 0.0      # x_position from the PML where the source is placed
     sm_monitor_position: float = 0.25 # x_position from the PML where the single-mode waveguide mode monitor is
     mm_monitor_position: float = 0.25 # x_position from the PML where the multi-mode waveguide mode monitor is
-    sim_type: str = "FDTD"            # Simulation type: "FDTD", "EME", or "HYBRID"
+    sim_type: str = "FDTD"            # Simulation type: "FDTD", "EME", "HYBRID", or "FDTD_GDS"
     num_cells_taper: int = 15         # Number of cells the taper regions are broken up into
     num_modes_taper: int = 7          # Number of modes computed in the taper regions
+    input_modes: List[int] = field(default_factory=lambda: [1])  # Waveguide modes to excite at the input (1-based)
+    output_modes: List[int] = field(default_factory=lambda: [1]) # Waveguide modes to measure at each output arm
 
 @dataclass(eq=False, kw_only=True)
 class HyperParamsMMI:
     geo: GeoParamsMMI = field(default_factory=GeoParamsMMI)
     sim: SimParams = field(default_factory=SimParams)
-
     outputfolder: str = "./out/test"

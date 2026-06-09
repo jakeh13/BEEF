@@ -21,7 +21,7 @@ from matplotlib import pyplot as plt
 
 from engine.helpers.general import make_output_folders
 from engine.helpers.meow import load_2x2_MMI_top, stack_extrusions_GF
-from engine.hyperparams.MMI_1x2 import HyperParamsMMI as HyperParams
+from engine.hyperparams.MMI import HyperParamsMMI as HyperParams
 from mmi_2x2_master import MMI_2x2
 
 MM_LENGTH_SWEEP = np.arange(20.0, 36.5, 0.5)

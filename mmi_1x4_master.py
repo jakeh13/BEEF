@@ -13,7 +13,7 @@ import meep as mp
 
 from meow import compute_modes_tidy3d as compute_modes
 
-from engine.hyperparams.MMI_1x4 import HyperParamsMMI as HyperParams
+from engine.hyperparams.MMI import HyperParamsMMI as HyperParams
 
 from engine.helpers.general import(
     make_output_folders

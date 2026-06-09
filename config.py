@@ -1,5 +1,4 @@
-from engine.hyperparams.MMI_1x2 import HyperParamsMMI, GeoParamsMMI, SimParams
-from engine.hyperparams.MMI_1x4 import HyperParamsMMI as HyperParamsMMI_1x4, GeoParamsMMI as GeoParamsMMI_1x4, SimParams as SimParams_1x4
+from engine.hyperparams.MMI import HyperParamsMMI, GeoParamsMMI, SimParams
 from dataclasses import asdict
 import json
 import os
@@ -55,8 +54,10 @@ def create_config_MMI_2x2(folder: str = 'configs_mmi', name: str = 'config'):
             wavelength_min=1.530,
             wavelength_max=1.565,
             wavelength_pts=5,
-            sim_type = sim_type,
-            mm_monitor_position=0.25
+            sim_type=sim_type,
+            mm_monitor_position=0.25,
+            input_modes=[1],
+            output_modes=[1],
         ),
         outputfolder=f"./out/mmi_2x2_sweep/{sim_type}_{int(res)}_1"
     )
@@ -70,6 +71,7 @@ def create_config_MMI_2x2_gds(folder: str = 'configs_mmi', name: str = 'config_2
     waveguide_offset = taper_width + taper_spacing
     sim_type = "FDTD_GDS"
     res = 40
+    splitter_name = "Splitter_60"
     hp = HyperParamsMMI(
         geo=GeoParamsMMI(
             waveguide_width=0.5,
@@ -79,7 +81,7 @@ def create_config_MMI_2x2_gds(folder: str = 'configs_mmi', name: str = 'config_2
             waveguide_offset=waveguide_offset,
             taper_width=taper_width,
             waveguide_height=0.215,
-            gds_file="gds/Splitter.gds"
+            gds_file=f"gds/{splitter_name}.gds"
         ),
         sim=SimParams(
             res=res,
@@ -87,9 +89,46 @@ def create_config_MMI_2x2_gds(folder: str = 'configs_mmi', name: str = 'config_2
             wavelength_max=1.580,
             wavelength_pts=30,
             sim_type=sim_type,
-            mm_monitor_position=0.25
+            mm_monitor_position=0.25,
+            input_modes=[1],
+            output_modes=[1],
         ),
-        outputfolder=f"./out/mmi_2x2_gds/{sim_type}_{int(res)}_0"
+        outputfolder=f"./out/mmi_2x2_gds/{sim_type}_{int(res)}_{splitter_name}"
+    )
+    save(hp, folder, name)
+
+def create_config_MMI_2x2_pol_splitter(folder: str = 'configs_mmi', name: str = 'config_2x2_gds'):
+    taper_spacing = 0.2
+    mm_width = 2.1
+    mm_length = 37.9
+    taper_width = mm_width/2 - taper_spacing/2
+    waveguide_offset = taper_width + taper_spacing
+    sim_type = "EME"
+    res = 40
+    # splitter_name = "Splitter_60"
+    hp = HyperParamsMMI(
+        geo=GeoParamsMMI(
+            waveguide_width=0.35,
+            mm_width=mm_width,
+            mm_length=mm_length,
+            taper_length=2,
+            waveguide_offset=waveguide_offset,
+            taper_width=taper_width,
+            waveguide_height=0.16
+        ),
+        sim=SimParams(
+            res=res,
+            wavelength_min=1.270,
+            wavelength_max=1.330,
+            wavelength_pts=5,
+            input_modes=[1,2],
+            output_modes=[1,2],
+            sim_type=sim_type,
+            mm_monitor_position=0.5,
+            num_modes_MMI=50, # 20
+            num_modes_taper=20
+        ),
+        outputfolder=f"./out/mmi_2x2_pol_splitter/v81_{sim_type}_{int(res)}"
     )
     save(hp, folder, name)
 
@@ -100,14 +139,14 @@ def create_config_MMI_1x4(folder: str = 'configs_mmi', name: str = 'config_1x4')
     taper_width = 0.8
     sim_type = "EME"
     res = 40
-    hp = HyperParamsMMI_1x4(
-        geo=GeoParamsMMI_1x4(
+    hp = HyperParamsMMI(
+        geo=GeoParamsMMI(
             mm_width=mm_width,
             mm_length=mm_length,
             taper_width=taper_width,
             waveguide_offset=waveguide_offset
         ),
-        sim=SimParams_1x4(
+        sim=SimParams(
             res=res,
             wavelength_min=1.26,
             wavelength_max=1.36,
@@ -122,4 +161,5 @@ if __name__ == '__main__':
     create_config_MMI_1x2(name='config')
     create_config_MMI_2x2(name='config_2x2')
     create_config_MMI_2x2_gds(name='config_2x2_gds')
+    create_config_MMI_2x2_pol_splitter(name='config_2x2_pol_splitter')
     create_config_MMI_1x4(name='config_1x4')
