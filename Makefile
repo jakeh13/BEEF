@@ -22,7 +22,7 @@ mmi_2x2_gds:
 	$(runner) $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2_gds.json
 
 mmi_2x2_pol_splitter:
-	$(runner) $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2_pol_splitter.json
+	$(runner) 4 $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2_pol_splitter.json
 
 mmi_2x2_s_cluster::
 	$(runner) $(my_python) mmi_2x2_sweep.py -c configs_mmi/config_2x2.json
@@ -35,6 +35,9 @@ mmi_1x4:
 
 mmi_1x4_s:
 	$(runner) 2 $(my_python) mmi_1x4_sweep_efficient.py --config configs_mmi/config_1x4.json
+
+mmi_mux:
+	$(runner) 2 $(my_python) mmi_mux_master.py -c configs_mmi/config_mux.json
 
 config:
 	$(my_python) config.py

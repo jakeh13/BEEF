@@ -1,4 +1,9 @@
 from engine.hyperparams.MMI import HyperParamsMMI, GeoParamsMMI, SimParams
+from engine.hyperparams.MMI_MUX import (
+    HyperParamsMMIMUX,
+    GeoParamsMMI as GeoParamsMMIMUX,
+    SimParams as SimParamsMMIMUX,
+)
 from dataclasses import asdict
 import json
 import os
@@ -128,7 +133,7 @@ def create_config_MMI_2x2_pol_splitter(folder: str = 'configs_mmi', name: str = 
             num_modes_MMI=50, # 20
             num_modes_taper=20
         ),
-        outputfolder=f"./out/mmi_2x2_pol_splitter/v81_{sim_type}_{int(res)}"
+        outputfolder=f"./out/mmi_2x2_pol_splitter/v0_{sim_type}_{int(res)}"
     )
     save(hp, folder, name)
 
@@ -157,9 +162,31 @@ def create_config_MMI_1x4(folder: str = 'configs_mmi', name: str = 'config_1x4')
     )
     save(hp, folder, name)
 
+def create_config_MMI_MUX(folder: str = 'configs_mmi', name: str = 'config_mux'):
+    sim_type = "EME"
+    res = 50
+    hp = HyperParamsMMIMUX(
+        geo=GeoParamsMMIMUX(),
+        sim=SimParamsMMIMUX(
+            res=res,
+            wavelength_min=1.26,
+            wavelength_max=1.36,
+            wavelength_pts=5,
+            sim_type=sim_type,
+            input_modes=[1, 2],
+            output_modes=[1],
+            num_modes_MMI=30,
+            num_modes_taper=20,
+            num_cells_taper=20
+        ),
+        outputfolder=f"./out/mmi_mux/v1_{sim_type}_{int(res)}"
+    )
+    save(hp, folder, name)
+
 if __name__ == '__main__':
     create_config_MMI_1x2(name='config')
     create_config_MMI_2x2(name='config_2x2')
     create_config_MMI_2x2_gds(name='config_2x2_gds')
     create_config_MMI_2x2_pol_splitter(name='config_2x2_pol_splitter')
     create_config_MMI_1x4(name='config_1x4')
+    create_config_MMI_MUX(name='config_mux')
