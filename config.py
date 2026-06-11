@@ -139,7 +139,7 @@ def create_config_MMI_2x2_gds_bend(folder: str = 'configs_mmi', name: str = 'con
     taper_width = mm_width/2 - taper_spacing/2
     waveguide_offset = taper_width + taper_spacing
     sim_type = "FDTD_GDS_BEND"
-    res = 10
+    res = 20
     splitter_name = "Splitter_60"
     hp = HyperParamsMMI(
         geo=GeoParamsMMI(
@@ -167,7 +167,7 @@ def create_config_MMI_2x2_gds_bend(folder: str = 'configs_mmi', name: str = 'con
             input_modes=[1],
             output_modes=[1],
         ),
-        outputfolder=f"../out/mmi_2x2_gds_bend/v2_{sim_type}_{int(res)}_{splitter_name}"
+        outputfolder=f"../out/mmi_2x2_gds_bend/v9_{sim_type}_{int(res)}_{splitter_name}"
     )
     save(hp, folder, name)
 

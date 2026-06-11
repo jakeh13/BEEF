@@ -4,7 +4,7 @@ ifeq ($(LMOD_SYSHOST), phoenix)
 	trash = ~/scratch
 	my_python = python3
 else
-	runner = mpirun -np
+	runner = mpirun -np 2 
 	trash = .
 	my_python = python
 endif
@@ -16,19 +16,19 @@ mmi_2x2_bend:
 	$(runner) $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2_gds_bend.json
 
 mmi:
-	$(runner) 2 $(my_python) mmi_1x2_master.py -c configs_mmi/config.json
+	$(runner) $(my_python) mmi_1x2_master.py -c configs_mmi/config.json
 
 mmi_1x2_gds:
-	$(runner) 2 $(my_python) mmi_1x2_master.py -c configs_mmi/config_1x2_gds.json
+	$(runner) $(my_python) mmi_1x2_master.py -c configs_mmi/config_1x2_gds.json
 
 mmi_2x2:
-	$(runner) 4 $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2.json
+	$(runner) $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2.json
 
 mmi_2x2_gds:
 	$(runner) $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2_gds.json
 
 mmi_2x2_pol_splitter:
-	$(runner) 4 $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2_pol_splitter.json
+	$(runner) $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2_pol_splitter.json
 
 mmi_2x2_s_cluster::
 	$(runner) $(my_python) mmi_2x2_sweep.py -c configs_mmi/config_2x2.json
@@ -37,13 +37,13 @@ mmi_2x2_s_eme_cluster:
 	$(runner) $(my_python) mmi_2x2_sweep_efficient.py -c configs_mmi/config_2x2.json
 
 mmi_1x4:
-	$(runner) 2 $(my_python) mmi_1x4_master.py -c configs_mmi/config_1x4.json
+	$(runner) $(my_python) mmi_1x4_master.py -c configs_mmi/config_1x4.json
 
 mmi_1x4_s:
-	$(runner) 2 $(my_python) mmi_1x4_sweep_efficient.py --config configs_mmi/config_1x4.json
+	$(runner) $(my_python) mmi_1x4_sweep_efficient.py --config configs_mmi/config_1x4.json
 
 mmi_mux:
-	$(runner) 2 $(my_python) mmi_mux_master.py -c configs_mmi/config_mux.json
+	$(runner) $(my_python) mmi_mux_master.py -c configs_mmi/config_mux.json
 
 config:
 	$(my_python) config.py

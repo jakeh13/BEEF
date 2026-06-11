@@ -20,7 +20,7 @@
     "sim": {
         "oxide_height": 1.5,
         "oxide_width": 5,
-        "res": 10,
+        "res": 20,
         "wavelength_min": 1.52,
         "wavelength_max": 1.58,
         "wavelength_pts": 30,
@@ -41,5 +41,5 @@
             1
         ]
     },
-    "outputfolder": "../out/mmi_2x2_gds_bend/v1_FDTD_GDS_BEND_10_Splitter_60"
+    "outputfolder": "../out/mmi_2x2_gds_bend/v9_FDTD_GDS_BEND_20_Splitter_60"
 }

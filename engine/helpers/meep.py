@@ -137,17 +137,20 @@ def create_bend_gds_for_meep(
     bend_radius, bend_type, bend_locations,
     device_Sx, stub_length, bend_wg_length,
     output_path,
+    dpml=0.0,
 ):
     """Generate GDS with 90° bends (and post/pre-bend straight segments) for MEEP.
 
     Bends placed at ±waveguide_offset/2 on input and/or output side.
     bend_type: "euler" uses gdsfactory bend_euler; "circular" uses hand-built arc polygon
                (euler uses gf path, circular uses explicit arc ring polygon).
+    Straight segments extend bend_wg_length + dpml so they reach through the PML.
     Returns dict with domain expansion: x_extra_left, x_extra_right, y_extra.
     """
     R = bend_radius
     hw = waveguide_width / 2
     yo = waveguide_offset / 2
+    straight_len = bend_wg_length + dpml
 
     c = gf.Component("bends")
     xs = gf.cross_section.cross_section(width=waveguide_width, layer=(2, 0))
@@ -198,14 +201,20 @@ def create_bend_gds_for_meep(
         x_stub_end = device_Sx / 2 + stub_length  # x where stub ends (bend starts)
 
         if bend_type == "euler":
-            # Top: +x → +y (CCW, angle=+90)
-            _add_bend_euler_gf(c, x_stub_end, yo, +90)
-            # Bottom: +x → -y (CW, angle=-90)
-            _add_bend_euler_gf(c, x_stub_end, -yo, -90)
-            # Post-bend straight segments (approximate x-footprint of euler bend ≈ R)
-            # euler bend x-footprint is slightly less than R; use R as conservative estimate
-            _add_straight_y(c, x_stub_end + R, yo + R, bend_wg_length, upward=True)
-            _add_straight_y(c, x_stub_end + R, -yo - R, bend_wg_length, upward=False)
+            # Top output: CCW (+x → +y). x-mirror of CW bend: (px,py)→(px,-py).
+            # Bypass ComponentReference transforms; manipulate polygon vertices directly.
+            b_ot = gf.components.bend_euler(radius=R, angle=-90, cross_section=xs)
+            o2_ot = np.array(b_ot.ports["o2"].center)
+            for pts in [np.array(p) for ps in b_ot.get_polygons_points(by="tuple").values() for p in ps]:
+                c.add_polygon(np.column_stack([pts[:, 0] + x_stub_end,
+                                               -pts[:, 1] + yo]), layer=(2, 0))
+            _add_straight_y(c, o2_ot[0] + x_stub_end, -o2_ot[1] + yo,
+                            straight_len, upward=True)
+            # Bottom output: CW (+x → -y, angle=-90).
+            b_ob = _add_bend_euler_gf(c, x_stub_end, -yo, -90)
+            o2_ob = np.array(b_ob.ports["o2"].center)
+            _add_straight_y(c, x_stub_end + o2_ob[0], -yo + o2_ob[1],
+                            straight_len, upward=False)
         else:
             # Circular arc: top CCW from 0° to 90°, center at (x_stub_end, yo + R)
             # Wait — for top output: start at (x_stub_end, yo) going +x, center is above
@@ -216,8 +225,8 @@ def create_bend_gds_for_meep(
             # End at (x_stub_end + R, yo + R) which is at angle 0° from center
             _add_bend_ccw(c, x_stub_end, yo + R, R, hw, -90, 0)   # top: CCW -90°→0°
             _add_bend_ccw(c, x_stub_end, -yo - R, R, hw, 0, 90)   # bot: CW (mirror) 0°→90°
-            _add_straight_y(c, x_stub_end + R, yo + R, bend_wg_length, upward=True)
-            _add_straight_y(c, x_stub_end + R, -yo - R, bend_wg_length, upward=False)
+            _add_straight_y(c, x_stub_end + R, yo + R, straight_len, upward=True)
+            _add_straight_y(c, x_stub_end + R, -yo - R, straight_len, upward=False)
 
         x_extra_right = R + bend_wg_length
         y_extra = max(y_extra, R + bend_wg_length)
@@ -232,16 +241,18 @@ def create_bend_gds_for_meep(
         # That's a CW arc from 180° to 270°.
 
         if bend_type == "euler":
-            # For input bends we need reverse euler: arriving in ±y, exiting in +x.
-            # Simplest: use same bend, mirror so o2 points in +x (acts as output port into device).
-            b_in_top = gf.components.bend_euler(radius=R, angle=+90, cross_section=xs)
-            ref_it = c.add_ref(b_in_top)
-            ref_it.rotate(-90, center=(0, 0))
-            o2_top = np.array(b_in_top.ports["o2"].center)
-            o2_top_rotated = np.array([o2_top[1], -o2_top[0]])   # CW: (y, -x)
-            ref_it.move(-o2_top_rotated + np.array([x_stub_start, yo]))
-            o1_top_world = np.array(ref_it.ports["o1"].center)
-            _add_straight_y(c, o1_top_world[0], o1_top_world[1], bend_wg_length, upward=True)
+            # Top input: -y → +x. Combined transform (x-mirror then -90° rotate): (px,py)→(-py,-px).
+            # Bypass ComponentReference transforms; manipulate polygon vertices directly.
+            b_it = gf.components.bend_euler(radius=R, angle=-90, cross_section=xs)
+            o1_it = np.array(b_it.ports["o1"].center)
+            o2_it = np.array(b_it.ports["o2"].center)
+            o2_it_t = np.array([-o2_it[1], -o2_it[0]])        # o2 after transform
+            tx_it = np.array([x_stub_start, yo]) - o2_it_t    # translate so o2→(x_stub_start,yo)
+            for pts in [np.array(p) for ps in b_it.get_polygons_points(by="tuple").values() for p in ps]:
+                c.add_polygon(np.column_stack([-pts[:, 1] + tx_it[0],
+                                               -pts[:, 0] + tx_it[1]]), layer=(2, 0))
+            o1_it_w = np.array([-o1_it[1], -o1_it[0]]) + tx_it
+            _add_straight_y(c, o1_it_w[0], o1_it_w[1], straight_len, upward=True)
 
             b_in_bot = gf.components.bend_euler(radius=R, angle=-90, cross_section=xs)
             ref_ib = c.add_ref(b_in_bot)
@@ -250,14 +261,14 @@ def create_bend_gds_for_meep(
             o2_bot_rotated = np.array([-o2_bot[1], o2_bot[0]])   # CCW: (-y, x)
             ref_ib.move(-o2_bot_rotated + np.array([x_stub_start, -yo]))
             o1_bot_world = np.array(ref_ib.ports["o1"].center)
-            _add_straight_y(c, o1_bot_world[0], o1_bot_world[1], bend_wg_length, upward=False)
+            _add_straight_y(c, o1_bot_world[0], o1_bot_world[1], straight_len, upward=False)
         else:
             # Circular: top input CW arc from 180°→270°
             _add_bend_ccw(c, x_stub_start, yo + R, R, hw, 180, 270)  # CW = reversed CCW
-            _add_straight_y(c, x_stub_start - R, yo + R, bend_wg_length, upward=True)
+            _add_straight_y(c, x_stub_start - R, yo + R, straight_len, upward=True)
             # Bottom input CW arc from 90°→180°
             _add_bend_ccw(c, x_stub_start, -yo - R, R, hw, 90, 180)
-            _add_straight_y(c, x_stub_start - R, -yo - R, bend_wg_length, upward=False)
+            _add_straight_y(c, x_stub_start - R, -yo - R, straight_len, upward=False)
 
         x_extra_left = R + bend_wg_length
         y_extra = max(y_extra, R + bend_wg_length)

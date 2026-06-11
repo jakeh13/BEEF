@@ -6,7 +6,7 @@
 #SBATCH --mem-per-cpu=8G
 #SBATCH -t 60
 #SBATCH -q inferno
-#SBATCH -o reports/%j.out
+#SBATCH -o ../reports/%j.out
 #SBATCH --mail-type=FAIL
 #SBATCH --array=0
 #SBATCH --mail-user=jhiesener3@gatech.edu

@@ -637,7 +637,8 @@ class MMI_2x2:
             self.hp.geo.waveguide_width, self.hp.geo.waveguide_offset,
             self.hp.geo.bend_radius, self.hp.geo.bend_type, self.hp.geo.bend_locations,
             device_Sx, self.hp.geo.bend_stub_length, self.hp.geo.bend_wg_length,
-            "gds/temp_gds_bends.gds"
+            "gds/temp_gds_bends.gds",
+            dpml=self.hp.sim.dpml,
         )
         x_extra_left  = bend_info["x_extra_left"]
         x_extra_right = bend_info["x_extra_right"]
@@ -645,17 +646,33 @@ class MMI_2x2:
         R = self.hp.geo.bend_radius
 
         Sx = device_Sx + (self.hp.geo.bend_stub_length + x_extra_left) + (self.hp.geo.bend_stub_length + x_extra_right) + 2*self.hp.sim.dpml
-        Sy = self.hp.sim.oxide_width + 2*y_extra + 2*self.hp.sim.dpml
+        Sy = self.hp.geo.waveguide_offset + 2*y_extra + 2*self.hp.sim.dpml
         Sz = self.hp.sim.oxide_height + 2*self.hp.sim.dpml
 
         Si  = meep_material_from_meow(mw.silicon.n, mw.silicon.params['wl'], wavelength_center)
         SiO2 = meep_material_from_meow(mw.silicon_oxide.n, mw.silicon_oxide.params['wl'], wavelength_center)
 
-        # Waveguide stubs (x-traveling, same positions as FDTD_GDS but Sx is larger)
-        x_in_center  = -Sx/2 + (self.hp.geo.bend_stub_length + x_extra_left)/2 + self.hp.sim.dpml/2
-        x_out_center =  Sx/2 - (self.hp.geo.bend_stub_length + x_extra_right)/2 - self.hp.sim.dpml/2
-        stub_size = mp.Vector3(self.hp.geo.bend_stub_length + x_extra_left + self.hp.sim.dpml, self.hp.geo.waveguide_width, self.hp.geo.waveguide_height)
-        stub_size_out = mp.Vector3(self.hp.geo.bend_stub_length + x_extra_right + self.hp.sim.dpml, self.hp.geo.waveguide_width, self.hp.geo.waveguide_height)
+        has_output_bends = "output" in self.hp.geo.bend_locations
+        has_input_bends  = "input"  in self.hp.geo.bend_locations
+
+        # Waveguide stubs: stop at the bend start when that side has a bend; extend
+        # through x-PML when no bend (source/monitor live in the stub on that side).
+        if has_input_bends:
+            x_in_center = -Sx/2 + self.hp.sim.dpml + x_extra_left + self.hp.geo.bend_stub_length / 2
+            in_stub_sz  = self.hp.geo.bend_stub_length
+        else:
+            x_in_center = -Sx/2 + (self.hp.geo.bend_stub_length + self.hp.sim.dpml) / 2
+            in_stub_sz  = self.hp.geo.bend_stub_length + self.hp.sim.dpml
+
+        if has_output_bends:
+            x_out_center = Sx/2 - self.hp.sim.dpml - x_extra_right - self.hp.geo.bend_stub_length / 2
+            out_stub_sz  = self.hp.geo.bend_stub_length
+        else:
+            x_out_center = Sx/2 - (self.hp.geo.bend_stub_length + self.hp.sim.dpml) / 2
+            out_stub_sz  = self.hp.geo.bend_stub_length + self.hp.sim.dpml
+
+        stub_size     = mp.Vector3(in_stub_sz,  self.hp.geo.waveguide_width, self.hp.geo.waveguide_height)
+        stub_size_out = mp.Vector3(out_stub_sz, self.hp.geo.waveguide_width, self.hp.geo.waveguide_height)
 
         geometry_base = [mp.Block(center=mp.Vector3(x_in_center,  self.hp.geo.waveguide_offset/2, 0), size=stub_size,     material=Si)]
         geometry_base += [mp.Block(center=mp.Vector3(x_in_center, -self.hp.geo.waveguide_offset/2, 0), size=stub_size,     material=Si)]
@@ -670,10 +687,10 @@ class MMI_2x2:
 
         # Taper monitor x-position: sm_monitor_position from the GDS right edge (middle of output stub)
         x_taper_mon = Sx/2 - self.hp.sim.dpml - x_extra_right - self.hp.geo.bend_stub_length + self.hp.sim.sm_monitor_position
+        # Input taper monitor x-position: mirror of x_taper_mon (sm_monitor_position from device edge into input stub)
+        x_in_taper_mon = -Sx/2 + self.hp.sim.dpml + x_extra_left + self.hp.geo.bend_stub_length - self.hp.sim.sm_monitor_position
 
         # Bend exit monitor positions (y-flux, only when output bends present)
-        has_output_bends = "output" in self.hp.geo.bend_locations
-        has_input_bends  = "input"  in self.hp.geo.bend_locations
 
         # x-center of bend exit (right-side bends go R past the end of the stub)
         x_bend_exit = Sx/2 - self.hp.sim.dpml - x_extra_right + R
@@ -696,6 +713,10 @@ class MMI_2x2:
         angles_bend_top  = {}
         powers_bend_bot  = {}
         angles_bend_bot  = {}
+        powers_in_top_fwd = {}
+        powers_in_bot_fwd = {}
+        powers_in_top_bwd = {}
+        powers_in_bot_bwd = {}
 
         # Determine input loop: if input bends, iterate over ports; otherwise single top-port loop
         if has_input_bends:
@@ -704,16 +725,17 @@ class MMI_2x2:
             input_port_configs = [("top", self.hp.geo.waveguide_offset/2, None)]
 
         sim_idx = 0
-        for port_label, port_y, y_kpoint_sign in input_port_configs:
+        for port_label, _, y_kpoint_sign in input_port_configs:
             for fdtd_input_mode in self.hp.sim.input_modes:
                 if mp.am_master(): self.master_logger.info(f"FDTD_GDS_BEND port={port_label} mode={fdtd_input_mode}")
 
                 if has_input_bends:
-                    # Source in pre-bend waveguide, traveling in ±y direction
-                    src_x = x_in_bend_exit - self.hp.sim.source_position
-                    mon_y_in = y_top_in_bend_mon if port_label == "top" else y_bot_in_bend_mon
-                    # Offset source away from device along direction of travel (against kpoint direction)
-                    src_y = mon_y_in - np.sign(y_kpoint_sign) * self.hp.sim.source_position
+                    # Source/monitor in pre-bend vertical waveguide, offset inward from PML face
+                    # (mirrors how non-bend FDTD offsets from PML in x).
+                    src_x = x_in_bend_exit
+                    y_pml_face = (Sy/2 - self.hp.sim.dpml) * (-1 if port_label == "bot" else 1)
+                    src_y  = y_pml_face - np.sign(y_pml_face) * self.hp.sim.source_position
+                    mon_y_in = y_pml_face - np.sign(y_pml_face) * self.hp.sim.sm_monitor_position
                     source_gaus = [mp.EigenModeSource(
                         mp.GaussianSource(frequency=1/wavelength_center, fwidth=0.4/wavelength_center),
                         eig_band=fdtd_input_mode,
@@ -743,15 +765,19 @@ class MMI_2x2:
                 )
 
                 if has_input_bends:
-                    # in_flux: pre-bend waveguide (y-flux); center at waveguide x so left edge stays inside PML
+                    # in_flux: pre-bend waveguide (y-flux); source normalization monitor
                     in_flux = sim.add_mode_monitor(freqs, mp.FluxRegion(
                         center=mp.Vector3(x_in_bend_exit, mon_y_in, 0),
                         size=mp.Vector3(Sz - 2*self.hp.sim.dpml, 0, self.hp.sim.oxide_height)
                     ))
-                    # taper_in_flux: after bend, in the stub (x-flux) — power delivered to the device
-                    taper_in_flux = sim.add_mode_monitor(freqs, mp.FluxRegion(
-                        center=mp.Vector3(-Sx/2 + self.hp.sim.dpml + x_extra_left - self.hp.geo.bend_stub_length + self.hp.sim.sm_monitor_position, port_y, 0),
-                        size=mp.Vector3(0, self.hp.sim.oxide_width/2, Sz - 2*self.hp.sim.dpml)
+                    # Post-bend input monitors (x-flux) — both stubs, measuring fwd + bwd power
+                    taper_in_flux_top = sim.add_mode_monitor(freqs, mp.FluxRegion(
+                        center=mp.Vector3(x_in_taper_mon, self.hp.geo.waveguide_offset/2, 0),
+                        size=mp.Vector3(0, self.hp.geo.waveguide_offset, Sz - 2*self.hp.sim.dpml)
+                    ))
+                    taper_in_flux_bot = sim.add_mode_monitor(freqs, mp.FluxRegion(
+                        center=mp.Vector3(x_in_taper_mon, -self.hp.geo.waveguide_offset/2, 0),
+                        size=mp.Vector3(0, self.hp.geo.waveguide_offset, Sz - 2*self.hp.sim.dpml)
                     ))
                 else:
                     in_flux = sim.add_mode_monitor(freqs, mp.FluxRegion(
@@ -760,14 +786,13 @@ class MMI_2x2:
                     ))
 
                 # Taper output monitors (x-flux) — between stub and bend
-                # Use (Sy - 4*dpml) so the y-edges stay one dpml inside the PML boundary
                 taper_flux_top = sim.add_mode_monitor(freqs, mp.FluxRegion(
-                    center=mp.Vector3(x_taper_mon, (Sy - 4*self.hp.sim.dpml)/4, 0),
-                    size=mp.Vector3(0, (Sy - 4*self.hp.sim.dpml)/2, Sz - 2*self.hp.sim.dpml)
+                    center=mp.Vector3(x_taper_mon, self.hp.geo.waveguide_offset/2, 0),
+                    size=mp.Vector3(0, self.hp.geo.waveguide_offset, Sz - 2*self.hp.sim.dpml)
                 ))
                 taper_flux_bot = sim.add_mode_monitor(freqs, mp.FluxRegion(
-                    center=mp.Vector3(x_taper_mon, -(Sy - 4*self.hp.sim.dpml)/4, 0),
-                    size=mp.Vector3(0, (Sy - 4*self.hp.sim.dpml)/2, Sz - 2*self.hp.sim.dpml)
+                    center=mp.Vector3(x_taper_mon, -self.hp.geo.waveguide_offset/2, 0),
+                    size=mp.Vector3(0, self.hp.geo.waveguide_offset, Sz - 2*self.hp.sim.dpml)
                 ))
 
                 # Post-bend monitors (y-flux) — only if output bends present
@@ -828,10 +853,11 @@ class MMI_2x2:
                                         f'{port_label}_input_source', color='red')
                         _plot_component(x_in_bend_exit, mon_y_in,
                                         Sz - 2*self.hp.sim.dpml, 0, f'{port_label}_input_pre_bend')
-                        _plot_component(-Sx/2 + self.hp.sim.dpml + x_extra_left
-                                        - self.hp.geo.bend_stub_length + self.hp.sim.sm_monitor_position,
-                                        port_y, 0, self.hp.sim.oxide_width/2,
-                                        f'{port_label}_input_post_bend')
+                        if sim_idx == 0:
+                            _plot_component(x_in_taper_mon, self.hp.geo.waveguide_offset/2,
+                                            0, self.hp.geo.waveguide_offset, 'top_input_post_bend')
+                            _plot_component(x_in_taper_mon, -self.hp.geo.waveguide_offset/2,
+                                            0, self.hp.geo.waveguide_offset, 'bot_input_post_bend')
                     else:
                         _plot_component(-Sx/2 + self.hp.sim.dpml + self.hp.sim.source_position,
                                         self.hp.sim.oxide_width/4, 0, self.hp.sim.oxide_width/2,
@@ -842,10 +868,10 @@ class MMI_2x2:
 
                     # Shared output monitors — only plot on first sim iteration
                     if sim_idx == 0:
-                        _plot_component(x_taper_mon, (Sy - 4*self.hp.sim.dpml)/4,
-                                        0, (Sy - 4*self.hp.sim.dpml)/2, 'top_output_pre_bend')
-                        _plot_component(x_taper_mon, -(Sy - 4*self.hp.sim.dpml)/4,
-                                        0, (Sy - 4*self.hp.sim.dpml)/2, 'bot_output_pre_bend')
+                        _plot_component(x_taper_mon, self.hp.geo.waveguide_offset/2,
+                                        0, self.hp.geo.waveguide_offset, 'top_output_pre_bend')
+                        _plot_component(x_taper_mon, -self.hp.geo.waveguide_offset/2,
+                                        0, self.hp.geo.waveguide_offset, 'bot_output_pre_bend')
                         if has_output_bends:
                             _plot_component(x_bend_exit, y_top_bend_mon,
                                             _bend_fx_sx, 0, 'top_output_post_bend')
@@ -861,6 +887,26 @@ class MMI_2x2:
                 else:
                     src_coeff = sim.get_eigenmode_coefficients(in_flux, [fdtd_input_mode], eig_parity=mp.NO_PARITY,
                                                                kpoint_func=lambda a, b: mp.Vector3(x=1))
+
+                if has_input_bends:
+                    in_key = (port_label, fdtd_input_mode)
+                    c_it = sim.get_eigenmode_coefficients(taper_in_flux_top, [fdtd_input_mode], eig_parity=mp.NO_PARITY,
+                                                          kpoint_func=lambda a, b: mp.Vector3(x=1))
+                    c_ib = sim.get_eigenmode_coefficients(taper_in_flux_bot, [fdtd_input_mode], eig_parity=mp.NO_PARITY,
+                                                          kpoint_func=lambda a, b: mp.Vector3(x=1))
+                    s_it_fwd = (c_it.alpha[:, :, 0] / src_coeff.alpha[:, :, 0])[0, :]
+                    s_ib_fwd = (c_ib.alpha[:, :, 0] / src_coeff.alpha[:, :, 0])[0, :]
+                    s_it_bwd = (c_it.alpha[:, :, 1] / src_coeff.alpha[:, :, 0])[0, :]
+                    s_ib_bwd = (c_ib.alpha[:, :, 1] / src_coeff.alpha[:, :, 0])[0, :]
+                    powers_in_top_fwd[in_key] = [np.abs(s)**2 for s in s_it_fwd]
+                    powers_in_bot_fwd[in_key] = [np.abs(s)**2 for s in s_ib_fwd]
+                    powers_in_top_bwd[in_key] = [np.abs(s)**2 for s in s_it_bwd]
+                    powers_in_bot_bwd[in_key] = [np.abs(s)**2 for s in s_ib_bwd]
+                    for pt in range(len(wavelengths)):
+                        if mp.am_master(): self.master_logger.info(
+                            f"InTaper | Port {port_label} In {fdtd_input_mode} | "
+                            f"TopFwd: {powers_in_top_fwd[in_key][pt]:.4f}  TopBwd: {powers_in_top_bwd[in_key][pt]:.4f}  "
+                            f"BotFwd: {powers_in_bot_fwd[in_key][pt]:.4f}  BotBwd: {powers_in_bot_bwd[in_key][pt]:.4f}")
 
                 for out_mode in self.hp.sim.output_modes:
                     key = (port_label, fdtd_input_mode, out_mode)
@@ -895,16 +941,20 @@ class MMI_2x2:
                 sim_idx += 1
 
         data_to_save = {
-            'coeffs_taper_top': coeffs_taper_top,
-            'coeffs_taper_bot': coeffs_taper_bot,
-            'powers_taper_top': powers_taper_top,
-            'angles_taper_top': angles_taper_top,
-            'powers_taper_bot': powers_taper_bot,
-            'angles_taper_bot': angles_taper_bot,
-            'powers_bend_top':  powers_bend_top,
-            'angles_bend_top':  angles_bend_top,
-            'powers_bend_bot':  powers_bend_bot,
-            'angles_bend_bot':  angles_bend_bot,
+            'coeffs_taper_top':   coeffs_taper_top,
+            'coeffs_taper_bot':   coeffs_taper_bot,
+            'powers_taper_top':   powers_taper_top,
+            'angles_taper_top':   angles_taper_top,
+            'powers_taper_bot':   powers_taper_bot,
+            'angles_taper_bot':   angles_taper_bot,
+            'powers_bend_top':    powers_bend_top,
+            'angles_bend_top':    angles_bend_top,
+            'powers_bend_bot':    powers_bend_bot,
+            'angles_bend_bot':    angles_bend_bot,
+            'powers_in_top_fwd':  powers_in_top_fwd,
+            'powers_in_bot_fwd':  powers_in_bot_fwd,
+            'powers_in_top_bwd':  powers_in_top_bwd,
+            'powers_in_bot_bwd':  powers_in_bot_bwd,
             'wavelengths': wavelengths,
         }
         with open(f'{self.hp.outputfolder}/data/sim_results.pkl', 'wb') as f:
