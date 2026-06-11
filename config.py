@@ -19,7 +19,7 @@ def save(hp: HyperParamsMMI, config_folder: str, name: str) -> None:
         print(s, file=f)
 
 def create_config_MMI_1x2(folder: str = 'configs_mmi', name: str = 'config'):
-    res = 10
+    res = 40
     sim_type = "EME"
     hp = HyperParamsMMI(
         geo=GeoParamsMMI(
@@ -33,6 +33,36 @@ def create_config_MMI_1x2(folder: str = 'configs_mmi', name: str = 'config'):
             sim_type = sim_type
         ),
         outputfolder=f"./out/mmi_1x2/{sim_type}_{int(res)}_2"
+    )
+    save(hp, folder, name)
+
+def create_config_MMI_1x2_gds(folder: str = 'configs_mmi', name: str = 'config_1x2_gds'):
+    sim_type = "FDTD_GDS"
+    res = 40
+    splitter_name = "splitter_f32"
+    mm_width = 2.6
+    mm_length = 6.4
+    hp = HyperParamsMMI(
+        geo=GeoParamsMMI(
+            gds_file=f"gds/{splitter_name}.gds",
+            mm_length=mm_length,
+            mm_width=mm_width,
+            taper_width=1.0,
+            taper_length=2.0,
+            waveguide_offset=1.3,
+            waveguide_width=0.35,
+            waveguide_height=0.16
+            ),
+        sim=SimParams(
+            res=res,
+            wavelength_min=1.26,
+            wavelength_max=1.36,
+            wavelength_pts=30,
+            sim_type=sim_type,
+            input_modes=[1],
+            output_modes=[1],
+        ),
+        outputfolder=f"./out/mmi_1x2_gds/{sim_type}_{int(res)}_{splitter_name}"
     )
     save(hp, folder, name)
 
@@ -99,6 +129,44 @@ def create_config_MMI_2x2_gds(folder: str = 'configs_mmi', name: str = 'config_2
             output_modes=[1],
         ),
         outputfolder=f"./out/mmi_2x2_gds/{sim_type}_{int(res)}_{splitter_name}"
+    )
+    save(hp, folder, name)
+
+def create_config_MMI_2x2_gds_bend(folder: str = 'configs_mmi', name: str = 'config_2x2_gds_bend'):
+    taper_spacing = 0.2
+    mm_width = 1.6
+    mm_length = 10.8
+    taper_width = mm_width/2 - taper_spacing/2
+    waveguide_offset = taper_width + taper_spacing
+    sim_type = "FDTD_GDS_BEND"
+    res = 40
+    splitter_name = "Splitter_60"
+    hp = HyperParamsMMI(
+        geo=GeoParamsMMI(
+            waveguide_width=0.5,
+            mm_width=mm_width,
+            mm_length=mm_length,
+            taper_length=4,
+            waveguide_offset=waveguide_offset,
+            taper_width=taper_width,
+            waveguide_height=0.215,
+            gds_file=f"gds/{splitter_name}.gds",
+            bend_radius=5.0,
+            bend_type="euler",
+            bend_locations=["output"],
+            bend_wg_length=1.0,
+        ),
+        sim=SimParams(
+            res=res,
+            wavelength_min=1.520,
+            wavelength_max=1.580,
+            wavelength_pts=30,
+            sim_type=sim_type,
+            mm_monitor_position=0.25,
+            input_modes=[1],
+            output_modes=[1],
+        ),
+        outputfolder=f"./out/mmi_2x2_gds_bend/{sim_type}_{int(res)}_{splitter_name}"
     )
     save(hp, folder, name)
 
@@ -185,8 +253,10 @@ def create_config_MMI_MUX(folder: str = 'configs_mmi', name: str = 'config_mux')
 
 if __name__ == '__main__':
     create_config_MMI_1x2(name='config')
+    create_config_MMI_1x2_gds(name='config_1x2_gds')
     create_config_MMI_2x2(name='config_2x2')
     create_config_MMI_2x2_gds(name='config_2x2_gds')
+    create_config_MMI_2x2_gds_bend(name='config_2x2_gds_bend')
     create_config_MMI_2x2_pol_splitter(name='config_2x2_pol_splitter')
     create_config_MMI_1x4(name='config_1x4')
     create_config_MMI_MUX(name='config_mux')

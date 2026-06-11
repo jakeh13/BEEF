@@ -13,7 +13,10 @@ mmi_cluster:
 	$(runner) $(my_python) mmi_1x2_master.py -c configs_mmi/config.json
 
 mmi:
-	$(runner) 1 $(my_python) mmi_1x2_master.py -c configs_mmi/config.json
+	$(runner) 2 $(my_python) mmi_1x2_master.py -c configs_mmi/config.json
+
+mmi_1x2_gds:
+	$(runner) 2 $(my_python) mmi_1x2_master.py -c configs_mmi/config_1x2_gds.json
 
 mmi_2x2:
 	$(runner) 4 $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2.json

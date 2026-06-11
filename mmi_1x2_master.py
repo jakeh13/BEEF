@@ -17,10 +17,11 @@ from engine.helpers.general import(
     make_output_folders
 )
 from engine.helpers.meep import(
-     meep_material_from_meow, 
-     create_temp_gds_for_mmi_input, 
+     meep_material_from_meow,
+     create_temp_gds_for_mmi_input,
      create_temp_gds_for_mmi_output,
-     create_temp_gds_for_full_mmi
+     create_temp_gds_for_full_mmi,
+     prepare_gds_for_meep,
 )
 from engine.helpers.meow import(
     load_1x2_MMI,
@@ -419,7 +420,141 @@ class MMI_1x2:
             pickle.dump(data_to_save, f)
 
         return powers, wavelengths
-    
+
+    def fdtd_simulation_from_gds(self):
+        if mp.am_master(): self.master_logger.info(f"Creating full FDTD simulation from GDS: {self.hp.geo.gds_file}")
+        wavelength_center = (self.hp.sim.wavelength_max - self.hp.sim.wavelength_min)/2 + self.hp.sim.wavelength_min
+        wavelengths = np.linspace(self.hp.sim.wavelength_min, self.hp.sim.wavelength_max, self.hp.sim.wavelength_pts)
+        freqs = 1/wavelengths.astype(list)
+
+        device_Sx = prepare_gds_for_meep(self.hp.geo.gds_file, "gds/temp_gds_fdtd.gds")
+        Sx = device_Sx + 2*self.hp.sim.waveguide_length + 2*self.hp.sim.dpml
+        Sy = self.hp.sim.oxide_width + 2*self.hp.sim.dpml
+        Sz = self.hp.sim.oxide_height + 2*self.hp.sim.dpml
+
+        Si = meep_material_from_meow(mw.silicon.n, mw.silicon.params['wl'], wavelength_center)
+        SiO2 = meep_material_from_meow(mw.silicon_oxide.n, mw.silicon_oxide.params['wl'], wavelength_center)
+
+        geometry_base = [mp.Block(center=mp.Vector3(-Sx/2 + self.hp.sim.waveguide_length/2 + self.hp.sim.dpml/2, 0, 0), size=mp.Vector3(self.hp.sim.waveguide_length + self.hp.sim.dpml, self.hp.geo.waveguide_width, self.hp.geo.waveguide_height), material=Si)]
+        geometry_base += [mp.Block(center=mp.Vector3(Sx/2 - self.hp.sim.waveguide_length/2 - self.hp.sim.dpml/2, self.hp.geo.waveguide_offset/2, 0), size=mp.Vector3(self.hp.sim.waveguide_length + self.hp.sim.dpml, self.hp.geo.waveguide_width, self.hp.geo.waveguide_height), material=Si)]
+        geometry_base += [mp.Block(center=mp.Vector3(Sx/2 - self.hp.sim.waveguide_length/2 - self.hp.sim.dpml/2, -self.hp.geo.waveguide_offset/2, 0), size=mp.Vector3(self.hp.sim.waveguide_length + self.hp.sim.dpml, self.hp.geo.waveguide_width, self.hp.geo.waveguide_height), material=Si)]
+
+        mmi = mp.get_GDSII_prisms(Si, "gds/temp_gds_fdtd.gds", 2, -self.hp.geo.waveguide_height/2, self.hp.geo.waveguide_height/2)
+        geometry_base += mmi
+
+        coeffs_top_by_mode = {}
+        coeffs_bot_by_mode = {}
+        powers_top_by_mode = {}
+        angles_top_by_mode = {}
+        powers_bot_by_mode = {}
+        angles_bot_by_mode = {}
+
+        for in_m_idx, fdtd_input_mode in enumerate(self.hp.sim.input_modes):
+            if mp.am_master(): self.master_logger.info(f"FDTD_GDS input mode {fdtd_input_mode}")
+
+            source_gaus = [
+                mp.EigenModeSource(
+                    mp.GaussianSource(frequency=1/wavelength_center, fwidth=0.4/wavelength_center),
+                    eig_band=fdtd_input_mode,
+                    direction=mp.NO_DIRECTION,
+                    eig_kpoint=mp.Vector3(x=1),
+                    size=mp.Vector3(0, self.hp.sim.oxide_width, self.hp.sim.oxide_height),
+                    center=[-Sx/2+self.hp.sim.dpml+self.hp.sim.source_position, 0, 0],
+                )
+            ]
+
+            sim = mp.Simulation(
+                cell_size=mp.Vector3(Sx, Sy, Sz),
+                boundary_layers=[mp.PML(self.hp.sim.dpml)],
+                geometry=geometry_base,
+                sources=source_gaus,
+                eps_averaging=True,
+                resolution=self.hp.sim.res,
+                default_material=SiO2
+            )
+
+            in_flux = sim.add_mode_monitor(
+                freqs,
+                mp.FluxRegion(
+                    center=mp.Vector3(-Sx/2 + self.hp.sim.dpml + self.hp.sim.sm_monitor_position, 0, 0),
+                    size=mp.Vector3(0, Sy - 2*self.hp.sim.dpml, Sz - 2*self.hp.sim.dpml)
+                )
+            )
+
+            out_flux_top = sim.add_mode_monitor(
+                freqs,
+                mp.FluxRegion(
+                    center=mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.sm_monitor_position, (Sy - 2*self.hp.sim.dpml)/4, 0),
+                    size=mp.Vector3(0, (Sy - 2*self.hp.sim.dpml)/2, Sz - 2*self.hp.sim.dpml)
+                )
+            )
+
+            out_flux_bot = sim.add_mode_monitor(
+                freqs,
+                mp.FluxRegion(
+                    center=mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.sm_monitor_position, -(Sy - 2*self.hp.sim.dpml)/4, 0),
+                    size=mp.Vector3(0, (Sy - 2*self.hp.sim.dpml)/2, Sz - 2*self.hp.sim.dpml)
+                )
+            )
+
+            if in_m_idx == 0:
+                if mp.am_master(): self.master_logger.info("Plotting FDTD GDS simulation geometry")
+                if mp.am_master():
+                    plt.figure()
+                    sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(Sx, Sy, 0)))
+                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_xy.png', dpi=300)
+                    plt.figure()
+                    sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(Sx, 0, Sz)))
+                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_xz.png', dpi=300)
+                    plt.figure()
+                    sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(0, Sy, Sz)))
+                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_yz.png', dpi=300)
+                    plt.close("all")
+
+            if mp.am_master(): self.master_logger.info(f"Running FDTD GDS (mode {fdtd_input_mode})")
+            sim.run(until_after_sources=mp.stop_when_dft_decayed(minimum_run_time=20, tol=1e-11))
+
+            if mp.am_master(): self.master_logger.info(f"Getting FDTD GDS eigenmode coefficients (mode {fdtd_input_mode}):")
+            src_coeff = sim.get_eigenmode_coefficients(in_flux, [fdtd_input_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(x=1))
+
+            for out_mode in self.hp.sim.output_modes:
+                coeff_top = sim.get_eigenmode_coefficients(out_flux_top, [out_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(x=1))
+                coeff_bot = sim.get_eigenmode_coefficients(out_flux_bot, [out_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(x=1))
+                s_top = coeff_top.alpha[:, :, 0] / src_coeff.alpha[:, :, 0]
+                s_top = s_top[0, :]
+                s_bot = coeff_bot.alpha[:, :, 0] / src_coeff.alpha[:, :, 0]
+                s_bot = s_bot[0, :]
+                key = (fdtd_input_mode, out_mode)
+                coeffs_top_by_mode[key] = s_top
+                coeffs_bot_by_mode[key] = s_bot
+                pwr_top, ang_top, pwr_bot, ang_bot = [], [], [], []
+                for point in range(len(wavelengths)):
+                    pwr_top.append(np.abs(s_top[point])**2)
+                    ang_top.append(np.angle(s_top[point], deg=True))
+                    pwr_bot.append(np.abs(s_bot[point])**2)
+                    ang_bot.append(np.angle(s_bot[point], deg=True))
+                    if mp.am_master(): self.master_logger.info(f"In {fdtd_input_mode} Out {out_mode} | Top: Power {pwr_top[-1]:.4f}, Angle {ang_top[-1]:.2f}")
+                    if mp.am_master(): self.master_logger.info(f"In {fdtd_input_mode} Out {out_mode} | Bot: Power {pwr_bot[-1]:.4f}, Angle {ang_bot[-1]:.2f}")
+                powers_top_by_mode[key] = pwr_top
+                angles_top_by_mode[key] = ang_top
+                powers_bot_by_mode[key] = pwr_bot
+                angles_bot_by_mode[key] = ang_bot
+
+        data_to_save = {
+            'coeffs_top_by_mode': coeffs_top_by_mode,
+            'coeffs_bot_by_mode': coeffs_bot_by_mode,
+            'powers_top_by_mode': powers_top_by_mode,
+            'angles_top_by_mode': angles_top_by_mode,
+            'powers_bot_by_mode': powers_bot_by_mode,
+            'angles_bot_by_mode': angles_bot_by_mode,
+            'wavelengths': wavelengths,
+        }
+
+        with open(f'{self.hp.outputfolder}/data/sim_results.pkl', 'wb') as f:
+            pickle.dump(data_to_save, f)
+
+        return powers_top_by_mode, powers_bot_by_mode, wavelengths
+
     def eme_simulation(self):
         wavelengths = np.linspace(self.hp.sim.wavelength_min,self.hp.sim.wavelength_max,self.hp.sim.wavelength_pts)
         # Load the GDSII file for the MMI splitter
@@ -494,12 +629,35 @@ class MMI_1x2:
             powers, wavelengths = self.hybrid_simulation()
         elif self.hp.sim.sim_type == "FDTD":
             powers, wavelengths = self.fdtd_simulation()
+        elif self.hp.sim.sim_type == "FDTD_GDS":
+            powers_top_by_mode, powers_bot_by_mode, wavelengths = self.fdtd_simulation_from_gds()
+            if mp.am_master():
+                plt.figure()
+                for (in_m, out_m), powers in powers_top_by_mode.items():
+                    plt.plot(wavelengths, powers, label=f"In {in_m} → Top {out_m}")
+                for (in_m, out_m), powers in powers_bot_by_mode.items():
+                    plt.plot(wavelengths, powers, label=f"In {in_m} → Bot {out_m}")
+                plt.xlabel("Wavelength (micron)")
+                plt.ylabel("Transmission")
+                plt.legend()
+                plt.savefig(f'{self.hp.outputfolder}/performance.png', dpi=300)
+                plt.figure()
+                for (in_m, out_m), powers in powers_top_by_mode.items():
+                    plt.plot(wavelengths, 10 * np.log10(np.array(powers)), label=f"In {in_m} → Top {out_m}")
+                for (in_m, out_m), powers in powers_bot_by_mode.items():
+                    plt.plot(wavelengths, 10 * np.log10(np.array(powers)), label=f"In {in_m} → Bot {out_m}")
+                plt.xlabel("Wavelength (micron)")
+                plt.ylabel("Transmission (dB)")
+                plt.legend()
+                plt.savefig(f'{self.hp.outputfolder}/performance_dB.png', dpi=300)
+                plt.close("all")
+            return
         elif self.hp.sim.sim_type == "EME":
             powers, wavelengths = self.eme_simulation()
 
         if mp.am_master():
             plt.figure()
-            plt.plot(wavelengths,powers)
+            plt.plot(wavelengths, powers)
             plt.xlabel("Wavelength (micron)")
             plt.ylabel("Transmission")
             plt.savefig(f'{self.hp.outputfolder}/performance.png', dpi=300)

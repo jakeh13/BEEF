@@ -121,6 +121,159 @@ def prepare_gds_for_meep(gds_path, output_path):
     bbox = component.bbox()
     return float(bbox.right - bbox.left)
 
+
+def _arc_polygon(cx, cy, r_inner, r_outer, theta0_deg, theta1_deg, n_pts=64):
+    """Return polygon vertices for an arc ring (annulus sector) in layer (2,0)."""
+    t0 = np.radians(theta0_deg)
+    t1 = np.radians(theta1_deg)
+    thetas = np.linspace(t0, t1, n_pts)
+    outer = [(cx + r_outer*np.cos(t), cy + r_outer*np.sin(t)) for t in thetas]
+    inner = [(cx + r_inner*np.cos(t), cy + r_inner*np.sin(t)) for t in reversed(thetas)]
+    return outer + inner
+
+
+def create_bend_gds_for_meep(
+    waveguide_width, waveguide_offset,
+    bend_radius, bend_type, bend_locations,
+    device_Sx, stub_length, bend_wg_length,
+    output_path,
+):
+    """Generate GDS with 90° bends (and post/pre-bend straight segments) for MEEP.
+
+    Bends placed at ±waveguide_offset/2 on input and/or output side.
+    bend_type: "euler" uses gdsfactory bend_euler; "circular" uses hand-built arc polygon
+               (euler uses gf path, circular uses explicit arc ring polygon).
+    Returns dict with domain expansion: x_extra_left, x_extra_right, y_extra.
+    """
+    R = bend_radius
+    hw = waveguide_width / 2
+    yo = waveguide_offset / 2
+
+    c = gf.Component("bends")
+    xs = gf.cross_section.cross_section(width=waveguide_width, layer=(2, 0))
+
+    x_extra_right = 0.0
+    x_extra_left  = 0.0
+    y_extra        = 0.0
+
+    def _add_straight_x(component, x0, y_center, length):
+        """Horizontal straight waveguide from x0 to x0+length."""
+        component.add_polygon([
+            (x0,          y_center - hw),
+            (x0 + length, y_center - hw),
+            (x0 + length, y_center + hw),
+            (x0,          y_center + hw),
+        ], layer=(2, 0))
+
+    def _add_straight_y(component, x_center, y0, length, upward=True):
+        """Vertical straight waveguide from y0 upward (or downward)."""
+        dy = length if upward else -length
+        y1 = y0 + dy
+        y_lo, y_hi = min(y0, y1), max(y0, y1)
+        component.add_polygon([
+            (x_center - hw, y_lo),
+            (x_center + hw, y_lo),
+            (x_center + hw, y_hi),
+            (x_center - hw, y_hi),
+        ], layer=(2, 0))
+
+    def _add_bend_ccw(component, arc_cx, arc_cy, R, hw, theta0_deg, theta1_deg):
+        """Counter-clockwise 90° bend arc polygon."""
+        verts = _arc_polygon(arc_cx, arc_cy, R - hw, R + hw, theta0_deg, theta1_deg)
+        component.add_polygon(verts, layer=(2, 0))
+
+    def _add_bend_euler_gf(component, x_start, y_start, angle_deg):
+        """Euler bend via gdsfactory. angle_deg=+90 turns CCW, -90 turns CW.
+        Input port is at (x_start, y_start) traveling in +x direction.
+        """
+        b = gf.components.bend_euler(radius=R, angle=angle_deg, cross_section=xs)
+        ref = component.add_ref(b)
+        # gf bend_euler: o1 port at (0,0) facing +x (orientation=180 means facing left,
+        # so the waveguide enters from left going right). Move o1 to target position.
+        o1 = b.ports["o1"]
+        ref.move(-o1.center + np.array([x_start, y_start]))
+        return b
+
+    if "output" in bend_locations:
+        x_stub_end = device_Sx / 2 + stub_length  # x where stub ends (bend starts)
+
+        if bend_type == "euler":
+            # Top: +x → +y (CCW, angle=+90)
+            _add_bend_euler_gf(c, x_stub_end, yo, +90)
+            # Bottom: +x → -y (CW, angle=-90)
+            _add_bend_euler_gf(c, x_stub_end, -yo, -90)
+            # Post-bend straight segments (approximate x-footprint of euler bend ≈ R)
+            # euler bend x-footprint is slightly less than R; use R as conservative estimate
+            _add_straight_y(c, x_stub_end + R, yo + R, bend_wg_length, upward=True)
+            _add_straight_y(c, x_stub_end + R, -yo - R, bend_wg_length, upward=False)
+        else:
+            # Circular arc: top CCW from 0° to 90°, center at (x_stub_end, yo + R)
+            # Wait — for top output: start at (x_stub_end, yo) going +x, center is above
+            # Arc center for turning +x→+y: center at (x_stub_end, yo + R)...
+            # No: for CCW turn from east to north, center is to the left of travel = above
+            # Center = (x_stub_end, yo + R), arc goes from 270° to 0° (CCW)
+            # Actually: start at (x_stub_end, yo) which is at angle 270° from center (x_stub_end, yo+R)
+            # End at (x_stub_end + R, yo + R) which is at angle 0° from center
+            _add_bend_ccw(c, x_stub_end, yo + R, R, hw, -90, 0)   # top: CCW -90°→0°
+            _add_bend_ccw(c, x_stub_end, -yo - R, R, hw, 0, 90)   # bot: CW (mirror) 0°→90°
+            _add_straight_y(c, x_stub_end + R, yo + R, bend_wg_length, upward=True)
+            _add_straight_y(c, x_stub_end + R, -yo - R, bend_wg_length, upward=False)
+
+        x_extra_right = R + bend_wg_length
+        y_extra = max(y_extra, R + bend_wg_length)
+
+    if "input" in bend_locations:
+        x_stub_start = -(device_Sx / 2 + stub_length)  # x where input stub starts (bend exits here going +x)
+        # Top input bend: -y → +x; arc center at (x_stub_start, yo + R)
+        # Start of arc (pre-bend wg): (x_stub_start - R, yo + R), traveling -y
+        # Arc: CCW from 0° → -90° (i.e., from east going to south),
+        # Wait: for -y→+x turn (CW), center is to the right of -y = +x direction
+        # center = (x_stub_start, yo + R), start = (x_stub_start - R, yo + R) at 180°, end = (x_stub_start, yo) at 270°
+        # That's a CW arc from 180° to 270°.
+
+        if bend_type == "euler":
+            # For input bends we need reverse euler: arriving in ±y, exiting in +x.
+            # Simplest: use same bend, mirror so o2 points in +x (acts as output port into device).
+            b_in_top = gf.components.bend_euler(radius=R, angle=-90, cross_section=xs)
+            ref_it = c.add_ref(b_in_top)
+            # o2 port of angle=-90 bend exits going -y; we need it to exit going +x
+            # Rotate 90° CCW so that the -y exit becomes +x exit
+            ref_it.rotate(90, center=(0, 0))
+            # Now move so the exit port (was o2, now going +x) lands at x_stub_start, yo
+            o2 = b_in_top.ports["o2"]
+            o2_rotated = np.array([-o2.center[1], o2.center[0]])  # 90° CCW rotation
+            ref_it.move(-o2_rotated + np.array([x_stub_start, yo]))
+            # Pre-bend straight (going upward from top of bend)
+            # After rotation, o1 port faces upward; add straight going up from there
+            o1 = b_in_top.ports["o1"]
+            o1_rotated = np.array([-o1.center[1], o1.center[0]])
+            o1_world = o1_rotated + ref_it.origin
+            _add_straight_y(c, o1_world[0], o1_world[1], bend_wg_length, upward=True)
+
+            b_in_bot = gf.components.bend_euler(radius=R, angle=90, cross_section=xs)
+            ref_ib = c.add_ref(b_in_bot)
+            ref_ib.rotate(-90, center=(0, 0))
+            o2b = b_in_bot.ports["o2"]
+            o2b_rotated = np.array([o2b.center[1], -o2b.center[0]])
+            ref_ib.move(-o2b_rotated + np.array([x_stub_start, -yo]))
+            o1b = b_in_bot.ports["o1"]
+            o1b_rotated = np.array([o1b.center[1], -o1b.center[0]])
+            o1b_world = o1b_rotated + ref_ib.origin
+            _add_straight_y(c, o1b_world[0], o1b_world[1], bend_wg_length, upward=False)
+        else:
+            # Circular: top input CW arc from 180°→270°
+            _add_bend_ccw(c, x_stub_start, yo + R, R, hw, 180, 270)  # CW = reversed CCW
+            _add_straight_y(c, x_stub_start - R, yo + R, bend_wg_length, upward=True)
+            # Bottom input CW arc from 90°→180°
+            _add_bend_ccw(c, x_stub_start, -yo - R, R, hw, 90, 180)
+            _add_straight_y(c, x_stub_start - R, -yo - R, bend_wg_length, upward=False)
+
+        x_extra_left = R + bend_wg_length
+        y_extra = max(y_extra, R + bend_wg_length)
+
+    c.write_gds(output_path)
+    return {"x_extra_right": x_extra_right, "x_extra_left": x_extra_left, "y_extra": y_extra}
+
 def create_MMI_1x4(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset, name):
     mmi = gf.Component(name)
     mmi.add_polygon([(-mm_length/2,-mm_width/2),
