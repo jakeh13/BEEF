@@ -12,6 +12,9 @@ endif
 mmi_cluster:
 	$(runner) $(my_python) mmi_1x2_master.py -c configs_mmi/config.json
 
+mmi_2x2_bend:
+	$(runner) $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2_gds_bend.json
+
 mmi:
 	$(runner) 2 $(my_python) mmi_1x2_master.py -c configs_mmi/config.json
 

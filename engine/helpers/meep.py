@@ -191,7 +191,7 @@ def create_bend_gds_for_meep(
         # gf bend_euler: o1 port at (0,0) facing +x (orientation=180 means facing left,
         # so the waveguide enters from left going right). Move o1 to target position.
         o1 = b.ports["o1"]
-        ref.move(-o1.center + np.array([x_start, y_start]))
+        ref.move(-np.array(o1.center) + np.array([x_start, y_start]))
         return b
 
     if "output" in bend_locations:
@@ -234,32 +234,23 @@ def create_bend_gds_for_meep(
         if bend_type == "euler":
             # For input bends we need reverse euler: arriving in ±y, exiting in +x.
             # Simplest: use same bend, mirror so o2 points in +x (acts as output port into device).
-            b_in_top = gf.components.bend_euler(radius=R, angle=-90, cross_section=xs)
+            b_in_top = gf.components.bend_euler(radius=R, angle=+90, cross_section=xs)
             ref_it = c.add_ref(b_in_top)
-            # o2 port of angle=-90 bend exits going -y; we need it to exit going +x
-            # Rotate 90° CCW so that the -y exit becomes +x exit
-            ref_it.rotate(90, center=(0, 0))
-            # Now move so the exit port (was o2, now going +x) lands at x_stub_start, yo
-            o2 = b_in_top.ports["o2"]
-            o2_rotated = np.array([-o2.center[1], o2.center[0]])  # 90° CCW rotation
-            ref_it.move(-o2_rotated + np.array([x_stub_start, yo]))
-            # Pre-bend straight (going upward from top of bend)
-            # After rotation, o1 port faces upward; add straight going up from there
-            o1 = b_in_top.ports["o1"]
-            o1_rotated = np.array([-o1.center[1], o1.center[0]])
-            o1_world = o1_rotated + ref_it.origin
-            _add_straight_y(c, o1_world[0], o1_world[1], bend_wg_length, upward=True)
+            ref_it.rotate(-90, center=(0, 0))
+            o2_top = np.array(b_in_top.ports["o2"].center)
+            o2_top_rotated = np.array([o2_top[1], -o2_top[0]])   # CW: (y, -x)
+            ref_it.move(-o2_top_rotated + np.array([x_stub_start, yo]))
+            o1_top_world = np.array(ref_it.ports["o1"].center)
+            _add_straight_y(c, o1_top_world[0], o1_top_world[1], bend_wg_length, upward=True)
 
-            b_in_bot = gf.components.bend_euler(radius=R, angle=90, cross_section=xs)
+            b_in_bot = gf.components.bend_euler(radius=R, angle=-90, cross_section=xs)
             ref_ib = c.add_ref(b_in_bot)
-            ref_ib.rotate(-90, center=(0, 0))
-            o2b = b_in_bot.ports["o2"]
-            o2b_rotated = np.array([o2b.center[1], -o2b.center[0]])
-            ref_ib.move(-o2b_rotated + np.array([x_stub_start, -yo]))
-            o1b = b_in_bot.ports["o1"]
-            o1b_rotated = np.array([o1b.center[1], -o1b.center[0]])
-            o1b_world = o1b_rotated + ref_ib.origin
-            _add_straight_y(c, o1b_world[0], o1b_world[1], bend_wg_length, upward=False)
+            ref_ib.rotate(+90, center=(0, 0))
+            o2_bot = np.array(b_in_bot.ports["o2"].center)
+            o2_bot_rotated = np.array([-o2_bot[1], o2_bot[0]])   # CCW: (-y, x)
+            ref_ib.move(-o2_bot_rotated + np.array([x_stub_start, -yo]))
+            o1_bot_world = np.array(ref_ib.ports["o1"].center)
+            _add_straight_y(c, o1_bot_world[0], o1_bot_world[1], bend_wg_length, upward=False)
         else:
             # Circular: top input CW arc from 180°→270°
             _add_bend_ccw(c, x_stub_start, yo + R, R, hw, 180, 270)  # CW = reversed CCW

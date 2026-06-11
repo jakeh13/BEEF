@@ -15,6 +15,7 @@ class GeoParamsMMI:
     bend_type: str = "euler"          # "euler" or "circular" (FDTD_GDS_BEND only)
     bend_locations: List[str] = field(default_factory=list)  # ["input"], ["output"], or ["input","output"]
     bend_wg_length: float = 1.0       # Straight waveguide length after/before bend for monitor placement
+    bend_stub_length: float = 0.5     # Length of waveguide between MMI device edge and bend start
 
 @dataclass(eq=False, kw_only=True)
 class SimParams:

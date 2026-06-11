@@ -6,12 +6,18 @@
         "mm_width": 2.8,
         "taper_length": 4,
         "taper_width": 1.2999999999999998,
-        "waveguide_offset": 1.4999999999999998
+        "waveguide_offset": 1.4999999999999998,
+        "gds_file": "",
+        "bend_radius": 5.0,
+        "bend_type": "euler",
+        "bend_locations": [],
+        "bend_wg_length": 1.0,
+        "bend_stub_length": 0.5
     },
     "sim": {
         "oxide_height": 1.5,
         "oxide_width": 5,
-        "res": 10,
+        "res": 40,
         "wavelength_min": 1.53,
         "wavelength_max": 1.565,
         "wavelength_pts": 5,
@@ -24,7 +30,13 @@
         "mm_monitor_position": 0.25,
         "sim_type": "HYBRID",
         "num_cells_taper": 15,
-        "num_modes_taper": 7
+        "num_modes_taper": 7,
+        "input_modes": [
+            1
+        ],
+        "output_modes": [
+            1
+        ]
     },
-    "outputfolder": "./out/mmi_2x2_sweep/HYBRID_10_1"
+    "outputfolder": "./out/mmi_2x2_sweep/HYBRID_40_1"
 }

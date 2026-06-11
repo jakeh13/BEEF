@@ -7,7 +7,12 @@
         "taper_length": 4,
         "taper_width": 0.7000000000000001,
         "waveguide_offset": 0.9000000000000001,
-        "gds_file": "gds/Splitter.gds"
+        "gds_file": "gds/Splitter_60.gds",
+        "bend_radius": 5.0,
+        "bend_type": "euler",
+        "bend_locations": [],
+        "bend_wg_length": 1.0,
+        "bend_stub_length": 0.5
     },
     "sim": {
         "oxide_height": 1.5,
@@ -25,7 +30,13 @@
         "mm_monitor_position": 0.25,
         "sim_type": "FDTD_GDS",
         "num_cells_taper": 15,
-        "num_modes_taper": 7
+        "num_modes_taper": 7,
+        "input_modes": [
+            1
+        ],
+        "output_modes": [
+            1
+        ]
     },
-    "outputfolder": "./out/mmi_2x2_gds/FDTD_GDS_40_0"
+    "outputfolder": "./out/mmi_2x2_gds/FDTD_GDS_40_Splitter_60"
 }

@@ -1,0 +1,44 @@
+{
+    "geo": {
+        "waveguide_height": 0.16,
+        "waveguide_width": 0.35,
+        "mm_waveguide_width": 0.7,
+        "top_waveguide_width": 0.33,
+        "between_waveguide_length": 3.0,
+        "top_bot_taper_width": 0.725,
+        "middle_taper_width": 1.15,
+        "mm_1_length": 16.92,
+        "mm_width": 2.8,
+        "mm_2_length": 34.24,
+        "taper_length": 2.0,
+        "input_taper_width": 1.4,
+        "waveguide_offset": 1.0375,
+        "gds_file": ""
+    },
+    "sim": {
+        "oxide_height": 1.5,
+        "oxide_width": 5,
+        "res": 50,
+        "wavelength_min": 1.26,
+        "wavelength_max": 1.36,
+        "wavelength_pts": 5,
+        "num_modes_MMI": 30,
+        "dpml": 0.5,
+        "mm_sim_length": 1.0,
+        "waveguide_length": 0.5,
+        "source_position": 0.0,
+        "sm_monitor_position": 0.25,
+        "mm_monitor_position": 0.75,
+        "sim_type": "EME",
+        "num_cells_taper": 20,
+        "num_modes_taper": 20,
+        "input_modes": [
+            1,
+            2
+        ],
+        "output_modes": [
+            1
+        ]
+    },
+    "outputfolder": "./out/mmi_mux/v1_EME_50"
+}
