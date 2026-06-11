@@ -16,7 +16,8 @@ from meow import compute_modes_tidy3d as compute_modes
 from engine.hyperparams.MMI import HyperParamsMMI as HyperParams
 
 from engine.helpers.general import(
-    make_output_folders
+    make_output_folders,
+    resolve_output_folder,
 )
 from engine.helpers.meep import(
      meep_material_from_meow,
@@ -39,6 +40,7 @@ class MMI_2x2:
     def __init__(self,args):
         self.config = args.config
         self.hp: HyperParams = dataconf.load(self.config, HyperParams)
+        self.hp.outputfolder = resolve_output_folder(self.hp.outputfolder)
         make_output_folders(self.hp.outputfolder)
 
         # save config in output folder
@@ -385,94 +387,97 @@ class MMI_2x2:
         powers_bot_by_mode = {}
         angles_bot_by_mode = {}
 
-        for in_m_idx, fdtd_input_mode in enumerate(self.hp.sim.input_modes):
-            if mp.am_master(): self.master_logger.info(f"Full FDTD input mode {fdtd_input_mode}")
+        _port_y_map = {"top": self.hp.sim.oxide_width / 4, "bot": -self.hp.sim.oxide_width / 4}
+        for port_label in self.hp.sim.input_ports:
+            y_port = _port_y_map[port_label]
+            for in_m_idx, fdtd_input_mode in enumerate(self.hp.sim.input_modes):
+                if mp.am_master(): self.master_logger.info(f"Full FDTD port={port_label} mode={fdtd_input_mode}")
 
-            source_gaus = [
-                mp.EigenModeSource(
-                    mp.GaussianSource(frequency=1/wavelength_center, fwidth=0.4/wavelength_center),
-                    eig_band=fdtd_input_mode,
-                    direction=mp.NO_DIRECTION,
-                    eig_kpoint=mp.Vector3(x=1),
-                    size=mp.Vector3(0, self.hp.sim.oxide_width/2, self.hp.sim.oxide_height),
-                    center=[-Sx/2+self.hp.sim.dpml+self.hp.sim.source_position, self.hp.sim.oxide_width/4, 0],
+                source_gaus = [
+                    mp.EigenModeSource(
+                        mp.GaussianSource(frequency=1/wavelength_center, fwidth=0.4/wavelength_center),
+                        eig_band=fdtd_input_mode,
+                        direction=mp.NO_DIRECTION,
+                        eig_kpoint=mp.Vector3(x=1),
+                        size=mp.Vector3(0, self.hp.sim.oxide_width/2, self.hp.sim.oxide_height),
+                        center=[-Sx/2+self.hp.sim.dpml+self.hp.sim.source_position, y_port, 0],
+                    )
+                ]
+
+                sim = mp.Simulation(
+                    cell_size=mp.Vector3(Sx, Sy, Sz),
+                    boundary_layers=[mp.PML(self.hp.sim.dpml)],
+                    geometry=geometry_base,
+                    sources=source_gaus,
+                    eps_averaging=True,
+                    resolution=self.hp.sim.res,
+                    default_material=SiO2
                 )
-            ]
 
-            sim = mp.Simulation(
-                cell_size=mp.Vector3(Sx, Sy, Sz),
-                boundary_layers=[mp.PML(self.hp.sim.dpml)],
-                geometry=geometry_base,
-                sources=source_gaus,
-                eps_averaging=True,
-                resolution=self.hp.sim.res,
-                default_material=SiO2
-            )
-
-            in_flux = sim.add_mode_monitor(
-                freqs,
-                mp.FluxRegion(
-                    center = mp.Vector3(-Sx/2 + self.hp.sim.dpml + self.hp.sim.sm_monitor_position, self.hp.sim.oxide_width/4, 0),
-                    size = mp.Vector3(0, self.hp.sim.oxide_width/2,Sz - 2*self.hp.sim.dpml)
+                in_flux = sim.add_mode_monitor(
+                    freqs,
+                    mp.FluxRegion(
+                        center = mp.Vector3(-Sx/2 + self.hp.sim.dpml + self.hp.sim.sm_monitor_position, y_port, 0),
+                        size = mp.Vector3(0, self.hp.sim.oxide_width/2,Sz - 2*self.hp.sim.dpml)
+                    )
                 )
-            )
 
-            out_flux_top = sim.add_mode_monitor(
-                freqs,
-                mp.FluxRegion(
-                    center = mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.sm_monitor_position, (Sy - 2*self.hp.sim.dpml)/4, 0),
-                    size = mp.Vector3(0, (Sy - 2*self.hp.sim.dpml)/2,Sz - 2*self.hp.sim.dpml)
+                out_flux_top = sim.add_mode_monitor(
+                    freqs,
+                    mp.FluxRegion(
+                        center = mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.sm_monitor_position, (Sy - 2*self.hp.sim.dpml)/4, 0),
+                        size = mp.Vector3(0, (Sy - 2*self.hp.sim.dpml)/2,Sz - 2*self.hp.sim.dpml)
+                    )
                 )
-            )
 
-            out_flux_bot = sim.add_mode_monitor(
-                freqs,
-                mp.FluxRegion(
-                    center = mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.sm_monitor_position, -(Sy - 2*self.hp.sim.dpml)/4, 0),
-                    size = mp.Vector3(0, (Sy - 2*self.hp.sim.dpml)/2,Sz - 2*self.hp.sim.dpml)
+                out_flux_bot = sim.add_mode_monitor(
+                    freqs,
+                    mp.FluxRegion(
+                        center = mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.sm_monitor_position, -(Sy - 2*self.hp.sim.dpml)/4, 0),
+                        size = mp.Vector3(0, (Sy - 2*self.hp.sim.dpml)/2,Sz - 2*self.hp.sim.dpml)
+                    )
                 )
-            )
 
-            if in_m_idx == 0:
-                if mp.am_master(): self.master_logger.info("Plotting FDTD simulation geometry")
-                plt.figure()
-                sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, Sy, 0)))
-                plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_xy.png', dpi=300)
-                plt.figure()
-                sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, 0, Sz)))
-                plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_xz.png', dpi=300)
-                plt.figure()
-                sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(0, Sy, Sz)))
-                plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_yz.png', dpi=300)
+                if in_m_idx == 0:
+                    if mp.am_master(): self.master_logger.info(f"Plotting FDTD simulation geometry (port={port_label})")
+                    plt.figure()
+                    sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, Sy, 0)))
+                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_xy_{port_label}.png', dpi=300)
+                    plt.figure()
+                    sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, 0, Sz)))
+                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_xz_{port_label}.png', dpi=300)
+                    plt.figure()
+                    sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(0, Sy, Sz)))
+                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_yz_{port_label}.png', dpi=300)
 
-            if mp.am_master(): self.master_logger.info(f"Running FDTD simulation (mode {fdtd_input_mode})")
-            sim.run(until_after_sources=mp.stop_when_dft_decayed(minimum_run_time=20, tol = 1e-11))
+                if mp.am_master(): self.master_logger.info(f"Running FDTD simulation (port={port_label} mode={fdtd_input_mode})")
+                sim.run(until_after_sources=mp.stop_when_dft_decayed(minimum_run_time=20, tol = 1e-11))
 
-            if mp.am_master(): self.master_logger.info(f"Getting FDTD eigenmode coefficients (mode {fdtd_input_mode}):")
-            src_coeff = sim.get_eigenmode_coefficients(in_flux, [fdtd_input_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(x=1))
+                if mp.am_master(): self.master_logger.info(f"Getting FDTD eigenmode coefficients (port={port_label} mode={fdtd_input_mode}):")
+                src_coeff = sim.get_eigenmode_coefficients(in_flux, [fdtd_input_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(x=1))
 
-            for out_mode in self.hp.sim.output_modes:
-                coeff_top = sim.get_eigenmode_coefficients(out_flux_top, [out_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(x=1))
-                coeff_bot = sim.get_eigenmode_coefficients(out_flux_bot, [out_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(x=1))
-                s_top = coeff_top.alpha[:,:,0] / src_coeff.alpha[:,:,0]
-                s_top = s_top[0,:]
-                s_bot = coeff_bot.alpha[:,:,0] / src_coeff.alpha[:,:,0]
-                s_bot = s_bot[0,:]
-                key = (fdtd_input_mode, out_mode)
-                coeffs_top_by_mode[key] = s_top
-                coeffs_bot_by_mode[key] = s_bot
-                pwr_top, ang_top, pwr_bot, ang_bot = [], [], [], []
-                for point in range(len(wavelengths)):
-                    pwr_top.append(np.abs(s_top[point])**2)
-                    ang_top.append(np.angle(s_top[point], deg=True))
-                    pwr_bot.append(np.abs(s_bot[point])**2)
-                    ang_bot.append(np.angle(s_bot[point], deg=True))
-                    if mp.am_master(): self.master_logger.info(f"In {fdtd_input_mode} Out {out_mode} | Top: Power {pwr_top[-1]:.4f}, Angle {ang_top[-1]:.2f}")
-                    if mp.am_master(): self.master_logger.info(f"In {fdtd_input_mode} Out {out_mode} | Bot: Power {pwr_bot[-1]:.4f}, Angle {ang_bot[-1]:.2f}")
-                powers_top_by_mode[key] = pwr_top
-                angles_top_by_mode[key] = ang_top
-                powers_bot_by_mode[key] = pwr_bot
-                angles_bot_by_mode[key] = ang_bot
+                for out_mode in self.hp.sim.output_modes:
+                    coeff_top = sim.get_eigenmode_coefficients(out_flux_top, [out_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(x=1))
+                    coeff_bot = sim.get_eigenmode_coefficients(out_flux_bot, [out_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(x=1))
+                    s_top = coeff_top.alpha[:,:,0] / src_coeff.alpha[:,:,0]
+                    s_top = s_top[0,:]
+                    s_bot = coeff_bot.alpha[:,:,0] / src_coeff.alpha[:,:,0]
+                    s_bot = s_bot[0,:]
+                    key = (port_label, fdtd_input_mode, out_mode)
+                    coeffs_top_by_mode[key] = s_top
+                    coeffs_bot_by_mode[key] = s_bot
+                    pwr_top, ang_top, pwr_bot, ang_bot = [], [], [], []
+                    for point in range(len(wavelengths)):
+                        pwr_top.append(np.abs(s_top[point])**2)
+                        ang_top.append(np.angle(s_top[point], deg=True))
+                        pwr_bot.append(np.abs(s_bot[point])**2)
+                        ang_bot.append(np.angle(s_bot[point], deg=True))
+                        if mp.am_master(): self.master_logger.info(f"Port {port_label} In {fdtd_input_mode} Out {out_mode} | Top: Power {pwr_top[-1]:.4f}, Angle {ang_top[-1]:.2f}")
+                        if mp.am_master(): self.master_logger.info(f"Port {port_label} In {fdtd_input_mode} Out {out_mode} | Bot: Power {pwr_bot[-1]:.4f}, Angle {ang_bot[-1]:.2f}")
+                    powers_top_by_mode[key] = pwr_top
+                    angles_top_by_mode[key] = ang_top
+                    powers_bot_by_mode[key] = pwr_bot
+                    angles_bot_by_mode[key] = ang_bot
 
         data_to_save = {
             'coeffs_top_by_mode': coeffs_top_by_mode,
@@ -522,94 +527,97 @@ class MMI_2x2:
         powers_bot_by_mode = {}
         angles_bot_by_mode = {}
 
-        for in_m_idx, fdtd_input_mode in enumerate(self.hp.sim.input_modes):
-            if mp.am_master(): self.master_logger.info(f"FDTD_GDS input mode {fdtd_input_mode}")
+        _port_y_map = {"top": self.hp.sim.oxide_width / 4, "bot": -self.hp.sim.oxide_width / 4}
+        for port_label in self.hp.sim.input_ports:
+            y_port = _port_y_map[port_label]
+            for in_m_idx, fdtd_input_mode in enumerate(self.hp.sim.input_modes):
+                if mp.am_master(): self.master_logger.info(f"FDTD_GDS port={port_label} mode={fdtd_input_mode}")
 
-            source_gaus = [
-                mp.EigenModeSource(
-                    mp.GaussianSource(frequency=1/wavelength_center, fwidth=0.4/wavelength_center),
-                    eig_band=fdtd_input_mode,
-                    direction=mp.NO_DIRECTION,
-                    eig_kpoint=mp.Vector3(x=1),
-                    size=mp.Vector3(0, self.hp.sim.oxide_width/2, self.hp.sim.oxide_height),
-                    center=[-Sx/2+self.hp.sim.dpml+self.hp.sim.source_position, self.hp.sim.oxide_width/4, 0],
+                source_gaus = [
+                    mp.EigenModeSource(
+                        mp.GaussianSource(frequency=1/wavelength_center, fwidth=0.4/wavelength_center),
+                        eig_band=fdtd_input_mode,
+                        direction=mp.NO_DIRECTION,
+                        eig_kpoint=mp.Vector3(x=1),
+                        size=mp.Vector3(0, self.hp.sim.oxide_width/2, self.hp.sim.oxide_height),
+                        center=[-Sx/2+self.hp.sim.dpml+self.hp.sim.source_position, y_port, 0],
+                    )
+                ]
+
+                sim = mp.Simulation(
+                    cell_size=mp.Vector3(Sx, Sy, Sz),
+                    boundary_layers=[mp.PML(self.hp.sim.dpml)],
+                    geometry=geometry_base,
+                    sources=source_gaus,
+                    eps_averaging=True,
+                    resolution=self.hp.sim.res,
+                    default_material=SiO2
                 )
-            ]
 
-            sim = mp.Simulation(
-                cell_size=mp.Vector3(Sx, Sy, Sz),
-                boundary_layers=[mp.PML(self.hp.sim.dpml)],
-                geometry=geometry_base,
-                sources=source_gaus,
-                eps_averaging=True,
-                resolution=self.hp.sim.res,
-                default_material=SiO2
-            )
-
-            in_flux = sim.add_mode_monitor(
-                freqs,
-                mp.FluxRegion(
-                    center=mp.Vector3(-Sx/2 + self.hp.sim.dpml + self.hp.sim.sm_monitor_position, self.hp.sim.oxide_width/4, 0),
-                    size=mp.Vector3(0, self.hp.sim.oxide_width/2, Sz - 2*self.hp.sim.dpml)
+                in_flux = sim.add_mode_monitor(
+                    freqs,
+                    mp.FluxRegion(
+                        center=mp.Vector3(-Sx/2 + self.hp.sim.dpml + self.hp.sim.sm_monitor_position, y_port, 0),
+                        size=mp.Vector3(0, self.hp.sim.oxide_width/2, Sz - 2*self.hp.sim.dpml)
+                    )
                 )
-            )
 
-            out_flux_top = sim.add_mode_monitor(
-                freqs,
-                mp.FluxRegion(
-                    center=mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.sm_monitor_position, (Sy - 2*self.hp.sim.dpml)/4, 0),
-                    size=mp.Vector3(0, (Sy - 2*self.hp.sim.dpml)/2, Sz - 2*self.hp.sim.dpml)
+                out_flux_top = sim.add_mode_monitor(
+                    freqs,
+                    mp.FluxRegion(
+                        center=mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.sm_monitor_position, (Sy - 2*self.hp.sim.dpml)/4, 0),
+                        size=mp.Vector3(0, (Sy - 2*self.hp.sim.dpml)/2, Sz - 2*self.hp.sim.dpml)
+                    )
                 )
-            )
 
-            out_flux_bot = sim.add_mode_monitor(
-                freqs,
-                mp.FluxRegion(
-                    center=mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.sm_monitor_position, -(Sy - 2*self.hp.sim.dpml)/4, 0),
-                    size=mp.Vector3(0, (Sy - 2*self.hp.sim.dpml)/2, Sz - 2*self.hp.sim.dpml)
+                out_flux_bot = sim.add_mode_monitor(
+                    freqs,
+                    mp.FluxRegion(
+                        center=mp.Vector3(Sx/2 - self.hp.sim.dpml - self.hp.sim.sm_monitor_position, -(Sy - 2*self.hp.sim.dpml)/4, 0),
+                        size=mp.Vector3(0, (Sy - 2*self.hp.sim.dpml)/2, Sz - 2*self.hp.sim.dpml)
+                    )
                 )
-            )
 
-            if in_m_idx == 0:
-                if mp.am_master(): self.master_logger.info("Plotting FDTD GDS simulation geometry")
-                plt.figure()
-                sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(Sx, Sy, 0)))
-                plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_xy.png', dpi=300)
-                plt.figure()
-                sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(Sx, 0, Sz)))
-                plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_xz.png', dpi=300)
-                plt.figure()
-                sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(0, Sy, Sz)))
-                plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_yz.png', dpi=300)
+                if in_m_idx == 0:
+                    if mp.am_master(): self.master_logger.info(f"Plotting FDTD GDS simulation geometry (port={port_label})")
+                    plt.figure()
+                    sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(Sx, Sy, 0)))
+                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_xy_{port_label}.png', dpi=300)
+                    plt.figure()
+                    sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(Sx, 0, Sz)))
+                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_xz_{port_label}.png', dpi=300)
+                    plt.figure()
+                    sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(0, Sy, Sz)))
+                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_yz_{port_label}.png', dpi=300)
 
-            if mp.am_master(): self.master_logger.info(f"Running FDTD GDS (mode {fdtd_input_mode})")
-            sim.run(until_after_sources=mp.stop_when_dft_decayed(minimum_run_time=20, tol=1e-11))
+                if mp.am_master(): self.master_logger.info(f"Running FDTD GDS (port={port_label} mode={fdtd_input_mode})")
+                sim.run(until_after_sources=mp.stop_when_dft_decayed(minimum_run_time=20, tol=1e-11))
 
-            if mp.am_master(): self.master_logger.info(f"Getting FDTD GDS eigenmode coefficients (mode {fdtd_input_mode}):")
-            src_coeff = sim.get_eigenmode_coefficients(in_flux, [fdtd_input_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(x=1))
+                if mp.am_master(): self.master_logger.info(f"Getting FDTD GDS eigenmode coefficients (port={port_label} mode={fdtd_input_mode}):")
+                src_coeff = sim.get_eigenmode_coefficients(in_flux, [fdtd_input_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(x=1))
 
-            for out_mode in self.hp.sim.output_modes:
-                coeff_top = sim.get_eigenmode_coefficients(out_flux_top, [out_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(x=1))
-                coeff_bot = sim.get_eigenmode_coefficients(out_flux_bot, [out_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(x=1))
-                s_top = coeff_top.alpha[:, :, 0] / src_coeff.alpha[:, :, 0]
-                s_top = s_top[0, :]
-                s_bot = coeff_bot.alpha[:, :, 0] / src_coeff.alpha[:, :, 0]
-                s_bot = s_bot[0, :]
-                key = (fdtd_input_mode, out_mode)
-                coeffs_top_by_mode[key] = s_top
-                coeffs_bot_by_mode[key] = s_bot
-                pwr_top, ang_top, pwr_bot, ang_bot = [], [], [], []
-                for point in range(len(wavelengths)):
-                    pwr_top.append(np.abs(s_top[point])**2)
-                    ang_top.append(np.angle(s_top[point], deg=True))
-                    pwr_bot.append(np.abs(s_bot[point])**2)
-                    ang_bot.append(np.angle(s_bot[point], deg=True))
-                    if mp.am_master(): self.master_logger.info(f"In {fdtd_input_mode} Out {out_mode} | Top: Power {pwr_top[-1]:.4f}, Angle {ang_top[-1]:.2f}")
-                    if mp.am_master(): self.master_logger.info(f"In {fdtd_input_mode} Out {out_mode} | Bot: Power {pwr_bot[-1]:.4f}, Angle {ang_bot[-1]:.2f}")
-                powers_top_by_mode[key] = pwr_top
-                angles_top_by_mode[key] = ang_top
-                powers_bot_by_mode[key] = pwr_bot
-                angles_bot_by_mode[key] = ang_bot
+                for out_mode in self.hp.sim.output_modes:
+                    coeff_top = sim.get_eigenmode_coefficients(out_flux_top, [out_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(x=1))
+                    coeff_bot = sim.get_eigenmode_coefficients(out_flux_bot, [out_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(x=1))
+                    s_top = coeff_top.alpha[:, :, 0] / src_coeff.alpha[:, :, 0]
+                    s_top = s_top[0, :]
+                    s_bot = coeff_bot.alpha[:, :, 0] / src_coeff.alpha[:, :, 0]
+                    s_bot = s_bot[0, :]
+                    key = (port_label, fdtd_input_mode, out_mode)
+                    coeffs_top_by_mode[key] = s_top
+                    coeffs_bot_by_mode[key] = s_bot
+                    pwr_top, ang_top, pwr_bot, ang_bot = [], [], [], []
+                    for point in range(len(wavelengths)):
+                        pwr_top.append(np.abs(s_top[point])**2)
+                        ang_top.append(np.angle(s_top[point], deg=True))
+                        pwr_bot.append(np.abs(s_bot[point])**2)
+                        ang_bot.append(np.angle(s_bot[point], deg=True))
+                        if mp.am_master(): self.master_logger.info(f"Port {port_label} In {fdtd_input_mode} Out {out_mode} | Top: Power {pwr_top[-1]:.4f}, Angle {ang_top[-1]:.2f}")
+                        if mp.am_master(): self.master_logger.info(f"Port {port_label} In {fdtd_input_mode} Out {out_mode} | Bot: Power {pwr_bot[-1]:.4f}, Angle {ang_bot[-1]:.2f}")
+                    powers_top_by_mode[key] = pwr_top
+                    angles_top_by_mode[key] = ang_top
+                    powers_bot_by_mode[key] = pwr_bot
+                    angles_bot_by_mode[key] = ang_bot
 
         data_to_save = {
             'coeffs_top_by_mode': coeffs_top_by_mode,
@@ -718,15 +726,22 @@ class MMI_2x2:
         powers_in_top_bwd = {}
         powers_in_bot_bwd = {}
 
-        # Determine input loop: if input bends, iterate over ports; otherwise single top-port loop
+        # Build port configs filtered by configured input_ports
         if has_input_bends:
-            input_port_configs = [("top", self.hp.geo.waveguide_offset/2, -1), ("bot", -self.hp.geo.waveguide_offset/2, 1)]
+            _all_port_cfgs = {
+                "top": (self.hp.geo.waveguide_offset/2, -1),
+                "bot": (-self.hp.geo.waveguide_offset/2, 1),
+            }
         else:
-            input_port_configs = [("top", self.hp.geo.waveguide_offset/2, None)]
+            _all_port_cfgs = {
+                "top": (self.hp.sim.oxide_width/4, None),
+                "bot": (-self.hp.sim.oxide_width/4, None),
+            }
+        input_port_configs = [(p,) + _all_port_cfgs[p] for p in self.hp.sim.input_ports if p in _all_port_cfgs]
 
         sim_idx = 0
-        for port_label, _, y_kpoint_sign in input_port_configs:
-            for fdtd_input_mode in self.hp.sim.input_modes:
+        for port_label, y_center, y_kpoint_sign in input_port_configs:
+            for mode_idx_for_port, fdtd_input_mode in enumerate(self.hp.sim.input_modes):
                 if mp.am_master(): self.master_logger.info(f"FDTD_GDS_BEND port={port_label} mode={fdtd_input_mode}")
 
                 if has_input_bends:
@@ -751,7 +766,7 @@ class MMI_2x2:
                         direction=mp.NO_DIRECTION,
                         eig_kpoint=mp.Vector3(x=1),
                         size=mp.Vector3(0, self.hp.sim.oxide_width/2, self.hp.sim.oxide_height),
-                        center=[-Sx/2+self.hp.sim.dpml+self.hp.sim.source_position, self.hp.sim.oxide_width/4, 0],
+                        center=[-Sx/2+self.hp.sim.dpml+self.hp.sim.source_position, y_center, 0],
                     )]
 
                 sim = mp.Simulation(
@@ -781,7 +796,7 @@ class MMI_2x2:
                     ))
                 else:
                     in_flux = sim.add_mode_monitor(freqs, mp.FluxRegion(
-                        center=mp.Vector3(-Sx/2 + self.hp.sim.dpml + self.hp.sim.sm_monitor_position, self.hp.sim.oxide_width/4, 0),
+                        center=mp.Vector3(-Sx/2 + self.hp.sim.dpml + self.hp.sim.sm_monitor_position, y_center, 0),
                         size=mp.Vector3(0, self.hp.sim.oxide_width/2, Sz - 2*self.hp.sim.dpml)
                     ))
 
@@ -809,18 +824,18 @@ class MMI_2x2:
                         size=mp.Vector3(_bend_fx_sx, 0, Sz - 2*self.hp.sim.dpml)
                     ))
 
-                if sim_idx == 0:
-                    if mp.am_master(): self.master_logger.info("Plotting FDTD_GDS_BEND geometry")
+                if mode_idx_for_port == 0:
+                    if mp.am_master(): self.master_logger.info(f"Plotting FDTD_GDS_BEND geometry (port={port_label})")
                     if mp.am_master():
                         plt.figure()
                         sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(Sx, Sy, 0)))
-                        plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_bend_xy.png', dpi=300)
+                        plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_bend_xy_{port_label}.png', dpi=300)
                         plt.figure()
                         sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(Sx, 0, Sz)))
-                        plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_bend_xz.png', dpi=300)
+                        plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_bend_xz_{port_label}.png', dpi=300)
                         plt.figure()
                         sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(0, Sy, Sz)))
-                        plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_bend_yz.png', dpi=300)
+                        plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_bend_yz_{port_label}.png', dpi=300)
                         plt.close("all")
 
                 if mp.am_master():
@@ -860,11 +875,11 @@ class MMI_2x2:
                                             0, self.hp.geo.waveguide_offset, 'bot_input_post_bend')
                     else:
                         _plot_component(-Sx/2 + self.hp.sim.dpml + self.hp.sim.source_position,
-                                        self.hp.sim.oxide_width/4, 0, self.hp.sim.oxide_width/2,
-                                        'top_input_source', color='red')
+                                        y_center, 0, self.hp.sim.oxide_width/2,
+                                        f'{port_label}_input_source', color='red')
                         _plot_component(-Sx/2 + self.hp.sim.dpml + self.hp.sim.sm_monitor_position,
-                                        self.hp.sim.oxide_width/4, 0, self.hp.sim.oxide_width/2,
-                                        'top_input_flux')
+                                        y_center, 0, self.hp.sim.oxide_width/2,
+                                        f'{port_label}_input_flux')
 
                     # Shared output monitors — only plot on first sim iteration
                     if sim_idx == 0:
@@ -884,9 +899,15 @@ class MMI_2x2:
                 if has_input_bends:
                     src_coeff = sim.get_eigenmode_coefficients(in_flux, [fdtd_input_mode], eig_parity=mp.NO_PARITY,
                                                                kpoint_func=lambda a, b: mp.Vector3(y=float(y_kpoint_sign)))
+                    # For a y-flux monitor MEEP defines alpha[:,:,0] as +y ("forward") regardless of kpoint.
+                    # When y_kpoint_sign < 0 the source propagates in -y ("backward"), so the injected
+                    # power is in alpha[:,:,1]; using alpha[:,:,0] (the small reflection) as the
+                    # denominator would inflate all S-parameters by ~100-1000x.
+                    src_fwd_idx = 0 if y_kpoint_sign > 0 else 1
                 else:
                     src_coeff = sim.get_eigenmode_coefficients(in_flux, [fdtd_input_mode], eig_parity=mp.NO_PARITY,
                                                                kpoint_func=lambda a, b: mp.Vector3(x=1))
+                    src_fwd_idx = 0  # x-flux: +x is always "forward"
 
                 if has_input_bends:
                     in_key = (port_label, fdtd_input_mode)
@@ -894,10 +915,10 @@ class MMI_2x2:
                                                           kpoint_func=lambda a, b: mp.Vector3(x=1))
                     c_ib = sim.get_eigenmode_coefficients(taper_in_flux_bot, [fdtd_input_mode], eig_parity=mp.NO_PARITY,
                                                           kpoint_func=lambda a, b: mp.Vector3(x=1))
-                    s_it_fwd = (c_it.alpha[:, :, 0] / src_coeff.alpha[:, :, 0])[0, :]
-                    s_ib_fwd = (c_ib.alpha[:, :, 0] / src_coeff.alpha[:, :, 0])[0, :]
-                    s_it_bwd = (c_it.alpha[:, :, 1] / src_coeff.alpha[:, :, 0])[0, :]
-                    s_ib_bwd = (c_ib.alpha[:, :, 1] / src_coeff.alpha[:, :, 0])[0, :]
+                    s_it_fwd = (c_it.alpha[:, :, 0] / src_coeff.alpha[:, :, src_fwd_idx])[0, :]
+                    s_ib_fwd = (c_ib.alpha[:, :, 0] / src_coeff.alpha[:, :, src_fwd_idx])[0, :]
+                    s_it_bwd = (c_it.alpha[:, :, 1] / src_coeff.alpha[:, :, src_fwd_idx])[0, :]
+                    s_ib_bwd = (c_ib.alpha[:, :, 1] / src_coeff.alpha[:, :, src_fwd_idx])[0, :]
                     powers_in_top_fwd[in_key] = [np.abs(s)**2 for s in s_it_fwd]
                     powers_in_bot_fwd[in_key] = [np.abs(s)**2 for s in s_ib_fwd]
                     powers_in_top_bwd[in_key] = [np.abs(s)**2 for s in s_it_bwd]
@@ -913,8 +934,8 @@ class MMI_2x2:
 
                     ct = sim.get_eigenmode_coefficients(taper_flux_top, [out_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(x=1))
                     cb = sim.get_eigenmode_coefficients(taper_flux_bot, [out_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(x=1))
-                    s_top = (ct.alpha[:, :, 0] / src_coeff.alpha[:, :, 0])[0, :]
-                    s_bot = (cb.alpha[:, :, 0] / src_coeff.alpha[:, :, 0])[0, :]
+                    s_top = (ct.alpha[:, :, 0] / src_coeff.alpha[:, :, src_fwd_idx])[0, :]
+                    s_bot = (cb.alpha[:, :, 0] / src_coeff.alpha[:, :, src_fwd_idx])[0, :]
                     coeffs_taper_top[key] = s_top
                     coeffs_taper_bot[key] = s_bot
                     pwr_t, ang_t, pwr_b, ang_b = [], [], [], []
@@ -928,8 +949,9 @@ class MMI_2x2:
                     if has_output_bends:
                         cbt = sim.get_eigenmode_coefficients(bend_flux_top, [out_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(y=1))
                         cbb = sim.get_eigenmode_coefficients(bend_flux_bot, [out_mode], eig_parity=mp.NO_PARITY, kpoint_func=lambda a, b: mp.Vector3(y=-1))
-                        sb_top = (cbt.alpha[:, :, 0] / src_coeff.alpha[:, :, 0])[0, :]
-                        sb_bot = (cbb.alpha[:, :, 0] / src_coeff.alpha[:, :, 0])[0, :]
+                        sb_top = (cbt.alpha[:, :, 0] / src_coeff.alpha[:, :, src_fwd_idx])[0, :]
+                        # Bottom output bend exits in -y; for a y-flux monitor alpha[:,:,1] is the -y component.
+                        sb_bot = (cbb.alpha[:, :, 1] / src_coeff.alpha[:, :, src_fwd_idx])[0, :]
                         pwr_bt, ang_bt, pwr_bb, ang_bb = [], [], [], []
                         for pt in range(len(wavelengths)):
                             pwr_bt.append(np.abs(sb_top[pt])**2); ang_bt.append(np.angle(sb_top[pt], deg=True))
@@ -1087,44 +1109,72 @@ class MMI_2x2:
                 def _label(key):
                     port, in_m, out_m = key
                     return f"Port {port} In {in_m} → Out {out_m}"
-                plt.figure()
-                for key, powers in pt_top.items(): plt.plot(wavelengths, powers, label=f"Taper top {_label(key)}")
-                for key, powers in pt_bot.items(): plt.plot(wavelengths, powers, label=f"Taper bot {_label(key)}")
-                for key, powers in pb_top.items(): plt.plot(wavelengths, powers, label=f"Bend top {_label(key)}", linestyle="--")
-                for key, powers in pb_bot.items(): plt.plot(wavelengths, powers, label=f"Bend bot {_label(key)}", linestyle="--")
-                plt.xlabel("Wavelength (micron)"); plt.ylabel("Transmission"); plt.legend()
-                plt.savefig(f'{self.hp.outputfolder}/performance.png', dpi=300)
-                plt.figure()
-                for key, powers in pt_top.items(): plt.plot(wavelengths, 10*np.log10(np.array(powers)), label=f"Taper top {_label(key)}")
-                for key, powers in pt_bot.items(): plt.plot(wavelengths, 10*np.log10(np.array(powers)), label=f"Taper bot {_label(key)}")
-                for key, powers in pb_top.items(): plt.plot(wavelengths, 10*np.log10(np.array(powers)), label=f"Bend top {_label(key)}", linestyle="--")
-                for key, powers in pb_bot.items(): plt.plot(wavelengths, 10*np.log10(np.array(powers)), label=f"Bend bot {_label(key)}", linestyle="--")
-                plt.xlabel("Wavelength (micron)"); plt.ylabel("Transmission (dB)"); plt.legend()
-                plt.savefig(f'{self.hp.outputfolder}/performance_dB.png', dpi=300)
+                all_ports = sorted(set(k[0] for k in pt_top.keys()))
+                for port in all_ports:
+                    port_suffix = f"_{port}" if len(all_ports) > 1 else ""
+                    plt.figure()
+                    for key, powers in pt_top.items():
+                        if key[0] == port: plt.plot(wavelengths, powers, label=f"Taper top {_label(key)}")
+                    for key, powers in pt_bot.items():
+                        if key[0] == port: plt.plot(wavelengths, powers, label=f"Taper bot {_label(key)}")
+                    for key, powers in pb_top.items():
+                        if key[0] == port: plt.plot(wavelengths, powers, label=f"Bend top {_label(key)}", linestyle="--")
+                    for key, powers in pb_bot.items():
+                        if key[0] == port: plt.plot(wavelengths, powers, label=f"Bend bot {_label(key)}", linestyle="--")
+                    plt.xlabel("Wavelength (micron)"); plt.ylabel("Transmission"); plt.legend()
+                    plt.savefig(f'{self.hp.outputfolder}/performance{port_suffix}.png', dpi=300)
+                    plt.figure()
+                    for key, powers in pt_top.items():
+                        if key[0] == port: plt.plot(wavelengths, 10*np.log10(np.array(powers)), label=f"Taper top {_label(key)}")
+                    for key, powers in pt_bot.items():
+                        if key[0] == port: plt.plot(wavelengths, 10*np.log10(np.array(powers)), label=f"Taper bot {_label(key)}")
+                    for key, powers in pb_top.items():
+                        if key[0] == port: plt.plot(wavelengths, 10*np.log10(np.array(powers)), label=f"Bend top {_label(key)}", linestyle="--")
+                    for key, powers in pb_bot.items():
+                        if key[0] == port: plt.plot(wavelengths, 10*np.log10(np.array(powers)), label=f"Bend bot {_label(key)}", linestyle="--")
+                    plt.xlabel("Wavelength (micron)"); plt.ylabel("Transmission (dB)"); plt.legend()
+                    plt.savefig(f'{self.hp.outputfolder}/performance_dB{port_suffix}.png', dpi=300)
                 plt.close("all")
             return
         elif self.hp.sim.sim_type == "EME":
             powers_top_by_mode, powers_bot_by_mode, wavelengths = self.eme_simulation()
 
-        plt.figure()
-        for (in_m, out_m), powers in powers_top_by_mode.items():
-            plt.plot(wavelengths, powers, label=f"In {in_m} → Top {out_m}")
-        for (in_m, out_m), powers in powers_bot_by_mode.items():
-            plt.plot(wavelengths, powers, label=f"In {in_m} → Bot {out_m}")
-        plt.xlabel("Wavelength (micron)")
-        plt.ylabel("Transmission")
-        plt.legend()
-        plt.savefig(f'{self.hp.outputfolder}/performance.png', dpi=300)
+        # EME/HYBRID keys are (in_m, out_m); FDTD/FDTD_GDS keys are (port, in_m, out_m)
+        _sample_key = next(iter(powers_top_by_mode))
+        _has_port = len(_sample_key) == 3
+        if _has_port:
+            all_ports = sorted(set(k[0] for k in powers_top_by_mode.keys()))
+        else:
+            all_ports = [None]
+        for port in all_ports:
+            port_suffix = f"_{port}" if port is not None and len(all_ports) > 1 else ""
+            plt.figure()
+            for key, powers in powers_top_by_mode.items():
+                if port is None or key[0] == port:
+                    in_m, out_m = (key[0], key[1]) if not _has_port else (key[1], key[2])
+                    plt.plot(wavelengths, powers, label=f"In {in_m} → Top {out_m}")
+            for key, powers in powers_bot_by_mode.items():
+                if port is None or key[0] == port:
+                    in_m, out_m = (key[0], key[1]) if not _has_port else (key[1], key[2])
+                    plt.plot(wavelengths, powers, label=f"In {in_m} → Bot {out_m}")
+            plt.xlabel("Wavelength (micron)")
+            plt.ylabel("Transmission")
+            plt.legend()
+            plt.savefig(f'{self.hp.outputfolder}/performance{port_suffix}.png', dpi=300)
 
-        plt.figure()
-        for (in_m, out_m), powers in powers_top_by_mode.items():
-            plt.plot(wavelengths, 10 * np.log10(np.array(powers)), label=f"In {in_m} → Top {out_m}")
-        for (in_m, out_m), powers in powers_bot_by_mode.items():
-            plt.plot(wavelengths, 10 * np.log10(np.array(powers)), label=f"In {in_m} → Bot {out_m}")
-        plt.xlabel("Wavelength (micron)")
-        plt.ylabel("Transmission (dB)")
-        plt.legend()
-        plt.savefig(f'{self.hp.outputfolder}/performance_dB.png', dpi=300)
+            plt.figure()
+            for key, powers in powers_top_by_mode.items():
+                if port is None or key[0] == port:
+                    in_m, out_m = (key[0], key[1]) if not _has_port else (key[1], key[2])
+                    plt.plot(wavelengths, 10 * np.log10(np.array(powers)), label=f"In {in_m} → Top {out_m}")
+            for key, powers in powers_bot_by_mode.items():
+                if port is None or key[0] == port:
+                    in_m, out_m = (key[0], key[1]) if not _has_port else (key[1], key[2])
+                    plt.plot(wavelengths, 10 * np.log10(np.array(powers)), label=f"In {in_m} → Bot {out_m}")
+            plt.xlabel("Wavelength (micron)")
+            plt.ylabel("Transmission (dB)")
+            plt.legend()
+            plt.savefig(f'{self.hp.outputfolder}/performance_dB{port_suffix}.png', dpi=300)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

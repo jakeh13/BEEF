@@ -135,10 +135,10 @@ def create_config_MMI_2x2_gds(folder: str = 'configs_mmi', name: str = 'config_2
 def create_config_MMI_2x2_gds_bend(folder: str = 'configs_mmi', name: str = 'config_2x2_gds_bend'):
     taper_spacing = 0.2
     mm_width = 1.6
-    mm_length = 10.8
+    mm_length = 7.8
     taper_width = mm_width/2 - taper_spacing/2
     waveguide_offset = taper_width + taper_spacing
-    sim_type = "FDTD_GDS_BEND"
+    sim_type = "EME" # "FDTD_GDS_BEND"
     res = 20
     splitter_name = "Splitter_60"
     hp = HyperParamsMMI(
@@ -146,7 +146,7 @@ def create_config_MMI_2x2_gds_bend(folder: str = 'configs_mmi', name: str = 'con
             waveguide_width=0.5,
             mm_width=mm_width,
             mm_length=mm_length,
-            taper_length=4,
+            taper_length=1,
             waveguide_offset=waveguide_offset,
             taper_width=taper_width,
             waveguide_height=0.215,
@@ -161,13 +161,14 @@ def create_config_MMI_2x2_gds_bend(folder: str = 'configs_mmi', name: str = 'con
             res=res,
             wavelength_min=1.520,
             wavelength_max=1.580,
-            wavelength_pts=30,
+            wavelength_pts=5,
             sim_type=sim_type,
             mm_monitor_position=0.25,
             input_modes=[1],
             output_modes=[1],
+            input_ports=["top","bot"],
         ),
-        outputfolder=f"../out/mmi_2x2_gds_bend/v9_{sim_type}_{int(res)}_{splitter_name}"
+        outputfolder=f"../out/mmi_2x2_tests/{sim_type}_res_{int(res)}"
     )
     save(hp, folder, name)
 

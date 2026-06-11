@@ -36,6 +36,9 @@
         ],
         "output_modes": [
             1
+        ],
+        "input_ports": [
+            "top"
         ]
     },
     "outputfolder": "./out/mmi_2x2_gds/FDTD_GDS_40_Splitter_60"

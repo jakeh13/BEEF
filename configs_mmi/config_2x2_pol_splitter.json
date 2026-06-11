@@ -38,6 +38,9 @@
         "output_modes": [
             1,
             2
+        ],
+        "input_ports": [
+            "top"
         ]
     },
     "outputfolder": "./out/mmi_2x2_pol_splitter/v0_EME_40"

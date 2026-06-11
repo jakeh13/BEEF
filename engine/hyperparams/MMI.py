@@ -37,6 +37,7 @@ class SimParams:
     num_modes_taper: int = 7          # Number of modes computed in the taper regions
     input_modes: List[int] = field(default_factory=lambda: [1])  # Waveguide modes to excite at the input (1-based)
     output_modes: List[int] = field(default_factory=lambda: [1]) # Waveguide modes to measure at each output arm
+    input_ports: List[str] = field(default_factory=lambda: ["top"]) # Input ports to excite: "top", "bot", or both
 
 @dataclass(eq=False, kw_only=True)
 class HyperParamsMMI:

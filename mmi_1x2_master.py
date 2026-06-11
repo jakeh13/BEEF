@@ -14,7 +14,8 @@ import meep as mp
 from engine.hyperparams.MMI import HyperParamsMMI as HyperParams
 
 from engine.helpers.general import(
-    make_output_folders
+    make_output_folders,
+    resolve_output_folder,
 )
 from engine.helpers.meep import(
      meep_material_from_meow,
@@ -35,6 +36,7 @@ class MMI_1x2:
     def __init__(self,args):
         self.config = args.config
         self.hp: HyperParams = dataconf.load(self.config, HyperParams)
+        self.hp.outputfolder = resolve_output_folder(self.hp.outputfolder)
         make_output_folders(self.hp.outputfolder)
 
         # save config in output folder

@@ -36,6 +36,9 @@
         ],
         "output_modes": [
             1
+        ],
+        "input_ports": [
+            "top"
         ]
     },
     "outputfolder": "./out/mmi_1x4_sweep/EME_40_5"

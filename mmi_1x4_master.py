@@ -16,7 +16,8 @@ from meow import compute_modes_tidy3d as compute_modes
 from engine.hyperparams.MMI import HyperParamsMMI as HyperParams
 
 from engine.helpers.general import(
-    make_output_folders
+    make_output_folders,
+    resolve_output_folder,
 )
 from engine.helpers.meep import(
      meep_material_from_meow,
@@ -38,6 +39,7 @@ class MMI_1x4:
     def __init__(self, args):
         self.config = args.config
         self.hp: HyperParams = dataconf.load(self.config, HyperParams)
+        self.hp.outputfolder = resolve_output_folder(self.hp.outputfolder)
         make_output_folders(self.hp.outputfolder)
 
         s = json.dumps(asdict(self.hp), indent=4, default=lambda x: x.name)

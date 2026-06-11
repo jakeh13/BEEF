@@ -6,6 +6,10 @@ mm_length. Modes are computed once per wavelength from cross-sections that are
 independent of mm_length (constant-width MMI rectangle). Each sweep value only
 recomputes the S-matrix (cheap) with new cell lengths.
 """
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+del _sys, _os
+
 import argparse
 import dataconf
 import json

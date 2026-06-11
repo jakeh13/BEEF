@@ -2,9 +2,9 @@
     "geo": {
         "waveguide_height": 0.215,
         "waveguide_width": 0.5,
-        "mm_length": 10.8,
+        "mm_length": 7.8,
         "mm_width": 1.6,
-        "taper_length": 4,
+        "taper_length": 1,
         "taper_width": 0.7000000000000001,
         "waveguide_offset": 0.9000000000000001,
         "gds_file": "gds/Splitter_60.gds",
@@ -23,7 +23,7 @@
         "res": 20,
         "wavelength_min": 1.52,
         "wavelength_max": 1.58,
-        "wavelength_pts": 30,
+        "wavelength_pts": 5,
         "num_modes_MMI": 15,
         "dpml": 0.5,
         "mm_sim_length": 1.0,
@@ -31,7 +31,7 @@
         "source_position": 0.0,
         "sm_monitor_position": 0.25,
         "mm_monitor_position": 0.25,
-        "sim_type": "FDTD_GDS_BEND",
+        "sim_type": "EME",
         "num_cells_taper": 15,
         "num_modes_taper": 7,
         "input_modes": [
@@ -39,7 +39,11 @@
         ],
         "output_modes": [
             1
+        ],
+        "input_ports": [
+            "top",
+            "bot"
         ]
     },
-    "outputfolder": "../out/mmi_2x2_gds_bend/v9_FDTD_GDS_BEND_20_Splitter_60"
+    "outputfolder": "../out/mmi_2x2_tests/EME_res_20"
 }
