@@ -132,15 +132,15 @@ def create_config_MMI_2x2_gds(folder: str = 'configs_mmi', name: str = 'config_2
     )
     save(hp, folder, name)
 
-def create_config_MMI_2x2_gds_bend(folder: str = 'configs_mmi', name: str = 'config_2x2_gds_bend'):
+def create_config_MMI_2x2_gds_bend_archana(folder: str = 'configs_mmi', name: str = 'config_2x2_gds_bend'):
     taper_spacing = 0.2
     mm_width = 1.6
     mm_length = 7.8
     taper_width = mm_width/2 - taper_spacing/2
     waveguide_offset = taper_width + taper_spacing
-    sim_type = "EME" # "FDTD_GDS_BEND"
-    res = 20
-    splitter_name = "Splitter_60"
+    sim_type = "FDTD_GDS_BEND"
+    res = 40
+    splitter_name = "PSO_MMI" # "PSO_MMI" or "Splitter_60"
     hp = HyperParamsMMI(
         geo=GeoParamsMMI(
             waveguide_width=0.5,
@@ -151,24 +151,65 @@ def create_config_MMI_2x2_gds_bend(folder: str = 'configs_mmi', name: str = 'con
             taper_width=taper_width,
             waveguide_height=0.215,
             gds_file=f"gds/{splitter_name}.gds",
-            bend_radius=7.0,
-            bend_type="euler",
+            bend_radius=5.0,
+            bend_type="circular",
             bend_locations=["input","output"],
-            bend_wg_length=1.0,
-            bend_stub_length=0.5,
+            bend_wg_length=0,
+            bend_stub_length=0,
         ),
         sim=SimParams(
             res=res,
-            wavelength_min=1.520,
-            wavelength_max=1.580,
-            wavelength_pts=5,
+            wavelength_min=1.500,
+            wavelength_max=1.600,
+            wavelength_pts=30,
             sim_type=sim_type,
             mm_monitor_position=0.25,
             input_modes=[1],
             output_modes=[1],
-            input_ports=["top","bot"],
+            input_ports=["top"],
         ),
-        outputfolder=f"../out/mmi_2x2_tests/{sim_type}_res_{int(res)}"
+        outputfolder=f"../out/mmi_2x2_archana_bend/{sim_type}_res_{int(res)}_gds_{splitter_name}"
+    )
+    save(hp, folder, name)
+
+def create_config_MMI_2x2_gds_bend_jacob(folder: str = 'configs_mmi', name: str = 'config_2x2_gds_bend'):
+    taper_spacing = 0.2
+    mm_width = 1.6
+    mm_length = 10.2
+    taper_width = mm_width/2 - taper_spacing/2
+    waveguide_offset = taper_width + taper_spacing
+    sim_type = "FDTD_GDS_BEND"
+    res = 80
+    splitter_name = "splitter_2x2_f53" # "mmi2x2" or "splitter_2x2_f53"
+    hp = HyperParamsMMI(
+        geo=GeoParamsMMI(
+            waveguide_width=0.35,
+            mm_width=mm_width,
+            mm_length=mm_length,
+            taper_length=2,
+            waveguide_offset=waveguide_offset,
+            taper_width=taper_width,
+            waveguide_height=0.16,
+            gds_file=f"gds/{splitter_name}.gds",
+            bend_radius=5.0,
+            bend_type="circular",
+            bend_locations=["input","output"],
+            bend_wg_length=0,
+            bend_stub_length=0,
+            
+        ),
+        sim=SimParams(
+            res=res,
+            wavelength_min=1.260,
+            wavelength_max=1.360,
+            wavelength_pts=30,
+            sim_type=sim_type,
+            mm_monitor_position=0.25,
+            input_modes=[1],
+            output_modes=[1],
+            input_ports=["top"],
+        ),
+        outputfolder=f"../out/mmi_2x2_jmh_bend/{sim_type}_res_{int(res)}_gds_{splitter_name}"
     )
     save(hp, folder, name)
 
@@ -254,11 +295,14 @@ def create_config_MMI_MUX(folder: str = 'configs_mmi', name: str = 'config_mux')
     save(hp, folder, name)
 
 if __name__ == '__main__':
-    create_config_MMI_1x2(name='config')
-    create_config_MMI_1x2_gds(name='config_1x2_gds')
-    create_config_MMI_2x2(name='config_2x2')
-    create_config_MMI_2x2_gds(name='config_2x2_gds')
-    create_config_MMI_2x2_gds_bend(name='config_2x2_gds_bend')
-    create_config_MMI_2x2_pol_splitter(name='config_2x2_pol_splitter')
-    create_config_MMI_1x4(name='config_1x4')
-    create_config_MMI_MUX(name='config_mux')
+    # create_config_MMI_1x2(name='config')
+    # create_config_MMI_1x2_gds(name='config_1x2_gds')
+    # create_config_MMI_2x2(name='config_2x2')
+    # create_config_MMI_2x2_gds(name='config_2x2_gds')
+    # create_config_MMI_2x2_pol_splitter(name='config_2x2_pol_splitter')
+    # create_config_MMI_1x4(name='config_1x4')
+    # create_config_MMI_MUX(name='config_mux')
+
+    create_config_MMI_2x2_gds_bend_jacob(name='config_2x2_gds_bend')
+    # create_config_MMI_2x2_gds_bend_archana(name='config_2x2_gds_bend')
+    

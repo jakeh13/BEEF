@@ -7,23 +7,23 @@
         "taper_length": 1,
         "taper_width": 0.7000000000000001,
         "waveguide_offset": 0.9000000000000001,
-        "gds_file": "gds/Splitter_60.gds",
-        "bend_radius": 7.0,
-        "bend_type": "euler",
+        "gds_file": "gds/PSO_MMI.gds",
+        "bend_radius": 5.0,
+        "bend_type": "circular",
         "bend_locations": [
             "input",
             "output"
         ],
-        "bend_wg_length": 1.0,
-        "bend_stub_length": 0.5
+        "bend_wg_length": 0,
+        "bend_stub_length": 0
     },
     "sim": {
         "oxide_height": 1.5,
         "oxide_width": 5,
-        "res": 20,
-        "wavelength_min": 1.52,
-        "wavelength_max": 1.58,
-        "wavelength_pts": 5,
+        "res": 40,
+        "wavelength_min": 1.5,
+        "wavelength_max": 1.6,
+        "wavelength_pts": 30,
         "num_modes_MMI": 15,
         "dpml": 0.5,
         "mm_sim_length": 1.0,
@@ -31,7 +31,7 @@
         "source_position": 0.0,
         "sm_monitor_position": 0.25,
         "mm_monitor_position": 0.25,
-        "sim_type": "EME",
+        "sim_type": "FDTD_GDS_BEND",
         "num_cells_taper": 15,
         "num_modes_taper": 7,
         "input_modes": [
@@ -41,9 +41,8 @@
             1
         ],
         "input_ports": [
-            "top",
-            "bot"
+            "top"
         ]
     },
-    "outputfolder": "../out/mmi_2x2_tests/EME_res_20"
+    "outputfolder": "../out/mmi_2x2_archana_bend/FDTD_GDS_BEND_res_40_gds_PSO_MMI"
 }

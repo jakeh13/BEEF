@@ -2,9 +2,9 @@
 
 #SBATCH -J FECES
 #SBATCH --account=gts-sr108-ece
-#SBATCH -N 1 --ntasks-per-node=24
+#SBATCH -N 4 --ntasks-per-node=24
 #SBATCH --mem-per-cpu=8G
-#SBATCH -t 60
+#SBATCH -t 300
 #SBATCH -q inferno
 #SBATCH -o ../reports/%j.out
 #SBATCH --mail-type=FAIL

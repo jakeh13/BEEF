@@ -40,8 +40,14 @@ class MMI_2x2:
     def __init__(self,args):
         self.config = args.config
         self.hp: HyperParams = dataconf.load(self.config, HyperParams)
-        self.hp.outputfolder = resolve_output_folder(self.hp.outputfolder)
-        make_output_folders(self.hp.outputfolder)
+        if mp.am_master():
+            self.hp.outputfolder = resolve_output_folder(self.hp.outputfolder)
+            make_output_folders(self.hp.outputfolder)
+        try:
+            from mpi4py import MPI
+            self.hp.outputfolder = MPI.COMM_WORLD.bcast(self.hp.outputfolder, root=0)
+        except ImportError:
+            pass
 
         # save config in output folder
         s = json.dumps(asdict(self.hp), indent=4, default=lambda x: x.name)
@@ -132,13 +138,13 @@ class MMI_2x2:
             if mp.am_master(): self.master_logger.info("Plotting top FDTD simulation geometry")
             plt.figure()
             sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, Sy, 0)))
-            plt.savefig(f'{self.hp.outputfolder}/layout/top_xy.png', dpi=300)
+            plt.savefig(f'{self.hp.outputfolder}/layout/top_xy.png', dpi=600)
             plt.figure()
             sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, 0, Sz)))
-            plt.savefig(f'{self.hp.outputfolder}/layout/top_xz.png', dpi=300)
+            plt.savefig(f'{self.hp.outputfolder}/layout/top_xz.png', dpi=600)
             plt.figure()
             sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(0, Sy, Sz)))
-            plt.savefig(f'{self.hp.outputfolder}/layout/top_yz.png', dpi=300)
+            plt.savefig(f'{self.hp.outputfolder}/layout/top_yz.png', dpi=600)
 
         # run simulation
         if mp.am_master(): self.master_logger.info(f"Running top FDTD simulation (mode {mode})")
@@ -227,13 +233,13 @@ class MMI_2x2:
             if mp.am_master(): self.master_logger.info("Plotting bottom FDTD simulation geometry")
             plt.figure()
             sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, Sy, 0)))
-            plt.savefig(f'{self.hp.outputfolder}/layout/bot_xy.png', dpi=300)
+            plt.savefig(f'{self.hp.outputfolder}/layout/bot_xy.png', dpi=600)
             plt.figure()
             sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, 0, Sz)))
-            plt.savefig(f'{self.hp.outputfolder}/layout/bot_xz.png', dpi=300)
+            plt.savefig(f'{self.hp.outputfolder}/layout/bot_xz.png', dpi=600)
             plt.figure()
             sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(0, Sy, Sz)))
-            plt.savefig(f'{self.hp.outputfolder}/layout/bot_yz.png', dpi=300)
+            plt.savefig(f'{self.hp.outputfolder}/layout/bot_yz.png', dpi=600)
 
         # run simulation
         if mp.am_master(): self.master_logger.info(f"Running bottom FDTD simulation (mode {mode})")
@@ -442,13 +448,13 @@ class MMI_2x2:
                     if mp.am_master(): self.master_logger.info(f"Plotting FDTD simulation geometry (port={port_label})")
                     plt.figure()
                     sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, Sy, 0)))
-                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_xy_{port_label}.png', dpi=300)
+                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_xy_{port_label}.png', dpi=600)
                     plt.figure()
                     sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(Sx, 0, Sz)))
-                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_xz_{port_label}.png', dpi=300)
+                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_xz_{port_label}.png', dpi=600)
                     plt.figure()
                     sim.plot2D(output_plane=mp.Volume(center = mp.Vector3(), size = mp.Vector3(0, Sy, Sz)))
-                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_yz_{port_label}.png', dpi=300)
+                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_yz_{port_label}.png', dpi=600)
 
                 if mp.am_master(): self.master_logger.info(f"Running FDTD simulation (port={port_label} mode={fdtd_input_mode})")
                 sim.run(until_after_sources=mp.stop_when_dft_decayed(minimum_run_time=20, tol = 1e-11))
@@ -501,7 +507,16 @@ class MMI_2x2:
         freqs = 1/wavelengths.astype(list)
 
         # Load and center the GDS file; derive simulation x-extent from its bounding box
-        device_Sx = prepare_gds_for_meep(self.hp.geo.gds_file, "gds/temp_gds_fdtd.gds")
+        if mp.am_master():
+            device_Sx = prepare_gds_for_meep(self.hp.geo.gds_file, "gds/temp_gds_fdtd.gds")
+        else:
+            device_Sx = None
+        try:
+            from mpi4py import MPI
+            device_Sx = MPI.COMM_WORLD.bcast(device_Sx, root=0)
+        except ImportError:
+            pass
+        mp.all_wait()
         Sx = device_Sx + 2*self.hp.sim.waveguide_length + 2*self.hp.sim.dpml
         Sy = self.hp.sim.oxide_width + 2*self.hp.sim.dpml
         Sz = self.hp.sim.oxide_height + 2*self.hp.sim.dpml
@@ -582,13 +597,13 @@ class MMI_2x2:
                     if mp.am_master(): self.master_logger.info(f"Plotting FDTD GDS simulation geometry (port={port_label})")
                     plt.figure()
                     sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(Sx, Sy, 0)))
-                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_xy_{port_label}.png', dpi=300)
+                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_xy_{port_label}.png', dpi=600)
                     plt.figure()
                     sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(Sx, 0, Sz)))
-                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_xz_{port_label}.png', dpi=300)
+                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_xz_{port_label}.png', dpi=600)
                     plt.figure()
                     sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(0, Sy, Sz)))
-                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_yz_{port_label}.png', dpi=300)
+                    plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_yz_{port_label}.png', dpi=600)
 
                 if mp.am_master(): self.master_logger.info(f"Running FDTD GDS (port={port_label} mode={fdtd_input_mode})")
                 sim.run(until_after_sources=mp.stop_when_dft_decayed(minimum_run_time=20, tol=1e-11))
@@ -640,14 +655,26 @@ class MMI_2x2:
         wavelengths = np.linspace(self.hp.sim.wavelength_min, self.hp.sim.wavelength_max, self.hp.sim.wavelength_pts)
         freqs = 1/wavelengths.astype(list)
 
-        device_Sx = prepare_gds_for_meep(self.hp.geo.gds_file, "gds/temp_gds_fdtd.gds")
-        bend_info = create_bend_gds_for_meep(
-            self.hp.geo.waveguide_width, self.hp.geo.waveguide_offset,
-            self.hp.geo.bend_radius, self.hp.geo.bend_type, self.hp.geo.bend_locations,
-            device_Sx, self.hp.geo.bend_stub_length, self.hp.geo.bend_wg_length,
-            "gds/temp_gds_bends.gds",
-            dpml=self.hp.sim.dpml,
-        )
+        if mp.am_master():
+            device_Sx = prepare_gds_for_meep(self.hp.geo.gds_file, "gds/temp_gds_fdtd.gds")
+            bend_info = create_bend_gds_for_meep(
+                self.hp.geo.waveguide_width, self.hp.geo.waveguide_offset,
+                self.hp.geo.bend_radius, self.hp.geo.bend_type, self.hp.geo.bend_locations,
+                device_Sx, self.hp.geo.bend_stub_length, self.hp.geo.bend_wg_length,
+                "gds/temp_gds_bends.gds",
+                dpml=self.hp.sim.dpml,
+                monitor_margin=self.hp.sim.oxide_height/2,
+            )
+        else:
+            device_Sx = None
+            bend_info = None
+        try:
+            from mpi4py import MPI
+            device_Sx = MPI.COMM_WORLD.bcast(device_Sx, root=0)
+            bend_info = MPI.COMM_WORLD.bcast(bend_info, root=0)
+        except ImportError:
+            pass
+        mp.all_wait()
         x_extra_left  = bend_info["x_extra_left"]
         x_extra_right = bend_info["x_extra_right"]
         y_extra       = bend_info["y_extra"]
@@ -702,14 +729,14 @@ class MMI_2x2:
 
         # x-center of bend exit (right-side bends go R past the end of the stub)
         x_bend_exit = Sx/2 - self.hp.sim.dpml - x_extra_right + R
-        # y-center of post-bend waveguide monitor (halfway along bend_wg_length, measured from bend exit)
-        y_top_bend_mon =  self.hp.geo.waveguide_offset/2 + R + self.hp.geo.bend_wg_length/2
-        y_bot_bend_mon = -self.hp.geo.waveguide_offset/2 - R - self.hp.geo.bend_wg_length/2
+        # Monitor sits sm_monitor_position inside the active region (= just at PML boundary)
+        y_top_bend_mon =  Sy/2 - self.hp.sim.dpml
+        y_bot_bend_mon = -(Sy/2 - self.hp.sim.dpml)
 
         # Input bend pre-bend monitor x-center and y positions (y-flux, left side)
         x_in_bend_exit = -Sx/2 + self.hp.sim.dpml + x_extra_left - R
-        y_top_in_bend_mon =  self.hp.geo.waveguide_offset/2 + R + self.hp.geo.bend_wg_length/2
-        y_bot_in_bend_mon = -self.hp.geo.waveguide_offset/2 - R - self.hp.geo.bend_wg_length/2
+        y_top_in_bend_mon =  Sy/2 - self.hp.sim.dpml
+        y_bot_in_bend_mon = -(Sy/2 - self.hp.sim.dpml)
 
         coeffs_taper_top = {}
         coeffs_taper_bot = {}
@@ -810,10 +837,9 @@ class MMI_2x2:
                     size=mp.Vector3(0, self.hp.geo.waveguide_offset, Sz - 2*self.hp.sim.dpml)
                 ))
 
-                # Post-bend monitors (y-flux) — only if output bends present
-                # x_bend_exit is bend_wg_length from the right PML, so cap x-size to keep inside:
-                # right edge = x_bend_exit + size_x/2 < Sx/2 - dpml  →  size_x/2 < bend_wg_length
-                _bend_fx_sx = 2*self.hp.geo.bend_wg_length - self.hp.sim.dpml
+                # Post-bend monitors (y-flux) — only if output bends present.
+                # Monitor x-size = oxide_height so the right edge lands on the right PML inner face.
+                _bend_fx_sx = self.hp.sim.oxide_height
                 if has_output_bends:
                     bend_flux_top = sim.add_mode_monitor(freqs, mp.FluxRegion(
                         center=mp.Vector3(x_bend_exit, y_top_bend_mon, 0),
@@ -829,13 +855,13 @@ class MMI_2x2:
                     if mp.am_master():
                         plt.figure()
                         sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(Sx, Sy, 0)))
-                        plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_bend_xy_{port_label}.png', dpi=300)
+                        plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_bend_xy_{port_label}.png', dpi=600)
                         plt.figure()
                         sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(Sx, 0, Sz)))
-                        plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_bend_xz_{port_label}.png', dpi=300)
+                        plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_bend_xz_{port_label}.png', dpi=600)
                         plt.figure()
                         sim.plot2D(output_plane=mp.Volume(center=mp.Vector3(), size=mp.Vector3(0, Sy, Sz)))
-                        plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_bend_yz_{port_label}.png', dpi=300)
+                        plt.savefig(f'{self.hp.outputfolder}/layout/full_FDTD_gds_bend_yz_{port_label}.png', dpi=600)
                         plt.close("all")
 
                 if mp.am_master():
@@ -990,7 +1016,7 @@ class MMI_2x2:
         mmi_top = load_2x2_MMI_top(self.hp.geo.mm_length,self.hp.sim.waveguide_length,self.hp.geo.waveguide_width,self.hp.geo.waveguide_offset,self.hp.sim.oxide_width,0.0,self.hp.geo.taper_length,self.hp.geo.mm_width,self.hp.geo.taper_width)
         plt.figure()
         mmi_top.plot()
-        plt.savefig(f'{self.hp.outputfolder}/layout/eme_gds_top.png', dpi=300)
+        plt.savefig(f'{self.hp.outputfolder}/layout/eme_gds_top.png', dpi=600)
 
         extrusion_rules = stack_extrusions_GF(self.hp.geo.waveguide_height, self.hp.sim.oxide_height)
         structs = mw.extrude_gds(mmi_top, extrusion_rules)            
@@ -1013,7 +1039,7 @@ class MMI_2x2:
         mmi_bot = load_2x2_MMI_bot(self.hp.geo.mm_length,self.hp.sim.waveguide_length,self.hp.geo.waveguide_width,self.hp.geo.waveguide_offset,self.hp.sim.oxide_width,0.0,self.hp.geo.taper_length,self.hp.geo.mm_width,self.hp.geo.taper_width)
         plt.figure()
         mmi_bot.plot()
-        plt.savefig(f'{self.hp.outputfolder}/layout/eme_gds_bot.png', dpi=300)
+        plt.savefig(f'{self.hp.outputfolder}/layout/eme_gds_bot.png', dpi=600)
         structs_bot = mw.extrude_gds(mmi_bot, extrusion_rules) 
         cells_bot = mw.create_cells(
             structures=structs_bot,
@@ -1045,7 +1071,7 @@ class MMI_2x2:
                 plt.clf()
                 plt.figure()
                 mw.visualize(cs, show=False)
-                plt.savefig(f'{self.hp.outputfolder}/layout/cross_sections/cs_{cs_num}.png', dpi=300)
+                plt.savefig(f'{self.hp.outputfolder}/layout/cross_sections/cs_{cs_num}.png', dpi=600)
                 plt.close()
 
             # Perform mode simulations
@@ -1122,7 +1148,7 @@ class MMI_2x2:
                     for key, powers in pb_bot.items():
                         if key[0] == port: plt.plot(wavelengths, powers, label=f"Bend bot {_label(key)}", linestyle="--")
                     plt.xlabel("Wavelength (micron)"); plt.ylabel("Transmission"); plt.legend()
-                    plt.savefig(f'{self.hp.outputfolder}/performance{port_suffix}.png', dpi=300)
+                    plt.savefig(f'{self.hp.outputfolder}/performance{port_suffix}.png', dpi=600)
                     plt.figure()
                     for key, powers in pt_top.items():
                         if key[0] == port: plt.plot(wavelengths, 10*np.log10(np.array(powers)), label=f"Taper top {_label(key)}")
@@ -1133,7 +1159,7 @@ class MMI_2x2:
                     for key, powers in pb_bot.items():
                         if key[0] == port: plt.plot(wavelengths, 10*np.log10(np.array(powers)), label=f"Bend bot {_label(key)}", linestyle="--")
                     plt.xlabel("Wavelength (micron)"); plt.ylabel("Transmission (dB)"); plt.legend()
-                    plt.savefig(f'{self.hp.outputfolder}/performance_dB{port_suffix}.png', dpi=300)
+                    plt.savefig(f'{self.hp.outputfolder}/performance_dB{port_suffix}.png', dpi=600)
                 plt.close("all")
             return
         elif self.hp.sim.sim_type == "EME":
@@ -1160,7 +1186,7 @@ class MMI_2x2:
             plt.xlabel("Wavelength (micron)")
             plt.ylabel("Transmission")
             plt.legend()
-            plt.savefig(f'{self.hp.outputfolder}/performance{port_suffix}.png', dpi=300)
+            plt.savefig(f'{self.hp.outputfolder}/performance{port_suffix}.png', dpi=600)
 
             plt.figure()
             for key, powers in powers_top_by_mode.items():
@@ -1174,7 +1200,7 @@ class MMI_2x2:
             plt.xlabel("Wavelength (micron)")
             plt.ylabel("Transmission (dB)")
             plt.legend()
-            plt.savefig(f'{self.hp.outputfolder}/performance_dB{port_suffix}.png', dpi=300)
+            plt.savefig(f'{self.hp.outputfolder}/performance_dB{port_suffix}.png', dpi=600)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

@@ -138,19 +138,21 @@ def create_bend_gds_for_meep(
     device_Sx, stub_length, bend_wg_length,
     output_path,
     dpml=0.0,
+    monitor_margin=0.0,
 ):
     """Generate GDS with 90° bends (and post/pre-bend straight segments) for MEEP.
 
     Bends placed at ±waveguide_offset/2 on input and/or output side.
     bend_type: "euler" uses gdsfactory bend_euler; "circular" uses hand-built arc polygon
                (euler uses gf path, circular uses explicit arc ring polygon).
-    Straight segments extend bend_wg_length + dpml so they reach through the PML.
+    Straight segments extend monitor_margin into the active region then dpml through the PML.
+    monitor_margin (= sm_monitor_position) sets how far the monitor sits from the PML boundary.
     Returns dict with domain expansion: x_extra_left, x_extra_right, y_extra.
     """
     R = bend_radius
     hw = waveguide_width / 2
     yo = waveguide_offset / 2
-    straight_len = bend_wg_length + dpml
+    straight_len = monitor_margin + dpml
 
     c = gf.Component("bends")
     xs = gf.cross_section.cross_section(width=waveguide_width, layer=(2, 0))
@@ -228,8 +230,8 @@ def create_bend_gds_for_meep(
             _add_straight_y(c, x_stub_end + R, yo + R, straight_len, upward=True)
             _add_straight_y(c, x_stub_end + R, -yo - R, straight_len, upward=False)
 
-        x_extra_right = R + bend_wg_length
-        y_extra = max(y_extra, R + bend_wg_length)
+        x_extra_right = R + monitor_margin
+        y_extra = max(y_extra, R + monitor_margin)
 
     if "input" in bend_locations:
         x_stub_start = -(device_Sx / 2 + stub_length)  # x where input stub starts (bend exits here going +x)
@@ -270,8 +272,8 @@ def create_bend_gds_for_meep(
             _add_bend_ccw(c, x_stub_start, -yo - R, R, hw, 90, 180)
             _add_straight_y(c, x_stub_start - R, -yo - R, straight_len, upward=False)
 
-        x_extra_left = R + bend_wg_length
-        y_extra = max(y_extra, R + bend_wg_length)
+        x_extra_left = R + monitor_margin
+        y_extra = max(y_extra, R + monitor_margin)
 
     c.write_gds(output_path)
     return {"x_extra_right": x_extra_right, "x_extra_left": x_extra_left, "y_extra": y_extra}

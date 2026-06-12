@@ -39,8 +39,14 @@ class MMI_1x4:
     def __init__(self, args):
         self.config = args.config
         self.hp: HyperParams = dataconf.load(self.config, HyperParams)
-        self.hp.outputfolder = resolve_output_folder(self.hp.outputfolder)
-        make_output_folders(self.hp.outputfolder)
+        if mp.am_master():
+            self.hp.outputfolder = resolve_output_folder(self.hp.outputfolder)
+            make_output_folders(self.hp.outputfolder)
+        try:
+            from mpi4py import MPI
+            self.hp.outputfolder = MPI.COMM_WORLD.bcast(self.hp.outputfolder, root=0)
+        except ImportError:
+            pass
 
         s = json.dumps(asdict(self.hp), indent=4, default=lambda x: x.name)
         with open(f"{self.hp.outputfolder}/config.json", "w") as f:
