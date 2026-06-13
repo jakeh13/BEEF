@@ -3,13 +3,13 @@ import pickle
 from matplotlib import pyplot as plt
 from matplotlib.lines import Line2D
 
-output_subfolder = "mmi_2x2_archana_bend"
+output_subfolder = "mmi_2x2_jmh_bend"
 # mmi_2x2_jmh_bend
-# FDTD_GDS_BEND_res_40_gds_mmi2x2 FDTD_GDS_BEND_res_40_gds_splitter_2x2_f53
+# FDTD_GDS_BEND_res_40_gds_mmi2x2 FDTD_GDS_BEND_res_40_gds_splitter_2x2_f53 FDTD_GDS_BEND_res_80_gds_splitter_2x2_f53
 
 # mmi_2x2_archana_bend
 # FDTD_GDS_BEND_res_40_gds_PSO_MMI FDTD_GDS_BEND_res_40_gds_Splitter_60
-simulation_folder = "FDTD_GDS_BEND_res_40_gds_Splitter_60"
+simulation_folder = "FDTD_GDS_BEND_res_80_gds_splitter_2x2_f53"
 OUTPUT_FOLDER = f"/storage/scratch1/8/jhiesener3/shit/out/{output_subfolder}/{simulation_folder}"
 
 wl_min = 1.5; wl_max = 1.6  # x-axis wavelength limits (µm)

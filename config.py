@@ -101,34 +101,35 @@ def create_config_MMI_2x2(folder: str = 'configs_mmi', name: str = 'config'):
 def create_config_MMI_2x2_gds(folder: str = 'configs_mmi', name: str = 'config_2x2_gds'):
     taper_spacing = 0.2
     mm_width = 1.6
-    mm_length = 10.8
+    mm_length = 10.2
     taper_width = mm_width/2 - taper_spacing/2
     waveguide_offset = taper_width + taper_spacing
     sim_type = "FDTD_GDS"
     res = 40
-    splitter_name = "Splitter_60"
+    splitter_name = "splitter_2x2_f53_dilated_80" # "mmi2x2" or "splitter_2x2_f53"
+    
     hp = HyperParamsMMI(
         geo=GeoParamsMMI(
-            waveguide_width=0.5,
+            waveguide_width=0.35,
             mm_width=mm_width,
             mm_length=mm_length,
-            taper_length=4,
+            taper_length=2,
             waveguide_offset=waveguide_offset,
             taper_width=taper_width,
-            waveguide_height=0.215,
+            waveguide_height=0.16,
             gds_file=f"gds/{splitter_name}.gds"
         ),
         sim=SimParams(
             res=res,
-            wavelength_min=1.520,
-            wavelength_max=1.580,
+            wavelength_min=1.26,
+            wavelength_max=1.36,
             wavelength_pts=30,
             sim_type=sim_type,
             mm_monitor_position=0.25,
             input_modes=[1],
             output_modes=[1],
         ),
-        outputfolder=f"./out/mmi_2x2_gds/{sim_type}_{int(res)}_{splitter_name}"
+        outputfolder=f"../out/mmi_2x2_jmh/{sim_type}_res_{int(res)}_gds_{splitter_name}"
     )
     save(hp, folder, name)
 
@@ -179,8 +180,8 @@ def create_config_MMI_2x2_gds_bend_jacob(folder: str = 'configs_mmi', name: str 
     taper_width = mm_width/2 - taper_spacing/2
     waveguide_offset = taper_width + taper_spacing
     sim_type = "FDTD_GDS_BEND"
-    res = 80
-    splitter_name = "splitter_2x2_f53" # "mmi2x2" or "splitter_2x2_f53"
+    res = 40
+    splitter_name = "splitter_2x2_f53_dilated_80" # "mmi2x2" or "splitter_2x2_f53"
     hp = HyperParamsMMI(
         geo=GeoParamsMMI(
             waveguide_width=0.35,
@@ -298,7 +299,7 @@ if __name__ == '__main__':
     # create_config_MMI_1x2(name='config')
     # create_config_MMI_1x2_gds(name='config_1x2_gds')
     # create_config_MMI_2x2(name='config_2x2')
-    # create_config_MMI_2x2_gds(name='config_2x2_gds')
+    create_config_MMI_2x2_gds(name='config_2x2_gds')
     # create_config_MMI_2x2_pol_splitter(name='config_2x2_pol_splitter')
     # create_config_MMI_1x4(name='config_1x4')
     # create_config_MMI_MUX(name='config_mux')
