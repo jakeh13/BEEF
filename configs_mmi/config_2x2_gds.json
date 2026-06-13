@@ -7,7 +7,7 @@
         "taper_length": 2,
         "taper_width": 0.7000000000000001,
         "waveguide_offset": 0.9000000000000001,
-        "gds_file": "gds/splitter_2x2_f53.gds",
+        "gds_file": "gds/splitter_2x2_f53_dilated_80.gds",
         "bend_radius": 5.0,
         "bend_type": "euler",
         "bend_locations": [],
@@ -17,7 +17,7 @@
     "sim": {
         "oxide_height": 1.5,
         "oxide_width": 5,
-        "res": 80,
+        "res": 40,
         "wavelength_min": 1.26,
         "wavelength_max": 1.36,
         "wavelength_pts": 30,
@@ -41,5 +41,5 @@
             "top"
         ]
     },
-    "outputfolder": "../out/mmi_2x2_jmh/FDTD_GDS_res_80_gds_splitter_2x2_f53"
+    "outputfolder": "../out/mmi_2x2_jmh/FDTD_GDS_res_40_gds_splitter_2x2_f53_dilated_80"
 }

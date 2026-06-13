@@ -11,6 +11,7 @@ class GeoParamsMMI:
     taper_width: float = 0.8          # Width of taper at MMI interface
     waveguide_offset: float = 1.0     # Distance between centers of adjacent waveguides
     gds_file: str = ""                # Path to pre-existing GDS file; used when sim_type="FDTD_GDS"
+    dilation: float = 0.0             # GDS body dilation in µm (positive=expand, negative=erode); 0 disables
     bend_radius: float = 5.0          # Bend radius in microns (FDTD_GDS_BEND only)
     bend_type: str = "euler"          # "euler" or "circular" (FDTD_GDS_BEND only)
     bend_locations: List[str] = field(default_factory=list)  # ["input"], ["output"], or ["input","output"]

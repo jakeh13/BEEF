@@ -508,7 +508,8 @@ class MMI_2x2:
 
         # Load and center the GDS file; derive simulation x-extent from its bounding box
         if mp.am_master():
-            device_Sx = prepare_gds_for_meep(self.hp.geo.gds_file, "gds/temp_gds_fdtd.gds")
+            device_Sx = prepare_gds_for_meep(self.hp.geo.gds_file, "gds/temp_gds_fdtd.gds",
+                                             dilation=self.hp.geo.dilation)
         else:
             device_Sx = None
         try:
@@ -656,7 +657,8 @@ class MMI_2x2:
         freqs = 1/wavelengths.astype(list)
 
         if mp.am_master():
-            device_Sx = prepare_gds_for_meep(self.hp.geo.gds_file, "gds/temp_gds_fdtd.gds")
+            device_Sx = prepare_gds_for_meep(self.hp.geo.gds_file, "gds/temp_gds_fdtd.gds",
+                                             dilation=self.hp.geo.dilation)
             bend_info = create_bend_gds_for_meep(
                 self.hp.geo.waveguide_width, self.hp.geo.waveguide_offset,
                 self.hp.geo.bend_radius, self.hp.geo.bend_type, self.hp.geo.bend_locations,

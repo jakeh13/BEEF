@@ -295,15 +295,57 @@ def create_config_MMI_MUX(folder: str = 'configs_mmi', name: str = 'config_mux')
     )
     save(hp, folder, name)
 
-if __name__ == '__main__':
-    # create_config_MMI_1x2(name='config')
-    # create_config_MMI_1x2_gds(name='config_1x2_gds')
-    # create_config_MMI_2x2(name='config_2x2')
-    create_config_MMI_2x2_gds(name='config_2x2_gds')
-    # create_config_MMI_2x2_pol_splitter(name='config_2x2_pol_splitter')
-    # create_config_MMI_1x4(name='config_1x4')
-    # create_config_MMI_MUX(name='config_mux')
+def create_config_MMI_2x2_gds_dilation_sweep(dilation_nm: int, folder: str = 'configs_mmi'):
+    taper_spacing = 0.2
+    mm_width = 1.6
+    mm_length = 10.2
+    taper_width = mm_width/2 - taper_spacing/2
+    waveguide_offset = taper_width + taper_spacing
+    sim_type = "FDTD_GDS"
+    res = 40
+    hp = HyperParamsMMI(
+        geo=GeoParamsMMI(
+            waveguide_width=0.35,
+            mm_width=mm_width,
+            mm_length=mm_length,
+            taper_length=2,
+            waveguide_offset=waveguide_offset,
+            taper_width=taper_width,
+            waveguide_height=0.16,
+            gds_file="gds/splitter_2x2_f53.gds",
+            dilation=dilation_nm / 1000,
+        ),
+        sim=SimParams(
+            res=res,
+            wavelength_min=1.26,
+            wavelength_max=1.36,
+            wavelength_pts=30,
+            sim_type=sim_type,
+            mm_monitor_position=0.25,
+            input_modes=[1],
+            output_modes=[1],
+        ),
+        outputfolder=f"../out/mmi_2x2_jmh_dilation_sweep/dilation_{dilation_nm}nm"
+    )
+    save(hp, folder, f"config_2x2_gds_dilation_{dilation_nm}nm")
 
-    create_config_MMI_2x2_gds_bend_jacob(name='config_2x2_gds_bend')
-    # create_config_MMI_2x2_gds_bend_archana(name='config_2x2_gds_bend')
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dilation', type=int, default=None, help='Dilation in nm; generates one sweep config and exits')
+    args = parser.parse_args()
+
+    if args.dilation is not None:
+        create_config_MMI_2x2_gds_dilation_sweep(args.dilation)
+    else:
+        # create_config_MMI_1x2(name='config')
+        # create_config_MMI_1x2_gds(name='config_1x2_gds')
+        # create_config_MMI_2x2(name='config_2x2')
+        create_config_MMI_2x2_gds(name='config_2x2_gds')
+        # create_config_MMI_2x2_pol_splitter(name='config_2x2_pol_splitter')
+        # create_config_MMI_1x4(name='config_1x4')
+        # create_config_MMI_MUX(name='config_mux')
+
+        create_config_MMI_2x2_gds_bend_jacob(name='config_2x2_gds_bend')
+        # create_config_MMI_2x2_gds_bend_archana(name='config_2x2_gds_bend')
     

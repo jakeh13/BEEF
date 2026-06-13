@@ -113,7 +113,90 @@ def create_temp_gds_for_full_mmi_2x2(mm_length, taper_length, waveguide_width, m
     # save as temp.gds
     temp.write_gds(gdsdir='gds')
 
-def prepare_gds_for_meep(gds_path, output_path):
+def dilate_gds_file(input_path, output_path, dilation, port_zone=0.1, taper_len=0.3):
+    """Apply uniform body dilation to a GDS file, tapering smoothly at each port end.
+
+    Replicates the logic in dilate_gds.py using KLayout pya.
+    port_zone and taper_len are in µm; dilation is in µm (positive=expand, negative=erode).
+    """
+    import pya
+    import os
+
+    layout = pya.Layout()
+    layout.read(input_path)
+    dbu = layout.dbu
+    cell = layout.top_cell()
+    cell.name = os.path.splitext(os.path.basename(output_path))[0]
+
+    def um(v):
+        return int(round(v / dbu))
+
+    for li in layout.layer_indices():
+        shapes = cell.shapes(li)
+        region = pya.Region(shapes)
+        if region.count() == 0:
+            continue
+
+        bb = region.bbox()
+        dil   = um(dilation)
+        port  = um(port_zone)
+        taper = um(taper_len)
+
+        xl   = bb.left
+        xr   = bb.right
+        x_lp = xl + port
+        x_lt = x_lp + taper
+        x_rt = xr - port - taper
+        x_rp = xr - port
+
+        if x_lt >= x_rt:
+            raise ValueError(
+                f"Device too short for dilation zones: x_lt={x_lt*dbu:.3f} µm >= x_rt={x_rt*dbu:.3f} µm"
+            )
+
+        ym = bb.height()
+
+        def vstrip(x1, x2):
+            return pya.Region(pya.Box(x1, bb.bottom - ym, x2, bb.top + ym))
+
+        dilated = region.sized(dil)
+
+        port_l = region  & vstrip(xl,   x_lp)
+        port_r = region  & vstrip(x_rp, xr)
+        body   = dilated & vstrip(x_lt, x_rt)
+
+        def xsect(reg, x, tol=2):
+            slab = pya.Region(pya.Box(x - tol, bb.bottom - ym, x + tol, bb.top + ym))
+            intervals = []
+            for poly in (reg & slab).merged().each():
+                ys = [p.y for p in poly.each_point_hull()]
+                intervals.append((min(ys), max(ys)))
+            return sorted(intervals)
+
+        def make_tapers(iv_a, iv_b, xa, xb):
+            r = pya.Region()
+            for (y1a, y2a), (y1b, y2b) in zip(iv_a, iv_b):
+                pts = [
+                    pya.Point(xa, y1a), pya.Point(xb, y1b),
+                    pya.Point(xb, y2b), pya.Point(xa, y2a),
+                ]
+                r.insert(pya.Polygon(pts))
+            return r
+
+        left_taper  = make_tapers(xsect(region,  x_lp), xsect(dilated, x_lt), x_lp, x_lt)
+        right_taper = make_tapers(xsect(dilated, x_rt),  xsect(region,  x_rp), x_rt, x_rp)
+
+        result = (port_l | left_taper | body | right_taper | port_r).merged()
+        shapes.clear()
+        shapes.insert(result)
+
+    layout.write(output_path)
+
+
+def prepare_gds_for_meep(gds_path, output_path, dilation=0.0):
+    if dilation != 0.0:
+        dilate_gds_file(gds_path, "gds/temp_gds_dilated.gds", dilation)
+        gds_path = "gds/temp_gds_dilated.gds"
     component = gf.import_gds(gds_path)
     cx, cy = component.center
     component.move((-cx, -cy))

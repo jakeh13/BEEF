@@ -1,4 +1,5 @@
 seed_num ?= 1
+DILATION_NM ?= 0
 ifeq ($(LMOD_SYSHOST), phoenix)
 	runner = srun --mpi=pmi2
 	trash = ~/scratch
@@ -47,6 +48,12 @@ mmi_1x4_s_simple:
 
 mmi_mux:
 	$(runner) $(my_python) mmi_mux_master.py -c configs_mmi/config_mux.json
+
+mmi_2x2_dilation_sweep:
+	$(runner) $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2_gds_dilation_$(DILATION_NM)nm.json
+
+config_dilation_sweep_cluster:
+	$(runner) $(my_python) config.py --dilation $(DILATION_NM)
 
 config:
 	$(my_python) config.py

@@ -435,7 +435,8 @@ class MMI_1x2:
         wavelengths = np.linspace(self.hp.sim.wavelength_min, self.hp.sim.wavelength_max, self.hp.sim.wavelength_pts)
         freqs = 1/wavelengths.astype(list)
 
-        device_Sx = prepare_gds_for_meep(self.hp.geo.gds_file, "gds/temp_gds_fdtd.gds")
+        device_Sx = prepare_gds_for_meep(self.hp.geo.gds_file, "gds/temp_gds_fdtd.gds",
+                                         dilation=self.hp.geo.dilation)
         Sx = device_Sx + 2*self.hp.sim.waveguide_length + 2*self.hp.sim.dpml
         Sy = self.hp.sim.oxide_width + 2*self.hp.sim.dpml
         Sz = self.hp.sim.oxide_height + 2*self.hp.sim.dpml
