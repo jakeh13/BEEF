@@ -1,5 +1,6 @@
 seed_num ?= 1
 DILATION_NM ?= 0
+export PYTHONPATH := $(CURDIR)
 ifeq ($(LMOD_SYSHOST), phoenix)
 	runner = srun --mpi=pmi2
 	trash = ~/scratch
@@ -11,25 +12,25 @@ else
 endif
 
 mmi_cluster:
-	$(runner) $(my_python) mmi_1x2_master.py -c configs_mmi/config.json
+	$(runner) $(my_python) masters/mmi_1x2_master.py -c configs_mmi/config.json
 
 mmi_2x2_bend:
-	$(runner) $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2_gds_bend.json
+	$(runner) $(my_python) masters/mmi_2x2_master.py -c configs_mmi/config_2x2_gds_bend.json
 
 mmi:
-	$(runner) $(my_python) mmi_1x2_master.py -c configs_mmi/config.json
+	$(runner) $(my_python) masters/mmi_1x2_master.py -c configs_mmi/config.json
 
 mmi_1x2_gds:
-	$(runner) $(my_python) mmi_1x2_master.py -c configs_mmi/config_1x2_gds.json
+	$(runner) $(my_python) masters/mmi_1x2_master.py -c configs_mmi/config_1x2_gds.json
 
 mmi_2x2:
-	$(runner) $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2.json
+	$(runner) $(my_python) masters/mmi_2x2_master.py -c configs_mmi/config_2x2.json
 
 mmi_2x2_gds:
-	$(runner) $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2_gds.json
+	$(runner) $(my_python) masters/mmi_2x2_master.py -c configs_mmi/config_2x2_gds.json
 
 mmi_2x2_pol_splitter:
-	$(runner) $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2_pol_splitter.json
+	$(runner) $(my_python) masters/mmi_2x2_master.py -c configs_mmi/config_2x2_pol_splitter.json
 
 mmi_2x2_s_cluster::
 	$(runner) $(my_python) sweeps/mmi_2x2_sweep.py -c configs_mmi/config_2x2.json
@@ -38,7 +39,7 @@ mmi_2x2_s_eme_cluster:
 	$(runner) $(my_python) sweeps/mmi_2x2_sweep_efficient.py -c configs_mmi/config_2x2.json
 
 mmi_1x4:
-	$(runner) $(my_python) mmi_1x4_master.py -c configs_mmi/config_1x4.json
+	$(runner) $(my_python) masters/mmi_1x4_master.py -c configs_mmi/config_1x4.json
 
 mmi_1x4_s:
 	$(runner) $(my_python) sweeps/mmi_1x4_sweep_efficient.py --config configs_mmi/config_1x4.json
@@ -47,10 +48,10 @@ mmi_1x4_s_simple:
 	$(runner) $(my_python) sweeps/mmi_1x4_sweep.py -c configs_mmi/config_1x4.json
 
 mmi_mux:
-	$(runner) $(my_python) mmi_mux_master.py -c configs_mmi/config_mux.json
+	$(runner) $(my_python) masters/mmi_mux_master.py -c configs_mmi/config_mux.json
 
 mmi_2x2_dilation_sweep:
-	$(runner) $(my_python) mmi_2x2_master.py -c configs_mmi/config_2x2_gds_dilation_$(DILATION_NM)nm.json
+	$(runner) $(my_python) masters/mmi_2x2_master.py -c configs_mmi/config_2x2_gds_dilation_$(DILATION_NM)nm.json
 
 config_dilation_sweep_cluster:
 	$(runner) $(my_python) config.py --dilation $(DILATION_NM)

@@ -10,4 +10,5 @@
 #SBATCH --mail-type=FAIL
 #SBATCH --mail-user=jhiesener3@gatech.edu
 
-python3 anal/anal_mmi_2x2_batch.py /storage/scratch1/8/jhiesener3/shit/out/mmi_2x2_jmh_dilation_sweep
+python3 anal/anal_mmi_2x2_batch.py /storage/scratch1/8/jhiesener3/shit/out/mmi_2x2_jmh_dilation_sweep_60
+python3 anal/anal_mmi_2x2_dilation_sweep.py
