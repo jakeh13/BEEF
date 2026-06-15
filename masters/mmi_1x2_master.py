@@ -68,9 +68,9 @@ class MMI_1x2:
         # Compute the simulation dimensions
         Sx = self.hp.geo.taper_length + self.hp.sim.waveguide_length + self.hp.sim.mm_sim_length + 2*self.hp.sim.dpml  
         Sy = self.hp.sim.oxide_width + 2*self.hp.sim.dpml  
-        Sz = self.hp.sim.oxide_height + 2*self.hp.sim.dpml  
+        Sz = self.hp.sim.oxide_height + 2*self.hp.sim.dpml
         wavelength_center = (self.hp.sim.wavelength_max - self.hp.sim.wavelength_min)/2 + self.hp.sim.wavelength_min
-        freqs = 1/wavelengths.astype(list)
+        freqs = (1/wavelengths).tolist()
 
         # materials
         Si = meep_material_from_meow(mw.silicon.n, mw.silicon.params['wl'],wavelength_center)
@@ -154,7 +154,7 @@ class MMI_1x2:
             input_coeffs.append(s[0,:])
             if mp.am_master(): self.master_logger.info(f"Mode {mode_num}, Power: {np.abs(s[0,:])**2}, Angle: {np.angle(s[0,:], deg=True)}")
         input_coeffs = np.asarray(input_coeffs)
-        return input_coeffs.T.astype(list)
+        return input_coeffs.T.tolist()
 
     def mm_simulation(self,wavelengths):
         mm_coeffs = []
@@ -173,7 +173,7 @@ class MMI_1x2:
             ),
             Ls=Ls,
         )
-        for wavelength in wavelengths.astype(list):
+        for wavelength in wavelengths.tolist():
             if mp.am_master(): self.master_logger.info(f"Starting EME simulation for multimode section at wavelength {wavelength}")
             
             gf_environment = mw.Environment(wl=wavelength, T=25.0)
@@ -199,9 +199,9 @@ class MMI_1x2:
         # Compute the simulation dimensions
         Sx = self.hp.geo.taper_length + self.hp.sim.waveguide_length + self.hp.sim.mm_sim_length + 2*self.hp.sim.dpml  
         Sy = self.hp.sim.oxide_width + 2*self.hp.sim.dpml  
-        Sz = self.hp.sim.oxide_height + 2*self.hp.sim.dpml  
+        Sz = self.hp.sim.oxide_height + 2*self.hp.sim.dpml
         wavelength_center = (self.hp.sim.wavelength_max - self.hp.sim.wavelength_min)/2 + self.hp.sim.wavelength_min
-        freqs = 1/wavelengths.astype(list)
+        freqs = (1/wavelengths).tolist()
 
         # materials
         Si = meep_material_from_meow(mw.silicon.n, mw.silicon.params['wl'],wavelength_center)
@@ -287,7 +287,7 @@ class MMI_1x2:
             if mp.am_master(): self.master_logger.info(f"Mode {mode_num}, Power: {np.abs(s[0,:])**2}, Angle: {np.angle(s[0,:], deg=True)}")
 
         output_coeffs = np.asarray(output_coeffs)
-        return output_coeffs.T.astype(list)
+        return output_coeffs.T.tolist()
 
     def hybrid_simulation(self):
         wavelengths = np.linspace(self.hp.sim.wavelength_min,self.hp.sim.wavelength_max,self.hp.sim.wavelength_pts)
@@ -328,7 +328,7 @@ class MMI_1x2:
         Sz = self.hp.sim.oxide_height + 2*self.hp.sim.dpml  
         wavelength_center = (self.hp.sim.wavelength_max - self.hp.sim.wavelength_min)/2 + self.hp.sim.wavelength_min
         wavelengths = np.linspace(self.hp.sim.wavelength_min,self.hp.sim.wavelength_max,self.hp.sim.wavelength_pts)
-        freqs = 1/wavelengths.astype(list)
+        freqs = (1/wavelengths).tolist()
 
         # materials
         Si = meep_material_from_meow(mw.silicon.n, mw.silicon.params['wl'],wavelength_center)
@@ -433,7 +433,7 @@ class MMI_1x2:
         if mp.am_master(): self.master_logger.info(f"Creating full FDTD simulation from GDS: {self.hp.geo.gds_file}")
         wavelength_center = (self.hp.sim.wavelength_max - self.hp.sim.wavelength_min)/2 + self.hp.sim.wavelength_min
         wavelengths = np.linspace(self.hp.sim.wavelength_min, self.hp.sim.wavelength_max, self.hp.sim.wavelength_pts)
-        freqs = 1/wavelengths.astype(list)
+        freqs = (1/wavelengths).tolist()
 
         device_Sx = prepare_gds_for_meep(self.hp.geo.gds_file, "gds/temp_gds_fdtd.gds",
                                          dilation=self.hp.geo.dilation)

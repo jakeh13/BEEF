@@ -6,7 +6,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.lines import Line2D
 
-SWEEP_DIR = Path("/storage/scratch1/8/jhiesener3/shit/out/mmi_2x2_jmh_dilation_sweep_60")
+SWEEP_DIR = Path("/storage/scratch1/8/jhiesener3/shit/out/mmi_2x2_ak_dilation_sweep_80")
 
 # ── styling ───────────────────────────────────────────────────────────────────
 label_font      = "Arial"
