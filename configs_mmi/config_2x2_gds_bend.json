@@ -8,6 +8,7 @@
         "taper_width": 0.7000000000000001,
         "waveguide_offset": 0.9000000000000001,
         "gds_file": "gds/splitter_2x2_f53_dilated_80.gds",
+        "dilation": 0.0,
         "bend_radius": 5.0,
         "bend_type": "circular",
         "bend_locations": [

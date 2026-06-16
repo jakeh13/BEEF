@@ -11,6 +11,8 @@ from dataclasses import asdict
 import meow as mw
 import meep as mp
 
+from meow import compute_modes_tidy3d as compute_modes
+
 from engine.hyperparams.MMI import HyperParamsMMI as HyperParams
 
 from engine.helpers.general import(
@@ -184,7 +186,7 @@ class MMI_1x2:
             modes = []
             for cell_num, (cs, num_mode) in enumerate(zip(css,num_modes)):
                 if mp.am_master(): self.master_logger.info(f"Computing mode {num_mode} of cell {cell_num}")
-                modes.append(mw.compute_modes_meep(cs, num_modes=num_mode))
+                modes.append(compute_modes(cs, num_modes=num_mode))
 
             S, port_map = mw.compute_s_matrix(modes, cells=cells)
             mm_coeffs_1_wl = []
@@ -612,7 +614,7 @@ class MMI_1x2:
             modes = []
             for cell_num, (cs, num_mode) in enumerate(zip(css,num_modes)):
                 if mp.am_master(): self.master_logger.info(f"Computing mode {num_mode} of cell {cell_num}")
-                modes.append(mw.compute_modes_meep(cs, num_modes=num_mode))
+                modes.append(compute_modes(cs, num_modes=num_mode))
             S, port_map = mw.compute_s_matrix(modes, cells=cells)
             coeffs.append(S[0,1])
             powers.append(np.abs(S[0,1])**2)

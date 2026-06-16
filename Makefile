@@ -1,5 +1,6 @@
 seed_num ?= 1
 DILATION_NM ?= 0
+MM_LENGTH_X10 ?= 40
 export PYTHONPATH := $(CURDIR)
 ifeq ($(LMOD_SYSHOST), phoenix)
 	runner = srun --mpi=pmi2
@@ -55,6 +56,12 @@ mmi_2x2_dilation_sweep:
 
 config_dilation_sweep_cluster:
 	$(runner) $(my_python) config.py --dilation $(DILATION_NM)
+
+mmi_1x2_length_sweep:
+	$(runner) $(my_python) masters/mmi_1x2_master.py -c configs_mmi/config_1x2_gds_length_$(MM_LENGTH_X10).json
+
+config_1x2_length_sweep_cluster:
+	$(runner) $(my_python) config.py --length_x10 $(MM_LENGTH_X10)
 
 config:
 	$(my_python) config.py

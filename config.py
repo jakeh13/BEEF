@@ -37,32 +37,36 @@ def create_config_MMI_1x2(folder: str = 'configs_mmi', name: str = 'config'):
     save(hp, folder, name)
 
 def create_config_MMI_1x2_gds(folder: str = 'configs_mmi', name: str = 'config_1x2_gds'):
-    sim_type = "FDTD_GDS"
+    sim_type = "EME"
     res = 40
     splitter_name = "splitter_f32"
-    mm_width = 2.6
-    mm_length = 6.4
+    mm_width = 2.0
+    mm_length = 4.0
     hp = HyperParamsMMI(
         geo=GeoParamsMMI(
             gds_file=f"gds/{splitter_name}.gds",
             mm_length=mm_length,
             mm_width=mm_width,
-            taper_width=1.0,
-            taper_length=2.0,
-            waveguide_offset=1.3,
+            taper_width=0.8,
+            taper_length=1.0,
+            waveguide_offset=1.0,
             waveguide_width=0.35,
-            waveguide_height=0.16
+            waveguide_height=0.18
             ),
         sim=SimParams(
             res=res,
             wavelength_min=1.26,
             wavelength_max=1.36,
-            wavelength_pts=30,
+            wavelength_pts=7,
             sim_type=sim_type,
             input_modes=[1],
             output_modes=[1],
+            mm_monitor_position=0.75,
+            num_cells_taper=12,
+            num_modes_MMI=15,
+            num_modes_taper=7
         ),
-        outputfolder=f"./out/mmi_1x2_gds/{sim_type}_{int(res)}_{splitter_name}"
+        outputfolder=f"../out/mmi_1x2_tests/{sim_type}_res_{int(res)}"
     )
     save(hp, folder, name)
 
@@ -295,6 +299,40 @@ def create_config_MMI_MUX(folder: str = 'configs_mmi', name: str = 'config_mux')
     )
     save(hp, folder, name)
 
+def create_config_MMI_1x2_length_sweep(length_x10: int, folder: str = 'configs_mmi'):
+    sim_type = "EME"
+    res = 40
+    splitter_name = "splitter_f32"
+    mm_length = length_x10 / 10
+    mm_width = 2.0
+    hp = HyperParamsMMI(
+        geo=GeoParamsMMI(
+            gds_file=f"gds/{splitter_name}.gds",
+            mm_length=mm_length,
+            mm_width=mm_width,
+            taper_width=0.8,
+            taper_length=1.0,
+            waveguide_offset=1.0,
+            waveguide_width=0.35,
+            waveguide_height=0.16,
+        ),
+        sim=SimParams(
+            res=res,
+            wavelength_min=1.26,
+            wavelength_max=1.36,
+            wavelength_pts=7,
+            sim_type=sim_type,
+            input_modes=[1],
+            output_modes=[1],
+            mm_monitor_position=0.75,
+            num_cells_taper=12,
+            num_modes_MMI=15,
+            num_modes_taper=7,
+        ),
+        outputfolder=f"../out/mmi_1x2_length_sweep_0/{sim_type}_res_{int(res)}_length_{mm_length:.1f}um"
+    )
+    save(hp, folder, f"config_1x2_gds_length_{length_x10}")
+
 def create_config_MMI_2x2_gds_dilation_sweep(dilation_nm: int, folder: str = 'configs_mmi'):
     taper_spacing = 0.2
     mm_width = 1.6
@@ -367,13 +405,16 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--dilation', type=int, default=None, help='Dilation in nm; generates one sweep config and exits')
+    parser.add_argument('--length_x10', type=int, default=None, help='MMI length * 10 (e.g. 35 = 3.5 um); generates one 1x2 length sweep config and exits')
     args = parser.parse_args()
 
-    if args.dilation is not None:
+    if args.length_x10 is not None:
+        create_config_MMI_1x2_length_sweep(args.length_x10)
+    elif args.dilation is not None:
         create_config_MMI_2x2_gds_dilation_sweep_AK(args.dilation)
     else:
         # create_config_MMI_1x2(name='config')
-        # create_config_MMI_1x2_gds(name='config_1x2_gds')
+        create_config_MMI_1x2_gds(name='config_1x2_gds')
         # create_config_MMI_2x2(name='config_2x2')
         create_config_MMI_2x2_gds(name='config_2x2_gds')
         # create_config_MMI_2x2_pol_splitter(name='config_2x2_pol_splitter')
