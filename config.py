@@ -19,20 +19,29 @@ def save(hp: HyperParamsMMI, config_folder: str, name: str) -> None:
         print(s, file=f)
 
 def create_config_MMI_1x2(folder: str = 'configs_mmi', name: str = 'config'):
-    res = 40
     sim_type = "EME"
+    res = 40
+    splitter_name = "splitter_f32"
+    mm_width = 2.0
+    mm_length = 4.0
     hp = HyperParamsMMI(
         geo=GeoParamsMMI(
-            taper_width=0.8
+            taper_width=0.8,
+            mm_width=mm_width,
+            mm_length=mm_length,
+            taper_length=1.0,
+            waveguide_offset=1.0,
+            waveguide_width=0.35,
+            waveguide_height=0.16
         ),
         sim=SimParams(
             res=res,
-            wavelength_min=1.27,
-            wavelength_max=1.33,
-            wavelength_pts=3,
+            wavelength_min=1.26,
+            wavelength_max=1.36,
+            wavelength_pts=5,
             sim_type = sim_type
         ),
-        outputfolder=f"./out/mmi_1x2/{sim_type}_{int(res)}_2"
+        outputfolder=f"../out/mmi_1x2_sweep_0/{sim_type}_{int(res)}"
     )
     save(hp, folder, name)
 
@@ -253,6 +262,38 @@ def create_config_MMI_2x2_pol_splitter(folder: str = 'configs_mmi', name: str = 
     )
     save(hp, folder, name)
 
+def create_config_MMI_2x2_sweep(folder: str = 'configs_mmi', name: str = 'config_2x2_sweep'):
+    taper_spacing = 0.2
+    mm_width = 6.0           # nominal center of MM_WIDTH_SWEEP (5.0–7.0 um)
+    mm_length = 28.0         # nominal center of MM_LENGTH_SWEEP (20–36 um)
+    taper_width = (mm_width - taper_spacing) / 2
+    waveguide_offset = taper_width + taper_spacing
+    sim_type = "EME"
+    res = 40
+    hp = HyperParamsMMI(
+        geo=GeoParamsMMI(
+            waveguide_width=0.45,
+            mm_width=mm_width,
+            mm_length=mm_length,
+            taper_length=4,
+            waveguide_offset=waveguide_offset,
+            taper_width=taper_width,
+            waveguide_height=0.22,
+        ),
+        sim=SimParams(
+            res=res,
+            wavelength_min=1.55,
+            wavelength_max=1.55,
+            wavelength_pts=1,
+            sim_type=sim_type,
+            oxide_width=10,
+            num_modes_MMI=30,
+            num_modes_taper=15,
+        ),
+        outputfolder=f"../out/mmi_2x2_length_width_sweep_1/{sim_type}_{int(res)}"
+    )
+    save(hp, folder, name)
+
 def create_config_MMI_1x4(folder: str = 'configs_mmi', name: str = 'config_1x4'):
     waveguide_offset = 1.0  # pitch between adjacent output waveguide centers
     mm_width = 4.0          # needs to span 4 outputs: ~4 * waveguide_offset
@@ -413,10 +454,11 @@ if __name__ == '__main__':
     elif args.dilation is not None:
         create_config_MMI_2x2_gds_dilation_sweep_AK(args.dilation)
     else:
-        # create_config_MMI_1x2(name='config')
+        create_config_MMI_1x2(name='config_1x2_sweep')
         create_config_MMI_1x2_gds(name='config_1x2_gds')
         # create_config_MMI_2x2(name='config_2x2')
         create_config_MMI_2x2_gds(name='config_2x2_gds')
+        create_config_MMI_2x2_sweep(name='config_2x2_sweep')
         # create_config_MMI_2x2_pol_splitter(name='config_2x2_pol_splitter')
         # create_config_MMI_1x4(name='config_1x4')
         # create_config_MMI_MUX(name='config_mux')

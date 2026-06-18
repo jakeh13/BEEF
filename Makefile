@@ -60,6 +60,18 @@ config_dilation_sweep_cluster:
 mmi_1x2_length_sweep:
 	$(runner) $(my_python) masters/mmi_1x2_master.py -c configs_mmi/config_1x2_gds_length_$(MM_LENGTH_X10).json
 
+mmi_1x2_s_simple:
+	$(runner) $(my_python) sweeps/mmi_1x2_sweep.py -c configs_mmi/config_1x2_sweep.json 
+
+mmi_1x2_s_parallel:
+	$(my_python) sweeps/mmi_1x2_sweep_parallel.py -c configs_mmi/config_1x2_sweep.json
+
+mmi_1x2_s_parallel_efficient:
+	$(my_python) sweeps/mmi_1x2_sweep_parallel_efficient.py -c configs_mmi/config_1x2_sweep.json --full-output
+
+mmi_2x2_s_parallel_efficient:
+	$(my_python) sweeps/mmi_2x2_sweep_parallel_efficient.py -c configs_mmi/config_2x2_sweep.json --full-output
+
 config_1x2_length_sweep_cluster:
 	$(runner) $(my_python) config.py --length_x10 $(MM_LENGTH_X10)
 
