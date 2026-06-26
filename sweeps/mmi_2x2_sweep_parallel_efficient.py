@@ -48,8 +48,8 @@ N_PROCESSES = 4
 WL_BATCH_SIZE = 1  # max wavelengths whose MMI modes are held in memory at once per worker
 MIN_LW = 0.2
 
-MM_LENGTH_SWEEP = np.linspace(20.0, 36.0, 17)   # 20:1:36 um
-MM_WIDTH_SWEEP  = np.linspace(5.0, 7.0, 11)      # 5.0:0.2:7.0 um
+MM_LENGTH_SWEEP = np.linspace(20.0, 60.0, 41)   # 20:1:36 um
+MM_WIDTH_SWEEP  = np.linspace(5.0, 7.0, 21)      # 5.0:0.2:7.0 um
 
 PORT_NAMES = ["through", "cross"]
 LOAD_FNS   = [load_2x2_MMI_top, load_2x2_MMI_bot]

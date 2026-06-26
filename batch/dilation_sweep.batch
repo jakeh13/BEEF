@@ -8,10 +8,10 @@
 #SBATCH -q inferno
 #SBATCH -o ../reports/%A_%a.out
 #SBATCH --mail-type=FAIL
-#SBATCH --array=0-16
+#SBATCH --array=0-20
 #SBATCH --mail-user=jhiesener3@gatech.edu
 
-dilations_nm=(0 2 4 6 8 10 12 14 16 18 20 22 24 26 28 30 32)
+dilations_nm=(-20 -18 -16 -14 -12 -10 -8 -6 -4 -2 0 2 4 6 8 10 12 14 16 18 20)
 dil_nm=${dilations_nm[$SLURM_ARRAY_TASK_ID]}
 
 make config_dilation_sweep_cluster DILATION_NM=$dil_nm mmi_2x2_dilation_sweep DILATION_NM=$dil_nm

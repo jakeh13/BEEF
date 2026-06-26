@@ -23,7 +23,8 @@ from engine.helpers.meep import(
      meep_material_from_meow,
      create_temp_gds_for_mmi_1x4_input,
      create_temp_gds_for_mmi_1x4_output,
-     create_temp_gds_for_full_mmi_1x4
+     create_temp_gds_for_full_mmi_1x4,
+     cleanup_gds_temp_files,
 )
 from engine.helpers.meow import(
     load_1x4_MMI,
@@ -80,13 +81,18 @@ class MMI_1x4:
             material=Si
         )]
 
-        create_temp_gds_for_mmi_1x4_input(
-            self.hp.geo.mm_length, self.hp.geo.taper_length, Sx, self.hp.sim.dpml,
-            self.hp.sim.waveguide_length, self.hp.geo.waveguide_width, self.hp.geo.mm_width,
-            self.hp.geo.taper_width, self.hp.geo.waveguide_offset
-        )
-        mmi = mp.get_GDSII_prisms(Si, "gds/temp.gds", 2, -self.hp.geo.waveguide_height/2, self.hp.geo.waveguide_height/2)
+        gds_tmp_path = "../temp_gds/temp.gds"
+        if mp.am_master():
+            create_temp_gds_for_mmi_1x4_input(
+                self.hp.geo.mm_length, self.hp.geo.taper_length, Sx, self.hp.sim.dpml,
+                self.hp.sim.waveguide_length, self.hp.geo.waveguide_width, self.hp.geo.mm_width,
+                self.hp.geo.taper_width, self.hp.geo.waveguide_offset
+            )
+        mp.all_wait()
+        mmi = mp.get_GDSII_prisms(Si, gds_tmp_path, 2, -self.hp.geo.waveguide_height/2, self.hp.geo.waveguide_height/2)
         geometry += mmi
+        mp.all_wait()
+        cleanup_gds_temp_files(gds_tmp_path)
 
         source_gaus = [
             mp.EigenModeSource(
@@ -201,11 +207,14 @@ class MMI_1x4:
         SiO2 = meep_material_from_meow(mw.silicon_oxide.n, mw.silicon_oxide.params['wl'], wavelength_center)
 
         # Build geometry once (same for all 4 port sims)
-        create_temp_gds_for_mmi_1x4_output(
-            self.hp.geo.mm_length, self.hp.geo.taper_length, Sx, self.hp.sim.dpml,
-            self.hp.sim.waveguide_length, self.hp.geo.waveguide_width, self.hp.geo.mm_width,
-            self.hp.geo.taper_width, self.hp.geo.waveguide_offset
-        )
+        gds_tmp_path = "../temp_gds/temp_out.gds"
+        if mp.am_master():
+            create_temp_gds_for_mmi_1x4_output(
+                self.hp.geo.mm_length, self.hp.geo.taper_length, Sx, self.hp.sim.dpml,
+                self.hp.sim.waveguide_length, self.hp.geo.waveguide_width, self.hp.geo.mm_width,
+                self.hp.geo.taper_width, self.hp.geo.waveguide_offset
+            )
+        mp.all_wait()
 
         for port_idx, yo in enumerate(output_offsets):
             if mp.am_master(): self.master_logger.info(f"Creating output FDTD simulation for port {port_idx}")
@@ -221,7 +230,7 @@ class MMI_1x4:
                     size=mp.Vector3(self.hp.sim.waveguide_length + self.hp.sim.dpml, self.hp.geo.waveguide_width, self.hp.geo.waveguide_height),
                     material=Si
                 )]
-            mmi = mp.get_GDSII_prisms(Si, "gds/temp_out.gds", 2, -self.hp.geo.waveguide_height/2, self.hp.geo.waveguide_height/2)
+            mmi = mp.get_GDSII_prisms(Si, gds_tmp_path, 2, -self.hp.geo.waveguide_height/2, self.hp.geo.waveguide_height/2)
             geometry += mmi
 
             source_gaus = [
@@ -281,6 +290,9 @@ class MMI_1x4:
             all_output_coeffs.append(output_coeffs.T.astype(list))
 
             sim.reset_meep()
+
+        mp.all_wait()
+        cleanup_gds_temp_files(gds_tmp_path)
 
         return all_output_coeffs
 
@@ -344,12 +356,17 @@ class MMI_1x4:
                 material=Si
             )]
 
-        create_temp_gds_for_full_mmi_1x4(
-            self.hp.geo.mm_length, self.hp.geo.taper_length, self.hp.geo.waveguide_width,
-            self.hp.geo.mm_width, self.hp.geo.taper_width, self.hp.geo.waveguide_offset
-        )
-        mmi = mp.get_GDSII_prisms(Si, "gds/temp_full.gds", 2, -self.hp.geo.waveguide_height/2, self.hp.geo.waveguide_height/2)
+        gds_tmp_path = "../temp_gds/temp_full.gds"
+        if mp.am_master():
+            create_temp_gds_for_full_mmi_1x4(
+                self.hp.geo.mm_length, self.hp.geo.taper_length, self.hp.geo.waveguide_width,
+                self.hp.geo.mm_width, self.hp.geo.taper_width, self.hp.geo.waveguide_offset
+            )
+        mp.all_wait()
+        mmi = mp.get_GDSII_prisms(Si, gds_tmp_path, 2, -self.hp.geo.waveguide_height/2, self.hp.geo.waveguide_height/2)
         geometry += mmi
+        mp.all_wait()
+        cleanup_gds_temp_files(gds_tmp_path)
 
         source_gaus = [
             mp.EigenModeSource(

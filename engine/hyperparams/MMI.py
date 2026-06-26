@@ -1,6 +1,43 @@
 from dataclasses import dataclass, field
 from typing import List
 
+
+def waveguide_params_from_gds(gds_file: str, edge: str = "right", port_zone: float = 0.05) -> tuple[float, float]:
+    """Measure (waveguide_offset, waveguide_width) from the two single-mode
+    ports at one edge of a GDS device (e.g. a 2x2 MMI splitter's output side).
+    """
+    import pya
+
+    layout = pya.Layout()
+    layout.read(gds_file)
+    dbu = layout.dbu
+    cell = layout.top_cell()
+
+    region = pya.Region()
+    for li in layout.layer_indices():
+        region += pya.Region(cell.shapes(li))
+
+    bb = region.bbox()
+    x = bb.right if edge == "right" else bb.left
+    half_zone = int(round(port_zone / dbu))
+    pad = bb.height()
+    slab = pya.Region(pya.Box(x - half_zone, bb.bottom - pad, x + half_zone, bb.top + pad))
+
+    intervals = []
+    for poly in (region & slab).merged().each():
+        ys = [p.y for p in poly.each_point_hull()]
+        intervals.append((min(ys) * dbu, max(ys) * dbu))
+    intervals.sort()
+
+    if len(intervals) != 2:
+        raise ValueError(f"Expected 2 ports at the {edge} edge of {gds_file}, found {len(intervals)}")
+
+    (y1_min, y1_max), (y2_min, y2_max) = intervals
+    waveguide_width = ((y1_max - y1_min) + (y2_max - y2_min)) / 2
+    waveguide_offset = (y2_min + y2_max) / 2 - (y1_min + y1_max) / 2
+    return waveguide_offset, waveguide_width
+
+
 @dataclass(eq=False, kw_only=True)
 class GeoParamsMMI:
     waveguide_height: float = 0.16    # Height of waveguide layer

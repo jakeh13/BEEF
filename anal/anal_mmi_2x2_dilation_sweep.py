@@ -6,7 +6,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.lines import Line2D
 
-SWEEP_DIR = Path("/storage/scratch1/8/jhiesener3/shit/out/mmi_2x2_ak_dilation_sweep_80")
+SWEEP_DIR = Path("/storage/scratch1/8/jhiesener3/shit/out_0/mmi_2x2_PDK_dilation_sweep_80")
 
 # ── styling ───────────────────────────────────────────────────────────────────
 label_font      = "Arial"
@@ -52,7 +52,7 @@ def main():
         return
 
     # Discover dilation_Nnm subdirectories, sorted by dilation value
-    pattern = re.compile(r"^dilation_(\d+)nm$")
+    pattern = re.compile(r"^dilation_(-?\d+)nm$")
     runs = []
     for d in SWEEP_DIR.iterdir():
         m = pattern.match(d.name)

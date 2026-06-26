@@ -22,6 +22,8 @@ from engine.helpers.meep import (
     create_temp_gds_for_full_mmi_mux,
     create_temp_gds_for_mmi_mux_input,
     create_temp_gds_for_mmi_mux_output,
+    unique_gds_temp_path,
+    cleanup_gds_temp_files,
 )
 from engine.helpers.meow import (
     load_MMI_MUX_full,
@@ -115,12 +117,15 @@ class MMI_MUX:
             material=Si
         )]
 
+        gds_tmp_path = f"../temp_gds/temp_mux_in_{mode}.gds"
         if mp.am_master():
             create_temp_gds_for_mmi_mux_input(geo, sim, Sx, name=f"temp_mux_in_{mode}")
         mp.all_wait()
-        mmi = mp.get_GDSII_prisms(Si, f"gds/temp_mux_in_{mode}.gds", 2,
+        mmi = mp.get_GDSII_prisms(Si, gds_tmp_path, 2,
                                    -geo.waveguide_height/2, geo.waveguide_height/2)
         geometry += mmi
+        mp.all_wait()
+        cleanup_gds_temp_files(gds_tmp_path)
 
         sources = [mp.EigenModeSource(
             mp.GaussianSource(frequency=1/wl_c, fwidth=0.4/wl_c),
@@ -199,12 +204,15 @@ class MMI_MUX:
         )]
 
         name = f"temp_mux_out_{port_idx}_{mode}"
+        gds_tmp_path = f"../temp_gds/{name}.gds"
         if mp.am_master():
             create_temp_gds_for_mmi_mux_output(geo, sim, Sx, port_idx, name=name)
         mp.all_wait()
-        mmi = mp.get_GDSII_prisms(Si, f"gds/{name}.gds", 2,
+        mmi = mp.get_GDSII_prisms(Si, gds_tmp_path, 2,
                                    -geo.waveguide_height/2, geo.waveguide_height/2)
         geometry += mmi
+        mp.all_wait()
+        cleanup_gds_temp_files(gds_tmp_path)
 
         sources = [mp.EigenModeSource(
             mp.GaussianSource(frequency=1/wl_c, fwidth=0.4/wl_c),
@@ -394,12 +402,15 @@ class MMI_MUX:
                 material=Si,
             ))
 
+        gds_tmp_path = "../temp_gds/temp_mux_full.gds"
         if mp.am_master():
             create_temp_gds_for_full_mmi_mux(geo)
         mp.all_wait()
-        mmi = mp.get_GDSII_prisms(Si, "gds/temp_mux_full.gds", 2,
+        mmi = mp.get_GDSII_prisms(Si, gds_tmp_path, 2,
                                    -geo.waveguide_height/2, geo.waveguide_height/2)
         geometry_base += mmi
+        mp.all_wait()
+        cleanup_gds_temp_files(gds_tmp_path)
 
         powers_by_port = {}
         angles_by_port = {}
@@ -490,7 +501,19 @@ class MMI_MUX:
         freqs = 1 / wavelengths.astype(list)
         Si, SiO2 = self._materials(wl_c)
 
-        device_Sx = prepare_gds_for_meep(geo.gds_file, "gds/temp_gds_fdtd.gds")
+        if mp.am_master():
+            gds_tmp_path = unique_gds_temp_path("temp_gds_fdtd")
+            device_Sx = prepare_gds_for_meep(geo.gds_file, gds_tmp_path)
+        else:
+            gds_tmp_path = None
+            device_Sx = None
+        try:
+            from mpi4py import MPI
+            gds_tmp_path = MPI.COMM_WORLD.bcast(gds_tmp_path, root=0)
+            device_Sx = MPI.COMM_WORLD.bcast(device_Sx, root=0)
+        except ImportError:
+            pass
+        mp.all_wait()
         Sx = device_Sx + 2*sim.waveguide_length + 2*sim.dpml
         Sy = sim.oxide_width  + 2*sim.dpml
         Sz = sim.oxide_height + 2*sim.dpml
@@ -510,9 +533,11 @@ class MMI_MUX:
                 material=Si,
             ))
 
-        mmi = mp.get_GDSII_prisms(Si, "gds/temp_gds_fdtd.gds", 2,
+        mmi = mp.get_GDSII_prisms(Si, gds_tmp_path, 2,
                                    -geo.waveguide_height/2, geo.waveguide_height/2)
         geometry_base += mmi
+        mp.all_wait()
+        cleanup_gds_temp_files(gds_tmp_path)
 
         powers_by_port = {}
         angles_by_port = {}

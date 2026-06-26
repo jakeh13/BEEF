@@ -1,8 +1,11 @@
+import os
 import numpy as np
 import meep as mp
 import gdsfactory as gf
 
 gf.gpdk.PDK.activate()
+
+TEMP_GDS_DIR = "../temp_gds"  # one level outside FECES, alongside out/ and reports/
 
 # Get MEEP material from index vs wavelength lists used in MEOW
 def meep_material_from_meow(ns, wls, wl):
@@ -75,7 +78,7 @@ def create_temp_gds_for_mmi_input(mm_length, taper_length, Sx, dpml, waveguide_l
     temp = create_MMI_1x2(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset/2,"temp")
     temp.move((mmi_total_length/2 - Sx/2 + dpml + waveguide_length, 0))
     # save as temp.gds
-    temp.write_gds(gdsdir='gds')
+    temp.write_gds(gdsdir=TEMP_GDS_DIR)
 
 # Function to generate temp gds file for MMI geometry (to shift the MMI to the correct simulation coordinates)
 def create_temp_gds_for_mmi_output(mm_length, taper_length, Sx, dpml, waveguide_length, waveguide_width, mm_width, taper_width, waveguide_offset):
@@ -83,13 +86,13 @@ def create_temp_gds_for_mmi_output(mm_length, taper_length, Sx, dpml, waveguide_
     temp = create_MMI_1x2(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset/2,"temp_out")
     temp.move((-mmi_total_length/2 + Sx/2 - dpml - waveguide_length, 0))
     # save as temp.gds
-    temp.write_gds(gdsdir='gds')
+    temp.write_gds(gdsdir=TEMP_GDS_DIR)
 
 # Function to generate temp gds file for MMI geometry (to shift the MMI to the correct simulation coordinates)
 def create_temp_gds_for_full_mmi(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset):
     temp = create_MMI_1x2(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset/2,"temp_full")
     # save as temp.gds
-    temp.write_gds(gdsdir='gds')
+    temp.write_gds(gdsdir=TEMP_GDS_DIR)
 
 # Function to generate temp gds file for MMI geometry (to shift the MMI to the correct simulation coordinates)
 def create_temp_gds_for_mmi_2x2_input(mm_length, taper_length, Sx, dpml, waveguide_length, waveguide_width, mm_width, taper_width, waveguide_offset,name):
@@ -97,7 +100,7 @@ def create_temp_gds_for_mmi_2x2_input(mm_length, taper_length, Sx, dpml, wavegui
     temp = create_MMI_2x2(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset/2,name)
     temp.move((mmi_total_length/2 - Sx/2 + dpml + waveguide_length, 0))
     # save as temp.gds
-    temp.write_gds(gdsdir='gds')
+    temp.write_gds(gdsdir=TEMP_GDS_DIR)
 
 # Function to generate temp gds file for MMI geometry (to shift the MMI to the correct simulation coordinates)
 def create_temp_gds_for_mmi_2x2_output(mm_length, taper_length, Sx, dpml, waveguide_length, waveguide_width, mm_width, taper_width, waveguide_offset):
@@ -105,13 +108,13 @@ def create_temp_gds_for_mmi_2x2_output(mm_length, taper_length, Sx, dpml, wavegu
     temp = create_MMI_2x2(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset/2,"temp_out")
     temp.move((-mmi_total_length/2 + Sx/2 - dpml - waveguide_length, 0))
     # save as temp.gds
-    temp.write_gds(gdsdir='gds')
+    temp.write_gds(gdsdir=TEMP_GDS_DIR)
 
 # Function to generate temp gds file for MMI geometry (to shift the MMI to the correct simulation coordinates)
 def create_temp_gds_for_full_mmi_2x2(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset):
     temp = create_MMI_2x2(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset/2,"temp_full")
     # save as temp.gds
-    temp.write_gds(gdsdir='gds')
+    temp.write_gds(gdsdir=TEMP_GDS_DIR)
 
 def dilate_gds_file(input_path, output_path, dilation, port_zone=0.1, taper_len=0.3):
     """Apply uniform body dilation to a GDS file, tapering smoothly at each port end.
@@ -193,11 +196,40 @@ def dilate_gds_file(input_path, output_path, dilation, port_zone=0.1, taper_len=
     layout.write(output_path)
 
 
+def _unique_run_tag():
+    job_id = os.environ.get("SLURM_JOB_ID")
+    if job_id:
+        array_id = os.environ.get("SLURM_ARRAY_TASK_ID", "")
+        return f"{job_id}_{array_id}" if array_id else job_id
+    return str(os.getpid())
+
+
+def unique_gds_temp_path(prefix: str) -> str:
+    return f"{TEMP_GDS_DIR}/{prefix}_{_unique_run_tag()}.gds"
+
+
+def cleanup_gds_temp_files(*paths):
+    """Best-effort delete of per-run temp GDS files. Only call after every rank
+    that needs a path has finished reading it (i.e. after a post-read mp.all_wait()).
+    """
+    if mp.am_master():
+        for p in paths:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
 def prepare_gds_for_meep(gds_path, output_path, dilation=0.0):
     if dilation != 0.0:
-        dilate_gds_file(gds_path, "gds/temp_gds_dilated.gds", dilation)
-        gds_path = "gds/temp_gds_dilated.gds"
+        dilated_path = unique_gds_temp_path("temp_gds_dilated")
+        dilate_gds_file(gds_path, dilated_path, dilation)
+        gds_path = dilated_path
+    else:
+        dilated_path = None
     component = gf.import_gds(gds_path)
+    if dilated_path is not None:
+        cleanup_gds_temp_files(dilated_path)
     cx, cy = component.center
     component.move((-cx, -cy))
     component.write_gds(output_path)
@@ -385,17 +417,17 @@ def create_temp_gds_for_mmi_1x4_input(mm_length, taper_length, Sx, dpml, wavegui
     mmi_total_length = mm_length + 2*taper_length
     temp = create_MMI_1x4(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset, "temp")
     temp.move((mmi_total_length/2 - Sx/2 + dpml + waveguide_length, 0))
-    temp.write_gds(gdsdir='gds')
+    temp.write_gds(gdsdir=TEMP_GDS_DIR)
 
 def create_temp_gds_for_mmi_1x4_output(mm_length, taper_length, Sx, dpml, waveguide_length, waveguide_width, mm_width, taper_width, waveguide_offset):
     mmi_total_length = mm_length + 2*taper_length
     temp = create_MMI_1x4(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset, "temp_out")
     temp.move((-mmi_total_length/2 + Sx/2 - dpml - waveguide_length, 0))
-    temp.write_gds(gdsdir='gds')
+    temp.write_gds(gdsdir=TEMP_GDS_DIR)
 
 def create_temp_gds_for_full_mmi_1x4(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset):
     temp = create_MMI_1x4(mm_length, taper_length, waveguide_width, mm_width, taper_width, waveguide_offset, "temp_full")
-    temp.write_gds(gdsdir='gds')
+    temp.write_gds(gdsdir=TEMP_GDS_DIR)
 
 # --- MMI MUX (1x3 → 3x3 cascade) GDS helpers ---
 
@@ -508,7 +540,7 @@ def create_MMI_MUX(geo, name="mmi_mux"):
 def create_temp_gds_for_full_mmi_mux(geo):
     """Full device GDS for FDTD simulation, saved as gds/temp_mux_full.gds."""
     c = create_MMI_MUX(geo, name="temp_mux_full")
-    c.write_gds(gdsdir='gds')
+    c.write_gds(gdsdir=TEMP_GDS_DIR)
 
 
 def create_temp_gds_for_mmi_mux_input(geo, sim, Sx, name="temp_mux_in"):
@@ -545,7 +577,7 @@ def create_temp_gds_for_mmi_mux_input(geo, sim, Sx, name="temp_mux_in"):
     # shift: left edge of taper → -Sx/2 + dpml + wl
     x_shift = (-Sx/2 + dpml + wl)
     c.move((x_shift, 0))
-    c.write_gds(gdsdir='gds')
+    c.write_gds(gdsdir=TEMP_GDS_DIR)
 
 
 def create_temp_gds_for_mmi_mux_output(geo, sim, Sx, port_idx, name=None):
@@ -592,4 +624,4 @@ def create_temp_gds_for_mmi_mux_output(geo, sim, Sx, port_idx, name=None):
     # right edge of taper in local coords = Lt
     x_shift = (Sx/2 - dpml - wl) - Lt
     c.move((x_shift, 0))
-    c.write_gds(gdsdir='gds')
+    c.write_gds(gdsdir=TEMP_GDS_DIR)

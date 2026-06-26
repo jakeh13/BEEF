@@ -1,13 +1,13 @@
 {
     "geo": {
-        "waveguide_height": 0.215,
-        "waveguide_width": 0.5,
-        "mm_length": 7.8,
+        "waveguide_height": 0.16,
+        "waveguide_width": 0.35,
+        "mm_length": 10.2,
         "mm_width": 1.6,
         "taper_length": 2,
         "taper_width": 0.7000000000000001,
-        "waveguide_offset": 0.9000000000000001,
-        "gds_file": "gds/Splitter_60.gds",
+        "waveguide_offset": 0.9,
+        "gds_file": "gds/mmi2x2.gds",
         "dilation": 0.0,
         "bend_radius": 5.0,
         "bend_type": "euler",
@@ -19,8 +19,8 @@
         "oxide_height": 1.5,
         "oxide_width": 5,
         "res": 80,
-        "wavelength_min": 1.5,
-        "wavelength_max": 1.6,
+        "wavelength_min": 1.26,
+        "wavelength_max": 1.36,
         "wavelength_pts": 30,
         "num_modes_MMI": 15,
         "dpml": 0.5,
@@ -42,5 +42,5 @@
             "top"
         ]
     },
-    "outputfolder": "../out/mmi_2x2_ak_dilation_sweep_80/dilation_0nm"
+    "outputfolder": "../out_0/mmi_2x2_PDK_dilation_sweep_80/dilation_0nm"
 }

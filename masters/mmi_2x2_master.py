@@ -26,6 +26,8 @@ from engine.helpers.meep import(
      create_temp_gds_for_full_mmi_2x2,
      prepare_gds_for_meep,
      create_bend_gds_for_meep,
+     unique_gds_temp_path,
+     cleanup_gds_temp_files,
 )
 from engine.helpers.meow import(
     load_2x2_MMI_top,
@@ -87,13 +89,16 @@ class MMI_2x2:
         geometry += [mp.Block(center=mp.Vector3(-Sx/2 + self.hp.sim.waveguide_length/2 + self.hp.sim.dpml/2,-self.hp.geo.waveguide_offset/2,0), size=mp.Vector3(self.hp.sim.waveguide_length + self.hp.sim.dpml, self.hp.geo.waveguide_width, self.hp.geo.waveguide_height), material = Si)]
 
         # Create temp gds file for MMI geometry (master only, then sync)
+        gds_tmp_path = f"../temp_gds/{port}_{mode}.gds"
         if mp.am_master():
             create_temp_gds_for_mmi_2x2_input(self.hp.geo.mm_length, self.hp.geo.taper_length, Sx, self.hp.sim.dpml, self.hp.sim.waveguide_length, self.hp.geo.waveguide_width, self.hp.geo.mm_width, self.hp.geo.taper_width, self.hp.geo.waveguide_offset, f"{port}_{mode}")
         mp.all_wait()
 
         # Get MMI geometry from temp gds file
-        mmi = mp.get_GDSII_prisms(Si, f"gds/{port}_{mode}.gds", 2, -self.hp.geo.waveguide_height/2, self.hp.geo.waveguide_height/2)
+        mmi = mp.get_GDSII_prisms(Si, gds_tmp_path, 2, -self.hp.geo.waveguide_height/2, self.hp.geo.waveguide_height/2)
         geometry += mmi
+        mp.all_wait()
+        cleanup_gds_temp_files(gds_tmp_path)
 
         # Create source MEEP simulation
         source_gaus = [
@@ -275,12 +280,15 @@ class MMI_2x2:
         geometry_base += [mp.Block(center=mp.Vector3(Sx/2 - self.hp.sim.waveguide_length/2 - self.hp.sim.dpml/2,self.hp.geo.waveguide_offset/2,0), size=mp.Vector3(self.hp.sim.waveguide_length + self.hp.sim.dpml, self.hp.geo.waveguide_width, self.hp.geo.waveguide_height), material=Si)]
         geometry_base += [mp.Block(center=mp.Vector3(Sx/2 - self.hp.sim.waveguide_length/2 - self.hp.sim.dpml/2,-self.hp.geo.waveguide_offset/2,0), size=mp.Vector3(self.hp.sim.waveguide_length + self.hp.sim.dpml, self.hp.geo.waveguide_width, self.hp.geo.waveguide_height), material=Si)]
 
+        gds_tmp_path = "../temp_gds/temp_full.gds"
         if mp.am_master():
             create_temp_gds_for_full_mmi_2x2(self.hp.geo.mm_length, self.hp.geo.taper_length, self.hp.geo.waveguide_width, self.hp.geo.mm_width, self.hp.geo.taper_width, self.hp.geo.waveguide_offset)
         mp.all_wait()
 
-        mmi = mp.get_GDSII_prisms(Si, "gds/temp_full.gds", 2, -self.hp.geo.waveguide_height/2, self.hp.geo.waveguide_height/2)
+        mmi = mp.get_GDSII_prisms(Si, gds_tmp_path, 2, -self.hp.geo.waveguide_height/2, self.hp.geo.waveguide_height/2)
         geometry_base += mmi
+        mp.all_wait()
+        cleanup_gds_temp_files(gds_tmp_path)
 
         return self._run_fdtd(geometry_base, Sx, plot_prefix="full_FDTD")
 
@@ -289,12 +297,15 @@ class MMI_2x2:
         wavelength_center = (self.hp.sim.wavelength_max - self.hp.sim.wavelength_min)/2 + self.hp.sim.wavelength_min
 
         if mp.am_master():
-            device_Sx = prepare_gds_for_meep(self.hp.geo.gds_file, "gds/temp_gds_fdtd.gds",
+            gds_tmp_path = unique_gds_temp_path("temp_gds_fdtd")
+            device_Sx = prepare_gds_for_meep(self.hp.geo.gds_file, gds_tmp_path,
                                              dilation=self.hp.geo.dilation)
         else:
+            gds_tmp_path = None
             device_Sx = None
         try:
             from mpi4py import MPI
+            gds_tmp_path = MPI.COMM_WORLD.bcast(gds_tmp_path, root=0)
             device_Sx = MPI.COMM_WORLD.bcast(device_Sx, root=0)
         except ImportError:
             pass
@@ -308,8 +319,10 @@ class MMI_2x2:
         geometry_base += [mp.Block(center=mp.Vector3(Sx/2 - self.hp.sim.waveguide_length/2 - self.hp.sim.dpml/2, self.hp.geo.waveguide_offset/2, 0), size=mp.Vector3(self.hp.sim.waveguide_length + self.hp.sim.dpml, self.hp.geo.waveguide_width, self.hp.geo.waveguide_height), material=Si)]
         geometry_base += [mp.Block(center=mp.Vector3(Sx/2 - self.hp.sim.waveguide_length/2 - self.hp.sim.dpml/2, -self.hp.geo.waveguide_offset/2, 0), size=mp.Vector3(self.hp.sim.waveguide_length + self.hp.sim.dpml, self.hp.geo.waveguide_width, self.hp.geo.waveguide_height), material=Si)]
 
-        mmi = mp.get_GDSII_prisms(Si, "gds/temp_gds_fdtd.gds", 2, -self.hp.geo.waveguide_height/2, self.hp.geo.waveguide_height/2)
+        mmi = mp.get_GDSII_prisms(Si, gds_tmp_path, 2, -self.hp.geo.waveguide_height/2, self.hp.geo.waveguide_height/2)
         geometry_base += mmi
+        mp.all_wait()
+        cleanup_gds_temp_files(gds_tmp_path)
 
         return self._run_fdtd(geometry_base, Sx, plot_prefix="full_FDTD_gds")
 
@@ -444,21 +457,27 @@ class MMI_2x2:
         freqs = (1/wavelengths).tolist()
 
         if mp.am_master():
-            device_Sx = prepare_gds_for_meep(self.hp.geo.gds_file, "gds/temp_gds_fdtd.gds",
+            gds_tmp_path = unique_gds_temp_path("temp_gds_fdtd")
+            bend_tmp_path = unique_gds_temp_path("temp_gds_bends")
+            device_Sx = prepare_gds_for_meep(self.hp.geo.gds_file, gds_tmp_path,
                                              dilation=self.hp.geo.dilation)
             bend_info = create_bend_gds_for_meep(
                 self.hp.geo.waveguide_width, self.hp.geo.waveguide_offset,
                 self.hp.geo.bend_radius, self.hp.geo.bend_type, self.hp.geo.bend_locations,
                 device_Sx, self.hp.geo.bend_stub_length, self.hp.geo.bend_wg_length,
-                "gds/temp_gds_bends.gds",
+                bend_tmp_path,
                 dpml=self.hp.sim.dpml,
                 monitor_margin=self.hp.sim.oxide_height/2,
             )
         else:
+            gds_tmp_path = None
+            bend_tmp_path = None
             device_Sx = None
             bend_info = None
         try:
             from mpi4py import MPI
+            gds_tmp_path = MPI.COMM_WORLD.bcast(gds_tmp_path, root=0)
+            bend_tmp_path = MPI.COMM_WORLD.bcast(bend_tmp_path, root=0)
             device_Sx = MPI.COMM_WORLD.bcast(device_Sx, root=0)
             bend_info = MPI.COMM_WORLD.bcast(bend_info, root=0)
         except ImportError:
@@ -503,11 +522,13 @@ class MMI_2x2:
         geometry_base += [mp.Block(center=mp.Vector3(x_out_center, self.hp.geo.waveguide_offset/2, 0), size=stub_size_out, material=Si)]
         geometry_base += [mp.Block(center=mp.Vector3(x_out_center,-self.hp.geo.waveguide_offset/2, 0), size=stub_size_out, material=Si)]
 
-        device_prisms = mp.get_GDSII_prisms(Si, "gds/temp_gds_fdtd.gds", 2, -self.hp.geo.waveguide_height/2, self.hp.geo.waveguide_height/2)
+        device_prisms = mp.get_GDSII_prisms(Si, gds_tmp_path, 2, -self.hp.geo.waveguide_height/2, self.hp.geo.waveguide_height/2)
         geometry_base += device_prisms
         if self.hp.geo.bend_locations:
-            bend_prisms = mp.get_GDSII_prisms(Si, "gds/temp_gds_bends.gds", 2, -self.hp.geo.waveguide_height/2, self.hp.geo.waveguide_height/2)
+            bend_prisms = mp.get_GDSII_prisms(Si, bend_tmp_path, 2, -self.hp.geo.waveguide_height/2, self.hp.geo.waveguide_height/2)
             geometry_base += bend_prisms
+        mp.all_wait()
+        cleanup_gds_temp_files(gds_tmp_path, bend_tmp_path)
 
         # Taper monitor x-position: sm_monitor_position from the GDS right edge (middle of output stub)
         x_taper_mon = Sx/2 - self.hp.sim.dpml - x_extra_right - self.hp.geo.bend_stub_length + self.hp.sim.sm_monitor_position

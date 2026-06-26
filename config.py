@@ -1,4 +1,4 @@
-from engine.hyperparams.MMI import HyperParamsMMI, GeoParamsMMI, SimParams
+from engine.hyperparams.MMI import HyperParamsMMI, GeoParamsMMI, SimParams, waveguide_params_from_gds
 from engine.hyperparams.MMI_MUX import (
     HyperParamsMMIMUX,
     GeoParamsMMI as GeoParamsMMIMUX,
@@ -290,7 +290,7 @@ def create_config_MMI_2x2_sweep(folder: str = 'configs_mmi', name: str = 'config
             num_modes_MMI=30,
             num_modes_taper=15,
         ),
-        outputfolder=f"../out/mmi_2x2_length_width_sweep_1/{sim_type}_{int(res)}"
+        outputfolder=f"../out/mmi_2x2_length_width_sweep_1/{sim_type}_{int(res)}_0"
     )
     save(hp, folder, name)
 
@@ -379,19 +379,20 @@ def create_config_MMI_2x2_gds_dilation_sweep(dilation_nm: int, folder: str = 'co
     mm_width = 1.6
     mm_length = 10.2
     taper_width = mm_width/2 - taper_spacing/2
-    waveguide_offset = taper_width + taper_spacing
     sim_type = "FDTD_GDS"
-    res = 60
+    res = 80
+    gds_file = "gds/mmi2x2.gds"
+    waveguide_offset, waveguide_width = waveguide_params_from_gds(gds_file)
     hp = HyperParamsMMI(
         geo=GeoParamsMMI(
-            waveguide_width=0.35,
+            waveguide_width=waveguide_width,
             mm_width=mm_width,
             mm_length=mm_length,
             taper_length=2,
             waveguide_offset=waveguide_offset,
             taper_width=taper_width,
             waveguide_height=0.16,
-            gds_file="gds/splitter_2x2_f53.gds",
+            gds_file=gds_file,
             dilation=dilation_nm / 1000,
         ),
         sim=SimParams(
@@ -404,7 +405,7 @@ def create_config_MMI_2x2_gds_dilation_sweep(dilation_nm: int, folder: str = 'co
             input_modes=[1],
             output_modes=[1],
         ),
-        outputfolder=f"../out/mmi_2x2_jmh_dilation_sweep_60/dilation_{dilation_nm}nm"
+        outputfolder=f"../out_0/mmi_2x2_PDK_dilation_sweep_{res}/dilation_{dilation_nm}nm"
     )
     save(hp, folder, f"config_2x2_gds_dilation_{dilation_nm}nm")
 
@@ -442,17 +443,57 @@ def create_config_MMI_2x2_gds_dilation_sweep_AK(dilation_nm: int, folder: str = 
     )
     save(hp, folder, f"config_2x2_gds_dilation_{dilation_nm}nm")
 
+def create_config_MMI_1x2_gds_dilation_sweep(dilation_nm: int, folder: str = 'configs_mmi'):
+    sim_type = "FDTD_GDS"
+    res = 80
+    splitter_name = "splitter_m2g" #"splitter_f32_dilated_12"
+    mm_width = 2.0
+    mm_length = 4.0
+    gds_file = f"gds/{splitter_name}.gds"
+    waveguide_offset, waveguide_width = waveguide_params_from_gds(gds_file)
+    hp = HyperParamsMMI(
+        geo=GeoParamsMMI(
+            gds_file=gds_file,
+            mm_length=mm_length,
+            mm_width=mm_width,
+            taper_width=0.8,
+            taper_length=1.0,
+            waveguide_offset=waveguide_offset,
+            waveguide_width=waveguide_width,
+            waveguide_height=0.16,
+            dilation=dilation_nm / 1000,
+        ),
+        sim=SimParams(
+            res=res,
+            wavelength_min=1.26,
+            wavelength_max=1.36,
+            wavelength_pts=30,
+            sim_type=sim_type,
+            input_modes=[1],
+            output_modes=[1],
+            mm_monitor_position=0.75,
+            num_cells_taper=12,
+            num_modes_MMI=15,
+            num_modes_taper=7,
+        ),
+        outputfolder=f"../out_0/mmi_1x2_old_STO_dilation_sweep_{res}/dilation_{dilation_nm}nm"
+    )
+    save(hp, folder, f"config_1x2_gds_dilation_{dilation_nm}nm")
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--dilation', type=int, default=None, help='Dilation in nm; generates one sweep config and exits')
+    parser.add_argument('--dilation_1x2', type=int, default=None, help='Dilation in nm; generates one 1x2 sweep config and exits')
     parser.add_argument('--length_x10', type=int, default=None, help='MMI length * 10 (e.g. 35 = 3.5 um); generates one 1x2 length sweep config and exits')
     args = parser.parse_args()
 
     if args.length_x10 is not None:
         create_config_MMI_1x2_length_sweep(args.length_x10)
     elif args.dilation is not None:
-        create_config_MMI_2x2_gds_dilation_sweep_AK(args.dilation)
+        create_config_MMI_2x2_gds_dilation_sweep(args.dilation)
+    elif args.dilation_1x2 is not None:
+        create_config_MMI_1x2_gds_dilation_sweep(args.dilation_1x2)
     else:
         create_config_MMI_1x2(name='config_1x2_sweep')
         create_config_MMI_1x2_gds(name='config_1x2_gds')
