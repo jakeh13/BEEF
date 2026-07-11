@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "feces"
+version = "0.1.0"
+description = "FDTD/EME Combined Electromagnetic Solver for photonic MMI devices"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "gdsfactory",
+]
+
+[project.optional-dependencies]
+eme = ["meow-sim"]
+fdtd = ["meep"]
+all = ["meow-sim", "meep"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["feces*"]
