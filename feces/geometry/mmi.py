@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+from typing import Dict, List, Optional, Tuple
 
 import gdsfactory as gf
 
@@ -13,8 +14,6 @@ _OX_LAYER = (1, 0)
 
 
 def _reset_gf():
-    # Activate PDK without clearing the cache -- clearing destroys previously
-    # returned Component objects, making them unusable after the next build.
     gf.gpdk.PDK.activate()
 
 
@@ -22,14 +21,13 @@ def _component(name: str) -> gf.Component:
     return gf.Component(f"{name}_{next(_ctr)}")
 
 
-def _xs(width: float):
-    return gf.cross_section.cross_section(width=width, offset=0, layer=_WG_LAYER)
-
-
-def _straight(length: float, width: float) -> gf.Component:
-    """Straight waveguide with explicit layer and width (no width= kwarg clash)."""
-    xs = _xs(width)
-    return gf.components.straight(length=length, cross_section=xs)
+def _add_oxide(c: gf.Component, x_start: float, total_x: float, oxide_width: float) -> None:
+    c.add_polygon([
+        (x_start, -oxide_width / 2),
+        (total_x,  -oxide_width / 2),
+        (total_x,   oxide_width / 2),
+        (x_start,  oxide_width / 2),
+    ], layer=_OX_LAYER)
 
 
 # ---------------------------------------------------------------------------
@@ -39,8 +37,8 @@ def _straight(length: float, width: float) -> gf.Component:
 class MMI1x2(DeviceGeometry):
     """1×2 multimode interferometer splitter.
 
-    Parameters mirror the legacy GeoParamsMMI fields.  `waveguide_offset` is
-    the center-to-center distance between the two output waveguides.
+    waveguide_offset is the center-to-center distance between the two output
+    waveguides.
     """
 
     def __init__(
@@ -65,72 +63,168 @@ class MMI1x2(DeviceGeometry):
     def total_length(self) -> float:
         return self.mm_length + 2 * self.taper_length
 
-    def _draw_polygons(self, c: gf.Component, wo: float) -> None:
-        """Add 1×2 MMI polygon set to c.  wo = half waveguide_offset."""
+    def polygons(
+        self, stub_length: float = 0.0
+    ) -> Dict[Tuple[int, int], List[List[Tuple[float, float]]]]:
+        """1×2 MMI polygons in device frame (center at x=0)."""
         L, W = self.mm_length, self.mm_width
         tl, tw = self.taper_length, self.taper_width
         ww = self.waveguide_width
-
-        c.add_polygon([(-L/2, -W/2), (L/2, -W/2), (L/2, W/2), (-L/2, W/2)], layer=_WG_LAYER)
-        c.add_polygon([(-L/2-tl, -ww/2), (-L/2, -tw/2), (-L/2, tw/2), (-L/2-tl, ww/2)], layer=_WG_LAYER)
-        for sign in (+1, -1):
-            c.add_polygon([
-                (L/2,    -tw/2 + sign*wo), (L/2+tl, -ww/2 + sign*wo),
-                (L/2+tl,  ww/2 + sign*wo), (L/2,     tw/2 + sign*wo),
-            ], layer=_WG_LAYER)
-
-    def to_gds_eme(self, straight_length: float, oxide_width: float,
-                   x_start: float = 0.0, **kwargs) -> gf.Component:
-        _reset_gf()
         wo = self.waveguide_offset / 2
+        ml = self.total_length  # L + 2*tl
+
+        wg = [
+            # MMI body
+            [(-L/2, -W/2), (L/2, -W/2), (L/2, W/2), (-L/2, W/2)],
+            # Input taper
+            [(-L/2-tl, -ww/2), (-L/2, -tw/2), (-L/2, tw/2), (-L/2-tl, ww/2)],
+            # Output top taper
+            [(L/2, -tw/2+wo), (L/2+tl, -ww/2+wo), (L/2+tl, ww/2+wo), (L/2, tw/2+wo)],
+            # Output bottom taper
+            [(L/2, -tw/2-wo), (L/2+tl, -ww/2-wo), (L/2+tl, ww/2-wo), (L/2, tw/2-wo)],
+        ]
+        if stub_length > 0:
+            sl = stub_length
+            wg.append([(-ml/2-sl, -ww/2), (-ml/2, -ww/2), (-ml/2, ww/2), (-ml/2-sl, ww/2)])
+            for sign in (+1, -1):
+                wg.append([
+                    (ml/2,    -ww/2 + sign*wo), (ml/2+sl, -ww/2 + sign*wo),
+                    (ml/2+sl,  ww/2 + sign*wo), (ml/2,     ww/2 + sign*wo),
+                ])
+        return {_WG_LAYER: wg}
+
+    def to_gds_eme(
+        self, straight_length: float, oxide_width: float,
+        x_start: float = 0.0, **kwargs
+    ) -> gf.Component:
+        _reset_gf()
         ml = self.total_length
+        x_off = x_start + ml / 2 + straight_length
         c = _component(f"mmi_1x2_eme_{id(self)}")
-        self._draw_polygons(c, wo)
-        c.move((x_start + ml/2 + straight_length, 0))
-        in_wg = c.add_ref(_straight(straight_length, self.waveguide_width))
-        in_wg.move((x_start, 0))
-        out_wg_top = c.add_ref(_straight(straight_length, self.waveguide_width))
-        out_wg_top.move((x_start + ml + straight_length, wo))
-        out_wg_bot = c.add_ref(_straight(straight_length, self.waveguide_width))
-        out_wg_bot.move((x_start + ml + straight_length, -wo))
-        c.add_polygon([
-            (x_start, -oxide_width/2), (x_start + ml + 2*straight_length, -oxide_width/2),
-            (x_start + ml + 2*straight_length, oxide_width/2), (x_start, oxide_width/2),
-        ], layer=_OX_LAYER)
+        for verts in self.polygons(stub_length=straight_length)[_WG_LAYER]:
+            c.add_polygon([(x + x_off, y) for x, y in verts], layer=_WG_LAYER)
+        _add_oxide(c, x_start, x_start + ml + 2 * straight_length, oxide_width)
         return c
 
-    def to_gds_fdtd(self, domain_sx: float, dpml: float, waveguide_length: float,
-                    side: str = "input", **kwargs) -> gf.Component:
-        _reset_gf()
-        ml = self.total_length
+    # ------------------------------------------------------------------
+    # Arbitrary-section interface (HybridSolver)
+    # ------------------------------------------------------------------
+    #
+    # Device frame: x=0 at the MMI body centre (same as polygons()).
+    #   x in [-half_body-tl, -half_body] : input taper (width ww -> tw)
+    #   x in [-half_body, +half_body]    : MMI body (uniform, width W)
+    #   x in [+half_body, +half_body+tl] : output taper (width tw -> ww,
+    #                                      offset to y=+wo or y=-wo per branch)
+    # Anything beyond +-(half_body+tl) is the (virtual, arbitrary-length)
+    # access waveguide, uniform width ww.
+    #
+    # Cuts / stubs may land anywhere except strictly inside a taper (its
+    # cross-section is not constant there). port_idx (0=top, 1=bot) selects
+    # which output branch to include once a range reaches the output taper
+    # or access waveguide; irrelevant (ignored) otherwise.
+
+    def _taper_bounds(self):
+        half_body = self.mm_length / 2
+        tl = self.taper_length
+        return (-half_body - tl, -half_body), (half_body, half_body + tl)
+
+    def _check_cut(self, x: float) -> None:
+        (in0, in1), (out0, out1) = self._taper_bounds()
+        if in0 < x < in1 or out0 < x < out1:
+            raise ValueError(
+                f"Cut/stub at x={x:.4f} falls strictly inside a taper "
+                "(cross-section varies there) — cuts must land on a taper "
+                "endpoint or inside the uniform MMI body / access waveguide."
+            )
+
+    def _section_polygons(self, x0: float, x1: float,
+                           stub_left: float = 0.0, stub_right: float = 0.0,
+                           port_idx: Optional[int] = None):
+        """Raw vertex lists (device frame) covering [x0-stub_left, x1+stub_right]."""
+        (in0, in1), (out0, out1) = self._taper_bounds()
+        ww, tw, W = self.waveguide_width, self.taper_width, self.mm_width
         wo = self.waveguide_offset / 2
-        ww = self.waveguide_width
-        wl = waveguide_length
-        name = "mmi_1x2_fdtd_in" if side == "input" else "mmi_1x2_fdtd_out"
-        c = _component(name)
-        self._draw_polygons(c, wo)
-        # Input waveguide stub (centered coords: MMI center at 0)
-        c.add_polygon([
-            (-ml/2 - wl, -ww/2), (-ml/2, -ww/2), (-ml/2, ww/2), (-ml/2 - wl, ww/2),
-        ], layer=_WG_LAYER)
-        # Output waveguide stubs — top (+wo) and bottom (-wo)
-        for sign in (+1, -1):
-            c.add_polygon([
-                (ml/2,      -ww/2 + sign*wo), (ml/2 + wl, -ww/2 + sign*wo),
-                (ml/2 + wl,  ww/2 + sign*wo), (ml/2,       ww/2 + sign*wo),
-            ], layer=_WG_LAYER)
-        if side == "input":
-            c.move((ml/2 - domain_sx/2 + dpml + wl, 0))
-        else:
-            c.move((-ml/2 + domain_sx/2 - dpml - wl, 0))
+        y_c = 0.0 if port_idx is None else (+wo if port_idx == 0 else -wo)
+
+        lo, hi = x0 - stub_left, x1 + stub_right
+        self._check_cut(lo)
+        self._check_cut(hi)
+
+        polys = []
+
+        def _rect(xa, xb, half_w, yc=0.0):
+            if xb - xa > 1e-9:
+                polys.append([(xa, -half_w + yc), (xb, -half_w + yc),
+                              (xb, half_w + yc), (xa, half_w + yc)])
+
+        # left access waveguide (uniform, width ww)
+        if lo < in0:
+            _rect(lo, min(hi, in0), ww / 2)
+        # input taper (all-or-nothing — never cut mid-taper)
+        if lo <= in0 and hi >= in1:
+            polys.append([(in0, -ww/2), (in1, -tw/2), (in1, tw/2), (in0, ww/2)])
+        # MMI body (uniform, arbitrary sub-range)
+        _rect(max(lo, in1), min(hi, out0), W / 2)
+        # output taper (all-or-nothing, offset to the selected branch)
+        if lo <= out0 and hi >= out1:
+            polys.append([(out0, -tw/2 + y_c), (out1, -ww/2 + y_c),
+                          (out1, ww/2 + y_c), (out0, tw/2 + y_c)])
+        # right access waveguide (uniform, width ww, offset to the branch)
+        if hi > out1:
+            _rect(max(lo, out1), hi, ww / 2, yc=y_c)
+
+        return polys
+
+    def section_prisms(self, x0: float, x1: float, si_medium,
+                        stub_left: float = 0.0, stub_right: float = 0.0,
+                        port_idx: Optional[int] = None):
+        import meep as mp
+        return [
+            mp.Prism(
+                vertices=[mp.Vector3(x, y, 0) for x, y in verts],
+                height=mp.inf, material=si_medium,
+            )
+            for verts in self._section_polygons(x0, x1, stub_left, stub_right, port_idx)
+        ]
+
+    def section_gds(self, x0: float, x1: float, oxide_width: float,
+                     stub_left: float = 0.0, stub_right: float = 0.0,
+                     port_idx: Optional[int] = None) -> gf.Component:
+        _reset_gf()
+        lo, hi = x0 - stub_left, x1 + stub_right
+        x_off = -lo
+        c = _component(f"mmi_1x2_section_{id(self)}")
+        for verts in self._section_polygons(x0, x1, stub_left, stub_right, port_idx):
+            c.add_polygon([(x + x_off, y) for x, y in verts], layer=_WG_LAYER)
+        _add_oxide(c, 0.0, hi - lo, oxide_width)
         return c
 
-    def eme_lengths(self, straight_length: float):
+    def width_at(self, x: float, port_idx: Optional[int] = None) -> float:
+        (in0, in1), (out0, out1) = self._taper_bounds()
+        ww, tw, W = self.waveguide_width, self.taper_width, self.mm_width
+        if in1 <= x <= out0:
+            return W
+        if in0 <= x <= in1:
+            frac = (x - in0) / self.taper_length
+            return ww + frac * (tw - ww)
+        if out0 <= x <= out1:
+            frac = (x - out0) / self.taper_length
+            return tw + frac * (ww - tw)
+        return ww
+
+    def center_at(self, x: float, port_idx: Optional[int] = None) -> float:
+        half_body = self.mm_length / 2
+        if x <= half_body or port_idx is None:
+            return 0.0
+        wo = self.waveguide_offset / 2
+        return +wo if port_idx == 0 else -wo
+
+    def eme_lengths(self, straight_length: float) -> List[float]:
         return [straight_length, self.taper_length, self.mm_length,
                 self.taper_length, straight_length]
 
     @property
-    def bbox(self):
+    def bbox(self) -> Tuple[float, float]:
         return self.total_length, self.mm_width
 
 
@@ -141,7 +235,7 @@ class MMI1x2(DeviceGeometry):
 class MMI2x2(DeviceGeometry):
     """2×2 multimode interferometer splitter.
 
-    `waveguide_offset` is the full center-to-center distance between the two
+    waveguide_offset is the full center-to-center distance between the two
     input (and two output) waveguides.
     """
 
@@ -167,72 +261,58 @@ class MMI2x2(DeviceGeometry):
     def total_length(self) -> float:
         return self.mm_length + 2 * self.taper_length
 
-    def _draw_polygons(self, c: gf.Component, wo: float, name: str = "mmi_2x2") -> None:
-        """Add 2×2 MMI polygon set to c.  wo = half waveguide_offset."""
+    def polygons(
+        self, stub_length: float = 0.0
+    ) -> Dict[Tuple[int, int], List[List[Tuple[float, float]]]]:
+        """2×2 MMI polygons in device frame (center at x=0)."""
         L, W = self.mm_length, self.mm_width
         tl, tw = self.taper_length, self.taper_width
         ww = self.waveguide_width
-
-        c.add_polygon([(-L/2, -W/2), (L/2, -W/2), (L/2, W/2), (-L/2, W/2)], layer=_WG_LAYER)
-        for sign in (+1, -1):
-            c.add_polygon([
-                (-L/2-tl, -ww/2 + sign*wo), (-L/2, -tw/2 + sign*wo),
-                (-L/2,     tw/2 + sign*wo), (-L/2-tl,  ww/2 + sign*wo),
-            ], layer=_WG_LAYER)
-            c.add_polygon([
-                (L/2,    -tw/2 + sign*wo), (L/2+tl, -ww/2 + sign*wo),
-                (L/2+tl,  ww/2 + sign*wo), (L/2,     tw/2 + sign*wo),
-            ], layer=_WG_LAYER)
-
-    def to_gds_eme(self, straight_length: float, oxide_width: float,
-                   x_start: float = 0.0, side: str = "top", **kwargs) -> gf.Component:
-        """Build GDS for EME simulation.
-
-        Args:
-            side: "top" (through port: input top → output top) or
-                  "bot" (cross port: input top → output bottom).
-        """
-        _reset_gf()
         wo = self.waveguide_offset / 2
         ml = self.total_length
-        out_yo = wo if side == "top" else -wo
-        name = f"mmi_2x2_eme_{side}_{id(self)}"
 
-        c = _component(name)
-        self._draw_polygons(c, wo)
-        c.move((x_start + ml/2 + straight_length, 0))
+        wg = [
+            # MMI body
+            [(-L/2, -W/2), (L/2, -W/2), (L/2, W/2), (-L/2, W/2)],
+            # Input tapers (top + bottom)
+            [(-L/2-tl, -ww/2+wo), (-L/2, -tw/2+wo), (-L/2, tw/2+wo), (-L/2-tl, ww/2+wo)],
+            [(-L/2-tl, -ww/2-wo), (-L/2, -tw/2-wo), (-L/2, tw/2-wo), (-L/2-tl, ww/2-wo)],
+            # Output tapers (top + bottom)
+            [(L/2, -tw/2+wo), (L/2+tl, -ww/2+wo), (L/2+tl, ww/2+wo), (L/2, tw/2+wo)],
+            [(L/2, -tw/2-wo), (L/2+tl, -ww/2-wo), (L/2+tl, ww/2-wo), (L/2, tw/2-wo)],
+        ]
+        if stub_length > 0:
+            sl = stub_length
+            for sign in (+1, -1):
+                wg.append([
+                    (-ml/2-sl, -ww/2 + sign*wo), (-ml/2, -ww/2 + sign*wo),
+                    (-ml/2,     ww/2 + sign*wo), (-ml/2-sl, ww/2 + sign*wo),
+                ])
+                wg.append([
+                    (ml/2,    -ww/2 + sign*wo), (ml/2+sl, -ww/2 + sign*wo),
+                    (ml/2+sl,  ww/2 + sign*wo), (ml/2,     ww/2 + sign*wo),
+                ])
+        return {_WG_LAYER: wg}
 
-        in_wg = c.add_ref(_straight(straight_length, self.waveguide_width))
-        in_wg.move((x_start, wo))
-        out_wg = c.add_ref(_straight(straight_length, self.waveguide_width))
-        out_wg.move((x_start + ml + straight_length, out_yo))
-
-        c.add_polygon([
-            (x_start, -oxide_width/2), (x_start + ml + 2*straight_length, -oxide_width/2),
-            (x_start + ml + 2*straight_length, oxide_width/2), (x_start, oxide_width/2),
-        ], layer=_OX_LAYER)
-        return c
-
-    def to_gds_fdtd(self, domain_sx: float, dpml: float, waveguide_length: float,
-                    side: str = "input", name: str = "mmi_2x2_fdtd", **kwargs) -> gf.Component:
-        """Build GDS positioned for a MEEP simulation domain."""
+    def to_gds_eme(
+        self, straight_length: float, oxide_width: float,
+        x_start: float = 0.0, **kwargs
+    ) -> gf.Component:
         _reset_gf()
         ml = self.total_length
-        wo = self.waveguide_offset / 2
-        c = _component(name)
-        self._draw_polygons(c, wo)
-        if side == "input":
-            c.move((ml/2 - domain_sx/2 + dpml + waveguide_length, 0))
-        else:
-            c.move((-ml/2 + domain_sx/2 - dpml - waveguide_length, 0))
+        x_off = x_start + ml / 2 + straight_length
+        c = _component(f"mmi_2x2_eme_{id(self)}")
+        for verts in self.polygons(stub_length=straight_length)[_WG_LAYER]:
+            c.add_polygon([(x + x_off, y) for x, y in verts], layer=_WG_LAYER)
+        _add_oxide(c, x_start, x_start + ml + 2 * straight_length, oxide_width)
         return c
 
-    def eme_lengths(self, straight_length: float):
+    def eme_lengths(self, straight_length: float) -> List[float]:
         return [straight_length, self.taper_length, self.mm_length,
                 self.taper_length, straight_length]
 
     @property
-    def bbox(self):
+    def bbox(self) -> Tuple[float, float]:
         return self.total_length, self.mm_width
 
 
@@ -243,8 +323,8 @@ class MMI2x2(DeviceGeometry):
 class MMI1x4(DeviceGeometry):
     """1×4 multimode interferometer splitter.
 
-    `waveguide_offset` is the center-to-center spacing between adjacent output
-    waveguides; outputs are at ±wo/2 and ±3wo/2.
+    waveguide_offset is the center-to-center spacing between adjacent output
+    waveguides; the four outputs are at ±wo/2 and ±3wo/2.
     """
 
     def __init__(
@@ -269,61 +349,51 @@ class MMI1x4(DeviceGeometry):
     def total_length(self) -> float:
         return self.mm_length + 2 * self.taper_length
 
-    def _draw_polygons(self, c: gf.Component) -> None:
+    def polygons(
+        self, stub_length: float = 0.0
+    ) -> Dict[Tuple[int, int], List[List[Tuple[float, float]]]]:
+        """1×4 MMI polygons in device frame (center at x=0)."""
         L, W = self.mm_length, self.mm_width
         tl, tw = self.taper_length, self.taper_width
         ww = self.waveguide_width
-        wo = self.waveguide_offset
+        wo = self.waveguide_offset  # adjacent spacing; outputs at ±wo/2 and ±3wo/2
+        ml = self.total_length
+        out_ys = [3*wo/2, wo/2, -wo/2, -3*wo/2]
 
-        c.add_polygon([(-L/2, -W/2), (L/2, -W/2), (L/2, W/2), (-L/2, W/2)], layer=_WG_LAYER)
-        c.add_polygon([(-L/2-tl, -ww/2), (-L/2, -tw/2), (-L/2, tw/2), (-L/2-tl, ww/2)], layer=_WG_LAYER)
-        for yo in [3*wo/2, wo/2, -wo/2, -3*wo/2]:
-            c.add_polygon([
-                (L/2,    -tw/2 + yo), (L/2+tl, -ww/2 + yo),
-                (L/2+tl,  ww/2 + yo), (L/2,     tw/2 + yo),
-            ], layer=_WG_LAYER)
+        wg = [
+            [(-L/2, -W/2), (L/2, -W/2), (L/2, W/2), (-L/2, W/2)],
+            [(-L/2-tl, -ww/2), (-L/2, -tw/2), (-L/2, tw/2), (-L/2-tl, ww/2)],
+        ]
+        for yo in out_ys:
+            wg.append([(L/2, -tw/2+yo), (L/2+tl, -ww/2+yo), (L/2+tl, ww/2+yo), (L/2, tw/2+yo)])
 
-    def to_gds_eme(self, straight_length: float, oxide_width: float,
-                   x_start: float = 0.0, output_idx: int = 0, **kwargs) -> gf.Component:
+        if stub_length > 0:
+            sl = stub_length
+            wg.append([(-ml/2-sl, -ww/2), (-ml/2, -ww/2), (-ml/2, ww/2), (-ml/2-sl, ww/2)])
+            for yo in out_ys:
+                wg.append([
+                    (ml/2, -ww/2+yo), (ml/2+sl, -ww/2+yo),
+                    (ml/2+sl, ww/2+yo), (ml/2, ww/2+yo),
+                ])
+        return {_WG_LAYER: wg}
+
+    def to_gds_eme(
+        self, straight_length: float, oxide_width: float,
+        x_start: float = 0.0, **kwargs
+    ) -> gf.Component:
         _reset_gf()
         ml = self.total_length
-        wo = self.waveguide_offset
-        output_offsets = [3*wo/2, wo/2, -wo/2, -3*wo/2]
-        out_yo = output_offsets[output_idx]
-        name = f"mmi_1x4_eme_{output_idx}"
-
-        c = _component(name)
-        self._draw_polygons(c)
-        c.move((x_start + ml/2 + straight_length, 0))
-
-        in_wg = c.add_ref(_straight(straight_length, self.waveguide_width))
-        in_wg.move((x_start, 0))
-        out_wg = c.add_ref(_straight(straight_length, self.waveguide_width))
-        out_wg.move((x_start + ml + straight_length, out_yo))
-
-        c.add_polygon([
-            (x_start, -oxide_width/2), (x_start + ml + 2*straight_length, -oxide_width/2),
-            (x_start + ml + 2*straight_length, oxide_width/2), (x_start, oxide_width/2),
-        ], layer=_OX_LAYER)
+        x_off = x_start + ml / 2 + straight_length
+        c = _component(f"mmi_1x4_eme_{id(self)}")
+        for verts in self.polygons(stub_length=straight_length)[_WG_LAYER]:
+            c.add_polygon([(x + x_off, y) for x, y in verts], layer=_WG_LAYER)
+        _add_oxide(c, x_start, x_start + ml + 2 * straight_length, oxide_width)
         return c
 
-    def to_gds_fdtd(self, domain_sx: float, dpml: float, waveguide_length: float,
-                    side: str = "input", **kwargs) -> gf.Component:
-        _reset_gf()
-        ml = self.total_length
-        name = "mmi_1x4_fdtd_in" if side == "input" else "mmi_1x4_fdtd_out"
-        c = _component(name)
-        self._draw_polygons(c)
-        if side == "input":
-            c.move((ml/2 - domain_sx/2 + dpml + waveguide_length, 0))
-        else:
-            c.move((-ml/2 + domain_sx/2 - dpml - waveguide_length, 0))
-        return c
-
-    def eme_lengths(self, straight_length: float):
+    def eme_lengths(self, straight_length: float) -> List[float]:
         return [straight_length, self.taper_length, self.mm_length,
                 self.taper_length, straight_length]
 
     @property
-    def bbox(self):
+    def bbox(self) -> Tuple[float, float]:
         return self.total_length, self.mm_width

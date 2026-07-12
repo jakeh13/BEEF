@@ -93,9 +93,68 @@ class EMESolver:
         return out
 
     def compute_modes(self, cross_section, num_modes: int) -> list:
-        """Compute modes for a single cross-section (exposed for caching)."""
-        from meow import compute_modes_tidy3d
-        return compute_modes_tidy3d(cross_section, num_modes=num_modes)
+        """Compute modes for a single cross-section (exposed for caching).
+
+        Uses meow's MEEP/MPB-backed mode solver (not the tidy3d default) so
+        EME sections use the same underlying eigenmode solver/conventions as
+        FDTDSolver's own get_eigenmode_coefficients() calls in HybridSolver
+        chains — avoids basis mismatches between EME and FDTD sections.
+        """
+        from meow import compute_modes_meep
+        return compute_modes_meep(cross_section, num_modes=num_modes)
+
+    def solve_section(
+        self,
+        geometry,
+        wavelengths: np.ndarray,
+        x0: float,
+        x1: float,
+        n_modes_in: int = 1,
+        n_modes_out: int = 1,
+        stub_left: float = 0.0,
+        stub_right: float = 0.0,
+        **geometry_kwargs,
+    ) -> np.ndarray:
+        """Modal transfer matrix for the device section [x0, x1] (device frame).
+
+        Single-cell EME over the section — mode expansion naturally gives the
+        full n_modes_out x n_modes_in block in one solve (no per-mode source
+        runs needed), unlike FDTD.
+
+        Returns:
+            Complex ndarray [len(wavelengths), n_modes_out, n_modes_in].
+        """
+        import meow as mw
+
+        wavelengths = np.asarray(wavelengths)
+        n_modes = max(n_modes_in, n_modes_out)
+        length = (x1 - x0) + stub_left + stub_right
+
+        gds_comp = geometry.section_gds(
+            x0, x1, self.oxide_width,
+            stub_left=stub_left, stub_right=stub_right, **geometry_kwargs
+        )
+        structs = mw.extrude_gds(gds_comp, self.material_stack.extrusion_rules)
+        mesh = self._build_mesh()
+        cells = mw.create_cells(structures=structs, mesh=mesh, Ls=[length])
+
+        T = np.zeros((len(wavelengths), n_modes_out, n_modes_in), dtype=complex)
+
+        for wl_idx, wl in enumerate(wavelengths):
+            env = mw.Environment(wl=float(wl), T=self.temperature)
+            css = [mw.CrossSection.from_cell(cell=cell, env=env) for cell in cells]
+            modes = [self.compute_modes(cs, n_modes) for cs in css]
+            S, port_map = mw.compute_s_matrix(modes, cells=cells)
+            # S is a flat dense matrix keyed by string port labels ("left@n",
+            # "right@n"), not an NxN block per port pair — look up indices
+            # explicitly rather than assuming S[0,1] is the transmission block.
+            for i in range(n_modes_out):
+                for j in range(n_modes_in):
+                    i_out = port_map[f"right@{i}"]
+                    j_in = port_map[f"left@{j}"]
+                    T[wl_idx, i, j] = S[i_out, j_in]
+
+        return T
 
     def solve(self, geometry: DeviceGeometry, wavelengths: np.ndarray,
               ports: Optional[List[str]] = None, **kwargs) -> SMatrix:
