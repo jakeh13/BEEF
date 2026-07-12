@@ -27,8 +27,7 @@ class FDTDSolver:
         mm_monitor_position: x offset from PML for the multimode monitor (µm).
         oxide_width: simulation y-span (µm).
         oxide_height: simulation z-span / height for 2D slabs (µm).
-        mm_sim_length: length of the MMI section captured in the domain (µm).
-        num_modes_mmi: number of monitored modes in the MMI cross-section.
+        num_output_modes: number of modes to extract at each output waveguide monitor.
         material_stack: MaterialStack for material index lookup.
         decay_tol: DFT decay tolerance for early stopping.
         mpi_safe: wrap writes with mp.am_master() / mp.all_wait() guards.
@@ -44,8 +43,7 @@ class FDTDSolver:
         mm_monitor_position: float = 0.25,
         oxide_width: float = 5.0,
         oxide_height: float = 1.5,
-        mm_sim_length: float = 1.0,
-        num_modes_mmi: int = 15,
+        num_output_modes: int = 1,
         material_stack: MaterialStack = SOI_160,
         decay_tol: float = 1e-11,
         mpi_safe: bool = True,
@@ -58,8 +56,7 @@ class FDTDSolver:
         self.mm_monitor_position = mm_monitor_position
         self.oxide_width = oxide_width
         self.oxide_height = oxide_height
-        self.mm_sim_length = mm_sim_length
-        self.num_modes_mmi = num_modes_mmi
+        self.num_output_modes = num_output_modes
         self.material_stack = material_stack
         self.decay_tol = decay_tol
         self.mpi_safe = mpi_safe
@@ -131,7 +128,7 @@ class FDTDSolver:
         self._all_wait()
 
         gds_path = os.path.join(gds_dir, f"fdtd_{port}.gds")
-        geometry_meep = mp.get_GDSII_prisms(si_med, gds_path, layer=2, zmin=0, zmax=0)
+        geometry_meep = mp.get_GDSII_prisms(si_med, gds_path, Layer=2, zmin=0, zmax=0)
 
         wg_offset = getattr(geometry, "waveguide_offset", 0.0) / 2
         src_yo = wg_offset if port == "top" else -wg_offset
@@ -163,21 +160,32 @@ class FDTDSolver:
             fcen, fwidth, nfreq,
             mp.FluxRegion(center=mp.Vector3(sm_mon_x, src_yo), size=mp.Vector3(0, Sy)),
         )
-        mm_flux = sim.add_mode_monitor(
+        # One monitor per output waveguide, centered at ±wo
+        mm_flux_top = sim.add_mode_monitor(
             fcen, fwidth, nfreq,
-            mp.FluxRegion(center=mp.Vector3(mm_mon_x), size=mp.Vector3(0, Sy)),
+            mp.FluxRegion(center=mp.Vector3(mm_mon_x,  wg_offset), size=mp.Vector3(0, Sy)),
+        )
+        mm_flux_bot = sim.add_mode_monitor(
+            fcen, fwidth, nfreq,
+            mp.FluxRegion(center=mp.Vector3(mm_mon_x, -wg_offset), size=mp.Vector3(0, Sy)),
         )
 
         sim.run(
-            mp.dft_ldos(),
             until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol),
         )
 
+        # Normalize by source mode power so |coeff|^2 = physical transmission
+        src_coeff = sim.get_eigenmode_coefficients(
+            sm_flux, [input_mode], eig_parity=mp.NO_PARITY
+        )
+        src_alpha = src_coeff.alpha[0, :, 0]  # [nfreq] forward amplitude at source
+
         smat = SMatrix(wavelengths=wavelengths)
-        for mode_n in range(1, self.num_modes_mmi + 1):
-            coeff = sim.get_eigenmode_coefficients(mm_flux, [mode_n], eig_parity=mp.NO_PARITY)
-            alpha = coeff.alpha[:, :, 0].flatten()  # [nfreq] forward amplitude
-            smat.set(alpha, port=port, in_mode=input_mode, out_mode=mode_n)
+        for out_port, flux_mon in [("top_out", mm_flux_top), ("bot_out", mm_flux_bot)]:
+            for mode_n in range(1, self.num_output_modes + 1):
+                coeff = sim.get_eigenmode_coefficients(flux_mon, [mode_n], eig_parity=mp.NO_PARITY)
+                alpha = coeff.alpha[0, :, 0] / src_alpha
+                smat.set(alpha, port=out_port, in_mode=input_mode, out_mode=mode_n)
 
         sim.reset_meep()
         return smat

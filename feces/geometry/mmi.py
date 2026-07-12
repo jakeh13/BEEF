@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import itertools
+
 import gdsfactory as gf
 
 from .base import DeviceGeometry
+
+_ctr = itertools.count()
 
 _WG_LAYER = (2, 0)
 _OX_LAYER = (1, 0)
@@ -12,6 +16,10 @@ def _reset_gf():
     # Activate PDK without clearing the cache -- clearing destroys previously
     # returned Component objects, making them unusable after the next build.
     gf.gpdk.PDK.activate()
+
+
+def _component(name: str) -> gf.Component:
+    return gf.Component(f"{name}_{next(_ctr)}")
 
 
 def _xs(width: float):
@@ -76,13 +84,15 @@ class MMI1x2(DeviceGeometry):
         _reset_gf()
         wo = self.waveguide_offset / 2
         ml = self.total_length
-        c = gf.Component(f"mmi_1x2_eme_{id(self)}")
+        c = _component(f"mmi_1x2_eme_{id(self)}")
         self._draw_polygons(c, wo)
         c.move((x_start + ml/2 + straight_length, 0))
         in_wg = c.add_ref(_straight(straight_length, self.waveguide_width))
         in_wg.move((x_start, 0))
-        out_wg = c.add_ref(_straight(straight_length, self.waveguide_width))
-        out_wg.move((x_start + ml + straight_length, wo))
+        out_wg_top = c.add_ref(_straight(straight_length, self.waveguide_width))
+        out_wg_top.move((x_start + ml + straight_length, wo))
+        out_wg_bot = c.add_ref(_straight(straight_length, self.waveguide_width))
+        out_wg_bot.move((x_start + ml + straight_length, -wo))
         c.add_polygon([
             (x_start, -oxide_width/2), (x_start + ml + 2*straight_length, -oxide_width/2),
             (x_start + ml + 2*straight_length, oxide_width/2), (x_start, oxide_width/2),
@@ -94,14 +104,30 @@ class MMI1x2(DeviceGeometry):
         _reset_gf()
         ml = self.total_length
         wo = self.waveguide_offset / 2
+        ww = self.waveguide_width
+        wl = waveguide_length
         name = "mmi_1x2_fdtd_in" if side == "input" else "mmi_1x2_fdtd_out"
-        c = gf.Component(name)
+        c = _component(name)
         self._draw_polygons(c, wo)
+        # Input waveguide stub (centered coords: MMI center at 0)
+        c.add_polygon([
+            (-ml/2 - wl, -ww/2), (-ml/2, -ww/2), (-ml/2, ww/2), (-ml/2 - wl, ww/2),
+        ], layer=_WG_LAYER)
+        # Output waveguide stubs — top (+wo) and bottom (-wo)
+        for sign in (+1, -1):
+            c.add_polygon([
+                (ml/2,      -ww/2 + sign*wo), (ml/2 + wl, -ww/2 + sign*wo),
+                (ml/2 + wl,  ww/2 + sign*wo), (ml/2,       ww/2 + sign*wo),
+            ], layer=_WG_LAYER)
         if side == "input":
-            c.move((ml/2 - domain_sx/2 + dpml + waveguide_length, 0))
+            c.move((ml/2 - domain_sx/2 + dpml + wl, 0))
         else:
-            c.move((-ml/2 + domain_sx/2 - dpml - waveguide_length, 0))
+            c.move((-ml/2 + domain_sx/2 - dpml - wl, 0))
         return c
+
+    def eme_lengths(self, straight_length: float):
+        return [straight_length, self.taper_length, self.mm_length,
+                self.taper_length, straight_length]
 
     @property
     def bbox(self):
@@ -172,7 +198,7 @@ class MMI2x2(DeviceGeometry):
         out_yo = wo if side == "top" else -wo
         name = f"mmi_2x2_eme_{side}_{id(self)}"
 
-        c = gf.Component(name)
+        c = _component(name)
         self._draw_polygons(c, wo)
         c.move((x_start + ml/2 + straight_length, 0))
 
@@ -193,13 +219,17 @@ class MMI2x2(DeviceGeometry):
         _reset_gf()
         ml = self.total_length
         wo = self.waveguide_offset / 2
-        c = gf.Component(name)
+        c = _component(name)
         self._draw_polygons(c, wo)
         if side == "input":
             c.move((ml/2 - domain_sx/2 + dpml + waveguide_length, 0))
         else:
             c.move((-ml/2 + domain_sx/2 - dpml - waveguide_length, 0))
         return c
+
+    def eme_lengths(self, straight_length: float):
+        return [straight_length, self.taper_length, self.mm_length,
+                self.taper_length, straight_length]
 
     @property
     def bbox(self):
@@ -262,7 +292,7 @@ class MMI1x4(DeviceGeometry):
         out_yo = output_offsets[output_idx]
         name = f"mmi_1x4_eme_{output_idx}"
 
-        c = gf.Component(name)
+        c = _component(name)
         self._draw_polygons(c)
         c.move((x_start + ml/2 + straight_length, 0))
 
@@ -282,13 +312,17 @@ class MMI1x4(DeviceGeometry):
         _reset_gf()
         ml = self.total_length
         name = "mmi_1x4_fdtd_in" if side == "input" else "mmi_1x4_fdtd_out"
-        c = gf.Component(name)
+        c = _component(name)
         self._draw_polygons(c)
         if side == "input":
             c.move((ml/2 - domain_sx/2 + dpml + waveguide_length, 0))
         else:
             c.move((-ml/2 + domain_sx/2 - dpml - waveguide_length, 0))
         return c
+
+    def eme_lengths(self, straight_length: float):
+        return [straight_length, self.taper_length, self.mm_length,
+                self.taper_length, straight_length]
 
     @property
     def bbox(self):

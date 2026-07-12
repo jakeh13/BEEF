@@ -43,20 +43,20 @@ class MaterialStack:
         import meow as mw
         import meep as mp
 
-        ns = np.asarray(mw.silicon.n)
-        wls = np.asarray(mw.silicon.wl)
+        ns = np.asarray(mw.silicon.n).real
+        wls = np.asarray(mw.silicon.params['wl'])  # µm
         idx = int(np.argmin(np.abs(wls - wl)))
-        return mp.Medium(epsilon=float(ns[idx]) ** 2)
+        return mp.Medium(index=float(ns[idx]))
 
     def sio2_medium(self, wl: float):
         """Return a meep Medium for SiO2 at wavelength wl (µm)."""
         import meow as mw
         import meep as mp
 
-        ns = np.asarray(mw.silicon_oxide.n)
-        wls = np.asarray(mw.silicon_oxide.wl)
+        ns = np.asarray(mw.silicon_oxide.n).real
+        wls = np.asarray(mw.silicon_oxide.params['wl'])  # µm
         idx = int(np.argmin(np.abs(wls - wl)))
-        return mp.Medium(epsilon=float(ns[idx]) ** 2)
+        return mp.Medium(index=float(ns[idx]))
 
 
 # Pre-built stacks for common SOI platforms.

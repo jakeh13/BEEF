@@ -35,7 +35,7 @@ from .materials import MaterialStack, SOI_160, SOI_220
 from .results import SMatrix
 from .solvers import EMESolver, FDTDSolver, HybridSolver
 from .sweep import ParallelSweep
-from .plot import plot_eme_fields, plot_performance, plot_splitting_ratio
+from .plot import plot_eme_fields, plot_geometry, plot_performance, plot_splitting_ratio
 
 __all__ = [
     # geometry
@@ -51,5 +51,5 @@ __all__ = [
     # sweep
     "ParallelSweep",
     # plot
-    "plot_eme_fields", "plot_performance", "plot_splitting_ratio",
+    "plot_eme_fields", "plot_geometry", "plot_performance", "plot_splitting_ratio",
 ]

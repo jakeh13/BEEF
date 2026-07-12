@@ -16,7 +16,7 @@ import numpy as np
 class SMatrix:
     """S-parameter result indexed by (port, in_mode, out_mode).
 
-    All amplitudes are complex; power = |amplitude|^2.
+    All coefficients are complex; power = |coeff|^2.
 
     Attributes:
         wavelengths: [M] wavelength array (µm).
@@ -30,33 +30,33 @@ class SMatrix:
     # Building
     # ------------------------------------------------------------------
 
-    def set(self, amplitude: np.ndarray, port: str = "out",
+    def set(self, coeff: np.ndarray, port: str = "out",
             in_mode: int = 1, out_mode: int = 1) -> None:
-        """Store complex amplitude array for a (port, in_mode, out_mode) key."""
-        self._data[(port, in_mode, out_mode)] = np.asarray(amplitude, dtype=complex)
+        """Store complex mode overlap coefficient for a (port, in_mode, out_mode) key."""
+        self._data[(port, in_mode, out_mode)] = np.asarray(coeff, dtype=complex)
 
     def set_power(self, power: np.ndarray, port: str = "out",
                   in_mode: int = 1, out_mode: int = 1) -> None:
-        """Store real power (amplitude = sqrt(power), phase unknown → stored as real)."""
+        """Store real power (coeff = sqrt(power), phase unknown → stored as real)."""
         self._data[(port, in_mode, out_mode)] = np.sqrt(np.asarray(power, dtype=float)).astype(complex)
 
     # ------------------------------------------------------------------
     # Querying
     # ------------------------------------------------------------------
 
-    def amplitude(self, port: str = "out", in_mode: int = 1, out_mode: int = 1) -> np.ndarray:
-        """Complex amplitude array [M]."""
+    def coeff(self, port: str = "out", in_mode: int = 1, out_mode: int = 1) -> np.ndarray:
+        """Complex mode overlap coefficient array [M]."""
         return self._data[(port, in_mode, out_mode)]
 
     def transmission(self, port: str = "out", in_mode: int = 1, out_mode: int = 1) -> np.ndarray:
-        """Power transmission [M] = |amplitude|^2."""
+        """Power transmission [M] = |coeff|^2."""
         return np.abs(self._data[(port, in_mode, out_mode)]) ** 2
 
     def insertion_loss_db(self, port: str = "out", in_mode: int = 1, out_mode: int = 1) -> np.ndarray:
-        """Insertion loss in dB [M] (positive = loss)."""
+        """Insertion loss in dB [M] (negative = loss, e.g. −3 dB for 50/50 split)."""
         T = self.transmission(port, in_mode, out_mode)
         T = np.clip(T, 1e-20, None)
-        return -10 * np.log10(T)
+        return 10 * np.log10(T)
 
     def splitting_ratio(self, port_a: str, port_b: str,
                         in_mode: int = 1, out_mode: int = 1) -> np.ndarray:

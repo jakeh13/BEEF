@@ -1,8 +1,4 @@
-"""EMESolver: meow-based eigenmode expansion solver.
-
-Core loop migrated from masters/mmi_2x2_master.py::eme_simulation() and
-sweeps/mmi_2x2_sweep_parallel_efficient.py::_run_width().
-"""
+"""EMESolver: meow-based eigenmode expansion solver."""
 from __future__ import annotations
 
 from typing import List, Optional
@@ -10,7 +6,6 @@ from typing import List, Optional
 import numpy as np
 
 from ..geometry.base import DeviceGeometry
-from ..geometry.mmi import MMI2x2
 from ..materials.stack import MaterialStack, SOI_160
 from ..results.smatrix import SMatrix
 
@@ -19,9 +14,11 @@ class EMESolver:
     """Eigenmode expansion solver wrapping meow.
 
     Args:
-        num_modes_mmi: number of modes to compute in the MMI body.
-        num_modes_taper: number of modes in the taper transition cells.
-        num_cells_taper: number of cells to sub-divide each taper into.
+        num_modes: modes per EME region, left to right.
+                   e.g. [1, 7, 15, 7, 1] for (wg, taper, MMI, taper, wg).
+        num_cells: cells per region (same length as num_modes).
+                   e.g. [1, 12, 1, 12, 1].  Regions with num_cells > 1 are
+                   subdivided equally — use this for tapers.
         oxide_width: y-span of the cross-section mesh (µm).
         oxide_height: z-span of the cross-section mesh (µm).
         res: mesh resolution in pts/µm.
@@ -32,24 +29,31 @@ class EMESolver:
 
     def __init__(
         self,
-        num_modes_mmi: int = 15,
-        num_modes_taper: int = 7,
-        num_cells_taper: int = 15,
+        num_modes: List[int],
+        num_cells: List[int],
+        lengths: List[float],
         oxide_width: float = 5.0,
         oxide_height: float = 1.5,
         res: float = 40.0,
         material_stack: MaterialStack = SOI_160,
-        straight_length: float = 0.5,
         temperature: float = 25.0,
     ):
-        self.num_modes_mmi = num_modes_mmi
-        self.num_modes_taper = num_modes_taper
-        self.num_cells_taper = num_cells_taper
+        if len(num_modes) != len(num_cells):
+            raise ValueError(
+                f"num_modes ({len(num_modes)}) and num_cells ({len(num_cells)}) must be same length"
+            )
+        if len(lengths) != len(num_modes):
+            raise ValueError(
+                f"lengths ({len(lengths)}) must match num_modes ({len(num_modes)})"
+            )
+        self.num_modes = num_modes
+        self.num_cells = num_cells
+        self.lengths = lengths
+        self.straight_length = lengths[0]  # input access waveguide length
         self.oxide_width = oxide_width
         self.oxide_height = oxide_height
         self.res = res
         self.material_stack = material_stack
-        self.straight_length = straight_length
         self.temperature = temperature
 
     def _build_mesh(self):
@@ -62,8 +66,7 @@ class EMESolver:
                           int(self.res * self.oxide_height) + 1),
         )
 
-    def _build_cells(self, geometry: MMI2x2, side: str = "top"):
-        """Build meow cell list for given geometry and port side."""
+    def _build_cells(self, geometry: DeviceGeometry, side: str = "top"):
         import meow as mw
 
         gds_comp = geometry.to_gds_eme(
@@ -73,37 +76,36 @@ class EMESolver:
             side=side,
         )
         structs = mw.extrude_gds(gds_comp, self.material_stack.extrusion_rules)
-        taper_Ls = np.array(
-            [geometry.taper_length / self.num_cells_taper] * self.num_cells_taper
-        )
-        Ls = np.concatenate((
-            [self.straight_length],
-            taper_Ls,
-            [geometry.mm_length],
-            taper_Ls,
-            [self.straight_length],
-        ))
+
+        Ls = []
+        for region_len, n_cells in zip(self.lengths, self.num_cells):
+            cell_len = region_len / n_cells
+            Ls.extend([cell_len] * n_cells)
+
         mesh = self._build_mesh()
         return mw.create_cells(structures=structs, mesh=mesh, Ls=Ls)
+
+    def _modes_per_cell(self) -> List[int]:
+        """Flat list of mode counts, one entry per cell (not per region)."""
+        out = []
+        for n_modes, n_cells in zip(self.num_modes, self.num_cells):
+            out.extend([n_modes] * n_cells)
+        return out
 
     def compute_modes(self, cross_section, num_modes: int) -> list:
         """Compute modes for a single cross-section (exposed for caching)."""
         from meow import compute_modes_tidy3d
         return compute_modes_tidy3d(cross_section, num_modes=num_modes)
 
-    def _num_modes_list(self, geometry: DeviceGeometry) -> List[int]:
-        N = self.num_cells_taper
-        return [1] + [self.num_modes_taper]*N + [self.num_modes_mmi] + [self.num_modes_taper]*N + [1]
-
     def solve(self, geometry: DeviceGeometry, wavelengths: np.ndarray,
               ports: Optional[List[str]] = None, **kwargs) -> SMatrix:
         """Run EME simulation across all wavelengths.
 
         Args:
-            geometry: MMI2x2 (or compatible) geometry object.
+            geometry: device geometry implementing eme_lengths().
             wavelengths: [M] wavelength array (µm).
-            ports: list of port sides to simulate, e.g. ["top", "bot"].
-                   Defaults to ["top", "bot"] for MMI2x2.
+            ports: list of port sides to simulate.
+                   Defaults to ["top", "bot"] for 2-output devices.
 
         Returns:
             SMatrix with entries keyed by port name.
@@ -115,22 +117,16 @@ class EMESolver:
 
         wavelengths = np.asarray(wavelengths)
         smat = SMatrix(wavelengths=wavelengths)
+        modes_per_cell = self._modes_per_cell()
 
         for side in ports:
             cells = self._build_cells(geometry, side=side)
-            num_modes_list = self._num_modes_list(geometry)
-            # split indices: left wg + tapers | MMI | tapers + right wg
-            split_left = 1 + self.num_cells_taper
-            split_right = split_left + 1
-
             amplitudes = np.zeros(len(wavelengths), dtype=complex)
 
             for wl_idx, wl in enumerate(wavelengths):
                 env = mw.Environment(wl=float(wl), T=self.temperature)
                 css = [mw.CrossSection.from_cell(cell=c, env=env) for c in cells]
-                modes = []
-                for cs, nm in zip(css, num_modes_list):
-                    modes.append(self.compute_modes(cs, nm))
+                modes = [self.compute_modes(cs, nm) for cs, nm in zip(css, modes_per_cell)]
                 S, _ = mw.compute_s_matrix(modes, cells=cells)
                 amplitudes[wl_idx] = S[0, 1]
 
@@ -143,12 +139,9 @@ class EMESolver:
                     wl_batch_size: int = 1, **kwargs) -> SMatrix:
         """Memory-efficient EME sweep using batched wavelength processing.
 
-        Equivalent to the batched logic in _run_width() from the 2x2 sweep:
-        MMI body modes are solved in batches of wl_batch_size to limit peak
-        memory usage, while left/right cell modes are reused across batches.
-
-        Args:
-            wl_batch_size: max wavelengths held in memory simultaneously.
+        The center region (index len(num_modes)//2) is treated as the
+        variable region — modes are freed after each batch while left/right
+        cell modes are pre-computed and reused.
         """
         import meow as mw
         from meow import compute_modes_tidy3d as _compute_modes
@@ -159,58 +152,59 @@ class EMESolver:
         wavelengths = np.asarray(wavelengths)
         M = len(wavelengths)
         smat = SMatrix(wavelengths=wavelengths)
+        modes_per_cell = self._modes_per_cell()
 
-        # Build cells for first port (left cells are port-independent).
+        # Identify center region boundaries in the flat cell list
+        center_region = len(self.num_modes) // 2
+        cumcells = [0] + list(np.cumsum(self.num_cells))
+        split_left = cumcells[center_region]
+        split_right = cumcells[center_region + 1]
+
         cells_per_port = {side: self._build_cells(geometry, side=side) for side in ports}
-        split_left = 1 + self.num_cells_taper
-        split_right = split_left + 1
+        left_mode_counts = modes_per_cell[:split_left]
+        center_mode_count = modes_per_cell[split_left]
+        right_mode_counts = modes_per_cell[split_right:]
 
         left_cells = cells_per_port[ports[0]][:split_left]
-        left_num_modes = [1] + [self.num_modes_taper]*self.num_cells_taper
-        mmi_cell = cells_per_port[ports[0]][split_left]
+        center_cell = cells_per_port[ports[0]][split_left]
         right_cells_per_port = {side: cells_per_port[side][split_right:] for side in ports}
-        right_num_modes = [self.num_modes_taper]*self.num_cells_taper + [1]
 
-        # Pre-compute left and right cell modes (constant across wavelength sweep).
-        left_modes = {}
+        # Pre-compute left and right modes (constant across sweep)
+        left_modes: dict = {}
         right_modes_per_port: dict = {side: {} for side in ports}
 
         for wl_idx, wl in enumerate(wavelengths):
             env = mw.Environment(wl=float(wl), T=self.temperature)
-            lm = []
-            for cell, nm in zip(left_cells, left_num_modes):
-                cs = mw.CrossSection.from_cell(cell=cell, env=env)
-                lm.append(_compute_modes(cs, nm))
-            left_modes[wl_idx] = lm
-
+            left_modes[wl_idx] = [
+                _compute_modes(mw.CrossSection.from_cell(cell=c, env=env), nm)
+                for c, nm in zip(left_cells, left_mode_counts)
+            ]
             for side in ports:
-                rm = []
-                for cell, nm in zip(right_cells_per_port[side], right_num_modes):
-                    cs = mw.CrossSection.from_cell(cell=cell, env=env)
-                    rm.append(_compute_modes(cs, nm))
-                right_modes_per_port[side][wl_idx] = rm
+                right_modes_per_port[side][wl_idx] = [
+                    _compute_modes(mw.CrossSection.from_cell(cell=c, env=env), nm)
+                    for c, nm in zip(right_cells_per_port[side], right_mode_counts)
+                ]
 
-        # Process wavelengths in batches — MMI modes freed after each batch.
         all_wl = list(range(M))
         batches = [all_wl[i:i+wl_batch_size] for i in range(0, M, wl_batch_size)]
         acc: dict = {side: np.zeros(M, dtype=complex) for side in ports}
 
         for batch in batches:
-            mmi_modes_batch = {}
+            center_modes_batch = {}
             for wl_idx in batch:
                 env = mw.Environment(wl=float(wavelengths[wl_idx]), T=self.temperature)
-                cs = mw.CrossSection.from_cell(cell=mmi_cell, env=env)
-                mmi_modes_batch[wl_idx] = [_compute_modes(cs, self.num_modes_mmi)]
+                cs = mw.CrossSection.from_cell(cell=center_cell, env=env)
+                center_modes_batch[wl_idx] = [_compute_modes(cs, center_mode_count)]
 
             for wl_idx in batch:
                 for side in ports:
                     full_modes = (left_modes[wl_idx]
-                                  + mmi_modes_batch[wl_idx]
+                                  + center_modes_batch[wl_idx]
                                   + right_modes_per_port[side][wl_idx])
                     S, _ = mw.compute_s_matrix(full_modes, cells=cells_per_port[side])
                     acc[side][wl_idx] = S[0, 1]
 
-            del mmi_modes_batch
+            del center_modes_batch
 
         for side in ports:
             smat.set(acc[side], port=side)

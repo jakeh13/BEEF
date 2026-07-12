@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Tuple
+from typing import List, Tuple
 
 
 class DeviceGeometry(ABC):
@@ -48,6 +48,16 @@ class DeviceGeometry(ABC):
     @abstractmethod
     def total_length(self) -> float:
         """Device length without access waveguides (µm)."""
+        ...
+
+    @abstractmethod
+    def eme_lengths(self, straight_length: float) -> List[float]:
+        """Region lengths for EME cell construction, left to right (µm).
+
+        The length of this list must match the num_modes / num_cells lists
+        passed to EMESolver.  For a standard MMI this is:
+            [straight_length, taper_length, mm_length, taper_length, straight_length]
+        """
         ...
 
     @property

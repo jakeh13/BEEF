@@ -80,7 +80,8 @@ class HybridSolver:
         if eme_ports is None:
             eme_ports = output_ports
 
-        N = self.eme.num_modes_mmi
+        center_region = len(self.eme.num_modes) // 2
+        N = self.eme.num_modes[center_region]
 
         # Step 1: input FDTD — α_in[m, n] for n = 1..N
         in_smat = self.input_fdtd.solve(
@@ -88,7 +89,7 @@ class HybridSolver:
         )
         # α_in shape: [M, N] complex
         alpha_in = np.stack([
-            in_smat.amplitude(port=input_port, in_mode=input_mode, out_mode=n)
+            in_smat.coeff(port=input_port, in_mode=input_mode, out_mode=n)
             for n in range(1, N+1)
         ], axis=1)  # [M, N]
 
@@ -108,13 +109,13 @@ class HybridSolver:
                 geometry, wavelengths, port=out_port, input_mode=1, **kwargs
             )
             alpha_out = np.stack([
-                out_smat.amplitude(port=out_port, in_mode=1, out_mode=n)
+                out_smat.coeff(port=out_port, in_mode=1, out_mode=n)
                 for n in range(1, N+1)
             ], axis=1)  # [M, N]
 
             # Use EME S[0,1] as the single-mode propagation approximation.
             # Full multi-mode hybrid: α_mm[m,n] per mode would come from EME per-mode output.
-            alpha_mm_approx = eme_smat.amplitude(port=out_port).reshape(-1, 1)  # [M, 1] broadcast
+            alpha_mm_approx = eme_smat.coeff(port=out_port).reshape(-1, 1)  # [M, 1] broadcast
 
             # Step 4: combine
             alpha_full = np.sum(alpha_in * alpha_mm_approx * alpha_out, axis=1)  # [M]

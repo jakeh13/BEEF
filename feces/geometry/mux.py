@@ -4,10 +4,13 @@ Polygon logic migrated from engine/helpers/meow.py and engine/helpers/meep.py.
 """
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, field
 from typing import List
 
 import gdsfactory as gf
+
+_ctr = itertools.count()
 
 from .base import DeviceGeometry
 
@@ -35,6 +38,10 @@ class MuxGeoParams:
 def _reset_gf():
     gf.clear_cache()
     gf.gpdk.PDK.activate()
+
+
+def _component(name: str) -> gf.Component:
+    return gf.Component(f"{name}_{next(_ctr)}")
 
 
 def _xs(width: float):
@@ -119,7 +126,7 @@ class MMIMux(DeviceGeometry):
         total_len = sl + device_len + sl
 
         if port_idx is None:
-            c = gf.Component("mmi_mux_full_eme")
+            c = _component("mmi_mux_full_eme")
             _add_mux_polygons(c, geo, x_start=sl)
             inp_xs = _xs(geo.mm_waveguide_width)
             inp = c.add_ref(gf.components.straight(length=sl, width=geo.mm_waveguide_width, cross_section=inp_xs))
@@ -131,7 +138,7 @@ class MMIMux(DeviceGeometry):
         else:
             port_y = [geo.waveguide_offset, 0.0, -geo.waveguide_offset][port_idx]
             port_w = [geo.top_waveguide_width, geo.waveguide_width, geo.waveguide_width][port_idx]
-            c = gf.Component(f"mmi_mux_port{port_idx}_eme")
+            c = _component(f"mmi_mux_port{port_idx}_eme")
             _add_mux_polygons(c, geo, x_start=sl)
             inp = c.add_ref(gf.components.straight(length=sl, width=geo.mm_waveguide_width, cross_section=_xs(geo.mm_waveguide_width)))
             inp.move((x_start, 0))
@@ -150,7 +157,7 @@ class MMIMux(DeviceGeometry):
         geo = self.geo
         x_start = -mm_monitor_position
         total_gds_len = geo.mm_1_length + 2*geo.taper_length + geo.between_waveguide_length + geo.mm_2_length
-        c = gf.Component("mmi_mux_cascade_eme")
+        c = _component("mmi_mux_cascade_eme")
         _add_cascade_polygons(c, geo, x_start=x_start)
         c.add_polygon([
             (x_start, -oxide_width/2), (x_start + total_gds_len, -oxide_width/2),
@@ -168,7 +175,7 @@ class MMIMux(DeviceGeometry):
         x_shift = (-domain_sx/2 + dpml + waveguide_length) if side == "input" else None
 
         if side == "input":
-            c = gf.Component("mmi_mux_fdtd_in")
+            c = _component("mmi_mux_fdtd_in")
             iw, itw = geo.mm_waveguide_width, geo.input_taper_width
             c.add_polygon([(0, -iw/2), (Lt, -itw/2), (Lt, itw/2), (0, iw/2)], layer=_WG_LAYER)
             c.add_polygon([(Lt, -geo.mm_width/2), (Lt + mm_sim_length, -geo.mm_width/2),
@@ -182,13 +189,27 @@ class MMIMux(DeviceGeometry):
                 (-geo.waveguide_offset, geo.top_bot_taper_width, geo.waveguide_width),
             ]
             yo, mmi_w, wg_w = port_params[port_idx]
-            c = gf.Component(f"mmi_mux_fdtd_out_{port_idx}")
+            c = _component(f"mmi_mux_fdtd_out_{port_idx}")
             c.add_polygon([(-mm_sim_length, -mw_val/2), (0, -mw_val/2),
                            (0, mw_val/2), (-mm_sim_length, mw_val/2)], layer=_WG_LAYER)
             c.add_polygon([(0, -mmi_m/2+yo), (Lt, -wg_w/2+yo), (Lt, wg_w/2+yo), (0, mmi_m/2+yo)], layer=_WG_LAYER)
             x_shift_out = (domain_sx/2 - dpml - waveguide_length) - Lt
             c.move((x_shift_out, 0))
         return c
+
+    def eme_lengths(self, straight_length: float):
+        g = self.geo
+        return [
+            straight_length,
+            g.taper_length,
+            g.mm_1_length,
+            g.taper_length,
+            g.between_waveguide_length,
+            g.taper_length,
+            g.mm_2_length,
+            g.taper_length,
+            straight_length,
+        ]
 
     @property
     def bbox(self):
