@@ -1,0 +1,13 @@
+#!/bin/bash
+
+#SBATCH -J mmi_2x2_sweep_parallel_efficient
+#SBATCH --account=gts-sr108-gedc_main
+#SBATCH -N 4 --ntasks-per-node=24
+#SBATCH --mem-per-cpu=12G
+#SBATCH -t 1440
+#SBATCH -q inferno
+#SBATCH -o ../reports/%j.out
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=jhiesener3@gatech.edu
+
+make config mmi_2x2_s_parallel_efficient

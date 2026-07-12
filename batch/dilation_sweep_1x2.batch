@@ -1,0 +1,17 @@
+#!/bin/bash
+
+#SBATCH -J dilation_sweep_1x2
+#SBATCH --account=gts-sr108-gedc_main
+#SBATCH -N 3 --ntasks-per-node=24
+#SBATCH --mem-per-cpu=8G
+#SBATCH -t 240
+#SBATCH -q inferno
+#SBATCH -o ../reports/%A_%a.out
+#SBATCH --mail-type=FAIL
+#SBATCH --array=0-26
+#SBATCH --mail-user=jhiesener3@gatech.edu
+
+dilations_nm=(-20 -18 -16 -14 -12 -10 -8 -6 -4 -2 0 2 4 6 8 10 12 14 16 18 20 22 24 26 28 30 32)
+dil_nm=${dilations_nm[$SLURM_ARRAY_TASK_ID]}
+
+make config_1x2_dilation_sweep_cluster DILATION_NM=$dil_nm mmi_1x2_dilation_sweep DILATION_NM=$dil_nm

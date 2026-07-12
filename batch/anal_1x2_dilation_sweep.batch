@@ -1,0 +1,13 @@
+#!/bin/bash
+
+#SBATCH -J anal_mmi_1x2_dilation_sweep
+#SBATCH --account=gts-sr108-ece
+#SBATCH -N 1 --ntasks-per-node=1
+#SBATCH --mem-per-cpu=8G
+#SBATCH -t 10
+#SBATCH -q inferno
+#SBATCH -o ../reports/%j.out
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=jhiesener3@gatech.edu
+
+python3 anal/anal_mmi_1x2_dilation_sweep.py
