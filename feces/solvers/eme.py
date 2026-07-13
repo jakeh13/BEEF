@@ -66,7 +66,7 @@ class EMESolver:
                           int(self.res * self.oxide_height) + 1),
         )
 
-    def _build_cells(self, geometry: DeviceGeometry, side: str = "top"):
+    def _build_cells(self, geometry: DeviceGeometry, side: str = "top", **geometry_kwargs):
         import meow as mw
 
         gds_comp = geometry.to_gds_eme(
@@ -74,6 +74,7 @@ class EMESolver:
             oxide_width=self.oxide_width,
             x_start=0.0,
             side=side,
+            **geometry_kwargs,
         )
         structs = mw.extrude_gds(gds_comp, self.material_stack.extrusion_rules)
 
@@ -165,6 +166,8 @@ class EMESolver:
             wavelengths: [M] wavelength array (µm).
             ports: list of port sides to simulate.
                    Defaults to ["top", "bot"] for 2-output devices.
+            **kwargs: forwarded to geometry.to_gds_eme() (e.g. output_idx to
+                      restrict the drawn output branch to a single port).
 
         Returns:
             SMatrix with entries keyed by port name.
@@ -179,7 +182,7 @@ class EMESolver:
         modes_per_cell = self._modes_per_cell()
 
         for side in ports:
-            cells = self._build_cells(geometry, side=side)
+            cells = self._build_cells(geometry, side=side, **kwargs)
             amplitudes = np.zeros(len(wavelengths), dtype=complex)
 
             for wl_idx, wl in enumerate(wavelengths):

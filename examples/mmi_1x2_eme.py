@@ -19,7 +19,6 @@ import os
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")           # headless — swap for "Qt5Agg" for interactive
-import matplotlib.pyplot as plt
 
 from feces import MMI, EMESolver, SOI_160, plot_geometry, plot_performance
 
@@ -66,8 +65,9 @@ plot_geometry(
     mmi, solver=solver,
     show_eme_regions=True,
     region_labels=["wg in", "taper in", "MMI body", "taper out", "wg out"],
-    title="1×2 MMI Splitter — Top-down Geometry",
+    title="1×2 MMI Splitter — Top-down Geometry (top output only)",
     output_path=os.path.join(output_dir, "geometry.png"),
+    output_idx=1,  # top output branch only — matches what solver.solve() below monitors
 )
 print(f"Geometry plot saved → {output_dir}/geometry.png")
 
@@ -79,9 +79,11 @@ wavelengths = np.linspace(1.26, 1.36, 5)  # µm, O-band
 print(f"Sweeping {len(wavelengths)} wavelengths: "
       f"{wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm")
 
-# "out" = top output port. GDS draws one output waveguide;
-# S[0,1] coeff gives coupling from input mode 1 into that waveguide.
-smat = solver.solve(mmi, wavelengths, ports=["out"])
+# "out" = top output port. output_idx=1 restricts the EME cross-sections to
+# the top output branch only (output_ys[1] = +waveguide_offset/2), so the
+# solved mode is the isolated waveguide mode rather than a supermode of both
+# outputs. S[0,1] coeff gives coupling from input mode 1 into that waveguide.
+smat = solver.solve(mmi, wavelengths, ports=["out"], output_idx=1)
 
 # ---------------------------------------------------------------------------
 # 5. Print summary
@@ -106,17 +108,3 @@ print(f"\nSMatrix saved → {output_dir}/smatrix.pkl")
 # Plot insertion loss and transmission vs wavelength
 plot_performance(smat, output_dir=output_dir, title="1×2 MMI Splitter (EME)")
 print(f"Performance plot saved → {output_dir}/performance.png")
-
-# Custom IL plot vs ideal −3 dB
-fig, ax = plt.subplots(figsize=(7, 4))
-ax.plot(wavelengths, IL, label="Top output")
-ax.axhline(-3.0, color="k", linestyle="--", lw=0.8, label="Ideal −3 dB")
-ax.set_xlabel("Wavelength (µm)")
-ax.set_ylabel("Insertion Loss (dB)")
-ax.set_title("1×2 MMI — Insertion Loss vs Wavelength")
-ax.legend()
-ax.grid(True)
-plt.tight_layout()
-fig.savefig(os.path.join(output_dir, "insertion_loss.png"), dpi=300)
-plt.close("all")
-print(f"IL plot saved           → {output_dir}/insertion_loss.png")

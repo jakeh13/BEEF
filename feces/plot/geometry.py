@@ -21,6 +21,7 @@ def plot_geometry(
     figsize: Tuple[float, float] = (10, 4),
     wg_layer: Tuple[int, int] = (2, 0),
     ox_layer: Tuple[int, int] = (1, 0),
+    **geometry_kwargs,
 ):
     """Top-down device geometry plot.
 
@@ -42,6 +43,9 @@ def plot_geometry(
         figsize: figure size (width, height) in inches.
         wg_layer: GDS layer tuple for waveguide polygons.
         ox_layer: GDS layer tuple for oxide cladding polygon.
+        **geometry_kwargs: forwarded to geometry.to_gds_eme() (e.g. output_idx
+            to draw only a single output branch, matching what the solver
+            actually monitors).
 
     Returns:
         (fig, ax)
@@ -75,6 +79,7 @@ def plot_geometry(
     gds_comp = geometry.to_gds_eme(
         straight_length=straight_length,
         oxide_width=oxide_width,
+        **geometry_kwargs,
     )
 
     # gdsfactory returns KLayout polygon objects; coords are in dbu (1000 dbu = 1 µm)

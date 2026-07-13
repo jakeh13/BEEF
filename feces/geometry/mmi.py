@@ -80,13 +80,22 @@ class MMI(DeviceGeometry):
         return self.mm_length + 2 * self.taper_length
 
     def polygons(
-        self, stub_length: float = 0.0
+        self, stub_length: float = 0.0, output_indices: List[int] = None
     ) -> Dict[Tuple[int, int], List[List[Tuple[float, float]]]]:
-        """MMI polygons in device frame (center at x=0)."""
+        """MMI polygons in device frame (center at x=0).
+
+        output_indices: if given, only draw the output waveguide stub(s) at
+        these indices into output_ys instead of all n_outputs branches (e.g.
+        to build an EME cross-section that monitors a single output port in
+        isolation, rather than a coupled multi-waveguide supermode). Output
+        tapers are always drawn for every branch — they're part of the MMI
+        body's transition and stay regardless of which stub is monitored.
+        """
         L, W = self.mm_length, self.mm_width
         tl, tw = self.taper_length, self.taper_width
         ww = self.waveguide_width
         ml = self.total_length
+        stub_out_ys = self.output_ys if output_indices is None else [self.output_ys[i] for i in output_indices]
 
         wg = [[(-L/2, -W/2), (L/2, -W/2), (L/2, W/2), (-L/2, W/2)]]
         for yo in self.input_ys:
@@ -101,20 +110,24 @@ class MMI(DeviceGeometry):
             for yo in self.input_ys:
                 wg.append([(-ml/2-sl, -ww/2+yo), (-ml/2, -ww/2+yo),
                            (-ml/2, ww/2+yo), (-ml/2-sl, ww/2+yo)])
-            for yo in self.output_ys:
+            for yo in stub_out_ys:
                 wg.append([(ml/2, -ww/2+yo), (ml/2+sl, -ww/2+yo),
                            (ml/2+sl, ww/2+yo), (ml/2, ww/2+yo)])
         return {_WG_LAYER: wg}
 
     def to_gds_eme(
         self, straight_length: float, oxide_width: float,
-        x_start: float = 0.0, **kwargs
+        x_start: float = 0.0, output_idx: int = None, **kwargs
     ) -> gf.Component:
+        """Build the EME GDS. output_idx restricts the drawn output branch(es)
+        to a single output_ys index (e.g. output_idx=1 for a top-only output
+        stub) instead of all n_outputs — pass None to keep all of them."""
         _reset_gf()
         ml = self.total_length
         x_off = x_start + ml / 2 + straight_length
         c = _component(f"mmi_{self.n_inputs}x{self.n_outputs}_eme_{id(self)}")
-        for verts in self.polygons(stub_length=straight_length)[_WG_LAYER]:
+        output_indices = None if output_idx is None else [output_idx]
+        for verts in self.polygons(stub_length=straight_length, output_indices=output_indices)[_WG_LAYER]:
             c.add_polygon([(x + x_off, y) for x, y in verts], layer=_WG_LAYER)
         _add_oxide(c, x_start, x_start + ml + 2 * straight_length, oxide_width)
         return c
