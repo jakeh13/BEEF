@@ -145,22 +145,45 @@ def plot_geometry(
         _dpml = _fdtd_ref.dpml
         total_gds = tl + 2 * straight_length  # = tl + 2*(wl+dpml), full domain width
 
-        monitors = [
-            (_dpml + _fdtd_ref.source_margin,               "source",  "crimson",    "-"),
-            (_dpml + _fdtd_ref.monitor_margin,              "in mon",  "darkorange", "--"),
-            (total_gds - _dpml - _fdtd_ref.monitor_margin,  "out mon", "seagreen",   "--"),
-        ]
         y0, y1 = -oxide_width / 2, oxide_width / 2          # domain edges
         y_in0, y_in1 = y0 + _dpml, y1 - _dpml               # inner sim bounds (no PML)
-        for x_gds, label, color, ls in monitors:
-            (line,) = ax.plot([x_gds, x_gds], [y_in0, y_in1], color=color, lw=1.5, linestyle=ls, alpha=0.9, zorder=5)
+
+        def _draw_marker(x_gds, y_lo, y_hi, label, color, ls):
+            (line,) = ax.plot([x_gds, x_gds], [y_lo, y_hi], color=color, lw=1.5, linestyle=ls, alpha=0.9, zorder=5)
             line.set_path_effects([pe.withStroke(linewidth=3.5, foreground="white")])
             ax.text(
-                x_gds, oxide_width / 2 * 0.62, label,
+                x_gds, y_hi - 0.08 * (y_hi - y_lo), label,
                 ha="center", va="top", fontsize=7, color=color, zorder=6,
                 rotation=90,
                 bbox=dict(boxstyle="round,pad=0.1", facecolor="white", alpha=0.8, edgecolor=color, lw=0.5),
             )
+
+        src_x = _dpml + _fdtd_ref.source_margin
+        in_x = _dpml + _fdtd_ref.monitor_margin
+        out_x = total_gds - _dpml - _fdtd_ref.monitor_margin
+
+        _draw_marker(src_x, y_in0, y_in1, "source", "crimson", "-")
+        _draw_marker(in_x, y_in0, y_in1, "in mon", "darkorange", "--")
+
+        # FDTDSolver.solve() can define multiple, independently-positioned
+        # output monitors (one per output waveguide) via output_monitor_
+        # centers/widths — draw one marker per monitor, each spanning only
+        # its own y-range, rather than a single line across the whole
+        # cross-section. Falls back to a full-height line for solvers that
+        # don't set these (e.g. an FDTDSolver used only via solve_section()
+        # in a HybridSolver chain, where they're irrelevant).
+        out_centers = getattr(_fdtd_ref, "output_monitor_centers", None)
+        if out_centers:
+            out_widths = (
+                _fdtd_ref.output_monitor_widths
+                if getattr(_fdtd_ref, "output_monitor_widths", None) is not None
+                else [_fdtd_ref.sim_width] * len(out_centers)
+            )
+            for i, (yc, yw) in enumerate(zip(out_centers, out_widths)):
+                label = "out mon" if len(out_centers) == 1 else f"out mon {i}"
+                _draw_marker(out_x, yc - yw / 2, yc + yw / 2, label, "seagreen", "--")
+        else:
+            _draw_marker(out_x, y_in0, y_in1, "out mon", "seagreen", "--")
 
     # PML absorbing boundary regions
     if show_pml and _has_fdtd:
