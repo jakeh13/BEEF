@@ -357,18 +357,25 @@ class FDTDSolver:
         # offsets from the PML *inner* edge — i.e. from lo/hi (device frame),
         # not from x0/x1 directly; those only coincide when stub_left/right is
         # 0 (a pure interior cut). Shifted into the meep frame: lo - x_center
-        # and hi - x_center.
+        # and hi - x_center. monitor_margin only offsets the source-side
+        # normalization monitor (norm_x, collocated with the source, kept
+        # clear of its near-field launch region). The measured/interface side
+        # (mea_x) sits exactly at the PML interface (lo_m/hi_m, with no
+        # margin) so that this section's measured plane exactly matches an
+        # adjacent section's own modeled boundary at that same x — e.g.
+        # EMESolver.solve_section()'s `length = (x1-x0)+stub_left+stub_right`
+        # starts/ends exactly at x0/x1, not at x0+margin/x1-margin.
         lo_m, hi_m = lo - x_center, hi - x_center
         if n_modes_out <= n_modes_in:
             n_excite, n_measure = n_modes_out, n_modes_in
-            src_x, norm_x, mea_x = hi_m - self.source_margin, hi_m - self.monitor_margin, lo_m + self.monitor_margin
+            src_x, norm_x, mea_x = hi_m - self.source_margin, hi_m - self.monitor_margin, lo_m
             src_c, mea_c = c_right, c_left
             w_meas = w_meas_left
             kpoint = mp.Vector3(-1, 0, 0)
             alpha_idx = 1  # backward amplitude
         else:
             n_excite, n_measure = n_modes_in, n_modes_out
-            src_x, norm_x, mea_x = lo_m + self.source_margin, lo_m + self.monitor_margin, hi_m - self.monitor_margin
+            src_x, norm_x, mea_x = lo_m + self.source_margin, lo_m + self.monitor_margin, hi_m
             src_c, mea_c = c_left, c_right
             w_meas = w_meas_right
             kpoint = mp.Vector3(1, 0, 0)

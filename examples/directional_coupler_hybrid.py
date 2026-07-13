@@ -57,6 +57,9 @@ characterization — without any additional FDTD or EME simulations:
     feces/solvers/eme.py). Total solver cost is the same as a single fixed
     coupling_length run — 2 FDTD solves + 1 EME mode-solve per
     wavelength — regardless of sweeping 101 lengths instead of 1.
+  - The swept length actually fed to the EME body is coupling_length minus
+    the 2*body_stub already captured inside the (length-invariant) FDTD
+    sections, not the full nominal coupling_length — see step 5.
 
 HybridSolver itself has no idea this is a directional coupler; it only
 knows each solver implements solve_section() and combines the resulting
@@ -240,8 +243,20 @@ M_in1 = fdtd_solver.solve_section(
 M_out_through = M_in0.transpose(0, 2, 1)  # [n_wl, 1, N_MODES] — mirror-symmetry reuse, not a new simulation
 M_out_cross = M_in1.transpose(0, 2, 1)    # [n_wl, 1, N_MODES]
 
+# The input/output FDTD sections already each capture body_stub=0.5 µm of
+# straight coupled-pair waveguide beyond their S-bend (folded in past the
+# S-bend/coupling-region seam — see step 2/3 above), and that portion of
+# each FDTD matrix doesn't change across the sweep. So the EME body must
+# only model the *remaining* interior length for a given nominal
+# coupling_length — coupling_length - 2*body_stub — not the full nominal
+# value, or the two body_stub segments would be double-counted (once inside
+# the fixed FDTD matrices, once again by treating the full coupling_length
+# as freshly-propagated EME length). Clipped at 0 since coupling_length
+# below 2*body_stub leaves no interior straight section left to model with
+# EME (all of it is already inside the fixed FDTD stubs).
+body_lengths = np.clip(coupling_lengths - 2 * body_stub, 0.0, None)
 M_body = body_solver.solve_section_length_sweep(
-    dc, wavelengths, boundaries[1], boundaries[2], coupling_lengths,
+    dc, wavelengths, boundaries[1], boundaries[2], body_lengths,
     n_modes_in=N_MODES, n_modes_out=N_MODES,
 )  # [n_L, n_wl, N_MODES, N_MODES]
 
