@@ -37,7 +37,7 @@ os.makedirs(output_dir, exist_ok=True)
 # ---------------------------------------------------------------------------
 # Global simulation parameters
 # ---------------------------------------------------------------------------
-RESOLUTION = 30.0   # mesh resolution (pixels/µm) — used by both the EME and FDTD sub-solvers
+RESOLUTION = 40.0   # mesh resolution (pixels/µm) — used by both the EME and FDTD sub-solvers
 WL_MIN = 1.26       # wavelength sweep start (µm)
 WL_MAX = 1.36       # wavelength sweep end (µm)
 N_WL = 11           # number of wavelength points
@@ -90,7 +90,7 @@ _fdtd_common = dict(
     decay_tol=1e-11,
 )
 
-N_MODES = 15   # modes carried at the two input/output <-> body interfaces
+N_MODES = 12   # modes carried at the two input/output <-> body interfaces
 
 # The output section's single-mode port (the physical taper tip) sits only
 # waveguide_offset=1.0 µm from the *other* output branch, which is drawn in

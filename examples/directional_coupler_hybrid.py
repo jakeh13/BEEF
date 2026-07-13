@@ -88,7 +88,7 @@ os.makedirs(output_dir, exist_ok=True)
 # ---------------------------------------------------------------------------
 # Global simulation parameters
 # ---------------------------------------------------------------------------
-RESOLUTION = 30.0   # mesh resolution (pixels/µm) — used by both the EME and FDTD sub-solvers
+RESOLUTION = 40.0   # mesh resolution (pixels/µm) — used by both the EME and FDTD sub-solvers
 WL_MIN = 1.50       # wavelength sweep start (µm)
 WL_MAX = 1.60       # wavelength sweep end (µm)
 N_WL = 11           # number of wavelength points

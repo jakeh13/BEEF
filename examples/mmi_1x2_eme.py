@@ -29,7 +29,7 @@ output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_output", "
 # ---------------------------------------------------------------------------
 # Global simulation parameters
 # ---------------------------------------------------------------------------
-RESOLUTION = 30.0   # mesh resolution (pixels/µm) — used by the EME solver
+RESOLUTION = 40.0   # mesh resolution (pixels/µm) — used by the EME solver
 WL_MIN = 1.26       # wavelength sweep start (µm)
 WL_MAX = 1.36       # wavelength sweep end (µm)
 N_WL = 11            # number of wavelength points
@@ -56,7 +56,7 @@ print(f"MMI total length: {mmi.total_length:.2f} µm")
 # ---------------------------------------------------------------------------
 solver = EMESolver(
     # 5 regions: wg_in | taper_in | MMI body | taper_out | wg_out
-    num_modes=[1,   5,   15,  5,   1  ],  # modes per region
+    num_modes=[1,   5,   12,  5,   1  ],  # modes per region
     num_cells=[1,   8,  1,   8,  1  ],  # cells per region (tapers subdivided)
     lengths=  [0.5, 1.0, 4.5, 1.0, 0.5], # region lengths (µm)
     oxide_width=5.0,                       # cross-section mesh y-span (µm)
