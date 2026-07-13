@@ -25,7 +25,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from feces import MMI, FDTDSolver, SOI_160, plot_geometry
+from feces import MMI, FDTDSolver, SOI_160, plot_fdtd_geometry
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_output", "mmi_1x2_fdtd"))
@@ -70,10 +70,8 @@ solver = FDTDSolver(
 # ---------------------------------------------------------------------------
 # 3. Geometry plot
 # ---------------------------------------------------------------------------
-plot_geometry(
+plot_fdtd_geometry(
     mmi, solver=solver,
-    show_monitors=True,
-    show_pml=True,
     title="1×2 MMI Splitter — Top-down Geometry (FDTD)",
     output_path=os.path.join(output_dir, "geometry.png"),
 )

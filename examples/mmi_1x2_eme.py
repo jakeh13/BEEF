@@ -20,7 +20,7 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")           # headless — swap for "Qt5Agg" for interactive
 
-from feces import MMI, EMESolver, SOI_160, plot_geometry, plot_performance
+from feces import MMI, EMESolver, SOI_160, plot_eme_geometry, plot_performance
 
 # Output to a top-level example_output/ folder outside the repo
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -61,9 +61,8 @@ solver = EMESolver(
 # 3. Geometry plot
 # ---------------------------------------------------------------------------
 os.makedirs(output_dir, exist_ok=True)
-plot_geometry(
+plot_eme_geometry(
     mmi, solver=solver,
-    show_eme_regions=True,
     region_labels=["wg in", "taper in", "MMI body", "taper out", "wg out"],
     title="1×2 MMI Splitter — Top-down Geometry (top output only)",
     output_path=os.path.join(output_dir, "geometry.png"),

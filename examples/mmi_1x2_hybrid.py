@@ -28,7 +28,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from feces import MMI, EMESolver, FDTDSolver, HybridSolver, SOI_160, plot_geometry
+from feces import MMI, EMESolver, FDTDSolver, HybridSolver, SOI_160, plot_hybrid_geometry
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_output", "mmi_1x2_hybrid"))
@@ -131,14 +131,25 @@ hybrid = HybridSolver(
 # ---------------------------------------------------------------------------
 # 4. Geometry plot — shows which solver covers which section
 # ---------------------------------------------------------------------------
-plot_geometry(
+plot_hybrid_geometry(
     mmi, solver=hybrid,
-    show_hybrid_sections=True,
-    show_pml=True,
+    in_modes=1, out_modes=1,
     title="1×2 MMI — Hybrid Solver Sections",
     output_path=os.path.join(output_dir, "geometry_hybrid.png"),
+    sub_region_dir=os.path.join(output_dir, "sections"),
+    sub_region_show_pml=True,
+    sub_region_show_eme_detail=True,
+    # One set of sub-region plots per output port — matches the two
+    # hybrid.solve() calls below (geometry_kwargs=[{}, {}, {"output_idx": ..}]):
+    # only the output section's kwargs actually vary, so the input/body
+    # sections are each rendered once (not once per output port).
+    sub_region_configs=[
+        ("out_top", [{}, {}, {"output_idx": 1}]),
+        ("out_bot", [{}, {}, {"output_idx": 0}]),
+    ],
 )
 print(f"Geometry plot saved → {output_dir}/geometry_hybrid.png")
+print(f"Sub-region plots saved → {output_dir}/sections/")
 
 # ---------------------------------------------------------------------------
 # 5. Run hybrid simulation — once per output port (output_idx selects the
