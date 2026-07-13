@@ -216,12 +216,18 @@ class FDTDSolver:
     ) -> np.ndarray:
         """Modal transfer matrix for the device section [x0, x1] (device frame).
 
-        Source is always placed at the LEFT boundary (forward, +x) — one FDTD
-        run per input mode — and the monitor at the RIGHT boundary captures
-        n_modes_out modes. This is position-agnostic: the same method handles
-        a true input port, a true output port, or a purely interior interface,
-        since meep does not care whether a cross-section is a "real" device
-        port or an arbitrary cut through a larger structure.
+        One FDTD run is needed per excited mode, so the method excites from
+        whichever boundary has FEWER modes — min(n_modes_in, n_modes_out) runs
+        instead of always n_modes_in. By reciprocity, launching mode k
+        backward from the right and measuring mode m at the left gives
+        exactly the same coefficient as launching m forward from the left and
+        measuring k at the right (same passive, reciprocal structure, same
+        mode normalization on both sides) — so the returned matrix is
+        identical regardless of which side actually did the exciting. This is
+        also position-agnostic: the same method handles a true input port, a
+        true output port, or a purely interior interface, since meep does not
+        care whether a cross-section is a "real" device port or an arbitrary
+        cut through a larger structure.
 
         Args:
             x0, x1: device-frame bounds of this section (µm).
@@ -249,18 +255,18 @@ class FDTDSolver:
 
         span = x1 - x0
         eps = min(1e-3, span * 0.01)
-        # The launch (left) aperture must span most of the non-PML domain —
-        # not just the local waveguide core — so MPB's eigenmode solve for
-        # the source includes the mode's evanescent tail; a source/monitor
-        # sized to the bare core (e.g. a 0.35 µm single-mode waveguide in a
-        # 5 µm domain) truncates that tail and corrupts the mode solve,
-        # which then corrupts every normalization downstream. The right
-        # (measurement) side is a genuine per-interface decomposition and is
-        # correctly sized to the local cross-section width.
-        w_left = self.sim_width
-        w_right = geometry.width_at(x1 - eps, **geometry_kwargs)
+        # The launch aperture must span most of the non-PML domain — not just
+        # the local waveguide core — so MPB's eigenmode solve for the source
+        # includes the mode's evanescent tail; a source/monitor sized to the
+        # bare core (e.g. a 0.35 µm single-mode waveguide in a 5 µm domain)
+        # truncates that tail and corrupts the mode solve, which then
+        # corrupts every normalization downstream. The far (measurement) side
+        # is a genuine per-interface decomposition and is correctly sized to
+        # the local cross-section width.
         c_left = geometry.center_at(x0 + eps, **geometry_kwargs)
         c_right = geometry.center_at(x1 - eps, **geometry_kwargs)
+        w_meas_left = geometry.width_at(x0 + eps, **geometry_kwargs)
+        w_meas_right = geometry.width_at(x1 - eps, **geometry_kwargs)
 
         Sx = span + stub_left + stub_right + 2 * self.dpml
         Sy = self.sim_width + 2 * self.dpml
@@ -281,19 +287,33 @@ class FDTDSolver:
             for p in prisms
         ]
 
-        src_x = mx0 + self.source_margin
-        norm_x = mx0 + self.monitor_margin
-        mon_x = mx1 - self.monitor_margin
-
         T = np.zeros((len(wavelengths), n_modes_out, n_modes_in), dtype=complex)
 
-        for j in range(1, n_modes_in + 1):
+        # Excite from whichever boundary has fewer modes — min(n_in, n_out)
+        # simulations instead of always n_modes_in. Reciprocity guarantees
+        # the same coefficient matrix either way (see docstring).
+        if n_modes_out <= n_modes_in:
+            n_excite, n_measure = n_modes_out, n_modes_in
+            src_x, norm_x, mea_x = mx1 - self.source_margin, mx1 - self.monitor_margin, mx0 + self.monitor_margin
+            src_c, mea_c = c_right, c_left
+            w_meas = w_meas_left
+            kpoint = mp.Vector3(-1, 0, 0)
+            alpha_idx = 1  # backward amplitude
+        else:
+            n_excite, n_measure = n_modes_in, n_modes_out
+            src_x, norm_x, mea_x = mx0 + self.source_margin, mx0 + self.monitor_margin, mx1 - self.monitor_margin
+            src_c, mea_c = c_left, c_right
+            w_meas = w_meas_right
+            kpoint = mp.Vector3(1, 0, 0)
+            alpha_idx = 0  # forward amplitude
+
+        for k in range(1, n_excite + 1):
             src = mp.EigenModeSource(
                 mp.GaussianSource(fcen, fwidth=fwidth),
-                center=mp.Vector3(src_x, c_left),
-                size=mp.Vector3(0, w_left),
-                eig_band=j,
-                eig_kpoint=mp.Vector3(1, 0, 0),
+                center=mp.Vector3(src_x, src_c),
+                size=mp.Vector3(0, self.sim_width),
+                eig_band=k,
+                eig_kpoint=kpoint,
                 eig_match_freq=True,
             )
             sim = mp.Simulation(
@@ -306,21 +326,25 @@ class FDTDSolver:
             )
             norm_flux = sim.add_mode_monitor(
                 fcen, fwidth, nfreq,
-                mp.FluxRegion(center=mp.Vector3(norm_x, c_left), size=mp.Vector3(0, w_left)),
+                mp.FluxRegion(center=mp.Vector3(norm_x, src_c), size=mp.Vector3(0, self.sim_width)),
             )
-            out_flux = sim.add_mode_monitor(
+            mea_flux = sim.add_mode_monitor(
                 fcen, fwidth, nfreq,
-                mp.FluxRegion(center=mp.Vector3(mon_x, c_right), size=mp.Vector3(0, w_right)),
+                mp.FluxRegion(center=mp.Vector3(mea_x, mea_c), size=mp.Vector3(0, w_meas)),
             )
 
             sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol))
 
-            norm_coeff = sim.get_eigenmode_coefficients(norm_flux, [j], eig_parity=mp.NO_PARITY)
-            src_alpha = norm_coeff.alpha[0, :, 0]
+            norm_coeff = sim.get_eigenmode_coefficients(norm_flux, [k], eig_parity=mp.NO_PARITY)
+            src_alpha = norm_coeff.alpha[0, :, alpha_idx]
 
-            for i in range(1, n_modes_out + 1):
-                c = sim.get_eigenmode_coefficients(out_flux, [i], eig_parity=mp.NO_PARITY)
-                T[:, i - 1, j - 1] = c.alpha[0, :, 0] / src_alpha
+            for m in range(1, n_measure + 1):
+                c = sim.get_eigenmode_coefficients(mea_flux, [m], eig_parity=mp.NO_PARITY)
+                coeff = c.alpha[0, :, alpha_idx] / src_alpha
+                if n_modes_out <= n_modes_in:
+                    T[:, k - 1, m - 1] = coeff  # excited=out(k), measured=in(m)
+                else:
+                    T[:, m - 1, k - 1] = coeff  # excited=in(k), measured=out(m)
 
             sim.reset_meep()
 

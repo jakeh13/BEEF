@@ -77,7 +77,8 @@ class HybridSolver:
         in_modes: int = 1,
         out_modes: int = 1,
         port: str = "out",
-        geometry_kwargs: Optional[Dict[str, Any]] = None,
+        geometry_kwargs: Optional[Any] = None,
+        cache: Optional[Dict[Any, np.ndarray]] = None,
     ) -> SMatrix:
         """Run every section solver and cascade the resulting transfer matrices.
 
@@ -88,15 +89,35 @@ class HybridSolver:
             in_modes: mode count at the true left (input) port. Usually 1.
             out_modes: mode count at the true right (output) port. Usually 1.
             port: port label to store the result under in the returned SMatrix.
-            geometry_kwargs: forwarded to every solve_section() call (e.g.
-                port_idx to select an output branch on a multi-output device).
+            geometry_kwargs: forwarded to solve_section() calls. Either a
+                single dict applied to every section, or a list of
+                len(solvers) dicts giving different kwargs per section (e.g.
+                port_idx only on the section that actually branches — see
+                cache below for why this distinction matters).
+            cache: optional dict shared across multiple solve() calls (e.g.
+                once per output port of a multi-output device). Sections are
+                memoized by (solver identity, x0, x1, n_in, n_out, kwargs) —
+                so a section whose own kwargs don't change between calls
+                (typically every section upstream of the one that branches)
+                is only ever actually simulated once.
 
         Returns:
             SMatrix with coeff(port=port, in_mode=i, out_mode=o) = alpha_full[m].
         """
         wavelengths = np.asarray(wavelengths)
         K = len(self.solvers)
-        kwargs = geometry_kwargs or {}
+
+        if geometry_kwargs is None:
+            kwargs_per_section = [{}] * K
+        elif isinstance(geometry_kwargs, dict):
+            kwargs_per_section = [geometry_kwargs] * K
+        else:
+            kwargs_per_section = list(geometry_kwargs)
+            if len(kwargs_per_section) != K:
+                raise ValueError(
+                    f"geometry_kwargs list must have len(solvers) = {K} "
+                    f"entries, got {len(kwargs_per_section)}."
+                )
 
         n_in_list = [in_modes] + list(self.interface_modes)
         n_out_list = list(self.interface_modes) + [out_modes]
@@ -106,6 +127,17 @@ class HybridSolver:
             x0, x1 = self.boundaries[k], self.boundaries[k + 1]
             stub_left = solver.waveguide_length if (k == 0 and hasattr(solver, "waveguide_length")) else 0.0
             stub_right = solver.waveguide_length if (k == K - 1 and hasattr(solver, "waveguide_length")) else 0.0
+            kwargs = kwargs_per_section[k]
+
+            cache_key = None
+            if cache is not None:
+                cache_key = (id(solver), x0, x1, n_in_list[k], n_out_list[k],
+                             tuple(sorted(kwargs.items())))
+                if cache_key in cache:
+                    print(f"[Hybrid] Section {k + 1}/{K}: {type(solver).__name__} (cached)")
+                    mats.append(cache[cache_key])
+                    continue
+
             print(
                 f"[Hybrid] Section {k + 1}/{K}: {type(solver).__name__} "
                 f"x=[{x0:.3f}, {x1:.3f}]  modes {n_in_list[k]}->{n_out_list[k]}"
@@ -116,7 +148,10 @@ class HybridSolver:
                 stub_left=stub_left, stub_right=stub_right,
                 **kwargs,
             )
-            mats.append(np.asarray(mat, dtype=complex))
+            mat = np.asarray(mat, dtype=complex)
+            if cache is not None:
+                cache[cache_key] = mat
+            mats.append(mat)
 
         # Cascade: full[m] = mats[-1][m] @ ... @ mats[0][m]
         full = mats[0]
