@@ -270,9 +270,18 @@ class FDTDSolver:
 
         Sx = span + stub_left + stub_right + 2 * self.dpml
         Sy = self.sim_width + 2 * self.dpml
-        x_mid = (x0 + x1) / 2.0
-        mx0 = x0 - x_mid
-        mx1 = x1 - x_mid
+
+        # Centre the meep cell on the *padded* domain [x0-stub_left, x1+stub_right],
+        # not the bare section [x0, x1] — meep always centres its cell_size box at
+        # the origin, so when stub_left != stub_right (every true end-of-chain
+        # section, since only one side ever gets the access-waveguide stub) using
+        # the section's own midpoint (x0+x1)/2 as the shift leaves the geometry
+        # off-centre within the cell by (stub_right-stub_left)/2 — the PML would
+        # sit asymmetrically relative to the drawn stub instead of exactly dpml
+        # beyond it on both sides. lo/hi (and hence x_center) already match the
+        # frame section_gds()/section_prisms() build their geometry in.
+        lo, hi = x0 - stub_left, x1 + stub_right
+        x_center = (lo + hi) / 2.0
 
         fcen = 1.0 / wl_center
         fwidth = (1.0 / float(wavelengths.min()) - 1.0 / float(wavelengths.max())) * 0.5
@@ -281,7 +290,7 @@ class FDTDSolver:
         # shift prisms from device frame into the meep-centered frame
         shifted = [
             mp.Prism(
-                vertices=[mp.Vector3(v.x - x_mid, v.y, v.z) for v in p.vertices],
+                vertices=[mp.Vector3(v.x - x_center, v.y, v.z) for v in p.vertices],
                 height=mp.inf, material=p.material,
             )
             for p in prisms
@@ -292,16 +301,23 @@ class FDTDSolver:
         # Excite from whichever boundary has fewer modes — min(n_in, n_out)
         # simulations instead of always n_modes_in. Reciprocity guarantees
         # the same coefficient matrix either way (see docstring).
+        #
+        # source_margin/monitor_margin are documented (see class docstring) as
+        # offsets from the PML *inner* edge — i.e. from lo/hi (device frame),
+        # not from x0/x1 directly; those only coincide when stub_left/right is
+        # 0 (a pure interior cut). Shifted into the meep frame: lo - x_center
+        # and hi - x_center.
+        lo_m, hi_m = lo - x_center, hi - x_center
         if n_modes_out <= n_modes_in:
             n_excite, n_measure = n_modes_out, n_modes_in
-            src_x, norm_x, mea_x = mx1 - self.source_margin, mx1 - self.monitor_margin, mx0 + self.monitor_margin
+            src_x, norm_x, mea_x = hi_m - self.source_margin, hi_m - self.monitor_margin, lo_m + self.monitor_margin
             src_c, mea_c = c_right, c_left
             w_meas = w_meas_left
             kpoint = mp.Vector3(-1, 0, 0)
             alpha_idx = 1  # backward amplitude
         else:
             n_excite, n_measure = n_modes_in, n_modes_out
-            src_x, norm_x, mea_x = mx0 + self.source_margin, mx0 + self.monitor_margin, mx1 - self.monitor_margin
+            src_x, norm_x, mea_x = lo_m + self.source_margin, lo_m + self.monitor_margin, hi_m - self.monitor_margin
             src_c, mea_c = c_left, c_right
             w_meas = w_meas_right
             kpoint = mp.Vector3(1, 0, 0)

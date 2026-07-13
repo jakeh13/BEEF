@@ -167,11 +167,17 @@ class MMI(DeviceGeometry):
     def _section_polygons(self, x0: float, x1: float,
                            stub_left: float = 0.0, stub_right: float = 0.0,
                            input_idx: int = 0, output_idx: int = 0):
-        """Raw vertex lists (device frame) covering [x0-stub_left, x1+stub_right]."""
+        """Raw vertex lists (device frame) covering [x0-stub_left, x1+stub_right].
+
+        Draws *every* input/output branch, not just input_idx/output_idx —
+        those two only select which branch width_at()/center_at() report for
+        monitor sizing (i.e. which one HybridSolver is exciting/measuring);
+        the small FDTD box a section occupies is a real physical cross-section
+        of the whole device, and every other input/output waveguide the
+        device actually has is still sitting right there in it.
+        """
         (in0, in1), (out0, out1) = self._taper_bounds()
         ww, tw, W = self.waveguide_width, self.taper_width, self.mm_width
-        y_in = self.input_ys[input_idx]
-        y_out = self.output_ys[output_idx]
 
         lo, hi = x0 - stub_left, x1 + stub_right
         self._check_cut(lo)
@@ -184,22 +190,26 @@ class MMI(DeviceGeometry):
                 polys.append([(xa, -half_w + yc), (xb, -half_w + yc),
                               (xb, half_w + yc), (xa, half_w + yc)])
 
-        # left access waveguide (uniform, width ww, offset to the input port)
+        # left access waveguides (uniform, width ww, one per input port)
         if lo < in0:
-            _rect(lo, min(hi, in0), ww / 2, yc=y_in)
-        # input taper (all-or-nothing — never cut mid-taper)
+            for y_in in self.input_ys:
+                _rect(lo, min(hi, in0), ww / 2, yc=y_in)
+        # input tapers (all-or-nothing — never cut mid-taper)
         if lo <= in0 and hi >= in1:
-            polys.append([(in0, -ww/2 + y_in), (in1, -tw/2 + y_in),
-                          (in1, tw/2 + y_in), (in0, ww/2 + y_in)])
+            for y_in in self.input_ys:
+                polys.append([(in0, -ww/2 + y_in), (in1, -tw/2 + y_in),
+                              (in1, tw/2 + y_in), (in0, ww/2 + y_in)])
         # MMI body (uniform, arbitrary sub-range)
         _rect(max(lo, in1), min(hi, out0), W / 2)
-        # output taper (all-or-nothing, offset to the selected branch)
+        # output tapers (all-or-nothing, one per output port)
         if lo <= out0 and hi >= out1:
-            polys.append([(out0, -tw/2 + y_out), (out1, -ww/2 + y_out),
-                          (out1, ww/2 + y_out), (out0, tw/2 + y_out)])
-        # right access waveguide (uniform, width ww, offset to the output port)
+            for y_out in self.output_ys:
+                polys.append([(out0, -tw/2 + y_out), (out1, -ww/2 + y_out),
+                              (out1, ww/2 + y_out), (out0, tw/2 + y_out)])
+        # right access waveguides (uniform, width ww, one per output port)
         if hi > out1:
-            _rect(max(lo, out1), hi, ww / 2, yc=y_out)
+            for y_out in self.output_ys:
+                _rect(max(lo, out1), hi, ww / 2, yc=y_out)
 
         return polys
 

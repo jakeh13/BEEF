@@ -269,11 +269,19 @@ class DirectionalCoupler(DeviceGeometry):
     def _section_polygons(self, x0: float, x1: float,
                            stub_left: float = 0.0, stub_right: float = 0.0,
                            input_idx: int = 0, output_idx: int = 0):
+        """Raw vertex lists (device frame) covering [x0-stub_left, x1+stub_right].
+
+        Draws *both* arms everywhere, not just the input_idx/output_idx one —
+        those two only select which arm width_at()/center_at() report for
+        monitor sizing (i.e. which one HybridSolver is exciting/measuring);
+        the small FDTD box a section occupies is a real physical cross-
+        section of the whole coupler, and the other arm (e.g. "isolated" on
+        the input side) really is sitting right there in it, unexcited.
+        """
         (in0, in1), (out0, out1) = self._bend_bounds()
         ww = self.waveguide_width
         p_near = self.coupling_pitch / 2
         p_far = self.waveguide_offset / 2
-        s_in, s_out = _arm_sign(input_idx), _arm_sign(output_idx)
 
         lo, hi = x0 - stub_left, x1 + stub_right
         self._check_cut(lo)
@@ -285,23 +293,27 @@ class DirectionalCoupler(DeviceGeometry):
             if xb - xa > 1e-9:
                 polys.append([(xa, yc-ww/2), (xb, yc-ww/2), (xb, yc+ww/2), (xa, yc+ww/2)])
 
-        # left access waveguide (uniform, before the bend)
+        # left access waveguide (both arms, before the bend)
         if lo < in0:
-            _rect(lo, min(hi, in0), s_in * p_far)
-        # left S-bend (all-or-nothing - never cut mid-bend)
+            for s in (-1.0, 1.0):
+                _rect(lo, min(hi, in0), s * p_far)
+        # left S-bend (both arms, all-or-nothing - never cut mid-bend)
         if lo <= in0 and hi >= in1:
-            polys.extend(_sbend_polygon(in0, s_in*p_far, in1, s_in*p_near, ww, self.bend_type))
-        # coupling region (uniform, both arms, arbitrary sub-range)
+            for s in (-1.0, 1.0):
+                polys.extend(_sbend_polygon(in0, s*p_far, in1, s*p_near, ww, self.bend_type))
+        # coupling region (both arms, arbitrary sub-range)
         body_lo, body_hi = max(lo, in1), min(hi, out0)
         if body_hi - body_lo > 1e-9:
             _rect(body_lo, body_hi,  p_near)
             _rect(body_lo, body_hi, -p_near)
-        # right S-bend (all-or-nothing)
+        # right S-bend (both arms)
         if lo <= out0 and hi >= out1:
-            polys.extend(_sbend_polygon(out0, s_out*p_near, out1, s_out*p_far, ww, self.bend_type))
-        # right access waveguide
+            for s in (-1.0, 1.0):
+                polys.extend(_sbend_polygon(out0, s*p_near, out1, s*p_far, ww, self.bend_type))
+        # right access waveguide (both arms)
         if hi > out1:
-            _rect(max(lo, out1), hi, s_out * p_far)
+            for s in (-1.0, 1.0):
+                _rect(max(lo, out1), hi, s * p_far)
 
         return polys
 
