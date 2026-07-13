@@ -13,7 +13,7 @@ Geometry (220 nm SOI, C-band):
     |<- bend_length ->|<--- coupling_length --->|<- bend_length ->|
 
 Three physically distinct features, but only **2 FDTD simulations + 1 EME simulation
-total** (matching the planning deck's 2×2 MMI splitter method):
+total**:
 
     [input S-bend]  ->  [straight coupled pair]  ->  [output S-bend]
        FDTD (x2)               EME (x1)              reused, not resimulated
@@ -28,39 +28,34 @@ total** (matching the planning deck's 2×2 MMI splitter method):
     physics (bump N_MODES up only if the arm width supports higher-order
     per-arm modes too).
   - The output section is NEVER separately simulated. DirectionalCoupler has
-    no left/right asymmetry parameter anywhere (same bend_length,
-    coupling_pitch, waveguide_offset, bend_type on both sides), so the
-    output section is *exactly* the input section mirrored in x — same
-    segment lengths in reverse order, same S-bend shape (_sbend_polygon
-    only depends on dx/dy/width). solve_section() already gets one side's
-    coefficient "for free" from the other by reciprocity within a single
-    run (see its docstring); the same argument extends across the mirror:
-    exciting the input section's single-mode access end and measuring its
-    N-mode body-facing end gives the identical coefficient as exciting the
-    (mirrored) output section's body-facing end and measuring its
-    single-mode access end. So running the input section once per input
-    arm ("in" and "isolated") is enough to get *both* the input- and
-    output-side transfer matrices — the "through"/"cross" matrices are
-    just those results transposed (mode axes swapped), not resimulated.
+    no left/right asymmetry (same bend_length, coupling_pitch,
+    waveguide_offset, bend_type on both sides), so the output section is
+    *exactly* the input section mirrored in x. By reciprocity, exciting the
+    input section's single-mode access end and measuring its N-mode
+    body-facing end gives the same coefficient as exciting the (mirrored)
+    output section's body-facing end and measuring its access end. So
+    running the input section once per input arm ("in" and "isolated") is
+    enough to get *both* the input- and output-side transfer matrices — the
+    "through"/"cross" matrices are just those results transposed (mode axes
+    swapped), not resimulated.
 
 Coupling-length sweep — the classic directional-coupler "beat length"
 characterization — without any additional FDTD or EME simulations:
 
   - The input/output FDTD sections' transfer matrices don't depend on
-    coupling_length at all (the S-bend/access-waveguide geometry is defined
+    coupling_length (the S-bend/access-waveguide geometry is defined
     relative to the coupling-region edges, and FDTDSolver.solve_section()
-    re-centers on its own padded domain, so it's translation-invariant).
-    They're solved exactly once each, using one reference DirectionalCoupler
-    instance built at the *middle* of the length sweep (also what the
-    geometry/section preview plots use).
+    re-centers on its own padded domain). They're solved exactly once each,
+    using one reference DirectionalCoupler instance built at the *middle* of
+    the length sweep (also what the geometry/section preview plots use).
   - The EME body's mode profiles and effective indices depend only on the
     coupling cross-section (width/gap), not on how long the straight section
     is — so EMESolver.solve_section_length_sweep() computes the two
     supermodes once per wavelength and reuses them for every length in the
     sweep, each just a cheap diagonal phase-matrix evaluation
     (S_ii(L) = exp(2j*pi*neff_i/wavelength*L); see its docstring in
-    feces/solvers/eme.py). Total solver cost is exactly what a single fixed
-    coupling_length run already costs: 2 FDTD solves + 1 EME mode-solve per
+    feces/solvers/eme.py). Total solver cost is the same as a single fixed
+    coupling_length run — 2 FDTD solves + 1 EME mode-solve per
     wavelength — regardless of sweeping 101 lengths instead of 1.
 
 HybridSolver itself has no idea this is a directional coupler; it only
@@ -68,9 +63,6 @@ knows each solver implements solve_section() and combines the resulting
 per-section modal transfer matrices by matrix-chain multiplication. The
 coupler-specific geometry (S-bends, coupling region) lives entirely in
 DirectionalCoupler's section_prisms/section_gds/width_at/center_at methods.
-(HybridSolver.solve() itself has no notion of a length-swept section, so the
-matrix-chain contraction below is done directly, the same way it does it
-internally, broadcasting over the extra length axis.)
 
 Run:
     python /path/to/examples/directional_coupler_hybrid.py
@@ -108,13 +100,13 @@ N_WL = 11           # number of wavelength points
 #    and it's also exactly what the geometry/section preview plots should
 #    show per the "plots at the middle length" convention).
 # ---------------------------------------------------------------------------
-coupling_lengths = np.linspace(0.0, 20.0, 101)   # µm, the swept coupling length
+coupling_lengths = np.linspace(0.0, 10.0, 101)   # µm, the swept coupling length
 L_mid = coupling_lengths[len(coupling_lengths) // 2]
 L_mid_idx = len(coupling_lengths) // 2
 
 dc = DirectionalCoupler(
     waveguide_width=0.45,    # single-mode strip width (µm)
-    gap=0.20,                # coupling-region edge-to-edge gap (µm)
+    gap=0.25,                # coupling-region edge-to-edge gap (µm)
     coupling_length=L_mid,   # straight parallel interaction length (µm) — sweep reference value
     bend_length=9.0,         # horizontal extent of each S-bend (µm)
     waveguide_offset=3.0,    # far-end centre-to-centre port pitch (µm)
@@ -146,17 +138,12 @@ _fdtd_common = dict(
     dpml=0.5,
     source_margin=0.0,
     monitor_margin=0.25,
-    # A full-sim_width source/norm aperture at a true I/O port (half-width 3.0)
-    # would reach all the way to the *other* arm (only waveguide_offset=3.0
-    # away) - since both arms are always physically present in a section now,
-    # that aperture would solve for the near-degenerate even/odd pair of both
-    # waveguides instead of isolating the intended single arm, making
-    # "through" and "cross" look identical regardless of coupling_length.
-    # half_domain_aperture spans only sim_width/2=3.0 from the shared y=0
-    # symmetry axis to the near PML edge (centered at +-sim_width/4=1.5,
-    # which for this sim_width/waveguide_offset pairing happens to land
-    # exactly on the arm) - matches the legacy reference implementation's
-    # validated aperture convention (see its docstring in feces/solvers/fdtd.py).
+    # A full-sim_width source/norm aperture at a true I/O port would reach
+    # past the shared y=0 axis to the *other* arm (only waveguide_offset
+    # away), since both arms are always physically present in a section -
+    # corrupting the isolated single-arm excitation. half_domain_aperture
+    # confines the aperture to the near half of the domain (from the
+    # symmetry axis to the near PML edge) instead.
     half_domain_aperture=True,
     material_stack=SOI_220,
     decay_tol=1e-11,
@@ -180,11 +167,9 @@ body_solver = EMESolver(
 half_body = dc.coupling_length / 2
 half_total = dc.total_length / 2
 body_stub = 0.5   # µm of straight coupling region folded into each FDTD
-                  # section, past the S-bend/coupling-region seam — the
-                  # cross-section is continuous there, but this keeps each
-                  # interface monitor comfortably inside the always-both-arm
-                  # region rather than exactly on it (same trick used in
-                  # the MMI hybrid tutorial's taper/body seam).
+                  # section, past the S-bend/coupling-region seam, so each
+                  # interface monitor sits comfortably inside the
+                  # always-both-arm region rather than exactly on the seam.
 
 boundaries = [
     -half_total,              # physical input port (access waveguide end)
@@ -214,12 +199,9 @@ plot_hybrid_geometry(
     sub_region_show_eme_detail=True,
     # One sub-region plot per simulation actually run in step 5: the input
     # section is solved once per input arm (input_idx=0 "in", input_idx=1
-    # "isolated") — those are the two real FDTD runs, so those are the two
-    # configs varied here. sub_region_sections=[0, 1] skips rendering a
-    # sub-region for the output section (index 2) entirely, since it's never
-    # separately simulated (its transfer matrices are reused/transposed from
-    # the input-section runs — see the module docstring); it's still visible
-    # in the full-device overview plot above.
+    # "isolated"). sub_region_sections=[0, 1] skips the output section
+    # (index 2), which is never separately simulated (see module docstring)
+    # but is still visible in the full-device overview plot above.
     sub_region_configs=[
         ("in", [{"input_idx": 0}, {}, {}]),
         ("isolated", [{"input_idx": 1}, {}, {}]),
@@ -231,16 +213,12 @@ print(f"Sub-region plots saved → {output_dir}/sections/")
 
 # ---------------------------------------------------------------------------
 # 5. Run the sweep — 2 FDTD solves (input section, once per input arm) plus
-#    one EME mode-solve per wavelength, all independent of coupling_length,
-#    combined with the coupling_length-swept body matrix via the same
-#    matrix-chain contraction HybridSolver.solve() uses internally (just
-#    broadcast over the extra length axis).
-#
-#    The output section is never separately simulated: since it's the input
-#    section mirrored in x (see module docstring), M_in0/M_in1 double as the
-#    output-side transfer matrices once their mode axes are swapped
-#    (transpose) — "through" is the mirror of "in" (arm 0), "cross" is the
-#    mirror of "isolated" (arm 1).
+#    one EME mode-solve per wavelength, combined with the coupling_length-
+#    swept body matrix via the same matrix-chain contraction
+#    HybridSolver.solve() uses internally (broadcast over the extra length
+#    axis). The output section is never separately simulated: M_in0/M_in1
+#    double as the output-side transfer matrices once transposed (see module
+#    docstring) — "through" is the mirror of "in", "cross" of "isolated".
 # ---------------------------------------------------------------------------
 wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
 print(f"\nWavelength sweep: {wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm "
@@ -261,24 +239,6 @@ M_in1 = fdtd_solver.solve_section(
 
 M_out_through = M_in0.transpose(0, 2, 1)  # [n_wl, 1, N_MODES] — mirror-symmetry reuse, not a new simulation
 M_out_cross = M_in1.transpose(0, 2, 1)    # [n_wl, 1, N_MODES]
-
-# --- Diagnostics: is the mirror-symmetry reuse trick (M_out_* = M_in*.T)
-# actually justified? Physically, M_in0 ("in" arm) and M_in1 ("isolated"
-# arm) should agree on the even-supermode coefficient and be *sign-flipped*
-# on the odd-supermode one (arm 1 is arm 0 reflected through the coupling
-# region's y=0 symmetry axis) — never numerically equal. If through/cross
-# come out identical, this printout is the first place to look: M_in0 and
-# M_in1 being near-equal (not sign-flipped-on-one-mode) would confirm the
-# reuse trick itself is broken, rather than a deeper/different bug.
-_wl_c_idx = len(wavelengths) // 2
-_m0 = M_in0[_wl_c_idx, :, 0]
-_m1 = M_in1[_wl_c_idx, :, 0]
-print(f"[diagnostic] M_in0 (\"in\" arm)       @ λ={wavelengths[_wl_c_idx]:.3f} µm: {_m0}")
-print(f"[diagnostic] M_in1 (\"isolated\" arm) @ λ={wavelengths[_wl_c_idx]:.3f} µm: {_m1}")
-print(f"[diagnostic] |M_in0 - M_in1|                (same-sign both modes):  {np.abs(_m0 - _m1)}")
-if N_MODES == 2:
-    print(f"[diagnostic] |M_in0 - M_in1*[1,-1]|         (mode-2 sign-flipped):    "
-          f"{np.abs(_m0 - _m1 * np.array([1, -1]))}")
 
 M_body = body_solver.solve_section_length_sweep(
     dc, wavelengths, boundaries[1], boundaries[2], coupling_lengths,
@@ -325,10 +285,6 @@ np.savez(
     os.path.join(output_dir, "length_sweep.npz"),
     coupling_lengths=coupling_lengths, wavelengths=wavelengths,
     T_through=T_through_grid, T_cross=T_cross_grid,
-    # Raw per-arm input coefficients (see the M_in0/M_in1 diagnostic above) —
-    # saved so M_in0 vs M_in1 can be inspected post-hoc, not just at the one
-    # wavelength printed to the console.
-    M_in0=M_in0[:, :, 0], M_in1=M_in1[:, :, 0],
 )
 print(f"Length-sweep grid saved → {output_dir}/length_sweep.npz")
 

@@ -93,23 +93,13 @@ _fdtd_common = dict(
 N_MODES = 15   # modes carried at the two input/output <-> body interfaces
 
 # The output section's single-mode port (the physical taper tip) sits only
-# waveguide_offset=1.0 µm from the *other* output branch, which — per the
-# "both waveguides always physically present in FDTD sections" convention —
-# is drawn right there too. A full-sim_width source/norm aperture centered
-# on one branch reaches straight across that 1.0 µm gap, so MPB's eigenmode
-# solve stops isolating one branch and instead sees the near-degenerate
-# even/odd pair of both branches — corrupting the normalization for both
-# output_idx=0 and output_idx=1 runs independently, which is how
-# T_top + T_bot can end up outside [0, 1]. half_domain_aperture spans only
-# the near half of the domain (from the shared y=0 symmetry axis, exactly
-# between the two branches, out to the near PML edge) — it structurally
-# excludes the opposite branch regardless of how close the branches are,
-# since it's anchored at the symmetry line rather than sized to a specific
-# clearance distance. Matches the legacy reference implementation's
-# validated aperture convention (see its docstring in feces/solvers/fdtd.py).
-# The real input port (single waveguide, no neighbor) is left untouched —
-# its source/norm aperture should keep spanning the full sim_width (i.e. the
-# entire y-dimension, excluding the PML).
+# waveguide_offset=1.0 µm from the *other* output branch, which is drawn in
+# the same section too (both branches are always physically present).
+# half_domain_aperture confines the source/norm aperture to the near half of
+# the domain (from the shared y=0 symmetry axis out to the near PML edge),
+# so it structurally excludes the opposite branch regardless of how close
+# the branches are. The real input port (single waveguide, no neighbor) is
+# left untouched — its aperture keeps spanning the full sim_width.
 
 
 def make_section_solver(method: str, half_domain_aperture: bool = False):
@@ -144,7 +134,7 @@ output_solver = make_section_solver(OUTPUT_METHOD, half_domain_aperture=True)
 # ---------------------------------------------------------------------------
 half_body = mmi.mm_length / 2
 half_total = mmi.total_length / 2
-body_stub = 0.5   # µm of MMI body folded into each FDTD section, past the
+body_stub = 0.25   # µm of MMI body folded into each FDTD section, past the
                    # taper/body cross-section discontinuity
 
 boundaries = [

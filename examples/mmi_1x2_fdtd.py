@@ -68,7 +68,8 @@ solver = FDTDSolver(
     monitor_margin=0.25,       # monitor offset from PML inner edges, both sides (µm)
     num_input_modes=1,         # input modes for normalization
     num_output_modes=1,        # modes extracted per output waveguide
-    # Output waveguide y-centers: ±waveguide_offset/2 = ±1.0/2 = ±0.5 µm
+    # Output monitor centers at ±sim_width/4 = ±1.25 µm (half-domain aperture,
+    # each spanning from the shared y=0 axis to the near PML edge)
     output_monitor_centers=[2.5/2, -2.5/2],
     output_monitor_widths=[2.5, 2.5],
     material_stack=SOI_160,    # 160 nm SOI stack
