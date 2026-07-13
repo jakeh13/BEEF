@@ -6,6 +6,7 @@ Core public API:
         MMI                        — N-input/M-output MMI geometry (1x2, 2x2, 1x4, ...)
         MMIMux, MuxGeoParams       — cascaded MUX geometry
         BendGeometry               — 90° bend for non-collinear FDTD I/O
+        DirectionalCoupler         — 2-waveguide directional coupler w/ S-bend I/O
 
     Materials:
         MaterialStack              — Si/SiO2 layer definitions
@@ -30,7 +31,7 @@ Core public API:
 
 __version__ = "0.1.0"
 
-from .geometry import MMI, MMIMux, MuxGeoParams, BendGeometry
+from .geometry import MMI, MMIMux, MuxGeoParams, BendGeometry, DirectionalCoupler
 from .materials import MaterialStack, SOI_160, SOI_220
 from .results import SMatrix
 from .solvers import EMESolver, FDTDSolver, HybridSolver
@@ -42,6 +43,7 @@ __all__ = [
     "MMI",
     "MMIMux", "MuxGeoParams",
     "BendGeometry",
+    "DirectionalCoupler",
     # materials
     "MaterialStack", "SOI_160", "SOI_220",
     # results

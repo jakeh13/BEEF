@@ -9,9 +9,13 @@ else
 	my_python = $(PYTHON)
 endif
 
-.PHONY: all mmi_1x2_eme mmi_1x2_fdtd mmi_1x2_hybrid clean
+# Keep in sync with run_examples.batch's EXAMPLES array (index order matters
+# there since SLURM_ARRAY_TASK_ID selects a name positionally).
+EXAMPLES = mmi_1x2_eme mmi_1x2_fdtd mmi_1x2_hybrid directional_coupler_hybrid
 
-all: mmi_1x2_eme mmi_1x2_fdtd mmi_1x2_hybrid
+.PHONY: all $(EXAMPLES) clean
+
+all: $(EXAMPLES)
 
 mmi_1x2_eme:
 	$(runner) $(my_python) mmi_1x2_eme.py
@@ -21,6 +25,9 @@ mmi_1x2_fdtd:
 
 mmi_1x2_hybrid:
 	$(runner) $(my_python) mmi_1x2_hybrid.py
+
+directional_coupler_hybrid:
+	$(runner) $(my_python) directional_coupler_hybrid.py
 
 clean:
 	rm -rf ../../example_output
