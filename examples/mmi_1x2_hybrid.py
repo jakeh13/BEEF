@@ -16,7 +16,7 @@ multiplication (the direct generalization of
 
 to non-diagonal per-section matrices and an arbitrary number of sections).
 The MMI-specific geometry (tapers, body, output branches) lives entirely in
-MMI1x2's section_prisms/section_gds/width_at/center_at methods.
+MMI's section_prisms/section_gds/width_at/center_at methods.
 
 Run:
     python /path/to/examples/mmi_1x2_hybrid.py
@@ -28,7 +28,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from feces import MMI1x2, EMESolver, FDTDSolver, HybridSolver, SOI_160, plot_geometry
+from feces import MMI, EMESolver, FDTDSolver, HybridSolver, SOI_160, plot_geometry
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_output", "mmi_1x2_hybrid"))
@@ -46,7 +46,9 @@ OUTPUT_METHOD = "fdtd"   # "fdtd" or "eme"
 # ---------------------------------------------------------------------------
 # 1. Geometry
 # ---------------------------------------------------------------------------
-mmi = MMI1x2(
+mmi = MMI(
+    n_inputs=1,             # 1x2 splitter
+    n_outputs=2,
     mm_length=4.5,
     mm_width=2.0,
     waveguide_width=0.35,
@@ -139,12 +141,13 @@ plot_geometry(
 print(f"Geometry plot saved → {output_dir}/geometry_hybrid.png")
 
 # ---------------------------------------------------------------------------
-# 5. Run hybrid simulation — once per output port (port_idx selects the
-#    output branch of the MMI1x2 geometry). port_idx is passed ONLY to the
-#    output section's kwargs (the input/body sections don't branch, so their
-#    kwargs are identical across both calls) and a shared cache is passed to
-#    both solve() calls, so the input/body sections are only ever simulated
-#    once — not once per output port.
+# 5. Run hybrid simulation — once per output port (output_idx selects the
+#    output branch of the MMI geometry: output_ys = [-wo, +wo], so index 0
+#    is the bottom port and index 1 is the top port). output_idx is passed
+#    ONLY to the output section's kwargs (the input/body sections don't
+#    branch, so their kwargs are identical across both calls) and a shared
+#    cache is passed to both solve() calls, so the input/body sections are
+#    only ever simulated once — not once per output port.
 # ---------------------------------------------------------------------------
 wavelengths = np.linspace(1.26, 1.36, 11)
 print(f"\nHybrid sweep: {wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm "
@@ -152,9 +155,9 @@ print(f"\nHybrid sweep: {wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm "
 
 section_cache = {}
 smat_top = hybrid.solve(mmi, wavelengths, port="out_top", cache=section_cache,
-                         geometry_kwargs=[{}, {}, {"port_idx": 0}])
+                         geometry_kwargs=[{}, {}, {"output_idx": 1}])
 smat_bot = hybrid.solve(mmi, wavelengths, port="out_bot", cache=section_cache,
-                         geometry_kwargs=[{}, {}, {"port_idx": 1}])
+                         geometry_kwargs=[{}, {}, {"output_idx": 0}])
 
 T_top   = smat_top.transmission(port="out_top")
 T_bot   = smat_bot.transmission(port="out_bot")

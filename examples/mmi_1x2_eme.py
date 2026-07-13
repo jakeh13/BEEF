@@ -21,7 +21,7 @@ import matplotlib
 matplotlib.use("Agg")           # headless — swap for "Qt5Agg" for interactive
 import matplotlib.pyplot as plt
 
-from feces import MMI1x2, EMESolver, SOI_160, plot_geometry, plot_performance
+from feces import MMI, EMESolver, SOI_160, plot_geometry, plot_performance
 
 # Output to a top-level example_output/ folder outside the repo
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -30,7 +30,9 @@ output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_output", "
 # ---------------------------------------------------------------------------
 # 1. Define geometry
 # ---------------------------------------------------------------------------
-mmi = MMI1x2(
+mmi = MMI(
+    n_inputs=1,             # 1x2 splitter
+    n_outputs=2,
     mm_length=4.5,          # MMI body length (µm)
     mm_width=2.0,           # MMI body width (µm)
     waveguide_width=0.35,   # single-mode access waveguide width (µm)

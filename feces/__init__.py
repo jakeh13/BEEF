@@ -3,7 +3,7 @@
 Core public API:
 
     Geometry:
-        MMI1x2, MMI2x2, MMI1x4   — MMI device geometry classes
+        MMI                        — N-input/M-output MMI geometry (1x2, 2x2, 1x4, ...)
         MMIMux, MuxGeoParams       — cascaded MUX geometry
         BendGeometry               — 90° bend for non-collinear FDTD I/O
 
@@ -30,7 +30,7 @@ Core public API:
 
 __version__ = "0.1.0"
 
-from .geometry import MMI1x2, MMI2x2, MMI1x4, MMIMux, MuxGeoParams, BendGeometry
+from .geometry import MMI, MMIMux, MuxGeoParams, BendGeometry
 from .materials import MaterialStack, SOI_160, SOI_220
 from .results import SMatrix
 from .solvers import EMESolver, FDTDSolver, HybridSolver
@@ -39,7 +39,7 @@ from .plot import plot_eme_fields, plot_geometry, plot_performance, plot_splitti
 
 __all__ = [
     # geometry
-    "MMI1x2", "MMI2x2", "MMI1x4",
+    "MMI",
     "MMIMux", "MuxGeoParams",
     "BendGeometry",
     # materials
