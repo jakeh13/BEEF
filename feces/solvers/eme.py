@@ -157,6 +157,69 @@ class EMESolver:
 
         return T
 
+    def solve_section_length_sweep(
+        self,
+        geometry,
+        wavelengths: np.ndarray,
+        x0: float,
+        x1: float,
+        lengths: np.ndarray,
+        n_modes_in: int = 1,
+        n_modes_out: int = 1,
+        stub_left: float = 0.0,
+        stub_right: float = 0.0,
+        **geometry_kwargs,
+    ) -> np.ndarray:
+        """Modal transfer matrices for [x0, x1] swept over many section
+        lengths, from a single eigenmode solve per wavelength.
+
+        [x0, x1] must be a uniform-cross-section region (the actual cell
+        length used for meshing/mode-solving is irrelevant here — only the
+        cross-section shape matters, and that doesn't change with length).
+        Mode profiles and effective indices depend only on the cross-section
+        and wavelength (meow's CrossSection.from_cell() never reads cell
+        length), so for a single uniform cell the propagation S-matrix is
+        exactly diagonal in the mode basis: S_ii(L) = exp(2j*pi*neff_i/wl*L).
+        meow's compute_s_matrix() accepts an explicit cell_lengths override
+        that swaps in a different L for the same already-computed modes, with
+        no new mode solve — so this method costs exactly the same as one
+        solve_section() call (one mode solve per wavelength), regardless of
+        how many lengths are swept.
+
+        Returns:
+            Complex ndarray [len(lengths), len(wavelengths), n_modes_out, n_modes_in].
+        """
+        import meow as mw
+
+        wavelengths = np.asarray(wavelengths)
+        lengths = np.asarray(lengths)
+        n_modes = max(n_modes_in, n_modes_out)
+
+        gds_comp = geometry.section_gds(
+            x0, x1, self.oxide_width,
+            stub_left=stub_left, stub_right=stub_right, **geometry_kwargs
+        )
+        structs = mw.extrude_gds(gds_comp, self.material_stack.extrusion_rules)
+        mesh = self._build_mesh()
+        cells = mw.create_cells(structures=structs, mesh=mesh, Ls=[1.0])  # length is a placeholder
+
+        T = np.zeros((len(lengths), len(wavelengths), n_modes_out, n_modes_in), dtype=complex)
+
+        for wl_idx, wl in enumerate(wavelengths):
+            env = mw.Environment(wl=float(wl), T=self.temperature)
+            css = [mw.CrossSection.from_cell(cell=cell, env=env) for cell in cells]
+            modes = [self.compute_modes(cs, n_modes) for cs in css]  # one solve, reused below
+
+            for L_idx, L in enumerate(lengths):
+                S, port_map = mw.compute_s_matrix(modes, cells=cells, cell_lengths=[float(L)])
+                for i in range(n_modes_out):
+                    for j in range(n_modes_in):
+                        i_out = port_map[f"right@{i}"]
+                        j_in = port_map[f"left@{j}"]
+                        T[L_idx, wl_idx, i, j] = S[i_out, j_in]
+
+        return T
+
     def solve(self, geometry: DeviceGeometry, wavelengths: np.ndarray,
               ports: Optional[List[str]] = None, **kwargs) -> SMatrix:
         """Run EME simulation across all wavelengths.
