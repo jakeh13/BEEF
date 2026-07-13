@@ -33,6 +33,30 @@ class FDTDSolver:
             Required; must match the output waveguide positions of the device.
         output_monitor_widths: y-spans of the output monitors (µm).
             None → use sim_width for each (full cross-section).
+        half_domain_aperture: when True, solve_section()'s source+norm
+            monitor on a side being excited with exactly 1 mode spans only
+            *half* the domain — from the shared symmetry axis (y=0) out to
+            the near PML edge on whichever side the excited arm sits (i.e.
+            width sim_width/2, centered at +-sim_width/4) — instead of the
+            default full sim_width. Matches the convention validated by the
+            legacy (pre-FECES) FDTD/EME hybrid reference implementation
+            (FECES_Legacy/masters/mmi_2x2_master.py's _port_simulation:
+            aperture width = oxide_width/2 centered at +-oxide_width/4,
+            i.e. this codebase's sim_width/sim_width equivalents) — a full
+            sim_width aperture centered on the arm would also reach a
+            second, physically-present-but-unexcited waveguide sitting
+            nearby (e.g. a directional coupler's other arm, or an MMI's
+            other output branch), corrupting the "single-mode" eigenmode
+            solve into seeing the near-degenerate even/odd pair of both
+            waveguides instead of isolating the intended one. False
+            (default) keeps the full sim_width — correct for a lone port
+            with no nearby companion (e.g. a single-input MMI's input side).
+            Ignored (sim_width used) whenever more than 1 mode is being
+            excited at that boundary, where the full aperture is still
+            needed/correct. Not used by solve() — that method's source is
+            always the one true input port, with no neighboring port nearby
+            to avoid, so it always spans the full sim_width regardless of
+            this setting.
         material_stack: material index lookup for Si / SiO₂.
         decay_tol: DFT field decay tolerance for early-stop criterion.
             Lower = more accurate but slower; 1e-9 is faster, 1e-11 is tight.
@@ -55,6 +79,7 @@ class FDTDSolver:
         num_output_modes: int = 1,
         output_monitor_centers: Optional[List[float]] = None,
         output_monitor_widths: Optional[List[float]] = None,
+        half_domain_aperture: bool = False,
         material_stack: MaterialStack = SOI_160,
         decay_tol: float = 1e-11,
     ):
@@ -68,6 +93,7 @@ class FDTDSolver:
         self.num_output_modes = num_output_modes
         self.output_monitor_centers = list(output_monitor_centers or [])
         self.output_monitor_widths = output_monitor_widths  # None → sim_width per monitor
+        self.half_domain_aperture = half_domain_aperture     # True → half-domain aperture for single-mode ports
         self.material_stack = material_stack
         self.decay_tol = decay_tol
         # Derived: stub long enough that source + monitors sit in physical waveguide
@@ -102,9 +128,10 @@ class FDTDSolver:
         Args:
             geometry: device geometry (implements to_meep_prisms()).
             wavelengths: wavelengths to evaluate (µm), determines DFT frequencies.
-            port: input port label — "top" places source at +wg_offset/2,
-                  "bot" at −wg_offset/2.  For single-input devices (1×2 MMI)
-                  both land at y=0 effectively (full-width monitor).
+            port: input port label — "top" selects geometry.input_ys' last
+                  (highest-y) entry, "bot" its first (lowest-y) entry; both
+                  collapse to the same position for a single-input device
+                  (1×2 MMI), since input_ys has only one entry there.
             input_mode: 1-based waveguide mode index to excite and normalize against.
 
         Returns:
@@ -128,15 +155,26 @@ class FDTDSolver:
 
         geometry_meep = geometry.to_meep_prisms(si_med, stub_length=self.waveguide_length + self.dpml)
 
-        # Source position (y derived from device port geometry)
-        wg_offset = getattr(geometry, "waveguide_offset", 0.0) / 2
-        src_yo = wg_offset if port == "top" else -wg_offset
+        # Source position: centered on the actual input waveguide via
+        # geometry.input_ys, not a hand-rolled +-waveguide_offset/2 offset —
+        # that formula ignored the geometry's real port positions (e.g. it
+        # placed the source off-axis for a single-input device, whose one
+        # true input sits at input_ys[0]=0.0, not +-waveguide_offset/2).
+        input_ys = getattr(geometry, "input_ys", [0.0])
+        input_idx = len(input_ys) - 1 if port == "top" else 0
+        src_yo = input_ys[input_idx]
         src_x = -Sx / 2 + self.dpml + self.source_margin
+        # This is always the one true input port (no neighboring port
+        # nearby that a half-domain aperture would need to avoid, unlike a
+        # closely-spaced output branch), so it always spans the full
+        # non-PML domain — PML edge to PML edge, exclusive of PML — rather
+        # than half_domain_aperture (that setting is for narrow output ports).
+        src_width = self.sim_width
 
         src = mp.EigenModeSource(
             mp.GaussianSource(fcen, fwidth=fwidth),
             center=mp.Vector3(src_x, src_yo),
-            size=mp.Vector3(0, self.sim_width),   # span inner sim only, not PML
+            size=mp.Vector3(0, src_width),   # span inner sim only, not PML
             eig_band=input_mode,
             eig_kpoint=mp.Vector3(1, 0, 0),
             eig_match_freq=True,
@@ -154,10 +192,10 @@ class FDTDSolver:
             default_material=sio2_med,
         )
 
-        # Input normalization monitor — span inner sim width, not PML
+        # Input normalization monitor — same aperture as the source
         in_flux = sim.add_mode_monitor(
             fcen, fwidth, nfreq,
-            mp.FluxRegion(center=mp.Vector3(in_mon_x, src_yo), size=mp.Vector3(0, self.sim_width)),
+            mp.FluxRegion(center=mp.Vector3(in_mon_x, src_yo), size=mp.Vector3(0, src_width)),
         )
 
         # One output monitor per output waveguide
@@ -249,8 +287,21 @@ class FDTDSolver:
         si_med = self.material_stack.si_medium(wl_center)
         sio2_med = self.material_stack.sio2_medium(wl_center)
 
+        # Draw the waveguide dpml further than it functionally needs to reach
+        # (on *both* sides, always — every section is its own independent
+        # little simulation with its own PML on both sides, interior
+        # HybridSolver seams included) so it continues through the full PML
+        # thickness instead of stopping dead at the PML's inner edge, which
+        # would present the absorbing layer with an abrupt core->cladding
+        # step and risk spurious back-reflection. This only pads what's
+        # drawn — lo/hi/x_center/Sx below (and hence every monitor/source
+        # position) still key off the true stub_left/stub_right, matching
+        # solve()'s own geometry.to_meep_prisms(stub_length=waveguide_length
+        # + dpml) precedent.
         prisms = geometry.section_prisms(
-            x0, x1, si_med, stub_left=stub_left, stub_right=stub_right, **geometry_kwargs
+            x0, x1, si_med,
+            stub_left=stub_left + self.dpml, stub_right=stub_right + self.dpml,
+            **geometry_kwargs,
         )
 
         span = x1 - x0
@@ -323,11 +374,29 @@ class FDTDSolver:
             kpoint = mp.Vector3(1, 0, 0)
             alpha_idx = 0  # forward amplitude
 
+        # n_excite == 1 means this boundary is a genuinely single-mode port
+        # (e.g. one arm of a directional coupler, well after its S-bend). A
+        # full sim_width aperture centered on the arm would also reach a
+        # second, physically-present-but-unexcited waveguide sitting nearby;
+        # half_domain_aperture instead spans only sim_width/2 — from the
+        # shared symmetry axis (y=0) out to the near PML edge on whichever
+        # side the arm sits — centered at +-sim_width/4, matching the legacy
+        # reference implementation's validated convention (see
+        # half_domain_aperture's docstring). A multi-mode excite side (e.g.
+        # the coupling-region interface, where the aperture must see every
+        # arm) always keeps the full sim_width, centered on its own src_c.
+        if n_excite == 1 and self.half_domain_aperture:
+            src_width = self.sim_width / 2.0
+            src_c_ap = self.sim_width / 4.0 if src_c > 0 else (-self.sim_width / 4.0 if src_c < 0 else 0.0)
+        else:
+            src_width = self.sim_width
+            src_c_ap = src_c
+
         for k in range(1, n_excite + 1):
             src = mp.EigenModeSource(
                 mp.GaussianSource(fcen, fwidth=fwidth),
-                center=mp.Vector3(src_x, src_c),
-                size=mp.Vector3(0, self.sim_width),
+                center=mp.Vector3(src_x, src_c_ap),
+                size=mp.Vector3(0, src_width),
                 eig_band=k,
                 eig_kpoint=kpoint,
                 eig_match_freq=True,
@@ -342,7 +411,7 @@ class FDTDSolver:
             )
             norm_flux = sim.add_mode_monitor(
                 fcen, fwidth, nfreq,
-                mp.FluxRegion(center=mp.Vector3(norm_x, src_c), size=mp.Vector3(0, self.sim_width)),
+                mp.FluxRegion(center=mp.Vector3(norm_x, src_c_ap), size=mp.Vector3(0, src_width)),
             )
             mea_flux = sim.add_mode_monitor(
                 fcen, fwidth, nfreq,

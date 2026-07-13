@@ -32,6 +32,14 @@ output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_output", "
 os.makedirs(output_dir, exist_ok=True)
 
 # ---------------------------------------------------------------------------
+# Global simulation parameters
+# ---------------------------------------------------------------------------
+RESOLUTION = 30.0   # mesh resolution (pixels/µm) — used by the FDTD solver
+WL_MIN = 1.26       # wavelength sweep start (µm)
+WL_MAX = 1.36       # wavelength sweep end (µm)
+N_WL = 11            # number of wavelength points
+
+# ---------------------------------------------------------------------------
 # 1. Define geometry
 # ---------------------------------------------------------------------------
 mmi = MMI(
@@ -52,7 +60,7 @@ print(f"MMI total length: {mmi.total_length:.2f} µm")
 # 2. Configure FDTD solver
 # ---------------------------------------------------------------------------
 solver = FDTDSolver(
-    res=20.0,                  # mesh resolution (pixels/µm)
+    res=RESOLUTION,            # mesh resolution (pixels/µm)
     sim_width=5.0,             # simulation y-span (µm)
     sim_height=1.5,            # slab z-height reference (µm)
     dpml=0.5,                  # PML thickness, all 4 sides (µm)
@@ -80,7 +88,7 @@ print(f"Geometry plot saved → {output_dir}/geometry.png")
 # ---------------------------------------------------------------------------
 # 4. Wavelength sweep
 # ---------------------------------------------------------------------------
-wavelengths = np.linspace(1.26, 1.36, 5)  # µm, O-band
+wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)  # µm, O-band
 
 print(f"Sweeping {len(wavelengths)} wavelengths: "
       f"{wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm")

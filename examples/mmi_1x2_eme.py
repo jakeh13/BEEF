@@ -27,6 +27,14 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_output", "mmi_1x2_eme"))
 
 # ---------------------------------------------------------------------------
+# Global simulation parameters
+# ---------------------------------------------------------------------------
+RESOLUTION = 30.0   # mesh resolution (pixels/µm) — used by the EME solver
+WL_MIN = 1.26       # wavelength sweep start (µm)
+WL_MAX = 1.36       # wavelength sweep end (µm)
+N_WL = 11            # number of wavelength points
+
+# ---------------------------------------------------------------------------
 # 1. Define geometry
 # ---------------------------------------------------------------------------
 mmi = MMI(
@@ -48,13 +56,14 @@ print(f"MMI total length: {mmi.total_length:.2f} µm")
 # ---------------------------------------------------------------------------
 solver = EMESolver(
     # 5 regions: wg_in | taper_in | MMI body | taper_out | wg_out
-    num_modes=[1,   7,   15,  7,   1  ],  # modes per region
-    num_cells=[1,   12,  1,   12,  1  ],  # cells per region (tapers subdivided)
+    num_modes=[1,   5,   15,  5,   1  ],  # modes per region
+    num_cells=[1,   8,  1,   8,  1  ],  # cells per region (tapers subdivided)
     lengths=  [0.5, 1.0, 4.5, 1.0, 0.5], # region lengths (µm)
     oxide_width=5.0,                       # cross-section mesh y-span (µm)
     oxide_height=1.5,                      # cross-section mesh z-span (µm)
-    res=20.0,                              # mesh pts/µm
+    res=RESOLUTION,                        # mesh pts/µm
     material_stack=SOI_160,                # 160 nm SOI stack
+    mode_solver="tidy3d",                  # tidy3d-backed mode solver (no FDTD section to stay consistent with)
 )
 
 # ---------------------------------------------------------------------------
@@ -73,7 +82,7 @@ print(f"Geometry plot saved → {output_dir}/geometry.png")
 # ---------------------------------------------------------------------------
 # 4. Wavelength sweep
 # ---------------------------------------------------------------------------
-wavelengths = np.linspace(1.26, 1.36, 5)  # µm, O-band
+wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)  # µm, O-band
 
 print(f"Sweeping {len(wavelengths)} wavelengths: "
       f"{wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm")

@@ -32,15 +32,23 @@ def _new_ax(ax, figsize):
     return fig, ax
 
 
-def _draw_polygons(ax, gds_comp, wg_layer, ox_layer):
-    """Oxide + waveguide-core patches from a gdsfactory Component."""
+def _draw_polygons(ax, gds_comp, wg_layer, ox_layer, x_shift: float = 0.0):
+    """Oxide + waveguide-core patches from a gdsfactory Component.
+
+    x_shift: added to every x-coordinate after the dbu conversion. Used when
+    gds_comp was built with a *different* (larger) stub than the local
+    frame the rest of a plot (markers, PML rects) is drawn in — e.g. a
+    section rendered with its waveguide extended dpml further into the PML
+    (see _plot_hybrid_sub_regions) shifts gds_comp's own x_local=0 left by
+    dpml relative to that shared frame, so x_shift=dpml re-aligns it.
+    """
     from matplotlib.patches import Polygon as MplPolygon
 
     poly_dict = gds_comp.get_polygons(by="tuple")
     dbu = gds_comp.kcl.dbu  # µm per dbu (typically 0.001)
 
     def _to_xy(kpoly):
-        return np.array([[pt.x * dbu, pt.y * dbu] for pt in kpoly.each_point_hull()])
+        return np.array([[pt.x * dbu + x_shift, pt.y * dbu] for pt in kpoly.each_point_hull()])
 
     for kp in poly_dict.get(ox_layer, []):
         ax.add_patch(MplPolygon(
@@ -88,11 +96,15 @@ def _draw_marker(ax, x_gds, y_lo, y_hi, label, color, ls):
 
 def _draw_fdtd_monitors(ax, dpml, total_gds, oxide_width, source_margin, monitor_margin,
                          output_monitor_centers=None, output_monitor_widths=None,
-                         sim_width=None):
+                         sim_width=None, src_yo=0.0):
     """source/in-mon/out-mon markers matching FDTDSolver.solve()'s layout:
-    single source + input monitor on the left, one or more output monitors
-    on the right (one per output_monitor_centers/widths entry, each spanning
-    only its own y-range, or a single full-height line if unset)."""
+    single source + co-located input-normalization monitor (both centered on
+    src_yo — the actual input waveguide position, see plot_fdtd_geometry's
+    docstring — spanning the full sim_width: PML edge to PML edge, exclusive
+    of PML, exactly mirroring solve()'s own unconditional src_width), plus
+    one or more output monitors on the right (one per output_monitor_centers/
+    widths entry, each spanning only its own y-range, or a single full-height
+    line if unset)."""
     y0, y1 = -oxide_width / 2, oxide_width / 2
     y_in0, y_in1 = y0 + dpml, y1 - dpml
 
@@ -100,8 +112,10 @@ def _draw_fdtd_monitors(ax, dpml, total_gds, oxide_width, source_margin, monitor
     in_x = dpml + monitor_margin
     out_x = total_gds - dpml - monitor_margin
 
-    _draw_marker(ax, src_x, y_in0, y_in1, "source", "crimson", "-")
-    _draw_marker(ax, in_x, y_in0, y_in1, "in mon", "darkorange", "--")
+    y_lo = max(src_yo - sim_width / 2, y_in0)
+    y_hi = min(src_yo + sim_width / 2, y_in1)
+    _draw_marker(ax, src_x, y_lo, y_hi, "source", "crimson", "-")
+    _draw_marker(ax, in_x, y_lo, y_hi, "in mon", "darkorange", "--")
 
     if output_monitor_centers:
         out_widths = (
@@ -121,7 +135,7 @@ def _draw_pml(ax, dpml, total_gds, oxide_width):
     from matplotlib.patches import Rectangle
 
     y0, y1 = -oxide_width / 2, oxide_width / 2
-    y_in0, y_in1 = y0 + dpml, y1 - dpml
+    y_in1 = y1 - dpml
     pml_kw = dict(alpha=0.18, color="#8B0000", zorder=2)
     ax.add_patch(Rectangle((0.0, y0), dpml, oxide_width, **pml_kw))
     ax.add_patch(Rectangle((total_gds - dpml, y0), dpml, oxide_width, **pml_kw))
@@ -133,11 +147,6 @@ def _draw_pml(ax, dpml, total_gds, oxide_width):
             ha="center", va="top", fontsize=7, color="#8B0000", zorder=7,
             bbox=dict(boxstyle="round,pad=0.15", facecolor="white", alpha=0.65, edgecolor="none"),
         )
-    edge_kw = dict(color="#5C0000", lw=0.8, alpha=0.75, zorder=8)
-    for x_edge in (0.0, dpml, total_gds - dpml, total_gds):
-        ax.plot([x_edge, x_edge], [y0, y1], **edge_kw)
-    for y_edge in (y0, y_in0, y_in1, y1):
-        ax.plot([0.0, total_gds], [y_edge, y_edge], **edge_kw)
 
 
 def _finalize(fig, ax, title, geometry, output_path):
@@ -216,6 +225,7 @@ def plot_eme_geometry(
 def plot_fdtd_geometry(
     geometry,
     solver,
+    port: str = "top",
     show_pml: bool = True,
     ax=None,
     title: Optional[str] = None,
@@ -229,15 +239,24 @@ def plot_fdtd_geometry(
 
     Draws the device polygons plus the source/monitor markers and PML
     shading matching what FDTDSolver.solve() actually sets up: one source +
-    input-normalization monitor near the left PML, and one output monitor
-    per entry in solver.output_monitor_centers/widths near the right PML
-    (each spanning only its own y-range).
+    co-located input-normalization monitor near the left PML — centered on
+    geometry.input_ys' last (port="top") or first (port="bot") entry (the
+    same entry either way for a single-input device), spanning the full
+    sim_width (PML edge to PML edge, exclusive of PML — solve()'s source is
+    always the one true input port, with no neighboring port nearby that a
+    narrower aperture would need to avoid) — and one output monitor per
+    entry in solver.output_monitor_centers/widths near the right PML (each
+    spanning only its own y-range).
 
     Args:
         geometry: DeviceGeometry instance.
         solver: FDTDSolver — its .sim_width/.dpml/.source_margin/
             .monitor_margin/.output_monitor_centers drive domain size and
             marker placement.
+        port: which input port solve() would be called with — "top" selects
+            geometry.input_ys' last (highest-y) entry, "bot" its first
+            (lowest-y) entry (falls back to a single port at y=0.0 if the
+            geometry has no input_ys attribute).
         show_pml: shade the PML absorbing-boundary regions.
         ax: existing Axes; creates a new figure if None.
         title: plot title (defaults to the geometry class name).
@@ -262,12 +281,15 @@ def plot_fdtd_geometry(
     _draw_polygons(ax, gds_comp, wg_layer, ox_layer)
 
     total_gds = geometry.total_length + 2 * straight_length
+    input_ys = getattr(geometry, "input_ys", [0.0])
+    src_yo = input_ys[-1] if port == "top" else input_ys[0]
     _draw_fdtd_monitors(
         ax, dpml, total_gds, oxide_width,
         source_margin=solver.source_margin, monitor_margin=solver.monitor_margin,
         output_monitor_centers=getattr(solver, "output_monitor_centers", None),
         output_monitor_widths=getattr(solver, "output_monitor_widths", None),
         sim_width=solver.sim_width,
+        src_yo=src_yo,
     )
     if show_pml:
         _draw_pml(ax, dpml, total_gds, oxide_width)
@@ -296,6 +318,7 @@ def plot_hybrid_geometry(
     sub_region_show_pml: bool = False,
     sub_region_show_eme_detail: bool = False,
     sub_region_configs: Optional[List[Tuple[str, Union[Dict[str, Any], List[Dict[str, Any]]]]]] = None,
+    sub_region_sections: Optional[List[int]] = None,
     **geometry_kwargs,
 ):
     """Top-down geometry plot for a HybridSolver.
@@ -364,6 +387,15 @@ def plot_hybrid_geometry(
             change across configs is rendered once, unsuffixed, not once
             per config. Defaults to a single unnamed entry using
             **geometry_kwargs below, matching the plain (non-branching) case.
+        sub_region_sections: indices into solver.solvers to render sub-region
+            plots for; None (default) renders every section. Use this when a
+            section is never independently simulated (e.g. its transfer
+            matrix is reused/transposed from another section's result by a
+            symmetry argument rather than separately solved) — omitting it
+            keeps the sub-region plots in 1:1 correspondence with the actual
+            simulations run, rather than showing a box for a section that
+            was never itself simulated. The section still appears, as part
+            of the full device, in the overview plot above.
         **geometry_kwargs: forwarded to geometry.to_gds_eme() for the
             overview plot, and used as the default sub_region_configs entry.
 
@@ -434,6 +466,7 @@ def plot_hybrid_geometry(
             geometry, solver, oxide_width, in_modes, out_modes,
             sub_region_dir, wg_layer, ox_layer, sub_region_pad,
             sub_region_show_pml, sub_region_show_eme_detail, normalized,
+            sub_region_sections,
         )
 
     return fig, ax
@@ -456,10 +489,14 @@ def _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub
       width (stub included, PML not) — not from the device-frame x0/x1
       boundary directly (those only coincide when the relevant stub is 0,
       i.e. an interior cut);
-    - source + its co-located normalization monitor span only *half* the
+    - if sub_solver.half_domain_aperture is set (see its docstring in
+      feces/solvers/fdtd.py) and the excited side carries exactly 1 mode,
+      source + its co-located normalization monitor span only *half* the
       domain height: from the shared symmetry axis (y=0) out to the near
-      PML on whichever side the excited arm actually sits, since exactly
-      one arm is ever excited at a time;
+      PML on whichever side the excited arm actually sits (a port sitting
+      exactly *on* the axis has no "near" side to pick, so it gets the
+      *full* height instead). Otherwise (the default) they span the full
+      sim_width, centered on the excited arm's own position;
     - the interface/measurement monitor on the *other* side spans the full
       non-PML height (both PML inner edges) — a true per-interface
       decomposition that may need to see every arm/supermode present there
@@ -468,6 +505,7 @@ def _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub
     source_margin = getattr(sub_solver, "source_margin", 0.0)
     monitor_margin = getattr(sub_solver, "monitor_margin", 0.25)
     dpml = getattr(sub_solver, "dpml", 0.0) or 0.0
+    sim_width = getattr(sub_solver, "sim_width", oxide_width - 2 * dpml)
     L = (x1 - x0) + stub_left + stub_right
 
     eps = min(1e-3, (x1 - x0) * 0.01)
@@ -477,7 +515,17 @@ def _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub
     y_top, y_bot = oxide_width / 2 - dpml, -(oxide_width / 2 - dpml)
 
     def _half_span(c):
-        return (0.0, y_top) if c >= 0 else (y_bot, 0.0)
+        if c > 0:
+            return 0.0, y_top
+        if c < 0:
+            return y_bot, 0.0
+        return y_bot, y_top  # on-axis port, no companion arm to avoid -> full height
+
+    def _full_span(c):
+        return max(c - sim_width / 2, y_bot), min(c + sim_width / 2, y_top)
+
+    n_excite = n_out if n_out <= n_in else n_in
+    half_domain = n_excite == 1 and getattr(sub_solver, "half_domain_aperture", False)
 
     if n_out <= n_in:
         src_x, norm_x, mea_x = L - source_margin, L - monitor_margin, monitor_margin
@@ -488,7 +536,7 @@ def _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub
         src_c = c_left
         src_label = "source"
 
-    y_lo, y_hi = _half_span(src_c)
+    y_lo, y_hi = _half_span(src_c) if half_domain else _full_span(src_c)
     _draw_marker(ax, src_x, y_lo, y_hi, src_label, "crimson", "-")
     _draw_marker(ax, norm_x, y_lo, y_hi, "norm mon", "darkorange", "--")
     _draw_marker(ax, mea_x, y_bot, y_top, "interface mon", "seagreen", "--")
@@ -498,8 +546,6 @@ def _draw_pml_rect(ax, xa, xb, ya, yb, label=None):
     from matplotlib.patches import Rectangle
 
     ax.add_patch(Rectangle((xa, ya), xb - xa, yb - ya, alpha=0.18, color="#8B0000", zorder=2))
-    edge_kw = dict(color="#5C0000", lw=0.8, alpha=0.75, zorder=8)
-    ax.plot([xa, xa, xb, xb, xa], [ya, yb, yb, ya, ya], **edge_kw)
     if label:
         ax.text(
             (xa + xb) / 2, yb - 0.12 * (yb - ya), label,
@@ -555,7 +601,8 @@ def _section_kwargs_variants(normalized, k):
 
 def _plot_hybrid_sub_regions(geometry, solver, oxide_width, in_modes, out_modes,
                               output_dir, wg_layer, ox_layer, pad,
-                              show_pml, show_eme_detail, normalized):
+                              show_pml, show_eme_detail, normalized,
+                              sections=None):
     """Render each section in its *own* local frame via geometry.section_gds()
     (left edge of that section's own stubbed domain at x_local=0) — the same
     geometry-construction call FDTDSolver.solve_section()/EMESolver.
@@ -575,6 +622,8 @@ def _plot_hybrid_sub_regions(geometry, solver, oxide_width, in_modes, out_modes,
     n_out_list = list(solver.interface_modes) + [out_modes]
 
     for k, sub_solver in enumerate(solver.solvers):
+        if sections is not None and k not in sections:
+            continue
         x0, x1 = solver.boundaries[k], solver.boundaries[k + 1]
         n_in, n_out = n_in_list[k], n_out_list[k]
         is_eme = hasattr(sub_solver, "lengths")
@@ -596,8 +645,17 @@ def _plot_hybrid_sub_regions(geometry, solver, oxide_width, in_modes, out_modes,
             # doesn't vary with which output port is being solved for).
             config_name = "" if len(names) == n_configs else "_".join(names)
 
+            # FDTDSolver.solve_section() draws stub_left/right + dpml (not
+            # just stub_left/right) so the waveguide continues through the
+            # full PML thickness instead of stopping at its inner edge (see
+            # its docstring in feces/solvers/fdtd.py) — match that here so
+            # the plot shows what's actually simulated. L (used below for
+            # marker/axis placement) still keys off the true, unextended
+            # stub_left/stub_right, matching the solver's own bookkeeping.
+            draw_stub_left = stub_left + dpml if is_fdtd else stub_left
+            draw_stub_right = stub_right + dpml if is_fdtd else stub_right
             gds_comp = geometry.section_gds(
-                x0, x1, oxide_width, stub_left=stub_left, stub_right=stub_right, **kwargs_k
+                x0, x1, oxide_width, stub_left=draw_stub_left, stub_right=draw_stub_right, **kwargs_k
             )
 
             margin = pad if pad is not None else max(0.5, 0.08 * L)
@@ -605,7 +663,12 @@ def _plot_hybrid_sub_regions(geometry, solver, oxide_width, in_modes, out_modes,
                 margin = max(margin, dpml + 0.1)
 
             fig, ax = plt.subplots(figsize=(6, 3.5))
-            _draw_polygons(ax, gds_comp, wg_layer, ox_layer)
+            # gds_comp was built with draw_stub_left/right (extended by dpml
+            # for an FDTD section), which shifts its own x_local=0 left by
+            # dpml relative to the true stub_left/right frame markers/PML
+            # rects use below — x_shift=-dpml re-aligns it (see
+            # _draw_polygons' docstring).
+            _draw_polygons(ax, gds_comp, wg_layer, ox_layer, x_shift=-dpml if is_fdtd else 0.0)
 
             if is_eme:
                 if show_eme_detail:

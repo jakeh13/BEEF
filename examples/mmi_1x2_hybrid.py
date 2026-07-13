@@ -35,6 +35,14 @@ output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_output", "
 os.makedirs(output_dir, exist_ok=True)
 
 # ---------------------------------------------------------------------------
+# Global simulation parameters
+# ---------------------------------------------------------------------------
+RESOLUTION = 30.0   # mesh resolution (pixels/µm) — used by both the EME and FDTD sub-solvers
+WL_MIN = 1.26       # wavelength sweep start (µm)
+WL_MAX = 1.36       # wavelength sweep end (µm)
+N_WL = 11           # number of wavelength points
+
+# ---------------------------------------------------------------------------
 # 0. Simulation method per section — HybridSolver is solver-agnostic (any
 #    mix of FDTDSolver/EMESolver, in any order), so each of the three
 #    sections can independently be "fdtd" or "eme".
@@ -72,7 +80,7 @@ print(f"MMI total length: {mmi.total_length:.2f} µm")
 # ---------------------------------------------------------------------------
 
 _fdtd_common = dict(
-    res=20.0,
+    res=RESOLUTION,
     sim_width=5.0,
     sim_height=1.5,
     dpml=0.5,
@@ -82,28 +90,53 @@ _fdtd_common = dict(
     decay_tol=1e-11,
 )
 
-N_MODES = 5   # modes carried at the two input/output <-> body interfaces
+N_MODES = 15   # modes carried at the two input/output <-> body interfaces
+
+# The output section's single-mode port (the physical taper tip) sits only
+# waveguide_offset=1.0 µm from the *other* output branch, which — per the
+# "both waveguides always physically present in FDTD sections" convention —
+# is drawn right there too. A full-sim_width source/norm aperture centered
+# on one branch reaches straight across that 1.0 µm gap, so MPB's eigenmode
+# solve stops isolating one branch and instead sees the near-degenerate
+# even/odd pair of both branches — corrupting the normalization for both
+# output_idx=0 and output_idx=1 runs independently, which is how
+# T_top + T_bot can end up outside [0, 1]. half_domain_aperture spans only
+# the near half of the domain (from the shared y=0 symmetry axis, exactly
+# between the two branches, out to the near PML edge) — it structurally
+# excludes the opposite branch regardless of how close the branches are,
+# since it's anchored at the symmetry line rather than sized to a specific
+# clearance distance. Matches the legacy reference implementation's
+# validated aperture convention (see its docstring in feces/solvers/fdtd.py).
+# The real input port (single waveguide, no neighbor) is left untouched —
+# its source/norm aperture should keep spanning the full sim_width (i.e. the
+# entire y-dimension, excluding the PML).
 
 
-def make_section_solver(method: str):
+def make_section_solver(method: str, half_domain_aperture: bool = False):
     """Build a solver for one hybrid section. Both FDTDSolver and EMESolver
     implement the same solve_section() interface, so either can fill any
     slot in the chain — num_modes/num_cells/lengths on EMESolver only
     matter for its full-device solve()/solve_sweep(), not solve_section(),
     so placeholder values are fine here."""
     if method == "fdtd":
-        return FDTDSolver(**_fdtd_common)
+        kwargs = dict(_fdtd_common)
+        kwargs["half_domain_aperture"] = half_domain_aperture
+        return FDTDSolver(**kwargs)
     if method == "eme":
         return EMESolver(
             num_modes=[N_MODES], num_cells=[1], lengths=[1.0],
-            oxide_width=5.0, oxide_height=1.5, res=20.0, material_stack=SOI_160,
+            oxide_width=5.0, oxide_height=1.5, res=RESOLUTION, material_stack=SOI_160,
+            mode_solver="meep",  # matches FDTDSolver's own eigenmode basis in this hybrid chain
         )
     raise ValueError(f"unknown method {method!r}, expected 'fdtd' or 'eme'")
 
 
+# Input section keeps the default (full sim_width) aperture — a single
+# waveguide port has no neighbor to avoid. Only the output section, whose
+# two branches sit close together, needs the narrower aperture.
 input_solver = make_section_solver(INPUT_METHOD)
 body_solver = make_section_solver(BODY_METHOD)
-output_solver = make_section_solver(OUTPUT_METHOD)
+output_solver = make_section_solver(OUTPUT_METHOD, half_domain_aperture=True)
 
 # ---------------------------------------------------------------------------
 # 3. Build HybridSolver — a generic 3-section chain here, but HybridSolver
@@ -160,7 +193,7 @@ print(f"Sub-region plots saved → {output_dir}/sections/")
 #    cache is passed to both solve() calls, so the input/body sections are
 #    only ever simulated once — not once per output port.
 # ---------------------------------------------------------------------------
-wavelengths = np.linspace(1.26, 1.36, 11)
+wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
 print(f"\nHybrid sweep: {wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm "
       f"({len(wavelengths)} pts, {N_MODES} interface modes)\n")
 

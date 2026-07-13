@@ -25,6 +25,16 @@ class EMESolver:
         material_stack: MaterialStack instance for extrusion rules.
         straight_length: access waveguide length on each side (µm).
         temperature: simulation temperature for meow Environment (°C).
+        mode_solver: which meow mode solver compute_modes() dispatches to —
+            "meep" (meow.compute_modes_meep, the default) or "tidy3d"
+            (meow.compute_modes_tidy3d). "meep" matches the same underlying
+            eigenmode solver/conventions FDTDSolver's own
+            get_eigenmode_coefficients() calls use in HybridSolver chains,
+            avoiding basis mismatches between EME and FDTD sections — use
+            that for hybrid tutorials. A standalone EME-only solve (no FDTD
+            sections to stay consistent with) is free to use "tidy3d"
+            instead. Does not affect solve_sweep(), which always uses
+            tidy3d's batched mode solver regardless of this setting.
     """
 
     def __init__(
@@ -37,6 +47,7 @@ class EMESolver:
         res: float = 40.0,
         material_stack: MaterialStack = SOI_160,
         temperature: float = 25.0,
+        mode_solver: str = "meep",
     ):
         if len(num_modes) != len(num_cells):
             raise ValueError(
@@ -46,6 +57,8 @@ class EMESolver:
             raise ValueError(
                 f"lengths ({len(lengths)}) must match num_modes ({len(num_modes)})"
             )
+        if mode_solver not in ("meep", "tidy3d"):
+            raise ValueError(f"unknown mode_solver {mode_solver!r}, expected 'meep' or 'tidy3d'")
         self.num_modes = num_modes
         self.num_cells = num_cells
         self.lengths = lengths
@@ -55,6 +68,7 @@ class EMESolver:
         self.res = res
         self.material_stack = material_stack
         self.temperature = temperature
+        self.mode_solver = mode_solver
 
     def _build_mesh(self):
         import meow as mw
@@ -96,13 +110,17 @@ class EMESolver:
     def compute_modes(self, cross_section, num_modes: int) -> list:
         """Compute modes for a single cross-section (exposed for caching).
 
-        Uses meow's MEEP/MPB-backed mode solver (not the tidy3d default) so
-        EME sections use the same underlying eigenmode solver/conventions as
-        FDTDSolver's own get_eigenmode_coefficients() calls in HybridSolver
-        chains — avoids basis mismatches between EME and FDTD sections.
+        Dispatches to meow's MEEP/MPB-backed solver or its tidy3d-backed one
+        per self.mode_solver (see the class docstring) — "meep" matches the
+        same underlying eigenmode solver/conventions as FDTDSolver's own
+        get_eigenmode_coefficients() calls in HybridSolver chains, avoiding
+        basis mismatches between EME and FDTD sections.
         """
-        from meow import compute_modes_meep
-        return compute_modes_meep(cross_section, num_modes=num_modes)
+        if self.mode_solver == "meep":
+            from meow import compute_modes_meep
+            return compute_modes_meep(cross_section, num_modes=num_modes)
+        from meow import compute_modes_tidy3d
+        return compute_modes_tidy3d(cross_section, num_modes=num_modes)
 
     def solve_section(
         self,
@@ -209,6 +227,15 @@ class EMESolver:
             env = mw.Environment(wl=float(wl), T=self.temperature)
             css = [mw.CrossSection.from_cell(cell=cell, env=env) for cell in cells]
             modes = [self.compute_modes(cs, n_modes) for cs in css]  # one solve, reused below
+
+            if wl_idx == len(wavelengths) // 2:
+                # Diagnostic: confirm this cross-section actually resolves
+                # n_modes distinct, non-degenerate supermodes (neff split
+                # apart) rather than a near-degenerate/duplicate pair, which
+                # would explain a single-arm launch failing to couple into
+                # one of them.
+                neffs = [m.neff for m in modes[0]]
+                print(f"[diagnostic] EME cross-section neff @ λ={wl:.3f} µm: {neffs}")
 
             for L_idx, L in enumerate(lengths):
                 S, port_map = mw.compute_s_matrix(modes, cells=cells, cell_lengths=[float(L)])
