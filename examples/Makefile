@@ -11,7 +11,7 @@ endif
 
 # Keep in sync with run_examples.batch's EXAMPLES array (index order matters
 # there since SLURM_ARRAY_TASK_ID selects a name positionally).
-EXAMPLES = mmi_1x2_eme mmi_1x2_fdtd mmi_1x2_hybrid directional_coupler_hybrid
+EXAMPLES = mmi_1x2_eme mmi_1x2_fdtd mmi_1x2_hybrid directional_coupler_hybrid directional_coupler_mode
 
 .PHONY: all $(EXAMPLES) clean
 
@@ -28,6 +28,9 @@ mmi_1x2_hybrid:
 
 directional_coupler_hybrid:
 	$(runner) $(my_python) directional_coupler_hybrid.py
+
+directional_coupler_mode:
+	$(my_python) directional_coupler_mode.py
 
 clean:
 	rm -rf ../../example_output
