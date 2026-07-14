@@ -312,8 +312,14 @@ class FDTDSolver:
         # bare core (e.g. a 0.35 µm single-mode waveguide in a 5 µm domain)
         # truncates that tail and corrupts the mode solve, which then
         # corrupts every normalization downstream. The far (measurement) side
-        # is a genuine per-interface decomposition and is correctly sized to
-        # the local cross-section width.
+        # is correctly sized to the local cross-section width ONLY when it's
+        # a genuine single-mode port (well-isolated waveguide, small tail).
+        # Whenever that side must resolve >1 mode (e.g. a directional
+        # coupler's coupled-pair interface), width_at() there is just the
+        # bare silicon span with zero cladding margin — nowhere near enough
+        # room for MPB to resolve closely-spaced supermodes, whose whole
+        # distinguishing feature is the evanescent tail shape. Widened to
+        # self.sim_width below once n_measure is known.
         c_left = geometry.center_at(x0 + eps, **geometry_kwargs)
         c_right = geometry.center_at(x1 - eps, **geometry_kwargs)
         w_meas_left = geometry.width_at(x0 + eps, **geometry_kwargs)
@@ -370,14 +376,14 @@ class FDTDSolver:
             n_excite, n_measure = n_modes_out, n_modes_in
             src_x, norm_x, mea_x = hi_m - self.source_margin, hi_m - self.monitor_margin, lo_m
             src_c, mea_c = c_right, c_left
-            w_meas = w_meas_left
+            w_meas = self.sim_width if n_measure > 1 else w_meas_left
             kpoint = mp.Vector3(-1, 0, 0)
             alpha_idx = 1  # backward amplitude
         else:
             n_excite, n_measure = n_modes_in, n_modes_out
             src_x, norm_x, mea_x = lo_m + self.source_margin, lo_m + self.monitor_margin, hi_m
             src_c, mea_c = c_left, c_right
-            w_meas = w_meas_right
+            w_meas = self.sim_width if n_measure > 1 else w_meas_right
             kpoint = mp.Vector3(1, 0, 0)
             alpha_idx = 0  # forward amplitude
 
