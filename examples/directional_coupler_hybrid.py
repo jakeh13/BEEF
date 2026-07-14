@@ -57,9 +57,9 @@ characterization — without any additional FDTD or EME simulations:
     feces/solvers/eme.py). Total solver cost is the same as a single fixed
     coupling_length run — 2 FDTD solves + 1 EME mode-solve per
     wavelength — regardless of sweeping 101 lengths instead of 1.
-  - The swept length actually fed to the EME body is coupling_length minus
-    the 2*body_stub already captured inside the (length-invariant) FDTD
-    sections, not the full nominal coupling_length — see step 5.
+  - The FDTD input/output sections end exactly at the S-bend/coupling-region
+    seam (no straight sliver folded in), so the length fed to the EME body
+    sweep is the nominal coupling_length directly — see step 5.
 
 HybridSolver itself has no idea this is a directional coupler; it only
 knows each solver implements solve_section() and combines the resulting
@@ -103,7 +103,7 @@ N_WL = 11           # number of wavelength points
 #    and it's also exactly what the geometry/section preview plots should
 #    show per the "plots at the middle length" convention).
 # ---------------------------------------------------------------------------
-coupling_lengths = np.linspace(0.0, 10.0, 101)   # µm, the swept coupling length
+coupling_lengths = np.linspace(0.0, 60.0, 201)   # µm, the swept coupling length
 L_mid = coupling_lengths[len(coupling_lengths) // 2]
 L_mid_idx = len(coupling_lengths) // 2
 
@@ -124,11 +124,10 @@ print(f"Coupling length sweep: {coupling_lengths[0]:.1f} – {coupling_lengths[-
 # ---------------------------------------------------------------------------
 # 2. Configure sub-solvers — one per section.
 #
-#    input section  : input access waveguide + input S-bend + a sliver of
-#                      the coupling region (enough for a clean interface
-#                      monitor away from the bend/coupling-region seam)
-#    body section   : propagates N_MODES supermodes through the remaining
-#                      straight coupled-pair region
+#    input section  : input access waveguide + input S-bend, ending exactly
+#                      at the S-bend/coupling-region seam
+#    body section   : propagates N_MODES supermodes through the full
+#                      straight coupled-pair region (length = coupling_length)
 #    output section : the mirror image of the input section, one instance
 #                      per output port ("through" / "cross")
 # ---------------------------------------------------------------------------
@@ -169,16 +168,12 @@ body_solver = EMESolver(
 # ---------------------------------------------------------------------------
 half_body = dc.coupling_length / 2
 half_total = dc.total_length / 2
-body_stub = 0.5   # µm of straight coupling region folded into each FDTD
-                  # section, past the S-bend/coupling-region seam, so each
-                  # interface monitor sits comfortably inside the
-                  # always-both-arm region rather than exactly on the seam.
 
 boundaries = [
-    -half_total,              # physical input port (access waveguide end)
-    -half_body + body_stub,   # input section <-> body section interface
-    +half_body - body_stub,   # body section <-> output section interface
-    +half_total,              # physical output port (access waveguide end)
+    -half_total,   # physical input port (access waveguide end)
+    -half_body,    # input section <-> body section interface (S-bend/coupling-region seam)
+    +half_body,    # body section <-> output section interface (S-bend/coupling-region seam)
+    +half_total,   # physical output port (access waveguide end)
 ]
 interface_modes = [N_MODES, N_MODES]
 
@@ -243,18 +238,10 @@ M_in1 = fdtd_solver.solve_section(
 M_out_through = M_in0.transpose(0, 2, 1)  # [n_wl, 1, N_MODES] — mirror-symmetry reuse, not a new simulation
 M_out_cross = M_in1.transpose(0, 2, 1)    # [n_wl, 1, N_MODES]
 
-# The input/output FDTD sections already each capture body_stub=0.5 µm of
-# straight coupled-pair waveguide beyond their S-bend (folded in past the
-# S-bend/coupling-region seam — see step 2/3 above), and that portion of
-# each FDTD matrix doesn't change across the sweep. So the EME body must
-# only model the *remaining* interior length for a given nominal
-# coupling_length — coupling_length - 2*body_stub — not the full nominal
-# value, or the two body_stub segments would be double-counted (once inside
-# the fixed FDTD matrices, once again by treating the full coupling_length
-# as freshly-propagated EME length). Clipped at 0 since coupling_length
-# below 2*body_stub leaves no interior straight section left to model with
-# EME (all of it is already inside the fixed FDTD stubs).
-body_lengths = np.clip(coupling_lengths - 2 * body_stub, 0.0, None)
+# The FDTD input/output sections end exactly at the S-bend/coupling-region
+# seam (boundaries[1]/[2] above capture none of the straight interior), so
+# the EME body models the full nominal coupling_length directly.
+body_lengths = coupling_lengths
 M_body = body_solver.solve_section_length_sweep(
     dc, wavelengths, boundaries[1], boundaries[2], body_lengths,
     n_modes_in=N_MODES, n_modes_out=N_MODES,

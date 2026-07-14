@@ -222,7 +222,7 @@ print(f"Supermode analysis plot saved -> {output_dir}/supermode_analysis.png")
 #    over the same 0-10 um range directional_coupler_hybrid.py sweeps — lets
 #    you sanity-check that script's full FDTD/EME result against this much
 #    cheaper cross-section-only prediction.
-L_range = np.linspace(0.0, 10.0, 201)
+L_range = np.linspace(0.0, 60.0, 201)
 T_cross_pred = np.sin(np.pi * L_range / (2.0 * Lc_wl[idx_c])) ** 2
 T_through_pred = 1.0 - T_cross_pred
 
