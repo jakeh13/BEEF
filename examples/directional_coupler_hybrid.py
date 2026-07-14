@@ -93,6 +93,12 @@ WL_MIN = 1.50       # wavelength sweep start (µm)
 WL_MAX = 1.60       # wavelength sweep end (µm)
 N_WL = 11           # number of wavelength points
 
+# Coupling length used for the wavelength-domain ("hybrid_results.png") plot
+# and the SMatrix that gets saved. Set to a specific value (µm) to pin it;
+# leave as None to auto-pick the length in coupling_lengths (defined below)
+# whose coupling ratio is closest to a 50:50 (3 dB) split.
+PLOT_COUPLING_LENGTH = None   # µm, or None for auto (50:50 split point)
+
 # ---------------------------------------------------------------------------
 # 1. Geometry — all device dimensions as variables (220 nm SOI).
 #
@@ -105,7 +111,6 @@ N_WL = 11           # number of wavelength points
 # ---------------------------------------------------------------------------
 coupling_lengths = np.linspace(0.0, 60.0, 201)   # µm, the swept coupling length
 L_mid = coupling_lengths[len(coupling_lengths) // 2]
-L_mid_idx = len(coupling_lengths) // 2
 
 dc = DirectionalCoupler(
     waveguide_width=0.45,    # single-mode strip width (µm)
@@ -113,13 +118,13 @@ dc = DirectionalCoupler(
     coupling_length=L_mid,   # straight parallel interaction length (µm) — sweep reference value
     bend_length=9.0,         # horizontal extent of each S-bend (µm)
     waveguide_offset=3.0,    # far-end centre-to-centre port pitch (µm)
-    bend_type="euler",       # "euler" (gdsfactory bend_s) or "circular" (matched arcs)
+    bend_type="euler",       # "euler" (cubic-Bezier S-bend) or "circular" (matched arcs)
     waveguide_height=0.22,   # Si layer thickness (µm) — SOI_220
 )
 print(f"Directional coupler total length: {dc.total_length:.2f} µm "
       f"(coupling pitch {dc.coupling_pitch:.3f} µm, far pitch {dc.waveguide_offset:.2f} µm)")
 print(f"Coupling length sweep: {coupling_lengths[0]:.1f} – {coupling_lengths[-1]:.1f} µm "
-      f"({len(coupling_lengths)} pts, reference/plot length = {L_mid:.2f} µm)")
+      f"({len(coupling_lengths)} pts, build reference length = {L_mid:.2f} µm)")
 
 # ---------------------------------------------------------------------------
 # 2. Configure sub-solvers — one per section.
@@ -255,19 +260,41 @@ T_through_grid = np.abs(full_through[:, :, 0, 0]) ** 2   # [n_L, n_wl]
 T_cross_grid = np.abs(full_cross[:, :, 0, 0]) ** 2        # [n_L, n_wl]
 T_total_grid = T_through_grid + T_cross_grid
 
-# Slice at the reference (middle-of-sweep) coupling_length for the
-# wavelength-domain view — keep the complex coefficients (not just power)
-# for this slice so the saved SMatrix preserves phase, same as before.
-coeff_through = full_through[L_mid_idx, :, 0, 0]
-coeff_cross = full_cross[L_mid_idx, :, 0, 0]
-T_through = T_through_grid[L_mid_idx]
-T_cross = T_cross_grid[L_mid_idx]
-T_total = T_total_grid[L_mid_idx]
+# ---------------------------------------------------------------------------
+# 5b. Choose the coupling length used for the wavelength-domain plot/SMatrix.
+#     PLOT_COUPLING_LENGTH pins it explicitly (snapped to the nearest sampled
+#     length); left as None, auto-pick the shortest length whose mean-over-
+#     wavelength cross/through ratio crosses 0.5 (the "3 dB coupler length").
+# ---------------------------------------------------------------------------
+if PLOT_COUPLING_LENGTH is not None:
+    L_plot_idx = int(np.argmin(np.abs(coupling_lengths - PLOT_COUPLING_LENGTH)))
+    print(f"Plot length: user-set {PLOT_COUPLING_LENGTH:.2f} µm -> "
+          f"nearest sampled length {coupling_lengths[L_plot_idx]:.2f} µm")
+else:
+    ratio_mean = T_cross_grid.mean(axis=1) / np.clip(T_total_grid.mean(axis=1), 1e-20, None)
+    sign_changes = np.flatnonzero(np.diff(np.sign(ratio_mean - 0.5)))
+    if sign_changes.size:
+        i = sign_changes[0]
+        L_plot_idx = i if abs(ratio_mean[i] - 0.5) <= abs(ratio_mean[i + 1] - 0.5) else i + 1
+    else:
+        L_plot_idx = int(np.argmin(np.abs(ratio_mean - 0.5)))
+    print(f"Plot length: auto-picked {coupling_lengths[L_plot_idx]:.2f} µm "
+          f"(50:50 split, ratio = {ratio_mean[L_plot_idx]:.3f})")
+L_plot = coupling_lengths[L_plot_idx]
+
+# Slice at the chosen coupling_length for the wavelength-domain view — keep
+# the complex coefficients (not just power) for this slice so the saved
+# SMatrix preserves phase, same as before.
+coeff_through = full_through[L_plot_idx, :, 0, 0]
+coeff_cross = full_cross[L_plot_idx, :, 0, 0]
+T_through = T_through_grid[L_plot_idx]
+T_cross = T_cross_grid[L_plot_idx]
+T_total = T_total_grid[L_plot_idx]
 
 wl_c = wavelengths[len(wavelengths) // 2]
 idx = np.argmin(np.abs(wavelengths - wl_c))
 
-print(f"Results at coupling_length = {L_mid:.2f} µm, λ = {wl_c:.3f} µm:")
+print(f"Results at coupling_length = {L_plot:.2f} µm, λ = {wl_c:.3f} µm:")
 print(f"  Through output T = {T_through[idx]:.4f}  IL = {10*np.log10(max(T_through[idx],1e-20)):.2f} dB")
 print(f"  Cross output   T = {T_cross[idx]:.4f}  IL = {10*np.log10(max(T_cross[idx],1e-20)):.2f} dB")
 print(f"  Total          T = {T_total[idx]:.4f}  IL = {10*np.log10(max(T_total[idx],1e-20)):.2f} dB")
@@ -281,7 +308,7 @@ smat = SMatrix(wavelengths=wavelengths)
 smat.set(coeff_through, port="through")
 smat.set(coeff_cross, port="cross")
 smat.save(os.path.join(output_dir, "smatrix_hybrid.pkl"))
-print(f"\nSMatrix saved (coupling_length={L_mid:.2f} µm slice) → {output_dir}/smatrix_hybrid.pkl")
+print(f"\nSMatrix saved (coupling_length={L_plot:.2f} µm slice) → {output_dir}/smatrix_hybrid.pkl")
 
 np.savez(
     os.path.join(output_dir, "length_sweep.npz"),
@@ -300,7 +327,7 @@ ax.plot(wavelengths, T_total,   label="Total",   color="k", lw=1.5)
 ax.axhline(1.0, color="gray", linestyle=":", lw=0.8, label="Lossless")
 ax.set_xlabel("Wavelength (µm)")
 ax.set_ylabel("Transmission")
-ax.set_title(f"Transmission vs Wavelength (coupling_length={L_mid:.1f} µm)")
+ax.set_title(f"Transmission vs Wavelength (coupling_length={L_plot:.1f} µm)")
 ax.legend(fontsize=8)
 ax.grid(True)
 ax.set_ylim(0, 1.05)
@@ -315,7 +342,7 @@ ax.plot(wavelengths, IL_total,   label="Total",   color="k", lw=1.5)
 ax.axhline(0.0, color="gray", linestyle=":", lw=0.8, label="Lossless")
 ax.set_xlabel("Wavelength (µm)")
 ax.set_ylabel("Insertion Loss (dB)")
-ax.set_title(f"Insertion Loss vs Wavelength (coupling_length={L_mid:.1f} µm)")
+ax.set_title(f"Insertion Loss vs Wavelength (coupling_length={L_plot:.1f} µm)")
 ax.legend(fontsize=8)
 ax.grid(True)
 
@@ -339,7 +366,9 @@ for grid, label, color in [
             linestyle="--" if label == "Cross" else "-")
     ax.fill_between(coupling_lengths, lo, hi, color=color, alpha=0.15, lw=0)
 
-ax.axvline(L_mid, color="gray", linestyle=":", lw=0.8, label=f"Plotted length ({L_mid:.1f} µm)")
+_plot_len_note = "50:50 auto" if PLOT_COUPLING_LENGTH is None else "user-set"
+ax.axvline(L_plot, color="gray", linestyle=":", lw=0.8,
+           label=f"Plotted length ({L_plot:.1f} µm, {_plot_len_note})")
 ax.set_xlabel("Coupling length (µm)")
 ax.set_ylabel("Transmission (mean over wavelength, shaded = min–max)")
 ax.set_title("Directional Coupler — Power Transfer vs Coupling Length")

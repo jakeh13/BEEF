@@ -21,35 +21,23 @@ convention for a symmetric N-port device.
 """
 from __future__ import annotations
 
-import itertools
 from typing import Dict, List, Tuple
 
 import numpy as np
-import gdsfactory as gf
 
 from .base import DeviceGeometry
-
-_ctr = itertools.count()
 
 _WG_LAYER = (2, 0)
 _OX_LAYER = (1, 0)
 
 
-def _reset_gf():
-    gf.gpdk.PDK.activate()
-
-
-def _component(name: str) -> gf.Component:
-    return gf.Component(f"{name}_{next(_ctr)}")
-
-
-def _add_oxide(c: gf.Component, x_start: float, total_x: float, oxide_width: float) -> None:
-    c.add_polygon([
+def _oxide_box(x_start: float, total_x: float, oxide_width: float) -> List[Tuple[float, float]]:
+    return [
         (x_start, -oxide_width / 2),
         (total_x,  -oxide_width / 2),
         (total_x,   oxide_width / 2),
         (x_start,  oxide_width / 2),
-    ], layer=_OX_LAYER)
+    ]
 
 
 def _arm_sign(idx: int) -> float:
@@ -85,6 +73,25 @@ def _circular_sbend_centerline(dx: float, dy: float, n_pts: int = 80):
     return x, y
 
 
+def _bezier_sbend_centerline(dx: float, dy: float, n_pts: int = 80):
+    """Centerline of a cubic-Bezier S-bend with horizontal tangent at both
+    ends — control points (0,0), (dx/2,0), (dx/2,dy), (dx,dy), the same
+    layout a standard S-bend Bezier (e.g. gdsfactory's bend_s/path.bezier)
+    uses. Expanding the cubic Bernstein basis at those control points gives
+    the closed form below (y(t) is the familiar 3t^2-2t^3 smoothstep curve).
+    """
+    t = np.linspace(0.0, 1.0, n_pts)
+    x = dx * (1.5 * t - 1.5 * t**2 + t**3)
+    y = dy * (3.0 * t**2 - 2.0 * t**3)
+    return x, y
+
+
+_SBEND_CENTERLINES = {
+    "euler": _bezier_sbend_centerline,
+    "circular": _circular_sbend_centerline,
+}
+
+
 def _extrude_centerline(x: np.ndarray, y: np.ndarray, width: float) -> List[Tuple[float, float]]:
     """Constant-width ribbon polygon around a centerline, via finite-difference normals."""
     dxp = np.gradient(x)
@@ -106,11 +113,12 @@ def _sbend_polygon(
     horizontal (+x) tangent at both ends, constant width throughout.
 
     bend_type:
-        "euler"    - gdsfactory's bend_s (Bezier): continuously-varying
-                     curvature, no curvature discontinuity at the midpoint.
-                     Named to match BendGeometry's "euler" (smooth/library
-                     curve) vs. "circular" (constant-curvature arc) split;
-                     not a literal Euler-spiral/clothoid.
+        "euler"    - cubic-Bezier centerline (see _bezier_sbend_centerline):
+                     continuously-varying curvature, no curvature
+                     discontinuity at the midpoint. Named to match
+                     BendGeometry's "euler" (smooth curve) vs. "circular"
+                     (constant-curvature arc) split; not a literal
+                     Euler-spiral/clothoid.
         "circular" - two matched constant-curvature arcs (closed form above).
     """
     dx, dy = x1 - x0, y1 - y0
@@ -118,20 +126,12 @@ def _sbend_polygon(
         hw = width / 2.0
         return [[(x0, y0 - hw), (x1, y0 - hw), (x1, y0 + hw), (x0, y0 + hw)]]
 
-    if bend_type == "euler":
-        _reset_gf()
-        xs = gf.cross_section.cross_section(width=width, layer=_WG_LAYER)
-        comp = gf.components.bend_s(size=(dx, dy), cross_section=xs)
-        return [
-            [(x0 + px, y0 + py) for px, py in pts]
-            for pts in comp.get_polygons_points(by="tuple").get(_WG_LAYER, [])
-        ]
-    if bend_type == "circular":
-        cx, cy = _circular_sbend_centerline(dx, dy, n_pts=n_pts)
-        poly = _extrude_centerline(cx, cy, width)
-        return [[(x0 + px, y0 + py) for px, py in poly]]
-
-    raise ValueError(f"unknown bend_type {bend_type!r}, expected 'euler' or 'circular'")
+    centerline_fn = _SBEND_CENTERLINES.get(bend_type)
+    if centerline_fn is None:
+        raise ValueError(f"unknown bend_type {bend_type!r}, expected 'euler' or 'circular'")
+    cx, cy = centerline_fn(dx, dy, n_pts=n_pts)
+    poly = _extrude_centerline(cx, cy, width)
+    return [[(x0 + px, y0 + py) for px, py in poly]]
 
 
 class DirectionalCoupler(DeviceGeometry):
@@ -222,15 +222,15 @@ class DirectionalCoupler(DeviceGeometry):
     def to_gds_eme(
         self, straight_length: float, oxide_width: float,
         x_start: float = 0.0, **kwargs,
-    ) -> gf.Component:
-        _reset_gf()
+    ) -> Dict[Tuple[int, int], List[List[Tuple[float, float]]]]:
         ml = self.total_length
         x_off = x_start + ml / 2 + straight_length
-        c = _component(f"dc_eme_{id(self)}")
-        for verts in self.polygons(stub_length=straight_length)[_WG_LAYER]:
-            c.add_polygon([(x + x_off, y) for x, y in verts], layer=_WG_LAYER)
-        _add_oxide(c, x_start, x_start + ml + 2 * straight_length, oxide_width)
-        return c
+        wg_polys = [
+            [(x + x_off, y) for x, y in verts]
+            for verts in self.polygons(stub_length=straight_length)[_WG_LAYER]
+        ]
+        ox_poly = _oxide_box(x_start, x_start + ml + 2 * straight_length, oxide_width)
+        return {_WG_LAYER: wg_polys, _OX_LAYER: [ox_poly]}
 
     # ------------------------------------------------------------------
     # Arbitrary-section interface (HybridSolver)
@@ -331,15 +331,16 @@ class DirectionalCoupler(DeviceGeometry):
 
     def section_gds(self, x0: float, x1: float, oxide_width: float,
                      stub_left: float = 0.0, stub_right: float = 0.0,
-                     input_idx: int = 0, output_idx: int = 0) -> gf.Component:
-        _reset_gf()
+                     input_idx: int = 0, output_idx: int = 0
+                     ) -> Dict[Tuple[int, int], List[List[Tuple[float, float]]]]:
         lo, hi = x0 - stub_left, x1 + stub_right
         x_off = -lo
-        c = _component(f"dc_section_{id(self)}")
-        for verts in self._section_polygons(x0, x1, stub_left, stub_right, input_idx, output_idx):
-            c.add_polygon([(x + x_off, y) for x, y in verts], layer=_WG_LAYER)
-        _add_oxide(c, 0.0, hi - lo, oxide_width)
-        return c
+        wg_polys = [
+            [(x + x_off, y) for x, y in verts]
+            for verts in self._section_polygons(x0, x1, stub_left, stub_right, input_idx, output_idx)
+        ]
+        ox_poly = _oxide_box(0.0, hi - lo, oxide_width)
+        return {_WG_LAYER: wg_polys, _OX_LAYER: [ox_poly]}
 
     def width_at(self, x: float, input_idx: int = 0, output_idx: int = 0) -> float:
         (in0, in1), (out0, out1) = self._bend_bounds()

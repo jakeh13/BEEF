@@ -32,32 +32,30 @@ def _new_ax(ax, figsize):
     return fig, ax
 
 
-def _draw_polygons(ax, gds_comp, wg_layer, ox_layer, x_shift: float = 0.0):
-    """Oxide + waveguide-core patches from a gdsfactory Component.
+def _draw_polygons(ax, gds_polys, wg_layer, ox_layer, x_shift: float = 0.0):
+    """Oxide + waveguide-core patches from a {layer: [polygons]} dict (the
+    format DeviceGeometry.to_gds_eme()/section_gds() return).
 
-    x_shift: added to every x-coordinate after the dbu conversion. Used when
-    gds_comp was built with a *different* (larger) stub than the local
-    frame the rest of a plot (markers, PML rects) is drawn in — e.g. a
-    section rendered with its waveguide extended dpml further into the PML
-    (see _plot_hybrid_sub_regions) shifts gds_comp's own x_local=0 left by
-    dpml relative to that shared frame, so x_shift=dpml re-aligns it.
+    x_shift: added to every x-coordinate. Used when gds_polys was built with
+    a *different* (larger) stub than the local frame the rest of a plot
+    (markers, PML rects) is drawn in — e.g. a section rendered with its
+    waveguide extended dpml further into the PML (see
+    _plot_hybrid_sub_regions) shifts gds_polys' own x_local=0 left by dpml
+    relative to that shared frame, so x_shift=dpml re-aligns it.
     """
     from matplotlib.patches import Polygon as MplPolygon
 
-    poly_dict = gds_comp.get_polygons(by="tuple")
-    dbu = gds_comp.kcl.dbu  # µm per dbu (typically 0.001)
+    def _to_xy(poly):
+        return np.array([[x + x_shift, y] for x, y in poly])
 
-    def _to_xy(kpoly):
-        return np.array([[pt.x * dbu + x_shift, pt.y * dbu] for pt in kpoly.each_point_hull()])
-
-    for kp in poly_dict.get(ox_layer, []):
+    for poly in gds_polys.get(ox_layer, []):
         ax.add_patch(MplPolygon(
-            _to_xy(kp), closed=True,
+            _to_xy(poly), closed=True,
             facecolor="#d8d8d8", edgecolor="none", alpha=0.5, zorder=0,
         ))
-    for kp in poly_dict.get(wg_layer, []):
+    for poly in gds_polys.get(wg_layer, []):
         ax.add_patch(MplPolygon(
-            _to_xy(kp), closed=True,
+            _to_xy(poly), closed=True,
             facecolor="royalblue", edgecolor="steelblue", lw=0.4, alpha=0.9, zorder=1,
         ))
 
@@ -204,12 +202,12 @@ def plot_eme_geometry(
     straight_length = solver.lengths[0]
     oxide_width = solver.oxide_width
 
-    gds_comp = geometry.to_gds_eme(
+    gds_polys = geometry.to_gds_eme(
         straight_length=straight_length, oxide_width=oxide_width, **geometry_kwargs
     )
 
     fig, ax = _new_ax(ax, figsize)
-    _draw_polygons(ax, gds_comp, wg_layer, ox_layer)
+    _draw_polygons(ax, gds_polys, wg_layer, ox_layer)
 
     boundaries = np.concatenate([[0.0], np.cumsum(solver.lengths)])
     _draw_eme_regions(ax, boundaries, oxide_width, labels=region_labels)
@@ -273,12 +271,12 @@ def plot_fdtd_geometry(
     straight_length = _wl + dpml
     oxide_width = solver.sim_width + 2 * dpml
 
-    gds_comp = geometry.to_gds_eme(
+    gds_polys = geometry.to_gds_eme(
         straight_length=straight_length, oxide_width=oxide_width, **geometry_kwargs
     )
 
     fig, ax = _new_ax(ax, figsize)
-    _draw_polygons(ax, gds_comp, wg_layer, ox_layer)
+    _draw_polygons(ax, gds_polys, wg_layer, ox_layer)
 
     total_gds = geometry.total_length + 2 * straight_length
     input_ys = getattr(geometry, "input_ys", [0.0])
@@ -411,12 +409,12 @@ def plot_hybrid_geometry(
     straight_length = _wl + dpml
     oxide_width = getattr(_ref, "sim_width", 5.0) + 2 * dpml
 
-    gds_comp = geometry.to_gds_eme(
+    gds_polys = geometry.to_gds_eme(
         straight_length=straight_length, oxide_width=oxide_width, **geometry_kwargs
     )
 
     fig, ax = _new_ax(ax, figsize)
-    _draw_polygons(ax, gds_comp, wg_layer, ox_layer)
+    _draw_polygons(ax, gds_polys, wg_layer, ox_layer)
 
     # device frame (x=0 at geometry centre) -> GDS plot frame
     x_shift = geometry.total_length / 2 + straight_length
@@ -671,7 +669,7 @@ def _plot_hybrid_sub_regions(geometry, solver, oxide_width, in_modes, out_modes,
             # stub_left/stub_right, matching the solver's own bookkeeping.
             draw_stub_left = stub_left + dpml if is_fdtd else stub_left
             draw_stub_right = stub_right + dpml if is_fdtd else stub_right
-            gds_comp = geometry.section_gds(
+            gds_polys = geometry.section_gds(
                 x0, x1, oxide_width, stub_left=draw_stub_left, stub_right=draw_stub_right, **kwargs_k
             )
 
@@ -680,12 +678,12 @@ def _plot_hybrid_sub_regions(geometry, solver, oxide_width, in_modes, out_modes,
                 margin = max(margin, dpml + 0.1)
 
             fig, ax = plt.subplots(figsize=(6, 3.5))
-            # gds_comp was built with draw_stub_left/right (extended by dpml
+            # gds_polys was built with draw_stub_left/right (extended by dpml
             # for an FDTD section), which shifts its own x_local=0 left by
             # dpml relative to the true stub_left/right frame markers/PML
             # rects use below — x_shift=-dpml re-aligns it (see
             # _draw_polygons' docstring).
-            _draw_polygons(ax, gds_comp, wg_layer, ox_layer, x_shift=-dpml if is_fdtd else 0.0)
+            _draw_polygons(ax, gds_polys, wg_layer, ox_layer, x_shift=-dpml if is_fdtd else 0.0)
 
             if is_eme:
                 if show_eme_detail:

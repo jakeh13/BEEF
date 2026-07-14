@@ -1,34 +1,21 @@
 """Unified N-input / M-output multimode interferometer geometry."""
 from __future__ import annotations
 
-import itertools
 from typing import Dict, List, Tuple
 
-import gdsfactory as gf
-
 from .base import DeviceGeometry
-
-_ctr = itertools.count()
 
 _WG_LAYER = (2, 0)
 _OX_LAYER = (1, 0)
 
 
-def _reset_gf():
-    gf.gpdk.PDK.activate()
-
-
-def _component(name: str) -> gf.Component:
-    return gf.Component(f"{name}_{next(_ctr)}")
-
-
-def _add_oxide(c: gf.Component, x_start: float, total_x: float, oxide_width: float) -> None:
-    c.add_polygon([
+def _oxide_box(x_start: float, total_x: float, oxide_width: float) -> List[Tuple[float, float]]:
+    return [
         (x_start, -oxide_width / 2),
         (total_x,  -oxide_width / 2),
         (total_x,   oxide_width / 2),
         (x_start,  oxide_width / 2),
-    ], layer=_OX_LAYER)
+    ]
 
 
 class MMI(DeviceGeometry):
@@ -118,19 +105,19 @@ class MMI(DeviceGeometry):
     def to_gds_eme(
         self, straight_length: float, oxide_width: float,
         x_start: float = 0.0, output_idx: int = None, **kwargs
-    ) -> gf.Component:
-        """Build the EME GDS. output_idx restricts the drawn output branch(es)
+    ) -> Dict[Tuple[int, int], List[List[Tuple[float, float]]]]:
+        """Build the EME layout. output_idx restricts the drawn output branch(es)
         to a single output_ys index (e.g. output_idx=1 for a top-only output
         stub) instead of all n_outputs — pass None to keep all of them."""
-        _reset_gf()
         ml = self.total_length
         x_off = x_start + ml / 2 + straight_length
-        c = _component(f"mmi_{self.n_inputs}x{self.n_outputs}_eme_{id(self)}")
         output_indices = None if output_idx is None else [output_idx]
-        for verts in self.polygons(stub_length=straight_length, output_indices=output_indices)[_WG_LAYER]:
-            c.add_polygon([(x + x_off, y) for x, y in verts], layer=_WG_LAYER)
-        _add_oxide(c, x_start, x_start + ml + 2 * straight_length, oxide_width)
-        return c
+        wg_polys = [
+            [(x + x_off, y) for x, y in verts]
+            for verts in self.polygons(stub_length=straight_length, output_indices=output_indices)[_WG_LAYER]
+        ]
+        ox_poly = _oxide_box(x_start, x_start + ml + 2 * straight_length, oxide_width)
+        return {_WG_LAYER: wg_polys, _OX_LAYER: [ox_poly]}
 
     # ------------------------------------------------------------------
     # Arbitrary-section interface (HybridSolver)
@@ -227,15 +214,16 @@ class MMI(DeviceGeometry):
 
     def section_gds(self, x0: float, x1: float, oxide_width: float,
                      stub_left: float = 0.0, stub_right: float = 0.0,
-                     input_idx: int = 0, output_idx: int = 0) -> gf.Component:
-        _reset_gf()
+                     input_idx: int = 0, output_idx: int = 0
+                     ) -> Dict[Tuple[int, int], List[List[Tuple[float, float]]]]:
         lo, hi = x0 - stub_left, x1 + stub_right
         x_off = -lo
-        c = _component(f"mmi_section_{id(self)}")
-        for verts in self._section_polygons(x0, x1, stub_left, stub_right, input_idx, output_idx):
-            c.add_polygon([(x + x_off, y) for x, y in verts], layer=_WG_LAYER)
-        _add_oxide(c, 0.0, hi - lo, oxide_width)
-        return c
+        wg_polys = [
+            [(x + x_off, y) for x, y in verts]
+            for verts in self._section_polygons(x0, x1, stub_left, stub_right, input_idx, output_idx)
+        ]
+        ox_poly = _oxide_box(0.0, hi - lo, oxide_width)
+        return {_WG_LAYER: wg_polys, _OX_LAYER: [ox_poly]}
 
     def width_at(self, x: float, input_idx: int = 0, output_idx: int = 0) -> float:
         (in0, in1), (out0, out1) = self._taper_bounds()

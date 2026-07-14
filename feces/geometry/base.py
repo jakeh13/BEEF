@@ -78,10 +78,11 @@ class DeviceGeometry(ABC):
         x_start: float = 0.0,
         **kwargs,
     ):
-        """Build a gdsfactory Component for EME (meow) simulation.
+        """Build the waveguide/oxide polygon layout for EME (meow) simulation.
 
-        The component spans [x_start, x_start + total_length + 2*straight_length]
-        in the layout frame.
+        Returns a Dict[layer_tuple, List[polygon]] (same shape as polygons()),
+        with an extra oxide-cladding layer, covering
+        [x_start, x_start + total_length + 2*straight_length] in the layout frame.
 
         Args:
             straight_length: length of access waveguides on each side (µm).
@@ -98,7 +99,8 @@ class DeviceGeometry(ABC):
         side: str = "input",
         **kwargs,
     ):
-        """Build a gdsfactory Component positioned for a MEEP simulation domain.
+        """Build a waveguide-polygon layout (Dict[layer_tuple, List[polygon]])
+        positioned for a MEEP simulation domain.
 
         Deprecated: prefer to_meep_prisms() for new-style geometries.
         Retained for MMIMux and other complex geometries that have not yet
@@ -140,10 +142,11 @@ class DeviceGeometry(ABC):
         self, x0: float, x1: float, oxide_width: float,
         stub_left: float = 0.0, stub_right: float = 0.0, **kwargs
     ):
-        """gdsfactory Component covering [x0, x1] (+ stubs), for EME sections.
+        """Waveguide/oxide polygon layout covering [x0, x1] (+ stubs), for EME sections.
 
-        Same semantics as section_prisms(), but returns a gf.Component with
-        the layout's left edge at x=0 (i.e. shifted so x0 - stub_left -> 0).
+        Same semantics as section_prisms(), but returns a Dict[layer_tuple,
+        List[polygon]] (same shape as polygons()) with the layout's left edge
+        at x=0 (i.e. shifted so x0 - stub_left -> 0).
         """
         raise NotImplementedError(
             f"{type(self).__name__} has not implemented section_gds(); "

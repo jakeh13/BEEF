@@ -5,6 +5,7 @@ from typing import List, Optional
 
 import numpy as np
 
+from .._utils import extrude_polygons
 from ..geometry.base import DeviceGeometry
 from ..materials.stack import MaterialStack, SOI_160
 from ..results.smatrix import SMatrix
@@ -83,14 +84,14 @@ class EMESolver:
     def _build_cells(self, geometry: DeviceGeometry, side: str = "top", **geometry_kwargs):
         import meow as mw
 
-        gds_comp = geometry.to_gds_eme(
+        gds_polys = geometry.to_gds_eme(
             straight_length=self.straight_length,
             oxide_width=self.oxide_width,
             x_start=0.0,
             side=side,
             **geometry_kwargs,
         )
-        structs = mw.extrude_gds(gds_comp, self.material_stack.extrusion_rules)
+        structs = extrude_polygons(gds_polys, self.material_stack.extrusion_rules)
 
         Ls = []
         for region_len, n_cells in zip(self.lengths, self.num_cells):
@@ -149,11 +150,11 @@ class EMESolver:
         n_modes = max(n_modes_in, n_modes_out)
         length = (x1 - x0) + stub_left + stub_right
 
-        gds_comp = geometry.section_gds(
+        gds_polys = geometry.section_gds(
             x0, x1, self.oxide_width,
             stub_left=stub_left, stub_right=stub_right, **geometry_kwargs
         )
-        structs = mw.extrude_gds(gds_comp, self.material_stack.extrusion_rules)
+        structs = extrude_polygons(gds_polys, self.material_stack.extrusion_rules)
         mesh = self._build_mesh()
         cells = mw.create_cells(structures=structs, mesh=mesh, Ls=[length])
 
@@ -213,11 +214,11 @@ class EMESolver:
         lengths = np.asarray(lengths)
         n_modes = max(n_modes_in, n_modes_out)
 
-        gds_comp = geometry.section_gds(
+        gds_polys = geometry.section_gds(
             x0, x1, self.oxide_width,
             stub_left=stub_left, stub_right=stub_right, **geometry_kwargs
         )
-        structs = mw.extrude_gds(gds_comp, self.material_stack.extrusion_rules)
+        structs = extrude_polygons(gds_polys, self.material_stack.extrusion_rules)
         mesh = self._build_mesh()
         cells = mw.create_cells(structures=structs, mesh=mesh, Ls=[1.0])  # length is a placeholder
 
