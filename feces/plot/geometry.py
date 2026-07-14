@@ -483,12 +483,18 @@ def _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub
     - excite from whichever side has fewer modes (n_out <= n_in launches
       backward from the right — the "reverse simulated" case for an output
       section);
-    - source_margin/monitor_margin are offsets from the PML *inner* edge on
-      that side — x_local=0 on the left, x_local=L on the right, where
+    - source_margin/monitor_margin offset the source and its co-located
+      normalization monitor from the PML *inner* edge on the excited side —
+      x_local=0 on the left, x_local=L on the right, where
       L = (x1-x0)+stub_left+stub_right is this section's own local domain
       width (stub included, PML not) — not from the device-frame x0/x1
       boundary directly (those only coincide when the relevant stub is 0,
-      i.e. an interior cut);
+      i.e. an interior cut). The interface/measurement monitor on the
+      *other* side gets neither margin — it sits exactly at that side's
+      local edge (x_local=0 or L), flush with the PML, matching
+      FDTDSolver.solve_section()'s own mea_x = lo_m/hi_m exactly (see its
+      docstring in feces/solvers/fdtd.py for why: it must line up with the
+      adjacent section's own assumed boundary at that same x);
     - if sub_solver.half_domain_aperture is set (see its docstring in
       feces/solvers/fdtd.py) and the excited side carries exactly 1 mode,
       source + its co-located normalization monitor span only *half* the
@@ -497,10 +503,15 @@ def _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub
       exactly *on* the axis has no "near" side to pick, so it gets the
       *full* height instead). Otherwise (the default) they span the full
       sim_width, centered on the excited arm's own position;
-    - the interface/measurement monitor on the *other* side spans the full
-      non-PML height (both PML inner edges) — a true per-interface
-      decomposition that may need to see every arm/supermode present there
-      (e.g. the coupling-region interface).
+    - the interface/measurement monitor on the *other* side is sized exactly
+      like FDTDSolver.solve_section()'s own w_meas: the full sim_width
+      (both PML inner edges) whenever that side must resolve >1 mode (a
+      true per-interface decomposition that may need to see every arm/
+      supermode present there, e.g. the coupling-region interface), but
+      geometry.width_at() — the bare local cross-section, no PML-clearance
+      padding — for a genuine single-mode measurement (a well-isolated
+      waveguide, e.g. an MMI's single output arm), centered on
+      geometry.center_at() at that side exactly like the excited side is.
     """
     source_margin = getattr(sub_solver, "source_margin", 0.0)
     monitor_margin = getattr(sub_solver, "monitor_margin", 0.25)
@@ -511,6 +522,8 @@ def _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub
     eps = min(1e-3, (x1 - x0) * 0.01)
     c_left = geometry.center_at(x0 + eps, **geometry_kwargs)
     c_right = geometry.center_at(x1 - eps, **geometry_kwargs)
+    w_left = geometry.width_at(x0 + eps, **geometry_kwargs)
+    w_right = geometry.width_at(x1 - eps, **geometry_kwargs)
 
     y_top, y_bot = oxide_width / 2 - dpml, -(oxide_width / 2 - dpml)
 
@@ -521,25 +534,29 @@ def _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub
             return y_bot, 0.0
         return y_bot, y_top  # on-axis port, no companion arm to avoid -> full height
 
-    def _full_span(c):
-        return max(c - sim_width / 2, y_bot), min(c + sim_width / 2, y_top)
+    def _full_span(c, width=None):
+        w = sim_width if width is None else width
+        return max(c - w / 2, y_bot), min(c + w / 2, y_top)
 
     n_excite = n_out if n_out <= n_in else n_in
+    n_measure = n_in if n_out <= n_in else n_out
     half_domain = n_excite == 1 and getattr(sub_solver, "half_domain_aperture", False)
 
     if n_out <= n_in:
-        src_x, norm_x, mea_x = L - source_margin, L - monitor_margin, monitor_margin
-        src_c = c_right
+        src_x, norm_x, mea_x = L - source_margin, L - monitor_margin, 0.0
+        src_c, mea_c, mea_w = c_right, c_left, w_left
         src_label = "source (reverse)"
     else:
-        src_x, norm_x, mea_x = source_margin, monitor_margin, L - monitor_margin
-        src_c = c_left
+        src_x, norm_x, mea_x = source_margin, monitor_margin, L
+        src_c, mea_c, mea_w = c_left, c_right, w_right
         src_label = "source"
 
     y_lo, y_hi = _half_span(src_c) if half_domain else _full_span(src_c)
     _draw_marker(ax, src_x, y_lo, y_hi, src_label, "crimson", "-")
     _draw_marker(ax, norm_x, y_lo, y_hi, "norm mon", "darkorange", "--")
-    _draw_marker(ax, mea_x, y_bot, y_top, "interface mon", "seagreen", "--")
+
+    mea_lo, mea_hi = _full_span(mea_c, width=None if n_measure > 1 else mea_w)
+    _draw_marker(ax, mea_x, mea_lo, mea_hi, "interface mon", "seagreen", "--")
 
 
 def _draw_pml_rect(ax, xa, xb, ya, yb, label=None):
