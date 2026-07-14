@@ -48,7 +48,6 @@ Run:
     python /path/to/examples/directional_coupler_mode.py
 """
 
-import itertools
 import os
 
 import numpy as np
@@ -56,9 +55,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-import gdsfactory as gf
 import meow as mw
 
+from feces import extrude_polygons
 from feces.materials import SOI_220
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -80,35 +79,32 @@ RES = 40.0                 # pts/um, isotropic (required — meep's resolution i
 WL_MIN, WL_MAX, N_WL = 1.50, 1.60, 21   # matches directional_coupler_hybrid.py's C-band sweep
 GAPS = [0.15, 0.20, 0.25, 0.30, 0.40, 0.50]   # um, secondary sweep at the center wavelength
 
-_ctr = itertools.count()
-
 
 # ---------------------------------------------------------------------------
 # 2. Cross-section builder — two parallel silicon strips, `gap` apart.
 # ---------------------------------------------------------------------------
 def build_cross_section(gap: float, wl: float) -> mw.CrossSection:
-    """gdsfactory GDS -> meow CrossSection for two coupled parallel strips.
+    """Waveguide/oxide polygons -> meow CrossSection for two coupled parallel strips.
 
-    The GDS "length" here is arbitrary (1 um) — a CrossSection is a single
+    The "length" here is arbitrary (1 um) — a CrossSection is a single
     transverse slice, so nothing about it depends on propagation length.
     """
     pitch = WAVEGUIDE_WIDTH + gap
     yc0, yc1 = -pitch / 2, +pitch / 2
     length = 1.0
 
-    gf.gpdk.PDK.activate()
-    c = gf.Component(f"coupler_xsec_{next(_ctr)}")
-    for yc in (yc0, yc1):
-        c.add_polygon([
-            (0, yc - WAVEGUIDE_WIDTH / 2), (length, yc - WAVEGUIDE_WIDTH / 2),
-            (length, yc + WAVEGUIDE_WIDTH / 2), (0, yc + WAVEGUIDE_WIDTH / 2),
-        ], layer=(2, 0))
-    c.add_polygon([
+    wg_polys = [
+        [(0, yc - WAVEGUIDE_WIDTH / 2), (length, yc - WAVEGUIDE_WIDTH / 2),
+         (length, yc + WAVEGUIDE_WIDTH / 2), (0, yc + WAVEGUIDE_WIDTH / 2)]
+        for yc in (yc0, yc1)
+    ]
+    ox_poly = [
         (0, -MESH_WIDTH / 2), (length, -MESH_WIDTH / 2),
         (length, MESH_WIDTH / 2), (0, MESH_WIDTH / 2),
-    ], layer=(1, 0))
+    ]
+    gds_polys = {(2, 0): wg_polys, (1, 0): [ox_poly]}
 
-    structs = mw.extrude_gds(c, MATERIAL_STACK.extrusion_rules)
+    structs = extrude_polygons(gds_polys, MATERIAL_STACK.extrusion_rules)
     mesh = mw.Mesh2D(
         x=np.linspace(-MESH_WIDTH / 2, MESH_WIDTH / 2, int(RES * MESH_WIDTH) + 1),
         y=np.linspace(-MESH_HEIGHT / 2, MESH_HEIGHT / 2, int(RES * MESH_HEIGHT) + 1),

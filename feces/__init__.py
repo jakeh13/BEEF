@@ -7,6 +7,7 @@ Core public API:
         MMIMux, MuxGeoParams       — cascaded MUX geometry
         BendGeometry               — 90° bend for non-collinear FDTD I/O
         DirectionalCoupler         — 2-waveguide directional coupler w/ S-bend I/O
+        ModalMultiplexer           — asymmetric directional coupler for mode-division muxing
 
     Materials:
         MaterialStack              — Si/SiO2 layer definitions
@@ -19,6 +20,9 @@ Core public API:
 
     Results:
         SMatrix                    — unified S-parameter result type
+
+    Utilities:
+        extrude_polygons           — {layer: [polygons]} dict -> meow Structure3D list
 
     Sweep:
         ParallelSweep              — parallel parameter grid sweep
@@ -34,7 +38,8 @@ Core public API:
 
 __version__ = "0.1.0"
 
-from .geometry import MMI, MMIMux, MuxGeoParams, BendGeometry, DirectionalCoupler
+from ._utils import extrude_polygons
+from .geometry import MMI, MMIMux, MuxGeoParams, BendGeometry, DirectionalCoupler, ModalMultiplexer
 from .materials import MaterialStack, SOI_160, SOI_220
 from .results import SMatrix
 from .solvers import EMESolver, FDTDSolver, HybridSolver
@@ -50,12 +55,15 @@ __all__ = [
     "MMIMux", "MuxGeoParams",
     "BendGeometry",
     "DirectionalCoupler",
+    "ModalMultiplexer",
     # materials
     "MaterialStack", "SOI_160", "SOI_220",
     # results
     "SMatrix",
     # solvers
     "EMESolver", "FDTDSolver", "HybridSolver",
+    # utilities
+    "extrude_polygons",
     # sweep
     "ParallelSweep",
     # plot
