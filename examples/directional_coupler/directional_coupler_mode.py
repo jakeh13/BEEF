@@ -45,7 +45,7 @@ rules (so the material model matches directional_coupler_hybrid.py exactly)
 without going through any FECES solver class.
 
 Run:
-    python /path/to/examples/directional_coupler_mode.py
+    python /path/to/examples/directional_coupler/directional_coupler_mode.py
 """
 
 import os
@@ -61,7 +61,7 @@ from feces import extrude_polygons
 from feces.materials import SOI_220
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_output", "directional_coupler_mode"))
+output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "directional_coupler", "directional_coupler_mode"))
 os.makedirs(output_dir, exist_ok=True)
 
 # ---------------------------------------------------------------------------

@@ -187,6 +187,15 @@ class DirectionalCoupler(DeviceGeometry):
     def total_length(self) -> float:
         return self.coupling_length + 2 * self.bend_length
 
+    @property
+    def input_ys(self) -> List[float]:
+        """y-centres of the two input-side access waveguides, low to high:
+        index 0 = bottom arm ("in", the one meant to be excited), index 1 =
+        top arm ("isolated") — same ordering as _arm_sign()/MMI._port_ys.
+        FDTDSolver.solve() reads this to place its source: port="bot" picks
+        index 0 ("in"), port="top" index 1 ("isolated")."""
+        return [-self.waveguide_offset / 2, +self.waveguide_offset / 2]
+
     # ------------------------------------------------------------------
     # Whole-device polygons (plain FDTD / geometry preview)
     # ------------------------------------------------------------------
@@ -201,9 +210,10 @@ class DirectionalCoupler(DeviceGeometry):
         p_far = self.waveguide_offset / 2
 
         wg: List[List[Tuple[float, float]]] = []
-        for s in (-1.0, 1.0):
-            y = s * p_near
-            wg.append([(-hc, y - ww/2), (hc, y - ww/2), (hc, y + ww/2), (-hc, y + ww/2)])
+        if hc > 1e-9:  # coupling_length=0 -> bends back-to-back, no straight section
+            for s in (-1.0, 1.0):
+                y = s * p_near
+                wg.append([(-hc, y - ww/2), (hc, y - ww/2), (hc, y + ww/2), (-hc, y + ww/2)])
         for s in (-1.0, 1.0):
             wg.extend(_sbend_polygon(-hc - bl, s*p_far, -hc, s*p_near, ww, self.bend_type))
             wg.extend(_sbend_polygon(hc, s*p_near, hc + bl, s*p_far, ww, self.bend_type))
@@ -319,15 +329,13 @@ class DirectionalCoupler(DeviceGeometry):
 
     def section_prisms(self, x0: float, x1: float, si_medium,
                         stub_left: float = 0.0, stub_right: float = 0.0,
-                        input_idx: int = 0, output_idx: int = 0):
-        import meep as mp
-        return [
-            mp.Prism(
-                vertices=[mp.Vector3(x, y, 0) for x, y in verts],
-                height=mp.inf, material=si_medium,
-            )
-            for verts in self._section_polygons(x0, x1, stub_left, stub_right, input_idx, output_idx)
-        ]
+                        input_idx: int = 0, output_idx: int = 0,
+                        wg_height: float | None = None):
+        from .base import polygons_to_prisms
+        return polygons_to_prisms(
+            self._section_polygons(x0, x1, stub_left, stub_right, input_idx, output_idx),
+            si_medium, wg_height=wg_height,
+        )
 
     def section_gds(self, x0: float, x1: float, oxide_width: float,
                      stub_left: float = 0.0, stub_right: float = 0.0,
@@ -365,6 +373,29 @@ class DirectionalCoupler(DeviceGeometry):
             return s * p_far
         frac = (x - out0) / (out1 - out0)
         return s * (p_near + frac * (p_far - p_near))
+
+    def source_aperture_at(self, x: float, input_idx: int = 0,
+                            output_idx: int = 0) -> float | None:
+        """Widest eigenmode source / norm-monitor window (full y-span, µm),
+        centered on center_at(x), that stays clear of the OTHER arm's core
+        at this cross-section. Both arms are always physically present in
+        any cross-section of the coupler, so a full-domain launch aperture
+        centered on one arm would also reach the unexcited companion arm —
+        corrupting the "single-mode" MPB solve into seeing the arm pair's
+        near-degenerate even/odd supermodes instead of the intended isolated
+        arm. Returns None inside the straight coupling region, where a
+        launch/measurement legitimately must see both arms (the coupled-pair
+        supermode basis); callers clamp the window to their own non-PML
+        domain. Both arms mirror each other about y=0 everywhere, so the
+        window is the same size for either input_idx/output_idx choice."""
+        (in0, in1), (out0, out1) = self._bend_bounds()
+        if in1 <= x <= out0:
+            return None  # coupled-pair region — both arms belong in the basis
+        idx = input_idx if x < in1 else output_idx
+        c = self.center_at(x, input_idx=idx, output_idx=idx)
+        # other arm's centre is the mirror image at -c: edge-to-window
+        # half-span = |c - (-c)| - other arm's half width
+        return 2.0 * (2.0 * abs(c) - self.waveguide_width / 2)
 
     def eme_lengths(self, straight_length: float) -> List[float]:
         return [straight_length, self.bend_length, self.coupling_length,

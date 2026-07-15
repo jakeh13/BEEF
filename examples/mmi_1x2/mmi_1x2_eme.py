@@ -12,7 +12,7 @@ For a balanced 1x2 splitter each output carries ~50% of the input power
 (ideal insertion loss: −3 dB per port).
 
 Run from any directory:
-    python /path/to/examples/mmi_1x2_eme.py
+    python /path/to/examples/mmi_1x2/mmi_1x2_eme.py
 """
 
 import os
@@ -24,7 +24,7 @@ from feces import MMI, EMESolver, SOI_160, plot_eme_geometry, plot_performance
 
 # Output to a top-level example_output/ folder outside the repo
 _HERE = os.path.dirname(os.path.abspath(__file__))
-output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_output", "mmi_1x2_eme"))
+output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "mmi_1x2", "mmi_1x2_eme"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters

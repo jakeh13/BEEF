@@ -93,7 +93,11 @@ class HybridSolver:
                 single dict applied to every section, or a list of
                 len(solvers) dicts giving different kwargs per section (e.g.
                 port_idx only on the section that actually branches — see
-                cache below for why this distinction matters).
+                cache below for why this distinction matters). Entries that
+                match a solver's own solve_section() named parameters (e.g.
+                FDTDSolver's monitor_center/monitor_size overrides) bind to
+                those parameters rather than reaching the geometry hooks, so
+                per-section solver options ride in the same dicts.
             cache: optional dict shared across multiple solve() calls (e.g.
                 once per output port of a multi-output device). Sections are
                 memoized by (solver identity, x0, x1, n_in, n_out, kwargs) —

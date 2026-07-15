@@ -1,7 +1,30 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
+
+
+def polygons_to_prisms(vertex_lists, si_medium, wg_height: Optional[float] = None):
+    """meep Prisms from raw (x, y) vertex lists — the one place the 2-D/3-D
+    extrusion convention lives.
+
+    wg_height None (2-D): infinite extrusion at z=0, for a planar (x, y)
+    simulation. wg_height h (3-D): a real silicon core of thickness h
+    centered on z=0 (vertices placed at z=-h/2, extruded +h along z), with
+    the oxide above/below coming from the simulation's default_material.
+    """
+    import meep as mp
+
+    h = mp.inf if wg_height is None else wg_height
+    z0 = 0.0 if wg_height is None else -wg_height / 2
+    return [
+        mp.Prism(
+            vertices=[mp.Vector3(x, y, z0) for x, y in verts],
+            height=h,
+            material=si_medium,
+        )
+        for verts in vertex_lists
+    ]
 
 
 class DeviceGeometry(ABC):
@@ -41,7 +64,8 @@ class DeviceGeometry(ABC):
             "override it or use to_gds_fdtd() for the legacy GDS path."
         )
 
-    def to_meep_prisms(self, si_medium, stub_length: float = 0.0):
+    def to_meep_prisms(self, si_medium, stub_length: float = 0.0,
+                        wg_height: Optional[float] = None):
         """Convert waveguide polygons to a list of meep Prism objects.
 
         No GDS files are written.  Polygons from the (2, 0) layer are extruded
@@ -51,20 +75,18 @@ class DeviceGeometry(ABC):
         Args:
             si_medium: ``mp.Medium`` for silicon at the simulation wavelength.
             stub_length: access waveguide stub length passed to polygons() (µm).
+            wg_height: silicon core thickness (µm) for a 3-D simulation —
+                the core is extruded z=-wg_height/2..+wg_height/2; None
+                (default) keeps the legacy 2-D infinite extrusion. See
+                polygons_to_prisms().
 
         Returns:
             List of ``mp.Prism`` objects ready for ``mp.Simulation(geometry=...)``.
         """
-        import meep as mp
-
-        return [
-            mp.Prism(
-                vertices=[mp.Vector3(x, y, 0) for x, y in verts],
-                height=mp.inf,
-                material=si_medium,
-            )
-            for verts in self.polygons(stub_length=stub_length).get((2, 0), [])
-        ]
+        return polygons_to_prisms(
+            self.polygons(stub_length=stub_length).get((2, 0), []),
+            si_medium, wg_height=wg_height,
+        )
 
     # ------------------------------------------------------------------
     # GDS interface (still required for meow / EME)
@@ -102,9 +124,10 @@ class DeviceGeometry(ABC):
         """Build a waveguide-polygon layout (Dict[layer_tuple, List[polygon]])
         positioned for a MEEP simulation domain.
 
-        Deprecated: prefer to_meep_prisms() for new-style geometries.
-        Retained for MMIMux and other complex geometries that have not yet
-        migrated to the polygon-first interface.
+        Deprecated: prefer to_meep_prisms() for new-style geometries. Every
+        in-tree geometry (MMIMux included) now implements polygons(); this
+        hook is retained only for out-of-tree geometries still on the legacy
+        GDS path.
         """
         raise NotImplementedError(
             f"{type(self).__name__} has not implemented to_gds_fdtd(); "
@@ -163,6 +186,23 @@ class DeviceGeometry(ABC):
     def center_at(self, x: float, **kwargs) -> float:
         """Local waveguide y-center at device-frame position x (µm). Default 0."""
         return 0.0
+
+    def source_aperture_at(self, x: float, **kwargs) -> Optional[float]:
+        """Widest single-mode eigenmode-launch window (full y-span, µm),
+        centered on center_at(x), that stays clear of neighboring structure
+        at device-frame position x — or None for no geometry-imposed
+        restriction (the default).
+
+        FDTDSolver.solve_section() consults this whenever it excites exactly
+        one mode: a non-None value shrinks the eigenmode source and its
+        co-located normalization monitor to this window (further clamped to
+        the solver's own non-PML domain) so the MPB mode solve neither sees
+        a nearby unexcited waveguide nor reaches into the PML — while the
+        drawn geometry stays complete. Override in geometries whose ports
+        have close neighbors that half_domain_aperture's fixed half-domain
+        rule can't isolate (e.g. MMIMux's three output branches, one of
+        which sits exactly on the y=0 axis)."""
+        return None
 
     # ------------------------------------------------------------------
     # Shared properties / helpers

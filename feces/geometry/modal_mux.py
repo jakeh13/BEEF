@@ -244,15 +244,13 @@ class ModalMultiplexer(DeviceGeometry):
 
     def section_prisms(self, x0: float, x1: float, si_medium,
                         stub_left: float = 0.0, stub_right: float = 0.0,
-                        input_idx: int = 0, output_idx: int = 0):
-        import meep as mp
-        return [
-            mp.Prism(
-                vertices=[mp.Vector3(x, y, 0) for x, y in verts],
-                height=mp.inf, material=si_medium,
-            )
-            for verts in self._section_polygons(x0, x1, stub_left, stub_right, input_idx, output_idx)
-        ]
+                        input_idx: int = 0, output_idx: int = 0,
+                        wg_height: float | None = None):
+        from .base import polygons_to_prisms
+        return polygons_to_prisms(
+            self._section_polygons(x0, x1, stub_left, stub_right, input_idx, output_idx),
+            si_medium, wg_height=wg_height,
+        )
 
     def section_gds(self, x0: float, x1: float, oxide_width: float,
                      stub_left: float = 0.0, stub_right: float = 0.0,

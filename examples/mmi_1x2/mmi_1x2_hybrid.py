@@ -19,7 +19,7 @@ The MMI-specific geometry (tapers, body, output branches) lives entirely in
 MMI's section_prisms/section_gds/width_at/center_at methods.
 
 Run:
-    python /path/to/examples/mmi_1x2_hybrid.py
+    python /path/to/examples/mmi_1x2/mmi_1x2_hybrid.py
 """
 
 import os
@@ -31,7 +31,7 @@ import matplotlib.pyplot as plt
 from feces import MMI, EMESolver, FDTDSolver, HybridSolver, SOI_160, plot_hybrid_geometry
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_output", "mmi_1x2_hybrid"))
+output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "mmi_1x2", "mmi_1x2_hybrid"))
 os.makedirs(output_dir, exist_ok=True)
 
 # ---------------------------------------------------------------------------
@@ -86,6 +86,7 @@ _fdtd_common = dict(
     dpml=0.5,
     source_margin=0.0,
     monitor_margin=0.25,
+    three_d=True,       # full 3-D FDTD: real 160 nm Si core in oxide, PML on all six faces
     material_stack=SOI_160,
     decay_tol=1e-11,
 )

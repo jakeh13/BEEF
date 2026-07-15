@@ -16,7 +16,7 @@ for validation and for devices where EME is inaccurate (high-contrast bends,
 scattering geometries).
 
 Run from any directory:
-    python /path/to/examples/mmi_1x2_fdtd.py
+    python /path/to/examples/mmi_1x2/mmi_1x2_fdtd.py
 """
 
 import os
@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 from feces import MMI, FDTDSolver, SOI_160, plot_fdtd_geometry
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_output", "mmi_1x2_fdtd"))
+output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "mmi_1x2", "mmi_1x2_fdtd"))
 os.makedirs(output_dir, exist_ok=True)
 
 # ---------------------------------------------------------------------------
@@ -66,6 +66,7 @@ solver = FDTDSolver(
     dpml=0.5,                  # PML thickness, all 4 sides (µm)
     source_margin=0.0,         # source x-offset from left PML inner edge (µm)
     monitor_margin=0.25,       # monitor offset from PML inner edges, both sides (µm)
+    three_d=True,       # full 3-D FDTD: real 160 nm Si core in oxide, PML on all six faces
     num_input_modes=1,         # input modes for normalization
     num_output_modes=1,        # modes extracted per output waveguide
     # Output monitor centers at ±sim_width/4 = ±1.25 µm (half-domain aperture,

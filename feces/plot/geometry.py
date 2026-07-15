@@ -94,15 +94,17 @@ def _draw_marker(ax, x_gds, y_lo, y_hi, label, color, ls):
 
 def _draw_fdtd_monitors(ax, dpml, total_gds, oxide_width, source_margin, monitor_margin,
                          output_monitor_centers=None, output_monitor_widths=None,
-                         sim_width=None, src_yo=0.0):
+                         sim_width=None, src_yo=0.0, src_width=None):
     """source/in-mon/out-mon markers matching FDTDSolver.solve()'s layout:
     single source + co-located input-normalization monitor (both centered on
     src_yo — the actual input waveguide position, see plot_fdtd_geometry's
-    docstring — spanning the full sim_width: PML edge to PML edge, exclusive
-    of PML, exactly mirroring solve()'s own unconditional src_width), plus
-    one or more output monitors on the right (one per output_monitor_centers/
-    widths entry, each spanning only its own y-range, or a single full-height
-    line if unset)."""
+    docstring — spanning src_width, or the full sim_width when src_width is
+    None: PML edge to PML edge, exclusive of PML, exactly mirroring solve()'s
+    own default; a non-None src_width is the geometry-provided launch window
+    solve() shrinks to, see geometry.source_aperture_at), plus one or more
+    output monitors on the right (one per output_monitor_centers/widths
+    entry, each spanning only its own y-range, or a single full-height line
+    if unset)."""
     y0, y1 = -oxide_width / 2, oxide_width / 2
     y_in0, y_in1 = y0 + dpml, y1 - dpml
 
@@ -110,8 +112,9 @@ def _draw_fdtd_monitors(ax, dpml, total_gds, oxide_width, source_margin, monitor
     in_x = dpml + monitor_margin
     out_x = total_gds - dpml - monitor_margin
 
-    y_lo = max(src_yo - sim_width / 2, y_in0)
-    y_hi = min(src_yo + sim_width / 2, y_in1)
+    w_src = sim_width if src_width is None else src_width
+    y_lo = max(src_yo - w_src / 2, y_in0)
+    y_hi = min(src_yo + w_src / 2, y_in1)
     _draw_marker(ax, src_x, y_lo, y_hi, "source", "crimson", "-")
     _draw_marker(ax, in_x, y_lo, y_hi, "in mon", "darkorange", "--")
 
@@ -240,11 +243,13 @@ def plot_fdtd_geometry(
     co-located input-normalization monitor near the left PML — centered on
     geometry.input_ys' last (port="top") or first (port="bot") entry (the
     same entry either way for a single-input device), spanning the full
-    sim_width (PML edge to PML edge, exclusive of PML — solve()'s source is
-    always the one true input port, with no neighboring port nearby that a
-    narrower aperture would need to avoid) — and one output monitor per
-    entry in solver.output_monitor_centers/widths near the right PML (each
-    spanning only its own y-range).
+    sim_width (PML edge to PML edge, exclusive of PML) unless the geometry
+    itself reports a launch window at the source cross-section
+    (source_aperture_at() non-None, e.g. DirectionalCoupler with its
+    physically-present unexcited second arm), in which case they span that
+    window clamped to the non-PML domain, exactly like solve() — and one
+    output monitor per entry in solver.output_monitor_centers/widths near
+    the right PML (each spanning only its own y-range).
 
     Args:
         geometry: DeviceGeometry instance.
@@ -261,7 +266,8 @@ def plot_fdtd_geometry(
         output_path: full path for output PNG; directory created if needed.
         figsize: figure size (width, height) in inches.
         wg_layer/ox_layer: GDS layer tuples for waveguide/oxide polygons.
-        **geometry_kwargs: forwarded to geometry.to_gds_eme().
+        **geometry_kwargs: forwarded to geometry.to_gds_eme() and (when the
+            geometry defines it) geometry.source_aperture_at().
 
     Returns:
         (fig, ax)
@@ -281,6 +287,17 @@ def plot_fdtd_geometry(
     total_gds = geometry.total_length + 2 * straight_length
     input_ys = getattr(geometry, "input_ys", [0.0])
     src_yo = input_ys[-1] if port == "top" else input_ys[0]
+    # Same source-width rule as FDTDSolver.solve(): a geometry-provided
+    # launch window (source_aperture_at() non-None at the source's device-
+    # frame x, clamped to the non-PML domain) shrinks the source + norm
+    # monitor; otherwise they span the full sim_width.
+    src_width = None
+    _aperture_at = getattr(geometry, "source_aperture_at", None)
+    if _aperture_at is not None:
+        x_src_dev = -(geometry.total_length / 2 + _wl) + solver.source_margin
+        src_aperture = _aperture_at(x_src_dev, **geometry_kwargs)
+        if src_aperture is not None:
+            src_width = min(src_aperture, solver.sim_width - 2.0 * abs(src_yo))
     _draw_fdtd_monitors(
         ax, dpml, total_gds, oxide_width,
         source_margin=solver.source_margin, monitor_margin=solver.monitor_margin,
@@ -288,6 +305,7 @@ def plot_fdtd_geometry(
         output_monitor_widths=getattr(solver, "output_monitor_widths", None),
         sim_width=solver.sim_width,
         src_yo=src_yo,
+        src_width=src_width,
     )
     if show_pml:
         _draw_pml(ax, dpml, total_gds, oxide_width)
@@ -471,7 +489,8 @@ def plot_hybrid_geometry(
 
 
 def _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub_right,
-                                oxide_width, n_in, n_out, geometry_kwargs):
+                                oxide_width, n_in, n_out, geometry_kwargs,
+                                monitor_center=None, monitor_size=None):
     """Source/monitor markers for one HybridSolver FDTD section, in the
     section's own local frame — left edge of its section_gds()/
     section_prisms() domain (i.e. x0-stub_left) at x_local=0, matching the
@@ -493,8 +512,15 @@ def _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub
       FDTDSolver.solve_section()'s own mea_x = lo_m/hi_m exactly (see its
       docstring in feces/solvers/fdtd.py for why: it must line up with the
       adjacent section's own assumed boundary at that same x);
-    - if sub_solver.half_domain_aperture is set (see its docstring in
-      feces/solvers/fdtd.py) and the excited side carries exactly 1 mode,
+    - if the excited side carries exactly 1 mode and the geometry itself
+      provides a launch window there (geometry.source_aperture_at()
+      non-None — e.g. MMIMux's output branches), source + its co-located
+      normalization monitor span exactly that window, centered on the
+      excited arm and clamped to the non-PML domain, taking precedence
+      over half_domain_aperture below — mirroring FDTDSolver.
+      solve_section()'s own priority order;
+    - otherwise, if sub_solver.half_domain_aperture is set (see its docstring
+      in feces/solvers/fdtd.py) and the excited side carries exactly 1 mode,
       source + its co-located normalization monitor span only *half* the
       domain height: from the shared symmetry axis (y=0) out to the near
       PML on whichever side the excited arm actually sits (a port sitting
@@ -509,7 +535,10 @@ def _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub
       geometry.width_at() — the bare local cross-section, no PML-clearance
       padding — for a genuine single-mode measurement (a well-isolated
       waveguide, e.g. an MMI's single output arm), centered on
-      geometry.center_at() at that side exactly like the excited side is.
+      geometry.center_at() at that side exactly like the excited side is —
+      unless monitor_center/monitor_size are given, which override that
+      monitor's centre/span exactly like solve_section()'s own parameters
+      of the same names.
     """
     source_margin = getattr(sub_solver, "source_margin", 0.0)
     monitor_margin = getattr(sub_solver, "monitor_margin", 0.25)
@@ -543,17 +572,38 @@ def _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub
     if n_out <= n_in:
         src_x, norm_x, mea_x = L - source_margin, L - monitor_margin, 0.0
         src_c, mea_c, mea_w = c_right, c_left, w_left
+        src_ap_x = x1 - eps
         src_label = "source (reverse)"
     else:
         src_x, norm_x, mea_x = source_margin, monitor_margin, L
         src_c, mea_c, mea_w = c_left, c_right, w_right
+        src_ap_x = x0 + eps
         src_label = "source"
 
-    y_lo, y_hi = _half_span(src_c) if half_domain else _full_span(src_c)
+    # Same aperture priority as FDTDSolver.solve_section(): a geometry-
+    # provided single-mode launch window (source_aperture_at, clamped to the
+    # non-PML domain) wins over half_domain_aperture, which wins over the
+    # full sim_width.
+    src_aperture = None
+    if n_excite == 1:
+        _aperture_at = getattr(geometry, "source_aperture_at", None)
+        if _aperture_at is not None:
+            src_aperture = _aperture_at(src_ap_x, **geometry_kwargs)
+    if src_aperture is not None:
+        y_lo, y_hi = _full_span(src_c, width=min(src_aperture, sim_width - 2.0 * abs(src_c)))
+    elif half_domain:
+        y_lo, y_hi = _half_span(src_c)
+    else:
+        y_lo, y_hi = _full_span(src_c)
     _draw_marker(ax, src_x, y_lo, y_hi, src_label, "crimson", "-")
     _draw_marker(ax, norm_x, y_lo, y_hi, "norm mon", "darkorange", "--")
 
-    mea_lo, mea_hi = _full_span(mea_c, width=None if n_measure > 1 else mea_w)
+    if monitor_center is not None:
+        mea_c = monitor_center
+    mea_lo, mea_hi = _full_span(
+        mea_c,
+        width=(None if n_measure > 1 else mea_w) if monitor_size is None else monitor_size,
+    )
     _draw_marker(ax, mea_x, mea_lo, mea_hi, "interface mon", "seagreen", "--")
 
 
@@ -660,6 +710,17 @@ def _plot_hybrid_sub_regions(geometry, solver, oxide_width, in_modes, out_modes,
             # doesn't vary with which output port is being solved for).
             config_name = "" if len(names) == n_configs else "_".join(names)
 
+            # A section's kwargs dict may mix true geometry kwargs with
+            # FDTDSolver.solve_section()'s own monitor_center/monitor_size
+            # parameters (they ride in the same per-section dict, exactly as
+            # HybridSolver.solve() forwards them — there they bind to
+            # solve_section's named parameters rather than reaching the
+            # geometry hooks). Split them off here the same way, before
+            # section_gds()/width_at()/center_at() see the dict.
+            kwargs_k = dict(kwargs_k)
+            monitor_center = kwargs_k.pop("monitor_center", None)
+            monitor_size = kwargs_k.pop("monitor_size", None)
+
             # FDTDSolver.solve_section() draws stub_left/right + dpml (not
             # just stub_left/right) so the waveguide continues through the
             # full PML thickness instead of stopping at its inner edge (see
@@ -697,7 +758,9 @@ def _plot_hybrid_sub_regions(geometry, solver, oxide_width, in_modes, out_modes,
                 kind = "EME"
             elif is_fdtd:
                 _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub_right,
-                                            oxide_width, n_in, n_out, kwargs_k)
+                                            oxide_width, n_in, n_out, kwargs_k,
+                                            monitor_center=monitor_center,
+                                            monitor_size=monitor_size)
                 if show_pml:
                     y0, y1 = -oxide_width / 2, oxide_width / 2
                     _draw_pml_rect(ax, -dpml, 0.0, y0, y1, label="PML")           # left

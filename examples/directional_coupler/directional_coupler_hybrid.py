@@ -68,7 +68,7 @@ coupler-specific geometry (S-bends, coupling region) lives entirely in
 DirectionalCoupler's section_prisms/section_gds/width_at/center_at methods.
 
 Run:
-    python /path/to/examples/directional_coupler_hybrid.py
+    python /path/to/examples/directional_coupler/directional_coupler_hybrid.py
 """
 
 import os
@@ -82,7 +82,7 @@ from feces import (
 )
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_output", "directional_coupler_hybrid"))
+output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "directional_coupler", "directional_coupler_hybrid"))
 os.makedirs(output_dir, exist_ok=True)
 
 # ---------------------------------------------------------------------------
@@ -145,6 +145,7 @@ _fdtd_common = dict(
     dpml=0.5,
     source_margin=0.0,
     monitor_margin=0.25,
+    three_d=True,       # full 3-D FDTD: real 220 nm Si core in oxide, PML on all six faces
     # A full-sim_width source/norm aperture at a true I/O port would reach
     # past the shared y=0 axis to the *other* arm (only waveguide_offset
     # away), since both arms are always physically present in a section -
@@ -188,6 +189,17 @@ hybrid = HybridSolver(
     interface_modes=interface_modes,
 )
 
+# Interface-monitor override for the input-section FDTD runs (and their
+# section plots): span the full non-PML domain — PML inner edge to PML inner
+# edge — centered on the coupled pair's shared y=0 axis. Without this the
+# monitor inherits its centre from center_at() sampled just inside the
+# S-bend, i.e. the excited arm's ∓coupling_pitch/2 centreline: the window
+# then pokes into one PML, misses the last bit of domain on the other side,
+# differs between the "in" and "isolated" runs, and sits shifted relative to
+# the EME body's own y=0-centered supermode basis it is matrix-multiplied
+# against.
+_iface_mon = dict(monitor_center=0.0, monitor_size=fdtd_solver.sim_width)
+
 # ---------------------------------------------------------------------------
 # 4. Geometry plot — shows which solver covers which section, at dc's
 #    (middle-of-sweep) coupling_length.
@@ -206,8 +218,8 @@ plot_hybrid_geometry(
     # (index 2), which is never separately simulated (see module docstring)
     # but is still visible in the full-device overview plot above.
     sub_region_configs=[
-        ("in", [{"input_idx": 0}, {}, {}]),
-        ("isolated", [{"input_idx": 1}, {}, {}]),
+        ("in", [{"input_idx": 0, **_iface_mon}, {}, {}]),
+        ("isolated", [{"input_idx": 1, **_iface_mon}, {}, {}]),
     ],
     sub_region_sections=[0, 1],
 )
@@ -231,13 +243,13 @@ M_in0 = fdtd_solver.solve_section(
     dc, wavelengths, boundaries[0], boundaries[1],
     n_modes_in=1, n_modes_out=N_MODES,
     stub_left=fdtd_solver.waveguide_length, stub_right=0.0,
-    input_idx=0,
+    input_idx=0, **_iface_mon,
 )  # [n_wl, N_MODES, 1] — "in" arm -> body modes
 M_in1 = fdtd_solver.solve_section(
     dc, wavelengths, boundaries[0], boundaries[1],
     n_modes_in=1, n_modes_out=N_MODES,
     stub_left=fdtd_solver.waveguide_length, stub_right=0.0,
-    input_idx=1,
+    input_idx=1, **_iface_mon,
 )  # [n_wl, N_MODES, 1] — "isolated" arm -> body modes
 
 M_out_through = M_in0.transpose(0, 2, 1)  # [n_wl, 1, N_MODES] — mirror-symmetry reuse, not a new simulation
