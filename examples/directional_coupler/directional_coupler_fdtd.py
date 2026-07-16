@@ -76,7 +76,7 @@ WL_MIN = 1.50       # wavelength sweep start (µm)
 WL_MAX = 1.60       # wavelength sweep end (µm)
 N_WL = 11           # number of wavelength points
 
-COUPLING_LENGTH = 14.7   # µm, hard-coded — the ~3 dB length for this
+COUPLING_LENGTH = 13.5   # µm, hard-coded — the ~3 dB length for this
                          # cross-section (cf. the hybrid example's sweep)
 
 # ---------------------------------------------------------------------------
