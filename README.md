@@ -1,6 +1,6 @@
 # FECES
 
-**F**DTD/**E**ME **C**ombined **E**lectromagnetic **S**olver — for photonic MMI/coupler devices.
+**F**DTD/**E**ME **C**ascaded **E**lectromagnetic **S**olver — for photonic MMI/coupler devices.
 
 FECES is a hybrid-methodology orchestration layer on top of [meep](https://meep.readthedocs.io/) (FDTD),
 [meow](https://github.com/flaport/meow)/MPB (eigenmode expansion), and optionally
@@ -113,5 +113,6 @@ make clean
 
 ## Status
 
-No test suite or CI yet. See `notes.md` for a capability gap analysis against meep/meow/tidy3d/gdsfactory/SAX
-and a prioritized list of candidate additions (not yet implemented).
+Fast unit tests (`tests/`, no meep/meow required) run in CI on every push/PR (`.github/workflows/ci.yml`).
+See `notes.md` for a capability gap analysis against meep/meow/tidy3d/gdsfactory/SAX and a prioritized list
+of candidate additions (not yet implemented).
