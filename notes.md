@@ -275,11 +275,9 @@ where a category has fewer or lower-priority items.
    export a FECES geometry as a real `.gds`. A thin, optional adapter (gdsfactory
    `Component` ↔ FECES polygon dict) would restore that interop without
    reintroducing gdsfactory as a hard dependency.
-3. **Grating coupler / edge coupler geometry.** Missing entirely; needed for any
-   fiber-to-chip I/O device model.
-4. **Y-branch / adiabatic splitter and waveguide crossing.** Common alternatives to
+3. **Y-branch / adiabatic splitter and waveguide crossing.** Common alternatives to
    the MMI splitter and to routing waveguides through each other — neither exists.
-5. **Consolidate the duplicated S-bend logic — done for the coupler.py/modal_mux.py
+4. **Consolidate the duplicated S-bend logic — done for the coupler.py/modal_mux.py
    split.** S-bend centerline/extrusion math now lives solely in a standalone `SBend`
    `DeviceGeometry` (`sbend.py`), composed internally by `DirectionalCoupler` for each
    of its 4 arms via the shared `_compose.shift_polys`/`shift_prisms` offset helpers
@@ -291,7 +289,7 @@ where a category has fewer or lower-priority items.
    curve from `"circular"` (unlike `SBend`'s genuine Bezier/circular-arc split).
    Worth rebuilding it on top of `SBend` (or a new arc-profile primitive) so every
    bend in the library shares one implementation.
-6. **General-purpose parametric taper class — done.** A standalone `Taper`
+5. **General-purpose parametric taper class — done.** A standalone `Taper`
    `DeviceGeometry` (`taper.py`) now exists and is composed internally by `MMI` for
    every port's taper instead of inline trapezoid math duplicated 3x per class. It's
    linear-profile only for now; a polynomial or Euler-spiral width profile (for

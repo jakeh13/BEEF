@@ -91,7 +91,8 @@ class MMI(DeviceGeometry):
         return self.mm_length + in_max + out_max
 
     def polygons(
-        self, stub_length: float = 0.0, output_indices: List[int] = None
+        self, stub_length: float = 0.0, output_indices: List[int] = None,
+        input_indices: List[int] = None,
     ) -> Dict[Tuple[int, int], List[List[Tuple[float, float]]]]:
         """MMI polygons in device frame (center at x=0).
 
@@ -101,18 +102,25 @@ class MMI(DeviceGeometry):
         rather than a coupled multi-waveguide supermode). Output tapers are
         always drawn for every branch — they're part of the MMI body's
         transition and stay regardless of which stub is monitored.
+
+        input_indices: the symmetric restriction on the input side — needed
+        for a multi-input device (2x2, etc.) whose input access cross-section
+        would otherwise contain several waveguides, so an EME solve there
+        excites a two-guide supermode instead of a single input port. Input
+        tapers, like output tapers, are always drawn for every branch.
         """
         half = self.mm_length / 2
         W = self.mm_width
         in_max = max((p.taper_length for p in self.inputs), default=0.0)
         out_max = max((p.taper_length for p in self.outputs), default=0.0)
         stub_out_idxs = range(len(self.outputs)) if output_indices is None else output_indices
+        stub_in_idxs = range(len(self.inputs)) if input_indices is None else input_indices
 
         wg: List[List[Tuple[float, float]]] = [
             [(-half, -W/2), (half, -W/2), (half, W/2), (-half, W/2)]
         ]
 
-        for p in self.inputs:
+        for i, p in enumerate(self.inputs):
             ww = p.waveguide_width
             x_taper_start = -half - p.taper_length
             t = Taper(length=p.taper_length, width_start=ww, width_end=p.taper_width)
@@ -121,7 +129,7 @@ class MMI(DeviceGeometry):
             if extra > 1e-9:
                 wg.append([(x_taper_start-extra, -ww/2+p.y), (x_taper_start, -ww/2+p.y),
                            (x_taper_start, ww/2+p.y), (x_taper_start-extra, ww/2+p.y)])
-            if stub_length > 0:
+            if stub_length > 0 and i in stub_in_idxs:
                 sl = stub_length
                 x_far = -half - in_max
                 wg.append([(x_far-sl, -ww/2+p.y), (x_far, -ww/2+p.y),
@@ -145,18 +153,23 @@ class MMI(DeviceGeometry):
 
     def to_gds_eme(
         self, straight_length: float, oxide_width: float,
-        x_start: float = 0.0, output_idx: int = None, **kwargs
+        x_start: float = 0.0, output_idx: int = None, input_idx: int = None, **kwargs
     ) -> Dict[Tuple[int, int], List[List[Tuple[float, float]]]]:
         """Build the EME layout. output_idx restricts the drawn output branch(es)
         to a single output index (e.g. output_idx=1 for a top-only output
-        stub) instead of all n_outputs — pass None to keep all of them."""
+        stub) instead of all n_outputs — pass None to keep all of them.
+        input_idx does the same on the input side (needed for a multi-input
+        device so the EME input cross-section is one guide, not a supermode)."""
         in_max = max((p.taper_length for p in self.inputs), default=0.0)
         left_edge = -(self.mm_length / 2 + in_max)
         x_off = x_start - left_edge + straight_length
         output_indices = None if output_idx is None else [output_idx]
+        input_indices = None if input_idx is None else [input_idx]
         wg_polys = [
             [(x + x_off, y) for x, y in verts]
-            for verts in self.polygons(stub_length=straight_length, output_indices=output_indices)[_WG_LAYER]
+            for verts in self.polygons(stub_length=straight_length,
+                                       output_indices=output_indices,
+                                       input_indices=input_indices)[_WG_LAYER]
         ]
         total_span = self.total_length + 2 * straight_length
         ox_poly = _oxide_box(x_start, x_start + total_span, oxide_width)
