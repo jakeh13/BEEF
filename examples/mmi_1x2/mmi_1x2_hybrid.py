@@ -212,6 +212,7 @@ print(f"  (ideal 50/50 split: T_each=0.5, IL_total=0.0 dB)")
 # ---------------------------------------------------------------------------
 smat = smat_top
 smat._data.update(smat_bot._data)
+smat.check_passive()  # sanity: total output power must not exceed 1 at any wavelength
 smat.save(os.path.join(output_dir, "smatrix_hybrid.pkl"))
 print(f"\nSMatrix saved → {output_dir}/smatrix_hybrid.pkl")
 

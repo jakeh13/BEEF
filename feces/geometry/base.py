@@ -4,6 +4,15 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple
 
 
+def _oxide_box(x_start: float, total_x: float, oxide_width: float) -> List[Tuple[float, float]]:
+    return [
+        (x_start, -oxide_width / 2),
+        (total_x,  -oxide_width / 2),
+        (total_x,   oxide_width / 2),
+        (x_start,  oxide_width / 2),
+    ]
+
+
 def polygons_to_prisms(vertex_lists, si_medium, wg_height: Optional[float] = None):
     """meep Prisms from raw (x, y) vertex lists — the one place the 2-D/3-D
     extrusion convention lives.
@@ -125,9 +134,8 @@ class DeviceGeometry(ABC):
         positioned for a MEEP simulation domain.
 
         Deprecated: prefer to_meep_prisms() for new-style geometries. Every
-        in-tree geometry (MMIMux included) now implements polygons(); this
-        hook is retained only for out-of-tree geometries still on the legacy
-        GDS path.
+        in-tree geometry now implements polygons(); this hook is retained
+        only for out-of-tree geometries still on the legacy GDS path.
         """
         raise NotImplementedError(
             f"{type(self).__name__} has not implemented to_gds_fdtd(); "
@@ -200,8 +208,9 @@ class DeviceGeometry(ABC):
         a nearby unexcited waveguide nor reaches into the PML — while the
         drawn geometry stays complete. Override in geometries whose ports
         have close neighbors that half_domain_aperture's fixed half-domain
-        rule can't isolate (e.g. MMIMux's three output branches, one of
-        which sits exactly on the y=0 axis)."""
+        rule can't isolate (e.g. an MMI with several closely-spaced output
+        branches, one of which sits exactly on the y=0 axis — see MMI's
+        use_neighbor_aperture)."""
         return None
 
     # ------------------------------------------------------------------

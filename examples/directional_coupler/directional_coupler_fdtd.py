@@ -147,6 +147,7 @@ print(f"\nWavelength sweep: {wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm "
       f"({len(wavelengths)} pts, single FDTD run)\n")
 
 smat = solver.solve(dc, wavelengths, port="bot", input_mode=1)
+smat.check_passive()  # sanity: total output power must not exceed 1 at any wavelength
 
 # ---------------------------------------------------------------------------
 # 5. Print summary at the centre wavelength

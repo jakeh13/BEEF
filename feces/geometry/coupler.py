@@ -21,23 +21,14 @@ convention for a symmetric N-port device.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
-import numpy as np
-
-from .base import DeviceGeometry
+from ._compose import shift_polys
+from .base import DeviceGeometry, _oxide_box, polygons_to_prisms
+from .sbend import SBend, _sbend_polygon
 
 _WG_LAYER = (2, 0)
 _OX_LAYER = (1, 0)
-
-
-def _oxide_box(x_start: float, total_x: float, oxide_width: float) -> List[Tuple[float, float]]:
-    return [
-        (x_start, -oxide_width / 2),
-        (total_x,  -oxide_width / 2),
-        (total_x,   oxide_width / 2),
-        (x_start,  oxide_width / 2),
-    ]
 
 
 def _arm_sign(idx: int) -> float:
@@ -45,93 +36,14 @@ def _arm_sign(idx: int) -> float:
     return -1.0 if idx == 0 else 1.0
 
 
-def _circular_sbend_centerline(dx: float, dy: float, n_pts: int = 80):
-    """Centerline of a matched-circular-arc S-bend: two constant-curvature
-    arcs of equal radius R and equal sweep angle theta, curvature sign
-    flipping at the midpoint, horizontal tangent at both ends.
-
-    Closed form: dx = 2R sin(theta), dy = 2R(1 - cos(theta))
-      => theta = 2*atan2(|dy|, dx),  R = dx / (2 sin(theta))
-    """
-    theta = 2.0 * np.arctan2(abs(dy), dx)
-    R = dx / (2.0 * np.sin(theta))
-    s = np.sign(dy)
-    t = np.linspace(0.0, 1.0, n_pts)
-    x = np.empty(n_pts)
-    y = np.empty(n_pts)
-
-    m1 = t <= 0.5
-    a1 = (t[m1] / 0.5) * theta
-    x[m1] = R * np.sin(a1)
-    y[m1] = s * R * (1.0 - np.cos(a1))
-
-    tp = 1.0 - t[~m1]
-    a2 = (tp / 0.5) * theta
-    x[~m1] = dx - R * np.sin(a2)
-    y[~m1] = dy - s * R * (1.0 - np.cos(a2))
-
-    return x, y
-
-
-def _bezier_sbend_centerline(dx: float, dy: float, n_pts: int = 80):
-    """Centerline of a cubic-Bezier S-bend with horizontal tangent at both
-    ends — control points (0,0), (dx/2,0), (dx/2,dy), (dx,dy), the same
-    layout a standard S-bend Bezier (e.g. gdsfactory's bend_s/path.bezier)
-    uses. Expanding the cubic Bernstein basis at those control points gives
-    the closed form below (y(t) is the familiar 3t^2-2t^3 smoothstep curve).
-    """
-    t = np.linspace(0.0, 1.0, n_pts)
-    x = dx * (1.5 * t - 1.5 * t**2 + t**3)
-    y = dy * (3.0 * t**2 - 2.0 * t**3)
-    return x, y
-
-
-_SBEND_CENTERLINES = {
-    "euler": _bezier_sbend_centerline,
-    "circular": _circular_sbend_centerline,
-}
-
-
-def _extrude_centerline(x: np.ndarray, y: np.ndarray, width: float) -> List[Tuple[float, float]]:
-    """Constant-width ribbon polygon around a centerline, via finite-difference normals."""
-    dxp = np.gradient(x)
-    dyp = np.gradient(y)
-    norm = np.hypot(dxp, dyp)
-    norm[norm == 0] = 1.0
-    nx, ny = -dyp / norm, dxp / norm
-    hw = width / 2.0
-    left = list(zip(x + nx * hw, y + ny * hw))
-    right = list(zip(x - nx * hw, y - ny * hw))
-    return left + right[::-1]
-
-
-def _sbend_polygon(
-    x0: float, y0: float, x1: float, y1: float, width: float, bend_type: str,
-    n_pts: int = 80,
-) -> List[List[Tuple[float, float]]]:
-    """Waveguide polygon(s) for a lateral S-bend from (x0,y0) to (x1,y1),
-    horizontal (+x) tangent at both ends, constant width throughout.
-
-    bend_type:
-        "euler"    - cubic-Bezier centerline (see _bezier_sbend_centerline):
-                     continuously-varying curvature, no curvature
-                     discontinuity at the midpoint. Named to match
-                     BendGeometry's "euler" (smooth curve) vs. "circular"
-                     (constant-curvature arc) split; not a literal
-                     Euler-spiral/clothoid.
-        "circular" - two matched constant-curvature arcs (closed form above).
-    """
-    dx, dy = x1 - x0, y1 - y0
-    if abs(dy) < 1e-9 or dx <= 0:
-        hw = width / 2.0
-        return [[(x0, y0 - hw), (x1, y0 - hw), (x1, y0 + hw), (x0, y0 + hw)]]
-
-    centerline_fn = _SBEND_CENTERLINES.get(bend_type)
-    if centerline_fn is None:
-        raise ValueError(f"unknown bend_type {bend_type!r}, expected 'euler' or 'circular'")
-    cx, cy = centerline_fn(dx, dy, n_pts=n_pts)
-    poly = _extrude_centerline(cx, cy, width)
-    return [[(x0 + px, y0 + py) for px, py in poly]]
+def _bend_polys(x0: float, y0: float, x1: float, y1: float, width: float, bend_type: str
+                 ) -> List[List[Tuple[float, float]]]:
+    """S-bend polygon(s) from (x0,y0) to (x1,y1), built by composing an SBend
+    sub-geometry (centered at its own local origin) and translating it to
+    the requested endpoints — same result as calling _sbend_polygon directly."""
+    bend = SBend(length=x1 - x0, dy=y1 - y0, width=width, bend_type=bend_type)
+    x_off, y_off = (x0 + x1) / 2, (y0 + y1) / 2
+    return shift_polys(bend.polygons()[_WG_LAYER], x_off, y_off)
 
 
 class DirectionalCoupler(DeviceGeometry):
@@ -156,7 +68,7 @@ class DirectionalCoupler(DeviceGeometry):
             access-waveguide ends (µm) - must be large enough that the two
             arms are effectively uncoupled there (several waveguide widths
             beyond the evanescent tail).
-        bend_type: "euler" or "circular" (see _sbend_polygon).
+        bend_type: "euler" or "circular" (see feces.geometry.sbend._sbend_polygon).
         waveguide_height: Si layer thickness (µm).
     """
 
@@ -215,8 +127,8 @@ class DirectionalCoupler(DeviceGeometry):
                 y = s * p_near
                 wg.append([(-hc, y - ww/2), (hc, y - ww/2), (hc, y + ww/2), (-hc, y + ww/2)])
         for s in (-1.0, 1.0):
-            wg.extend(_sbend_polygon(-hc - bl, s*p_far, -hc, s*p_near, ww, self.bend_type))
-            wg.extend(_sbend_polygon(hc, s*p_near, hc + bl, s*p_far, ww, self.bend_type))
+            wg.extend(_bend_polys(-hc - bl, s*p_far, -hc, s*p_near, ww, self.bend_type))
+            wg.extend(_bend_polys(hc, s*p_near, hc + bl, s*p_far, ww, self.bend_type))
 
         if stub_length > 0:
             sl = stub_length
@@ -310,7 +222,7 @@ class DirectionalCoupler(DeviceGeometry):
         # left S-bend (both arms, all-or-nothing - never cut mid-bend)
         if lo <= in0 and hi >= in1:
             for s in (-1.0, 1.0):
-                polys.extend(_sbend_polygon(in0, s*p_far, in1, s*p_near, ww, self.bend_type))
+                polys.extend(_bend_polys(in0, s*p_far, in1, s*p_near, ww, self.bend_type))
         # coupling region (both arms, arbitrary sub-range)
         body_lo, body_hi = max(lo, in1), min(hi, out0)
         if body_hi - body_lo > 1e-9:
@@ -319,7 +231,7 @@ class DirectionalCoupler(DeviceGeometry):
         # right S-bend (both arms)
         if lo <= out0 and hi >= out1:
             for s in (-1.0, 1.0):
-                polys.extend(_sbend_polygon(out0, s*p_near, out1, s*p_far, ww, self.bend_type))
+                polys.extend(_bend_polys(out0, s*p_near, out1, s*p_far, ww, self.bend_type))
         # right access waveguide (both arms)
         if hi > out1:
             for s in (-1.0, 1.0):
@@ -330,8 +242,7 @@ class DirectionalCoupler(DeviceGeometry):
     def section_prisms(self, x0: float, x1: float, si_medium,
                         stub_left: float = 0.0, stub_right: float = 0.0,
                         input_idx: int = 0, output_idx: int = 0,
-                        wg_height: float | None = None):
-        from .base import polygons_to_prisms
+                        wg_height: Optional[float] = None, **_kwargs):
         return polygons_to_prisms(
             self._section_polygons(x0, x1, stub_left, stub_right, input_idx, output_idx),
             si_medium, wg_height=wg_height,
@@ -339,7 +250,7 @@ class DirectionalCoupler(DeviceGeometry):
 
     def section_gds(self, x0: float, x1: float, oxide_width: float,
                      stub_left: float = 0.0, stub_right: float = 0.0,
-                     input_idx: int = 0, output_idx: int = 0
+                     input_idx: int = 0, output_idx: int = 0, **_kwargs
                      ) -> Dict[Tuple[int, int], List[List[Tuple[float, float]]]]:
         lo, hi = x0 - stub_left, x1 + stub_right
         x_off = -lo
@@ -350,13 +261,13 @@ class DirectionalCoupler(DeviceGeometry):
         ox_poly = _oxide_box(0.0, hi - lo, oxide_width)
         return {_WG_LAYER: wg_polys, _OX_LAYER: [ox_poly]}
 
-    def width_at(self, x: float, input_idx: int = 0, output_idx: int = 0) -> float:
+    def width_at(self, x: float, input_idx: int = 0, output_idx: int = 0, **_kwargs) -> float:
         (in0, in1), (out0, out1) = self._bend_bounds()
         if in1 <= x <= out0:
             return 2 * self.waveguide_width + self.gap  # full coupled-pair span
         return self.waveguide_width
 
-    def center_at(self, x: float, input_idx: int = 0, output_idx: int = 0) -> float:
+    def center_at(self, x: float, input_idx: int = 0, output_idx: int = 0, **_kwargs) -> float:
         (in0, in1), (out0, out1) = self._bend_bounds()
         if in1 <= x <= out0:
             return 0.0
@@ -375,7 +286,7 @@ class DirectionalCoupler(DeviceGeometry):
         return s * (p_near + frac * (p_far - p_near))
 
     def source_aperture_at(self, x: float, input_idx: int = 0,
-                            output_idx: int = 0) -> float | None:
+                            output_idx: int = 0, **_kwargs) -> Optional[float]:
         """Widest eigenmode source / norm-monitor window (full y-span, µm),
         centered on center_at(x), that stays clear of the OTHER arm's core
         at this cross-section. Both arms are always physically present in

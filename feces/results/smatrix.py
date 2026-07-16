@@ -6,6 +6,7 @@ and ad-hoc pickle dumps across master and sweep scripts.
 from __future__ import annotations
 
 import pickle
+import warnings
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
@@ -70,6 +71,59 @@ class SMatrix:
     def ports(self) -> list:
         """All port labels present in this SMatrix."""
         return sorted({k[0] for k in self._data})
+
+    # ------------------------------------------------------------------
+    # Sanity checks
+    # ------------------------------------------------------------------
+
+    def total_power(self, in_mode: int = 1) -> np.ndarray:
+        """Total output power [M] for a given input mode, summed over every
+        (port, out_mode) entry present with that in_mode — i.e. all the
+        power this input mode couples to anywhere in the device."""
+        keys = [k for k in self._data if k[1] == in_mode]
+        if not keys:
+            raise KeyError(f"no SMatrix entries with in_mode={in_mode}")
+        total = np.zeros(len(self.wavelengths))
+        for k in keys:
+            total += np.abs(self._data[k]) ** 2
+        return total
+
+    def check_passive(self, tol: float = 1e-3, warn: bool = True) -> bool:
+        """Sanity check: for every input mode present, total output power
+        (summed over every port/out_mode via total_power()) must not exceed
+        1+tol at any wavelength — a passive device can only lose power
+        (to radiation, reflection, or a truncated mode basis), never gain
+        it. A violation almost always means a bug (mode-count mismatch, a
+        double-counted output branch, wrong normalization) rather than real
+        gain, and this check catches it immediately instead of requiring
+        someone to notice an anomalous plot first.
+
+        Args:
+            tol: allowed slack above 1.0 before a wavelength/mode counts as
+                a violation.
+            warn: emit a warnings.warn() identifying the worst violation
+                (input mode, wavelength, total power) when the check fails.
+
+        Returns:
+            True if every input mode passes at every wavelength.
+        """
+        in_modes = sorted({k[1] for k in self._data})
+        ok = True
+        for m in in_modes:
+            total = self.total_power(in_mode=m)
+            worst = np.argmax(total)
+            if total[worst] > 1.0 + tol:
+                ok = False
+                if warn:
+                    warnings.warn(
+                        f"SMatrix.check_passive: in_mode={m} totals "
+                        f"{total[worst]:.4f} (> 1+{tol:g}) at wavelength "
+                        f"{self.wavelengths[worst]:.4f} — check for a mode-"
+                        "count mismatch, double-counted output branch, or "
+                        "normalization bug.",
+                        stacklevel=2,
+                    )
+        return ok
 
     # ------------------------------------------------------------------
     # Serialization

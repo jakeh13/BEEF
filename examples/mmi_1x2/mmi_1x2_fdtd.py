@@ -98,6 +98,7 @@ print("(single broadband pulse; DFT monitors extract all wavelengths in one sim)
 
 # Source from top input port; measure coupling to each mode at output monitor
 smat = solver.solve(mmi, wavelengths, port="top", input_mode=1)
+smat.check_passive()  # sanity: total output power must not exceed 1 at any wavelength
 
 # ---------------------------------------------------------------------------
 # 5. Print summary

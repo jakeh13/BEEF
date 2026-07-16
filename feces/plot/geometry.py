@@ -514,7 +514,7 @@ def _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub
       adjacent section's own assumed boundary at that same x);
     - if the excited side carries exactly 1 mode and the geometry itself
       provides a launch window there (geometry.source_aperture_at()
-      non-None — e.g. MMIMux's output branches), source + its co-located
+      non-None — e.g. an MMI's closely-spaced output branches), source + its co-located
       normalization monitor span exactly that window, centered on the
       excited arm and clamped to the non-PML domain, taking precedence
       over half_domain_aperture below — mirroring FDTDSolver.

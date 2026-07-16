@@ -16,7 +16,13 @@ dependencies = [
 eme = ["meow-sim"]
 fdtd = ["meep"]
 all = ["meow-sim", "meep"]
+dev = ["pytest"]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["feces*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: golden-value integration tests that run a real (reduced-res) meep/meow simulation",
+]

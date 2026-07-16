@@ -1,15 +1,17 @@
 from .base import DeviceGeometry
-from .mmi import MMI
-from .mux import MMIMux, MuxGeoParams
+from .mmi import MMI, MMIPort
 from .bend import BendGeometry
 from .coupler import DirectionalCoupler
-from .modal_mux import ModalMultiplexer
+from .taper import Taper
+from .sbend import SBend
+from .compound import CompoundGeometry, WaveguideRun
 
 __all__ = [
     "DeviceGeometry",
-    "MMI",
-    "MMIMux", "MuxGeoParams",
+    "MMI", "MMIPort",
     "BendGeometry",
     "DirectionalCoupler",
-    "ModalMultiplexer",
+    "Taper",
+    "SBend",
+    "CompoundGeometry", "WaveguideRun",
 ]

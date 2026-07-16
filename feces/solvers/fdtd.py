@@ -491,7 +491,7 @@ class FDTDSolver:
         # (and, for an off-axis arm, the PML). Two narrowing rules, in
         # priority order:
         #   1. a geometry-provided window (source_aperture_at() non-None,
-        #      e.g. MMIMux's three output branches ~1 µm apart): the source
+        #      e.g. an MMI's closely-spaced output branches ~1 µm apart): the source
         #      + norm monitor shrink to that window, centered on the arm and
         #      clamped so it never reaches into the PML — the drawn geometry
         #      stays complete;

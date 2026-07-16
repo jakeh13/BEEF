@@ -4,7 +4,10 @@ FDTD/EME hybrid simulation (FECES method).
 
 Device (160 nm SOI, O-band) — the legacy library's cascaded MMI MUX
 (FECES_Legacy/masters/mmi_mux_master.py, configs_mmi/config_mux.json): a 1×3
-MMI followed by a 3×3 MMI, joined by three short single-mode waveguides.
+MMI followed by a 3×3 MMI, joined by three short single-mode waveguides. The
+geometry is built by composing two independent MMI devices and a
+WaveguideRun connector into one CompoundGeometry, rather than a single
+hand-rolled MUX class.
 
                                                         ____ "top"
     "in" ____                                          /____
@@ -35,11 +38,10 @@ Hybrid decomposition — this is HybridSolver's generic N-section cascade
   - Everything that *changes shape* along x — the input taper, the whole
     inter-stage transition (three output tapers, three connecting
     waveguides, three input tapers), and the output tapers — is
-    non-adiabatic and is solved with FDTD.
-  - The legacy hybrid only ever did FDTD | EME | FDTD, with a single EME
-    cascade spanning both bodies *and* the inter-stage tapers (meshed into
-    many sub-cells); here the tapers get full-wave FDTD instead and only
-    the genuinely uniform regions ride the eigenmode expansion.
+    non-adiabatic and is solved with FDTD. CompoundGeometry transparently
+    splits this section across MMI 1's output-taper band, the connector,
+    and MMI 2's input-taper band, delegating each piece to the owning
+    sub-geometry.
   - Interfaces between sections sit BODY_STUB inside the MMI bodies, past
     the taper/body cross-section discontinuity, and carry N_MODES body
     supermodes each.
@@ -47,12 +49,12 @@ Hybrid decomposition — this is HybridSolver's generic N-section cascade
     branches, identical for every port, so the simulated structure never
     differs from the real device. Per-port isolation happens in the launch
     window instead: the reverse eigenmode source and its co-located norm
-    monitor shrink to the selected port's aperture (MMIMux.
-    source_aperture_at) so the mode solve neither sees a neighboring
-    branch ~1 µm away nor reaches into the PML. The section is still
-    re-simulated once per output port (the launch moves) — every other
-    section's transfer matrix is shared across ports via HybridSolver's
-    section cache.
+    monitor shrink to the selected port's aperture (MMI 2's
+    use_neighbor_aperture / source_aperture_at) so the mode solve neither
+    sees a neighboring branch ~1 µm away nor reaches into the PML. The
+    section is still re-simulated once per output port (the launch moves)
+    — every other section's transfer matrix is shared across ports via
+    HybridSolver's section cache.
 
 FDTD run count: 2 (input, one per MM-input mode) + N_MODES (transition,
 one reverse launch per body supermode) + 3 (output, one reverse launch per
@@ -69,7 +71,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from feces import (
-    MMIMux, MuxGeoParams, EMESolver, FDTDSolver, HybridSolver, SOI_160, plot_hybrid_geometry,
+    MMI, MMIPort, CompoundGeometry, WaveguideRun,
+    EMESolver, FDTDSolver, HybridSolver, SOI_160, plot_hybrid_geometry,
 )
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -86,28 +89,56 @@ N_WL = 11           # number of wavelength points
 
 # ---------------------------------------------------------------------------
 # 1. Geometry — the legacy cascaded MUX, dimensions straight from
-#    FECES_Legacy/configs_mmi/config_mux.json (160 nm SOI).
+#    FECES_Legacy/configs_mmi/config_mux.json (160 nm SOI), rebuilt as two
+#    MMI devices + a WaveguideRun connector instead of one hand-rolled class.
 # ---------------------------------------------------------------------------
-geo = MuxGeoParams(
-    mm_1_length=16.92,             # 1×3 MMI body length (µm)
-    mm_2_length=34.24,             # 3×3 MMI body length (µm)
-    mm_width=2.8,                  # both MMI body widths (µm)
-    taper_length=2.0,              # every taper's length (µm)
-    between_waveguide_length=3.0,  # connecting-waveguide length between the MMIs (µm)
-    waveguide_offset=1.0375,       # centre-to-centre pitch of the three branches (µm)
-    mm_waveguide_width=0.7,        # multi-mode input waveguide width — carries TE0 + TE1 (µm)
-    input_taper_width=1.4,         # input taper width at the MMI 1 face (µm)
-    top_bot_taper_width=0.725,     # top/bot branch taper width at the MMI faces (µm)
-    middle_taper_width=1.15,       # mid branch taper width at the MMI faces (µm)
-    top_waveguide_width=0.33,      # top branch waveguide width (µm)
-    waveguide_width=0.35,          # mid/bot branch waveguide width (µm)
-)
-mux = MMIMux(geo)
-print(f"MMI MUX total length: {mux.total_length:.2f} µm "
-      f"(MMI 1 {geo.mm_1_length:.2f} µm + MMI 2 {geo.mm_2_length:.2f} µm, "
-      f"width {geo.mm_width:.2f} µm, branch pitch {geo.waveguide_offset:.4f} µm)")
+TAPER_L = 2.0                # every taper's length (µm)
+WO = 1.0375                  # centre-to-centre pitch of the three branches (µm)
+BETWEEN_WG_LENGTH = 3.0      # connecting-waveguide length between the MMIs (µm)
+MM_WIDTH = 2.8               # both MMI body widths (µm)
 
-# Output-port table — same index convention as MMIMux/the legacy master
+# (y, waveguide_width, taper_width) for the three inter-stage/output
+# branches, top -> mid -> bot — same ordering/values as
+# FECES_Legacy/configs_mmi/config_mux.json.
+BRANCH_SPECS = [
+    (+WO, 0.33, 0.725),   # top
+    (0.0, 0.35, 1.15),    # mid
+    (-WO, 0.35, 0.725),   # bot
+]
+
+def _branch_ports():
+    return [MMIPort(y=y, waveguide_width=ww, taper_length=TAPER_L, taper_width=tw)
+            for y, ww, tw in BRANCH_SPECS]
+
+mmi1 = MMI(  # 1x3: multi-mode input -> three branches
+    n_inputs=1, n_outputs=3,
+    mm_length=16.92, mm_width=MM_WIDTH,
+    inputs=[MMIPort(y=0.0, waveguide_width=0.7, taper_length=TAPER_L, taper_width=1.4)],
+    outputs=_branch_ports(),
+    waveguide_height=0.16,
+)
+mmi2 = MMI(  # 3x3: three branches -> three branches (mux output stage)
+    n_inputs=3, n_outputs=3,
+    mm_length=34.24, mm_width=MM_WIDTH,
+    inputs=_branch_ports(),
+    outputs=_branch_ports(),
+    waveguide_height=0.16,
+    # Three branches only WO (~1 µm) apart, one exactly on the y=0 axis —
+    # half_domain_aperture's fixed half-domain rule can't isolate the mid
+    # port, so the output section's per-port launch window instead comes
+    # from MMI's own neighbor-aware source_aperture_at.
+    use_neighbor_aperture=True,
+)
+connector = WaveguideRun(
+    length=BETWEEN_WG_LENGTH,
+    ports=[(y, ww) for y, ww, _ in BRANCH_SPECS],
+)
+mux = CompoundGeometry([mmi1, connector, mmi2])
+print(f"MMI MUX total length: {mux.total_length:.2f} µm "
+      f"(MMI 1 {mmi1.mm_length:.2f} µm + MMI 2 {mmi2.mm_length:.2f} µm, "
+      f"width {MM_WIDTH:.2f} µm, branch pitch {WO:.4f} µm)")
+
+# Output-port table — same index convention as the legacy master
 # (PORT_DEFS): 0=top (y=+offset), 1=mid (y=0), 2=bot (y=-offset). The legacy
 # master tags mid/bot as the "[MUX out]" pair.
 PORTS = [("top", 0), ("mid", 1), ("bot", 2)]
@@ -142,9 +173,10 @@ fdtd_solver = FDTDSolver(
     # No half_domain_aperture: the input side is a lone on-axis waveguide,
     # the interface monitors span the full width anyway (N_MODES > 1), and
     # the output sections' per-port source/norm-monitor windows come from
-    # the geometry itself (MMIMux.source_aperture_at, see module docstring),
-    # which isolates the selected branch where the fixed half-domain rule
-    # couldn't (it can't isolate the on-axis mid port at all).
+    # the geometry itself (MMI 2's use_neighbor_aperture, see module
+    # docstring), which isolates the selected branch where the fixed
+    # half-domain rule couldn't (it can't isolate the on-axis mid port at
+    # all).
     material_stack=SOI_160,
     decay_tol=1e-11,
 )
@@ -159,10 +191,10 @@ body_solver = EMESolver(
 #    FDTD input | EME MMI 1 | FDTD transition | EME MMI 2 | FDTD output.
 # ---------------------------------------------------------------------------
 half_total = mux.total_length / 2
-body1_start = -half_total + geo.taper_length
-body1_end = body1_start + geo.mm_1_length
-body2_start = body1_end + geo.taper_length + geo.between_waveguide_length + geo.taper_length
-body2_end = body2_start + geo.mm_2_length
+body1_start = -half_total + TAPER_L
+body1_end = body1_start + mmi1.mm_length
+body2_start = body1_end + TAPER_L + BETWEEN_WG_LENGTH + TAPER_L
+body2_end = body2_start + mmi2.mm_length
 
 boundaries = [
     -half_total,               # physical input port (input taper start)
@@ -197,14 +229,14 @@ plot_hybrid_geometry(
     sub_region_show_pml=True,
     sub_region_show_eme_detail=True,
     sub_region_configs=[
-        (f"port_{name}", [{}, {}, {}, {}, {"port_idx": k}]) for name, k in PORTS
+        (f"port_{name}", [{}, {}, {}, {}, {"output_idx": k}]) for name, k in PORTS
     ],
 )
 print(f"Geometry plot saved → {output_dir}/geometry_hybrid.png")
 print(f"Sub-region plots saved → {output_dir}/sections/")
 
 # ---------------------------------------------------------------------------
-# 5. Run the hybrid simulation — once per output port. port_idx is passed
+# 5. Run the hybrid simulation — once per output port. output_idx is passed
 #    ONLY to the output section's kwargs, and a shared cache is passed to
 #    every solve() call, so sections 0–3 (input FDTD, both EME bodies, the
 #    transition FDTD) are each simulated exactly once — not once per port.
@@ -222,26 +254,27 @@ for name, k in PORTS:
     smat_port = hybrid.solve(
         mux, wavelengths, in_modes=2, out_modes=1, port=name,
         cache=section_cache,
-        geometry_kwargs=[{}, {}, {}, {}, {"port_idx": k}],
+        geometry_kwargs=[{}, {}, {}, {}, {"output_idx": k}],
     )
     if smat is None:
         smat = smat_port
     else:
         smat._data.update(smat_port._data)
 
+smat.check_passive()  # sanity: total output power must not exceed 1 at any wavelength
+
 wl_c = wavelengths[len(wavelengths) // 2]
 idx = np.argmin(np.abs(wavelengths - wl_c))
 
 print(f"\nResults at λ = {wl_c:.3f} µm:")
 for in_mode in (1, 2):
-    total = 0.0
+    total = smat.total_power(in_mode=in_mode)
     for name, k in PORTS:
         T = smat.transmission(port=name, in_mode=in_mode)
-        total += T[idx]
         mux_tag = " [MUX out]" if k in (1, 2) else ""
         print(f"  TE{in_mode - 1} in → {name}{mux_tag}:  T = {T[idx]:.4f}  "
               f"IL = {10*np.log10(max(T[idx], 1e-20)):.2f} dB")
-    print(f"  TE{in_mode - 1} in → all ports total: {total:.4f} "
+    print(f"  TE{in_mode - 1} in → all ports total: {total[idx]:.4f} "
           f"(≤ 1; deficit = radiation/reflection + truncated basis)")
 
 # ---------------------------------------------------------------------------

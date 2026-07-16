@@ -319,6 +319,7 @@ print(f"  Coupling ratio   = {T_cross[idx]/max(T_total[idx],1e-20):.3f}  "
 smat = SMatrix(wavelengths=wavelengths)
 smat.set(coeff_through, port="through")
 smat.set(coeff_cross, port="cross")
+smat.check_passive()  # sanity: total output power must not exceed 1 at any wavelength
 smat.save(os.path.join(output_dir, "smatrix_hybrid.pkl"))
 print(f"\nSMatrix saved (coupling_length={L_plot:.2f} µm slice) → {output_dir}/smatrix_hybrid.pkl")
 

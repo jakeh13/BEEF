@@ -17,7 +17,7 @@ class Solver(Protocol):
         """Run simulation and return S-parameter results.
 
         Args:
-            geometry: device geometry object (MMI, MMIMux, etc.).
+            geometry: device geometry object (MMI, DirectionalCoupler, CompoundGeometry, etc.).
             wavelengths: [M] array of wavelengths (µm).
 
         Returns:

@@ -3,11 +3,12 @@
 Core public API:
 
     Geometry:
-        MMI                        — N-input/M-output MMI geometry (1x2, 2x2, 1x4, ...)
-        MMIMux, MuxGeoParams       — cascaded MUX geometry
+        MMI, MMIPort               — N-input/M-output MMI geometry (1x2, 2x2, 1x4, ...),
+                                      with optional per-port taper size/placement
         BendGeometry               — 90° bend for non-collinear FDTD I/O
         DirectionalCoupler         — 2-waveguide directional coupler w/ S-bend I/O
-        ModalMultiplexer           — asymmetric directional coupler for mode-division muxing
+        Taper, SBend               — standalone taper / S-bend building-block geometries
+        CompoundGeometry, WaveguideRun — concatenate several geometries end-to-end
 
     Materials:
         MaterialStack              — Si/SiO2 layer definitions
@@ -39,7 +40,10 @@ Core public API:
 __version__ = "0.1.0"
 
 from ._utils import extrude_polygons
-from .geometry import MMI, MMIMux, MuxGeoParams, BendGeometry, DirectionalCoupler, ModalMultiplexer
+from .geometry import (
+    MMI, MMIPort, BendGeometry, DirectionalCoupler, Taper, SBend,
+    CompoundGeometry, WaveguideRun,
+)
 from .materials import MaterialStack, SOI_160, SOI_220
 from .results import SMatrix
 from .solvers import EMESolver, FDTDSolver, HybridSolver
@@ -51,11 +55,11 @@ from .plot import (
 
 __all__ = [
     # geometry
-    "MMI",
-    "MMIMux", "MuxGeoParams",
+    "MMI", "MMIPort",
     "BendGeometry",
     "DirectionalCoupler",
-    "ModalMultiplexer",
+    "Taper", "SBend",
+    "CompoundGeometry", "WaveguideRun",
     # materials
     "MaterialStack", "SOI_160", "SOI_220",
     # results

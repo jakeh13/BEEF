@@ -135,6 +135,7 @@ def simulate_length(L: float) -> None:
           f"{N_WL} wavelengths {WL_MIN:.2f}–{WL_MAX:.2f} µm)")
 
     smat = solver.solve(dc, wavelengths, port="bot", input_mode=1)
+    smat.check_passive()  # sanity: total output power must not exceed 1 at any wavelength
     T_through = smat.transmission(port="out_0", in_mode=1, out_mode=1)
     T_cross = smat.transmission(port="out_1", in_mode=1, out_mode=1)
     T_total = T_through + T_cross

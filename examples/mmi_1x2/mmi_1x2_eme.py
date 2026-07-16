@@ -7,7 +7,8 @@ Geometry:
     - Dimensions from typical fabricated device (mm_length = 4.5 µm)
 
 Method: Eigenmode Expansion (EME) via meow.  Fast, no FDTD required.
-The EME models the path from the input to the top output waveguide.
+The EME models the path from the input to each output waveguide in turn
+(one solve per output_idx — see step 4) and reports both.
 For a balanced 1x2 splitter each output carries ~50% of the input power
 (ideal insertion loss: −3 dB per port).
 
@@ -73,9 +74,11 @@ os.makedirs(output_dir, exist_ok=True)
 plot_eme_geometry(
     mmi, solver=solver,
     region_labels=["wg in", "taper in", "MMI body", "taper out", "wg out"],
-    title="1×2 MMI Splitter — Top-down Geometry (top output only)",
+    title="1×2 MMI Splitter — Top-down Geometry",
     output_path=os.path.join(output_dir, "geometry.png"),
-    output_idx=1,  # top output branch only — matches what solver.solve() below monitors
+    # output_idx omitted (defaults to None) — draws both output branches,
+    # since both are solved below (each solve() call restricts them
+    # one at a time; the plot shows the full device for reference).
 )
 print(f"Geometry plot saved → {output_dir}/geometry.png")
 
@@ -87,24 +90,33 @@ wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)  # µm, O-band
 print(f"Sweeping {len(wavelengths)} wavelengths: "
       f"{wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm")
 
-# "out" = top output port. output_idx=1 restricts the EME cross-sections to
-# the top output branch only (output_ys[1] = +waveguide_offset/2), so the
-# solved mode is the isolated waveguide mode rather than a supermode of both
-# outputs. S[0,1] coeff gives coupling from input mode 1 into that waveguide.
-smat = solver.solve(mmi, wavelengths, ports=["out"], output_idx=1)
+# solve()'s single **kwargs call applies the same output_idx to every entry
+# in `ports`, so measuring both outputs accurately takes two separate calls
+# — one per output_idx — each restricting the EME cross-sections to that
+# one output branch only (output_ys[idx]), giving the isolated waveguide
+# mode rather than a supermode of both outputs (the two branches are
+# `waveguide_offset - waveguide_width` = 0.65 µm apart edge-to-edge past the
+# taper, comfortably decoupled). Results are merged into one SMatrix, same
+# as mmi_1x2_fdtd.py/mmi_1x2_hybrid.py's two-output reporting.
+smat_top = solver.solve(mmi, wavelengths, ports=["out_top"], output_idx=1)
+smat_bot = solver.solve(mmi, wavelengths, ports=["out_bot"], output_idx=0)
+smat = smat_top
+smat._data.update(smat_bot._data)
+smat.check_passive()  # sanity: total output power must not exceed 1 at any wavelength
 
 # ---------------------------------------------------------------------------
 # 5. Print summary
 # ---------------------------------------------------------------------------
-T = smat.transmission("out")
-IL = smat.insertion_loss_db("out")
+T_top, T_bot = smat.transmission("out_top"), smat.transmission("out_bot")
+T_total = T_top + T_bot
 wl_center = wavelengths[len(wavelengths) // 2]
 idx = np.argmin(np.abs(wavelengths - wl_center))
 
 print(f"\nResults at λ = {wl_center:.3f} µm:")
-print(f"  Transmission to top output : {T[idx]:.4f}")
-print(f"  Insertion loss             : {IL[idx]:.2f} dB")
-print(f"  (ideal 50/50 split → T=0.5, IL=−3.0 dB)")
+print(f"  Top output    T = {T_top[idx]:.4f}  IL = {10*np.log10(max(T_top[idx],1e-20)):.2f} dB")
+print(f"  Bottom output T = {T_bot[idx]:.4f}  IL = {10*np.log10(max(T_bot[idx],1e-20)):.2f} dB")
+print(f"  Total         T = {T_total[idx]:.4f}  IL = {10*np.log10(max(T_total[idx],1e-20)):.2f} dB")
+print(f"  (ideal 50/50 split → T_each=0.5, IL_total=0.0 dB)")
 
 # ---------------------------------------------------------------------------
 # 6. Save results
@@ -113,6 +125,7 @@ print(f"  (ideal 50/50 split → T=0.5, IL=−3.0 dB)")
 smat.save(os.path.join(output_dir, "smatrix.pkl"))
 print(f"\nSMatrix saved → {output_dir}/smatrix.pkl")
 
-# Plot insertion loss and transmission vs wavelength
+# Plot insertion loss and transmission vs wavelength — plot_performance()
+# defaults to every port in smat, so both outputs show up automatically.
 plot_performance(smat, output_dir=output_dir, title="1×2 MMI Splitter (EME)")
 print(f"Performance plot saved → {output_dir}/performance.png")
