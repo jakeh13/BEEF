@@ -76,7 +76,14 @@ def run_mmi_1x2_hybrid() -> SMatrix:
     mmi = _mmi_1x2()
     n_modes = 6
     fdtd_common = dict(
-        res=20.0, sim_width=5.0, sim_height=1.5, dpml=0.5,
+        # dpml doubled vs the real example's 0.5 (and vs the pure-FDTD
+        # target's solve()) — this hybrid section is a short interior
+        # solve_section() span where PML is a large fraction of the domain;
+        # at res=20 (half of production's res=40) 0.5 µm of PML is only 10
+        # pixels, half production's absorption, and this domain diverged
+        # (meep: fields are NaN or Inf) after ~20 min. 1.0 µm restores the
+        # same PML pixel count production gets at res=40/dpml=0.5.
+        res=20.0, sim_width=5.0, sim_height=1.5, dpml=1.0,
         source_margin=0.0, monitor_margin=0.25, three_d=True,
         material_stack=SOI_160, decay_tol=1e-9,
     )
@@ -114,7 +121,11 @@ def run_directional_coupler_hybrid() -> SMatrix:
     )
     n_modes = 3
     fdtd_solver = FDTDSolver(
-        res=20.0, sim_width=6.0, sim_height=1.5, dpml=0.5,
+        # dpml doubled vs the real example's 0.5 — same reasoning as
+        # run_mmi_1x2_hybrid's fdtd_common above (short interior
+        # solve_section() span, PML pixel count halved at res=20 vs
+        # production's res=40 unless dpml compensates).
+        res=20.0, sim_width=6.0, sim_height=1.5, dpml=1.0,
         source_margin=0.0, monitor_margin=0.25, three_d=True,
         half_domain_aperture=True, material_stack=SOI_220, decay_tol=1e-9,
     )

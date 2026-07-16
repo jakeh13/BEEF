@@ -111,8 +111,44 @@ make directional_coupler_fdtd_sweep SWEEP_INDEX=3
 make clean
 ```
 
+## Testing
+
+Fast unit tests (`tests/test_geometry.py`, `test_smatrix.py`, `test_hybrid.py` — no meep/meow
+required) run in CI on every push/PR (`.github/workflows/ci.yml`):
+
+```bash
+pytest tests/
+```
+
+`tests/test_golden_examples.py` additionally runs a real (reduced-resolution) meep/meow
+simulation per target — mmi_1x2 (EME, FDTD, hybrid) and directional_coupler (hybrid) — and checks
+transmission against a recorded reference in `tests/golden/`. These are genuinely slow (each
+target is a real simulation, not a mock, at `res=20` vs the real examples' `res=40`) and are
+skipped unless explicitly requested:
+
+```bash
+pytest tests/ --runslow
+```
+
+Real per-target wall-clock times on a single CPU core (macOS laptop, no MPI parallelism):
+mmi_1x2_eme ~7 min, mmi_1x2_fdtd ~12 min, mmi_1x2_hybrid ~58 min, directional_coupler_hybrid
+~96 min — even at reduced resolution, a real FDTD/EME solve is real solve time, not a mock; the
+hybrid targets are the slowest since HybridSolver's short interior `solve_section()` spans need
+`dpml` raised (0.5→1.0 µm) to keep enough PML pixels at `res=20`, which grows the domain. Budget roughly 3 hours to run the full `--runslow` suite; this is why it isn't wired into CI
+(see below).
+
+To regenerate the recorded references after a deliberate change to solver behavior:
+
+```bash
+python scripts/generate_golden_values.py                # all targets
+python scripts/generate_golden_values.py mmi_1x2_eme     # one target
+```
+
+If you're on macOS behind a VPN, `meep`'s MPI backend can crash on interpreter exit with an
+OFI/libfabric error (`OFI poll failed`) — `tests/conftest.py` sets `FI_PROVIDER=tcp` by default to
+avoid this; results are unaffected either way, it's purely a finalize-time crash.
+
 ## Status
 
-Fast unit tests (`tests/`, no meep/meow required) run in CI on every push/PR (`.github/workflows/ci.yml`).
-See `notes.md` for a capability gap analysis against meep/meow/tidy3d/gdsfactory/SAX and a prioritized list
-of candidate additions (not yet implemented).
+See `notes.md` for a capability gap analysis against meep/meow/tidy3d/gdsfactory/SAX and a
+prioritized list of candidate additions (not yet implemented).
