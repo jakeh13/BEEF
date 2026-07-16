@@ -1,4 +1,4 @@
-"""FECES — FDTD/EME Combined Electromagnetic Solver.
+"""FECES — FDTD/EME Cascaded Electromagnetic Solver.
 
 Core public API:
 
@@ -17,7 +17,7 @@ Core public API:
     Solvers:
         EMESolver                  — meow-based eigenmode expansion
         FDTDSolver                 — meep-based FDTD
-        HybridSolver               — FDTD/EME combined (the core FECES method)
+        HybridSolver               — FDTD/EME cascaded (the core FECES method)
 
     Results:
         SMatrix                    — unified S-parameter result type

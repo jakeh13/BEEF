@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "feces"
 version = "0.1.0"
-description = "FDTD/EME Combined Electromagnetic Solver for photonic MMI devices"
+description = "FDTD/EME Cascaded Electromagnetic Solver for photonic MMI devices"
 requires-python = ">=3.10"
 dependencies = [
     "numpy",
