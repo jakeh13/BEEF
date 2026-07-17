@@ -214,14 +214,14 @@ plot_hybrid_geometry(
     sub_region_show_eme_detail=True,
     # One sub-region plot per simulation actually run in step 5: the input
     # section is solved once per input arm (input_idx=0 "in", input_idx=1
-    # "isolated"). sub_region_sections=[0, 1] skips the output section
-    # (index 2), which is never separately simulated (see module docstring)
-    # but is still visible in the full-device overview plot above.
+    # "isolated"). Both configs declare the output section (index 2) as the
+    # x-mirror of the input section — the same reuse step 5 hand-rolls with
+    # .transpose() (see module docstring) — so it gets no sub-region plot
+    # and is hatched/labeled as mirrored in the full-device overview above.
     sub_region_configs=[
-        ("in", [{"input_idx": 0, **_iface_mon}, {}, {}]),
-        ("isolated", [{"input_idx": 1, **_iface_mon}, {}, {}]),
+        ("in", [{"input_idx": 0, **_iface_mon}, {}, {}], {2: 0}),
+        ("isolated", [{"input_idx": 1, **_iface_mon}, {}, {}], {2: 0}),
     ],
-    sub_region_sections=[0, 1],
 )
 print(f"Geometry plot saved → {output_dir}/geometry_hybrid.png")
 print(f"Sub-region plots saved → {output_dir}/sections/")

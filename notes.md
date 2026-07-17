@@ -415,6 +415,32 @@ where a category has fewer or lower-priority items.
    would require solving both input branches directly rather than one fixed
    excitation, for no additional savings over the current 2 FDTD + 1 EME on this
    example's actual bar/cross metric.
+9. **Wavelength-interpolation scheme for mode-solve/EME-driven sections.** A
+   real MPB mode solve is expensive per wavelength, while FDTD DFT monitors
+   sample a dense wavelength grid nearly for free (one broadband pulse, many
+   frequencies in one run). Resonant devices need thousands of wavelength
+   points to resolve a linewidth that's a small fraction of the sweep span —
+   `examples/ring_resonator/ring_resonator_hybrid.py` hits this directly: an
+   FSR of ~13 nm across a 100 nm C-band sweep needs a ~2000-point grid to
+   plot resonance dips cleanly, but only solves `neff(lambda)` at 13 sparse
+   points (each a real mode solve) and fits a degree-2 polynomial before
+   evaluating on the dense grid — piecewise-linear interpolation would put a
+   kink in `d(phi)/d(lambda)` at every solve node and corrupt resonance
+   positions, so the fit has to be smooth in `neff` itself, not in phase
+   (which winds too fast to interpolate directly — that example's FDTD-
+   coefficient interpolation is magnitude + `np.unwrap`'d phase for the same
+   reason). Done ad hoc, entirely inside that example script, because
+   nothing in `feces/solvers/eme.py` supports it. A library-level version
+   could look like sparse-solve/dense-eval wavelength arguments on
+   `EMESolver.solve_section()` (solve modes at a caller-chosen sparse subset,
+   fit, evaluate the returned transfer matrix at every wavelength in a
+   separate dense array), or a standalone reusable `NeffTable`/mode-fit
+   utility both `EMESolver` and examples could share. Related to, but
+   distinct from, Solver recommendation #1 (`MaterialStack`'s nearest-
+   tabulated-wavelength index lookup) — that's a materials-dispersion gap;
+   this is a mode-solve-cost gap, and the two would compound in a real
+   dispersive-material implementation (interpolating dispersive neff at
+   already-sparse solve points).
 
 ### Geometry
 
@@ -423,7 +449,17 @@ where a category has fewer or lower-priority items.
    `DeviceGeometry` interface (bus waveguide + coupled ring, `section_prisms`/
    `width_at`/`center_at` following the `DirectionalCoupler` pattern), and directly
    exercises `HybridSolver`'s generic cascading (bus straights as FDTD/EME + coupling
-   region).
+   region). **Partially addressed** — `examples/ring_resonator/ring_resonator_hybrid.py`
+   proves out the physics (closed-form all-pass feedback assembly, not a
+   `HybridSolver` chain — a ring is a loop, not a cascade), but does so entirely in
+   raw meep/meow, bypassing the geometry layer and every solver class. What's still
+   missing for a first-class version: (a) an actual `RingResonator`/racetrack
+   `DeviceGeometry`; (b) y-normal (x-z plane) source/monitor support in
+   `FDTDSolver` — it only ever builds `mp.Vector3(0, w, h)` y-z planes today, and
+   the two bus-to-ring coupling ports in a racetrack coupler section are
+   perpendicular to that; (c) a feedback-loop assembly mode in `HybridSolver`
+   (or a sibling), since its `solve()` is fundamentally a one-pass matrix chain,
+   not a resonator sum.
 2. **GDS import (read a real/foundry/gdsfactory layout) and export (tape-out-ready
    output).** The gdsfactory dependency was deliberately removed from the internal
    pipeline (raw polygon dicts are faster/simpler for FECES's own parametric shapes),
@@ -508,10 +544,15 @@ where a category has fewer or lower-priority items.
    (a pure meow/MPB even/odd-supermode script that doesn't use any FECES solver
    class at all) — worth generalizing into its own example once the Misc convergence
    utility exists.
-6. **Ring resonator example** — once the Geometry-section ring/racetrack class
-   exists, pair it with an example (and it'd make a good first user of the
-   convergence-utility recommendation above, plus `SMatrix.check_passive()` as
-   standard practice, exercising several new/existing features at once).
+6. **Ring resonator example — done, but as a raw-meep script, not paired with a
+   `RingResonator` `DeviceGeometry`.** `examples/ring_resonator/ring_resonator_hybrid.py`
+   exists (see Geometry recommendation #1) and does call `SMatrix.check_passive()`
+   as standard practice, but doesn't use the convergence-utility recommendation
+   above (no resolution sweep) and can't use `plot_fdtd_geometry`/`plot_hybrid_geometry`
+   at all (both require a `DeviceGeometry`) — it hand-draws its own geometry
+   preview plots instead. The geometry-class-backed version (proper
+   `plot_*_geometry` integration, resolution-sweep convergence check) remains
+   open.
 
 ### Misc
 

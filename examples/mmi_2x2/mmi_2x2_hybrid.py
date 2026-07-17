@@ -209,11 +209,14 @@ plot_hybrid_geometry(
     sub_region_dir=os.path.join(output_dir, "sections"),
     sub_region_show_pml=True,
     sub_region_show_eme_detail=True,
-    # One set of sub-region plots per output port — matches the two
-    # hybrid.solve() calls below. The input section (fixed input_idx=1) and
-    # body section don't vary between ports, so they're rendered once.
+    # One sub-region plot per simulation actually run in step 5. The input
+    # section (fixed input_idx=1) and body section don't vary between ports,
+    # so they render once. The bar config declares hybrid_mirror_bar's
+    # mirror_pairs, so its output section (mirror-derived, never simulated)
+    # gets no sub-region plot — only the cross output (genuinely solved)
+    # does — and the overview above hatches/labels the mirrored region.
     sub_region_configs=[
-        ("bar",   [IN_KW, {}, {"output_idx": 1}]),
+        ("bar",   [IN_KW, {}, {"output_idx": 1}], hybrid_mirror_bar.mirror_pairs),
         ("cross", [IN_KW, {}, {"output_idx": 0}]),
     ],
 )

@@ -97,6 +97,9 @@ See `examples/` — one folder per device, each with EME/FDTD/hybrid variants (`
 - `examples/directional_coupler/` — directional coupler (FDTD, FDTD length sweep, hybrid, even/odd
   supermode coupling-length analysis)
 - `examples/modal_multiplexer/` — modal multiplexer (hybrid)
+- `examples/ring_resonator/` — racetrack ring resonator (hybrid: raw-meep coupler-section +
+  90° bend FDTD, mode-solve neff interpolation, closed-form all-pass feedback assembly —
+  no `DeviceGeometry`/`FDTDSolver` support yet for this device, see `notes.md`)
 
 Run any example directly:
 

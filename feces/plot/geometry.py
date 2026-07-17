@@ -391,7 +391,8 @@ def plot_hybrid_geometry(
             thin dotted lines into num_cells[i] slices (the individual
             meow cells EMESolver._build_cells() would mesh that region
             into in the standalone, non-hybrid solve/solve_sweep() path).
-        sub_region_configs: list of (name, geometry_kwargs) pairs, where
+        sub_region_configs: list of (name, geometry_kwargs) or
+            (name, geometry_kwargs, mirror_pairs) entries, where
             geometry_kwargs is either a single dict (applied to every
             section) or a list of len(solver.solvers) dicts (one per
             section, matching HybridSolver.solve()'s own geometry_kwargs
@@ -401,17 +402,23 @@ def plot_hybrid_geometry(
             is only re-rendered once per *distinct* kwargs value it actually
             takes across configs — e.g. an input section whose kwargs never
             change across configs is rendered once, unsuffixed, not once
-            per config. Defaults to a single unnamed entry using
-            **geometry_kwargs below, matching the plain (non-branching) case.
+            per config. The optional third element declares that config's
+            mirror_pairs ({section: partner}, matching HybridSolver's own
+            parameter) when it differs per config (e.g. one output port
+            mirror-derived, the other genuinely solved — two HybridSolver
+            instances); it defaults to solver.mirror_pairs. A section that
+            a config mirror-derives is NOT rendered for that config — the
+            sub-region plots stay 1:1 with the simulations actually run —
+            and is instead hatched and labeled in the overview plot.
+            Defaults to a single unnamed entry using **geometry_kwargs
+            below, matching the plain (non-branching) case.
         sub_region_sections: indices into solver.solvers to render sub-region
-            plots for; None (default) renders every section. Use this when a
-            section is never independently simulated (e.g. its transfer
-            matrix is reused/transposed from another section's result by a
-            symmetry argument rather than separately solved) — omitting it
-            keeps the sub-region plots in 1:1 correspondence with the actual
-            simulations run, rather than showing a box for a section that
-            was never itself simulated. The section still appears, as part
-            of the full device, in the overview plot above.
+            plots for; None (default) renders every section not excluded by
+            a mirror declaration (see sub_region_configs above — mirror-
+            derived sections are skipped automatically, so this is only
+            needed for sections skipped for some *other* reason, e.g. a
+            transfer matrix reused by a symmetry argument hand-rolled
+            outside HybridSolver).
         **geometry_kwargs: forwarded to geometry.to_gds_eme() for the
             overview plot, and used as the default sub_region_configs entry.
 
@@ -440,12 +447,51 @@ def plot_hybrid_geometry(
     y0_h, y1_h = -(oxide_width / 2), +(oxide_width / 2)
     palette = plt.cm.Set2.colors
 
+    # Normalize configs up front (not just for the sub-region plots): each
+    # entry is (name, geometry_kwargs) or (name, geometry_kwargs,
+    # mirror_pairs), and the mirror declarations also drive the overview's
+    # mirrored-region annotations below. mirror_pairs defaults to the
+    # solver's own, so passing a mirror_pairs-carrying HybridSolver alone
+    # (no explicit configs) annotates and skips correctly too.
+    K = len(solver.solvers)
+    default_mirror = dict(getattr(solver, "mirror_pairs", {}) or {})
+    configs = sub_region_configs if sub_region_configs is not None else [("", geometry_kwargs)]
+    normalized = []
+    for entry in configs:
+        name, cfg = entry[0], entry[1]
+        mirror = dict(entry[2]) if len(entry) > 2 else default_mirror
+        per_section = [cfg] * K if isinstance(cfg, dict) else list(cfg)
+        if len(per_section) != K:
+            raise ValueError(
+                f"sub_region_configs entry {name!r} has {len(per_section)} "
+                f"geometry_kwargs entries, expected a single dict or a "
+                f"list of len(solver.solvers) = {K}."
+            )
+        normalized.append((name, per_section, mirror))
+    n_configs = len(normalized)
+
+    # section index -> {partner index: [config names that mirror it]}
+    mirror_ann = {}
+    for name, _per_section, mirror in normalized:
+        for mk, mj in mirror.items():
+            mirror_ann.setdefault(mk, {}).setdefault(mj, []).append(name)
+
     for k, sub_solver in enumerate(solver.solvers):
         xa, xb = bounds_gds[k], bounds_gds[k + 1]
         color = palette[k % len(palette)]
         ax.add_patch(Rectangle((xa, y0_h), xb - xa, y1_h - y0_h, alpha=0.15, color=color, zorder=3))
         ax.text((xa + xb) / 2, y1_h * 0.55, type(sub_solver).__name__,
                 ha="center", va="top", fontsize=7, color=color, zorder=10)
+        if k in mirror_ann:
+            ax.add_patch(Rectangle((xa, y0_h), xb - xa, y1_h - y0_h, fill=False,
+                                   hatch="///", edgecolor=color, lw=0, alpha=0.5, zorder=4))
+            parts = []
+            for j, names in sorted(mirror_ann[k].items()):
+                scope = "" if len(names) == n_configs else f" ({', '.join(n for n in names if n)})"
+                parts.append(f"mirror of section {j + 1}{scope}")
+            ax.text((xa + xb) / 2, y1_h * 0.30, "; ".join(parts),
+                    ha="center", va="top", fontsize=6.5, color=color, zorder=10,
+                    style="italic")
 
     for k in range(1, len(solver.solvers)):
         x_b = bounds_gds[k]
@@ -460,24 +506,6 @@ def plot_hybrid_geometry(
     _finalize(fig, ax, title, geometry, output_path)
 
     if sub_region_dir:
-        K = len(solver.solvers)
-        configs = sub_region_configs if sub_region_configs is not None else [("", geometry_kwargs)]
-        # Normalize every config's geometry_kwargs to a per-section list, so
-        # a section whose kwargs never change across configs (the common
-        # case for every section except the one that actually branches) can
-        # be identified and rendered exactly once, matching how
-        # HybridSolver.solve() itself accepts geometry_kwargs.
-        normalized = []
-        for name, cfg in configs:
-            per_section = [cfg] * K if isinstance(cfg, dict) else list(cfg)
-            if len(per_section) != K:
-                raise ValueError(
-                    f"sub_region_configs entry {name!r} has {len(per_section)} "
-                    f"geometry_kwargs entries, expected a single dict or a "
-                    f"list of len(solver.solvers) = {K}."
-                )
-            normalized.append((name, per_section))
-
         _plot_hybrid_sub_regions(
             geometry, solver, oxide_width, in_modes, out_modes,
             sub_region_dir, wg_layer, ox_layer, sub_region_pad,
@@ -652,9 +680,20 @@ def _section_kwargs_variants(normalized, k):
     never change across configs comes back as a single entry naming every
     config (the caller renders that as one unsuffixed, config-agnostic plot);
     a section that genuinely branches (e.g. output_idx varying with the
-    physical port) comes back as one entry per distinct value."""
+    physical port) comes back as one entry per distinct value.
+
+    A config that mirror-derives section k (k in its mirror_pairs) never
+    simulates it, so it contributes no variant — the sub-region plots stay
+    1:1 with the simulations actually run. If every config mirrors k, no
+    variants come back and the section gets no sub-region plot at all (it's
+    hatched/labeled in the overview instead). Because the caller compares
+    len(names) against the total config count for the unsuffixed-name rule,
+    a partially-mirrored section's surviving variant keeps its config
+    suffix (e.g. section_2_..._cross.png), which is the informative name."""
     variants = []  # [[names], kwargs]
-    for name, per_section in normalized:
+    for name, per_section, mirror in normalized:
+        if k in mirror:
+            continue
         kwargs_k = per_section[k]
         match = next((v for v in variants if v[1] == kwargs_k), None)
         if match is None:

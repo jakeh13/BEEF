@@ -17,9 +17,10 @@ MMI_1X2_EXAMPLES = mmi_1x2_eme mmi_1x2_fdtd mmi_1x2_hybrid
 MMI_2X2_EXAMPLES = mmi_2x2_eme mmi_2x2_fdtd mmi_2x2_hybrid
 DIRECTIONAL_COUPLER_EXAMPLES = directional_coupler_hybrid directional_coupler_mode directional_coupler_fdtd
 MODAL_MULTIPLEXER_EXAMPLES = modal_multiplexer_hybrid
+RING_RESONATOR_EXAMPLES = ring_resonator_hybrid
 
-EXAMPLES = $(MMI_1X2_EXAMPLES) $(MMI_2X2_EXAMPLES) $(DIRECTIONAL_COUPLER_EXAMPLES) $(MODAL_MULTIPLEXER_EXAMPLES)
-DEVICES = mmi_1x2 mmi_2x2 directional_coupler modal_multiplexer
+EXAMPLES = $(MMI_1X2_EXAMPLES) $(MMI_2X2_EXAMPLES) $(DIRECTIONAL_COUPLER_EXAMPLES) $(MODAL_MULTIPLEXER_EXAMPLES) $(RING_RESONATOR_EXAMPLES)
+DEVICES = mmi_1x2 mmi_2x2 directional_coupler modal_multiplexer ring_resonator
 
 # The brute-force FDTD coupling-length sweep is deliberately NOT in EXAMPLES
 # or the directional_coupler aggregate: it's a long production sweep with its
@@ -40,6 +41,7 @@ mmi_1x2: $(MMI_1X2_EXAMPLES)
 mmi_2x2: $(MMI_2X2_EXAMPLES)
 directional_coupler: $(DIRECTIONAL_COUPLER_EXAMPLES)
 modal_multiplexer: $(MODAL_MULTIPLEXER_EXAMPLES)
+ring_resonator: $(RING_RESONATOR_EXAMPLES)
 
 mmi_1x2_eme:
 	$(runner) $(my_python) mmi_1x2/mmi_1x2_eme.py
@@ -73,6 +75,11 @@ directional_coupler_fdtd_sweep:
 
 modal_multiplexer_hybrid:
 	$(runner) $(my_python) modal_multiplexer/modal_multiplexer_hybrid.py
+
+# RING_TEST_MODE=0 forces the full-res 3-D production run (defaults to the
+# fast 2-D smoke test otherwise — see the script's own TEST_MODE docstring).
+ring_resonator_hybrid:
+	RING_TEST_MODE=0 $(runner) $(my_python) ring_resonator/ring_resonator_hybrid.py
 
 clean:
 	rm -rf ../../example_output
