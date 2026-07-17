@@ -20,24 +20,24 @@ into that cascade.
 
 | Capability | FECES today | meep | meow | tidy3d | Other OSS |
 |---|---|---|---|---|---|
-| Time-domain FDTD | 2D or 3D via `FDTDSolver(three_d=...)`, single fixed uniform `res` | Native, mature, adaptive subpixel smoothing | — | Cloud GPU FDTD, auto mesh refinement | openEMS (general 3D FDTD, antenna-focused) |
+| Time-domain FDTD | 2D or 3D via `FDTDSolver(three_d=...)`, single fixed uniform `res` | Native, mature, adaptive subpixel smoothing | — | Cloud GPU FDTD, auto mesh refinement | openEMS (general 3D FDTD, antenna-focused); **FDTDX** (new, JAX-based, GPU-accelerated, native autodiff via time-reversibility — 10-415x faster than traditional FDTD per its own benchmarks) |
 | Eigenmode expansion (EME) | `EMESolver` wraps meow's cross-section mode-match + `compute_s_matrix` | — | Native (this *is* meow's job) | Has an EME plugin | EMEpy |
 | Hybrid FDTD+EME chaining | **Yes — `HybridSolver`, FECES's actual differentiator** | No | No | No (closest: manually stitching, no generic N-section cascade) | Not seen elsewhere in OSS photonics |
-| Dispersive materials | Single real index at center λ only (`.real` used, imaginary/loss dropped) | Full Lorentzian/Drude/Debye susceptibility fits | Has real material models (used via meow calls) | Automatic dispersion-fitting plugin | — |
+| Dispersive materials | Nearest-tabulated-wavelength real-index lookup (`np.argmin` on meow's built-in Si/SiO2 tables) — no interpolation, no loss | Full Lorentzian/Drude/Debye susceptibility fits | Has real material models (used via meow calls) | Automatic dispersion-fitting plugin | — |
 | Nonlinear materials (χ2/χ3) | None | Yes (Kerr, χ2) | No | Yes | — |
 | Lossy/absorptive materials | None (imaginary index discarded) | Yes | Partial | Yes | — |
 | Anisotropic / magneto-optic | None | Yes | No | Yes | — |
 | Material library breadth | 2 stacks: `SOI_160`, `SOI_220` (Si/SiO2 only, thickness-parametrized) | `meep.materials` — dozens of real fits (SiN, III-V, metals, oxides) | Some via meow | Large curated library | — |
 | Periodic structures / gratings / PhC | None (no Bloch BCs anywhere) | Yes (Bloch-periodic boundaries) | No | Yes | **S4/RCWA** — the standard OSS tool for this, much faster than FDTD for gratings; **MPB** for full PhC band structure (transitively available via meow but not exposed) |
 | Symmetry exploitation | None — always draws/simulates full both-arm geometry even for mirror-symmetric devices | `mp.Mirror`/`mp.Rotate2` — 2-4x speedup for symmetric structures | n/a | Yes | — |
-| Adjoint / inverse design / topology optimization | None | Adjoint solver (`meep.adjoint`) | No | `autograd`-based, mature | — |
+| Adjoint / inverse design / topology optimization | None | Adjoint solver (`meep.adjoint`, autograd/JAX-based) | No | Native `autograd` support (the older JAX-based adjoint plugin is being deprecated in favor of this) | **FDTDX** — JAX-native FDTD with automatic differentiation built into the solver itself, not bolted on afterward |
 | Near-to-far-field transform | None | `add_near2far` | No | Yes | — |
 | Mesh auto-refinement / convergence checking | None — manual `res`, user must sweep by hand | Manual (subpixel smoothing helps, not auto-refine) | n/a | Automatic adaptive meshing | — |
 | Device geometry library | `MMI` (N×M, per-port `MMIPort` taper size/placement), `DirectionalCoupler`, standalone `Taper`/`SBend` building blocks, `CompoundGeometry`/`WaveguideRun` (compose several devices into one cascade — e.g. two `MMI`s + a connector, replacing the old hand-rolled cascaded-MUX class), `BendGeometry` (legacy, poorly integrated) | n/a (raw geometry primitives only) | n/a | Has some parametric primitives + PDK support | **gdsfactory** — the standard OSS parametric photonic component library (rings, Y-branches, grating couplers, edge couplers, crossings, spirals, etc.) |
 | GDS import/export, PDK interop | **None** — `gdsfactory` dependency was actively removed (commit `ffcbf5a`); geometries are FECES-internal polygon dicts only, can't simulate a real fab layout or export one for tape-out | n/a | Uses gdsfactory `Component`s | Has gdsfactory integration | gdsfactory itself |
 | Ring/racetrack resonator | **Missing entirely** — extremely common building block | n/a | n/a | n/a | gdsfactory has one; easy to add as a new `DeviceGeometry` |
 | Grating coupler / edge coupler geometry | Missing | n/a | n/a | n/a | gdsfactory |
-| Circuit-level composition (cascade many devices' S-matrices into one chip netlist) | **None** — `SMatrix` has no `+`/`@`/composition operators | n/a | n/a | n/a | **SAX** — JAX-based, differentiable, netlist-driven; the standard OSS tool for this layer |
+| Circuit-level composition (cascade many devices' S-matrices into one chip netlist) | **None** — `SMatrix` has no `+`/`@`/composition operators | n/a | n/a | n/a | **SAX** — JAX-based, differentiable, netlist-driven; **Simphony** — component-library/plugin-based, ~20x faster than a leading commercial tool per its own benchmarks; both are standard OSS choices for this layer with different tradeoffs (functional/autodiff vs. component-abstraction) |
 | Result serialization | Pickle only, no schema/versioning | n/a | n/a | Its own `.hdf5`/JSON | Touchstone `.sNp` is the RF/photonics interop standard, not supported |
 | Passivity/unitarity sanity check | None | n/a | n/a | n/a | Trivial to add (`sum(|S|^2) <= 1`); would have caught real bugs found in earlier sessions automatically |
 | Parallel parameter sweeps | `ParallelSweep` — local `multiprocessing.Pool` grid sweep, but only calls whole-device `solver.solve()`, **not** `HybridSolver`-aware, no cloud/cluster backend beyond an external SLURM Makefile | n/a (user-driven) | n/a | Cloud batch is tidy3d's core value prop | — |
@@ -67,7 +67,10 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   count (always excites from whichever side has fewer modes, reversing the physical
   direction if needed) and sizing the source/monitor aperture via a priority order:
   geometry-provided `source_aperture_at()` first, then `half_domain_aperture`, then
-  the full `sim_width`.
+  the full `sim_width`. `monitor_center`/`monitor_size` explicitly override the
+  measured/interface-side monitor's placement/size when the geometry-driven default
+  would be off-axis relative to an adjacent section's own basis (e.g. re-centering
+  on the shared y=0 axis at a `DirectionalCoupler` S-bend/coupling-region seam).
 - **`EMESolver`** — meow-based eigenmode expansion. `num_modes`/`num_cells`/`lengths`
   (parallel lists, one entry per region left-to-right, e.g. `[wg, taper, MMI body,
   taper, wg]`) plus `oxide_width`/`oxide_height`/`res`/`material_stack` configure the
@@ -138,8 +141,12 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   modal_multiplexer_hybrid.py` composes a 1×3 `MMI` + a `WaveguideRun` connector +
   a 3×3 `MMI` this way, replacing the old hand-rolled cascaded-MUX class.
 - **`BendGeometry`** (`bend.py`) — legacy standalone 90° routing bend for
-  non-collinear FDTD I/O; predates and isn't integrated with the `section_prisms`/
-  `width_at`/`center_at` interface (see Geometry recommendations above).
+  non-collinear FDTD I/O; **not even a `DeviceGeometry` subclass** (a plain
+  dataclass with its own hand-rolled minimal GDSII binary writer,
+  `.build(device_sx, dpml, output_path)`), so it predates and isn't
+  integrated with the `section_prisms`/`width_at`/`center_at` interface at
+  all — can't participate in a `HybridSolver` chain like every other
+  geometry in this list (see Geometry recommendations below).
 - *Removed*: `ModalMultiplexer` (unused dead code) and `MMIMux`/`MuxGeoParams` (the
   old cascaded 1×3+3×3 MUX class) — superseded by composing two `MMI` instances via
   `CompoundGeometry`, as above.
@@ -168,11 +175,44 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   per-port output sections without re-drawing sections 0–3 three times over.
 - **`plot_eme_fields`** — EME-only: propagates modes through meow cells and saves
   6-component (`|Ex|`,`|Ey|`,`|Ez|`,`|Hx|`,`|Hy|`,`|Hz|`) (x,z) field heatmaps. No
-  FDTD time-domain equivalent exists yet (see Plotting recommendations above).
+  FDTD time-domain equivalent exists yet (see Plotting recommendations below).
 - **`plot_performance`** — transmission (linear) + insertion loss (dB) vs
   wavelength, side by side, for every port in an `SMatrix`.
 - **`plot_splitting_ratio`** — power splitting ratio `T_a/(T_a+T_b)` vs wavelength
   between two named ports, with a 50/50 reference line.
+
+### Results (`feces/results/`)
+
+- **`SMatrix`** (`smatrix.py`) — unified S-parameter result type, keyed by
+  `(port, in_mode, out_mode)` → a complex amplitude array over wavelength.
+  `transmission()`/`insertion_loss_db()` derive `|coeff|^2` (linear) and dB
+  from the stored complex coefficients. `check_passive(tol=1e-3)` sums
+  `|coeff|^2` over every `(port, out_mode)` entry present for a given input
+  mode (via the `total_power(in_mode)` helper) and warns
+  (`warnings.warn`, identifying the worst input mode/wavelength/total) if
+  the total exceeds `1+tol` at any wavelength — a passive device can only
+  lose power, never gain it, so a violation almost always means a real bug
+  (mode-count mismatch, double-counted output branch, normalization error)
+  rather than genuine gain. Every example script and all 4 golden tests call
+  `smat.check_passive()` right after `solve()`/`hybrid.solve()` as standard
+  practice. `save()`/`load()` round-trip via pickle (unversioned — see Misc
+  recommendations for the interop/schema gap).
+
+### Sweep (`feces/sweep/`)
+
+- **`ParallelSweep`** (`parallel.py`) — `ParallelSweep(solver_fn, geometry_fn,
+  param_grid, wavelengths, n_workers=4, output_dir=None, save_per_point=True)`.
+  `run()` builds the Cartesian product of `param_grid` (`itertools.product`)
+  and dispatches each point to a `multiprocessing.Pool(n_workers)` worker,
+  which builds a fresh geometry/solver instance and calls plain
+  `solver.solve(geometry, wavelengths)` — **always the whole-device `solve()`
+  API, never `HybridSolver.solve()`'s `cache=` mechanism** (see Solver
+  recommendations), so sweeping a hybrid device redundantly resimulates every
+  cached section once per worker/grid point. Returns `Dict[param_tuple,
+  SMatrix]`; optionally pickles each point's `SMatrix` under
+  `output_dir/<param-tag>/data/smatrix.pkl` and a `sweep_results.pkl`
+  summary. No cloud/cluster backend beyond the external SLURM `Makefile` in
+  `examples/`.
 
 ### Testing (`tests/`)
 
@@ -189,8 +229,8 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   real solve, and checks transmission against a recorded reference in
   `tests/golden/*.json` within a loose (10% relative / 3% absolute) tolerance
   — a regression guard against real correctness bugs (sign flips, wrong port
-  routing, normalization mistakes — see the Solver #1 passivity-check
-  rationale above), not a physical-accuracy check. Skipped unless
+  routing, normalization mistakes — see `SMatrix.check_passive()` in the
+  Results reference above), not a physical-accuracy check. Skipped unless
   `pytest --runslow` is passed; `scripts/generate_golden_values.py`
   (re)generates the reference JSON. Genuinely slow even at reduced
   resolution — real per-target wall-clock on a single CPU core: ~7 min
@@ -205,7 +245,7 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   `workflow_dispatch` (`.github/workflows/slow-tests.yml`), one job per
   target in parallel via `pymeep` installed from conda-forge — not on every
   push (too slow for that), and not pip-installed (see High-level
-  recommendation 7: `pyproject.toml`'s `[fdtd]`/`[all]` extras currently
+  recommendation 6: `pyproject.toml`'s `[fdtd]`/`[all]` extras currently
   declare the wrong `meep` package).
 - **Not covered by either suite**: `FDTDSolver`/`EMESolver` used standalone
   outside `HybridSolver` (the golden tests only exercise them via `solve()`/
@@ -223,115 +263,131 @@ where a category has fewer or lower-priority items.
 
 ### High-level
 
-1. **Test suite + CI — done.** See the Testing library reference above for what
-   exists: (a) fast `tests/test_geometry.py`/`test_smatrix.py`/`test_hybrid.py`,
-   meep/meow-free, run in CI on every push; (b) `tests/test_golden_examples.py`,
-   one slow real-simulation "golden value" test per target (`mmi_1x2_eme`/`fdtd`/
-   `hybrid`, `directional_coupler_hybrid`), `pytest --runslow`; (c) both are
-   CI-wired — the fast suite on every push (`.github/workflows/ci.yml`), the
-   slow suite as a manual-only `workflow_dispatch` 4-way parallel matrix
-   (`.github/workflows/slow-tests.yml`, ~96 min wall-clock for the slowest
-   target instead of ~3hr serial) since it's too slow for every push/PR. The
-   slow-suite CI job installs `pymeep` from conda-forge
-   (`mamba-org/setup-micromamba`), not via pip — see item 7 below for why
-   `pip install feces[fdtd]` doesn't actually work. Still open: `mmi_2x2_*` and
-   `modal_multiplexer_hybrid` have no golden test (items 2/3 below); no
-   lint/type-checking (item 5).
-2. **`mmi_2x2` golden test.** `examples/mmi_2x2/` (EME, FDTD, hybrid — see
+1. **`mmi_2x2` golden test.** `examples/mmi_2x2/` (EME, FDTD, hybrid — see
    Examples recommendations) has no golden-value regression test yet, unlike
    its `mmi_1x2` counterparts. Straightforward to add once the example itself
    is validated (same pattern as the existing 4 targets), but deliberately
    deferred until then — no value locking in a reference before trusting the
    example's own numbers.
-3. **`modal_multiplexer_hybrid` numerical accuracy.** Excluded from the golden
-   suite on the same basis as item 2, but blocked on more than just "add a
+2. **`modal_multiplexer_hybrid` numerical accuracy.** Excluded from the golden
+   suite on the same basis as item 1, but blocked on more than just "add a
    test": the device's accuracy isn't yet trusted, so this needs an
    independent correctness check (e.g. against a known-good reference, or at
    minimum a `check_passive()`-style sanity pass plus manual inspection)
    *before* a golden test would mean anything — a regression test only
    guards against drifting away from a value that's already right.
-4. **Documentation.** No docs site, no changelog beyond this `README.md`/
+3. **Documentation.** No docs site, no changelog beyond this `README.md`/
    `notes.md` pair — the `examples/` scripts are the only tutorials that
    exist. At minimum a `CHANGELOG.md` tracking the still-static
    `__version__ = "0.1.0"`.
-5. **Type checking in CI.** Type hints are used throughout (`from __future__ import
+4. **Type checking in CI.** Type hints are used throughout (`from __future__ import
    annotations`) but nothing enforces them — no `mypy`/`pyright` config, no `py.typed`
-   marker. Cheap to add now that CI exists (item 1).
-6. **Declare transitive dependencies explicitly.** `gdsfactory`/`tidy3d` are consumed
+   marker. Cheap to add now that CI exists (see the Testing library reference above).
+5. **Declare transitive dependencies explicitly.** `gdsfactory`/`tidy3d` are consumed
    indirectly through `meow-sim` (e.g. `meow.compute_modes_tidy3d`) but aren't
    declared in `pyproject.toml` — a `meow-sim` version bump that drops/renames those
    could silently break FECES. Pin or declare them directly, or guard the import
    with a clear error message.
-7. **Fix `pyproject.toml`'s `[fdtd]`/`[all]` extras — they install the wrong
+6. **Fix `pyproject.toml`'s `[fdtd]`/`[all]` extras — they install the wrong
    package.** Found while wiring up slow-suite CI: `fdtd = ["meep"]` and
    `all = ["meow-sim", "meep"]` declare `meep` as a pip dependency, but PyPI's
    `meep` package is an unrelated project (a lightweight task runner) — `pip
    install feces[fdtd]` succeeds with no error and leaves `import meep`
    completely broken. The real MIT electromagnetics package only ships via
    conda-forge (`conda install -c conda-forge pymeep`; confirmed working
-   locally and in CI this session). Fix: drop `meep` from these extras (or
+   both locally and in `.github/workflows/slow-tests.yml`'s CI job). Fix: drop
+   `meep` from these extras (or
    replace with a clear error message on import failure pointing at the
    conda-forge install command) and document the conda-forge requirement in
    `README.md`'s Install section, not just buried in the Testing section.
-8. **Standardize on `logging`, not `print()`.** `EMESolver.solve_section_length_sweep`
+7. **Standardize on `logging`, not `print()`.** `EMESolver.solve_section_length_sweep`
    and others `print()` diagnostics unconditionally (e.g. the mid-sweep neff
    diagnostic) while `ParallelSweep` already uses the `logging` module — inconsistent
    for a library whose callers may want to suppress or redirect that output.
 
 ### Solver
 
-1. **Passivity/unitarity self-check on `SMatrix` — done.** `smat.check_passive(tol=
-   1e-3)` (`feces/results/smatrix.py`) sums `|coeff|^2` over every (port, out_mode)
-   entry per input mode present (via the new `total_power(in_mode)` helper) and
-   warns (`warnings.warn`, identifying the worst input mode/wavelength/total) if any
-   input mode's total output power exceeds `1+tol` at any wavelength — exactly the
-   kind of check that would have flagged this session's own -200dB/+100dB/mode-
-   truncation-style bugs immediately, without needing to notice an anomalous plot
-   first. Not yet wired into any example's own print/verify block as a routine
-   post-solve call — worth adding `smat.check_passive()` to each example script
-   right after `solver.solve()`/`hybrid.solve()` as standard practice.
-2. **Lossy/dispersive material support.** The imaginary part of the refractive index
-   is discarded (`materials/stack.py`, `si_medium`/`sio2_medium` use `.real` only)
-   and only a single real index at the center wavelength is used per solve — no true
-   dispersion across a wavelength sweep, no absorption. Wiring meep's actual
-   Lorentzian-susceptibility fitting (or reusing `meep.materials` directly) into
-   `MaterialStack` would enable real loss/broadband dispersion and open the door to
-   SiN, III-V, or lossy/doped silicon.
-3. **Symmetry exploitation in `FDTDSolver`.** `MMI`/`DirectionalCoupler` are
+1. **Lossy/dispersive material support.** `MaterialStack.si_medium(wl)`/
+   `sio2_medium(wl)` (`materials/stack.py`) build an `mp.Medium(index=...)` from
+   whichever *tabulated* wavelength in meow's built-in Si/SiO2 data is nearest to
+   the requested one (`np.argmin`) — a nearest-neighbor lookup, not interpolation,
+   and always real-valued, so there's no true dispersion curve across a wavelength
+   sweep and no absorption/loss. Wiring meep's actual Lorentzian-susceptibility
+   fitting (or reusing `meep.materials` directly) into `MaterialStack` would enable
+   real loss/broadband dispersion and open the door to SiN, III-V, or lossy/doped
+   silicon.
+2. **Symmetry exploitation in `FDTDSolver`.** `MMI`/`DirectionalCoupler` are
    frequently mirror-symmetric about y=0; `solve_section()` currently always draws
    and simulates the full cross-section. An opt-in `mp.Mirror` symmetry when the
    geometry/excitation is actually symmetric could roughly halve FDTD cost for free —
    complements the reciprocity-based min-simulation-count optimization already there.
-4. **Circuit-level S-matrix composition.** `SMatrix` has no way to combine several
+3. **Circuit-level S-matrix composition.** `SMatrix` has no way to combine several
    devices' results into a larger circuit (e.g. cascading an MMI's `SMatrix` with a
    directional coupler's). `HybridSolver` already does exactly this kind of
    matrix-chain cascading *within* one device across sections — generalizing that
    same machinery to cascade *across* independently-solved devices (or documenting a
-   recipe for handing `SMatrix` results to SAX, which already does this for the
-   gdsfactory ecosystem) would stop device-level sims from being a dead end. (Note:
-   `CompoundGeometry` — see Geometry section — solves a related but distinct problem
-   at the geometry layer: it lets `HybridSolver` simulate a device built from several
-   `DeviceGeometry` parts as one cascade *before* solving, but doesn't let two
-   already-*solved* `SMatrix` results be combined after the fact, which is what this
-   item is about.)
-5. **`ParallelSweep` + `HybridSolver` integration.** The sweep utility only calls
+   recipe for handing `SMatrix` results to SAX or Simphony, both established OSS
+   tools for exactly this layer, SAX JAX/netlist-based and Simphony
+   component-library/plugin-based) would stop device-level sims from being a dead
+   end. (Note: `CompoundGeometry` — see Geometry section — solves a related but
+   distinct problem at the geometry layer: it lets `HybridSolver` simulate a device
+   built from several `DeviceGeometry` parts as one cascade *before* solving, but
+   doesn't let two already-*solved* `SMatrix` results be combined after the fact,
+   which is what this item is about.)
+4. **`ParallelSweep` + `HybridSolver` integration.** The sweep utility only calls
    whole-device `solver.solve()`; it doesn't know about `HybridSolver.solve()`'s
    `cache=` mechanism, so a parallel sweep over a hybrid device would redundantly
    re-simulate cached sections across worker processes.
-6. **Non-uniform/graded meshing.** `res` is a single isotropic scalar shared across
+5. **Non-uniform/graded meshing.** `res` is a single isotropic scalar shared across
    the whole mesh (both FDTD and EME's `Mesh2D`) — no finer mesh near the waveguide
    core and coarser in cladding, unlike tidy3d's automatic adaptive meshing. Would
    cut cell count for a given accuracy target.
-7. **Automatic mesh-resolution convergence.** Beyond the manual "run a list of
+6. **Automatic mesh-resolution convergence.** Beyond the manual "run a list of
    resolutions and eyeball it" pattern (see Misc/Examples below) — meep/tidy3d both
    have some form of resolution auto-selection; FECES has none, always a fixed
    user-chosen `res`.
-8. **Bigger lift, only if scope grows toward design automation:** adjoint/
-   inverse-design support (meep adjoint or tidy3d-style autograd), periodic/grating
-   structures via an RCWA backend (S4-style) for problems where FDTD/EME are the
-   wrong tool, near-to-far-field transform. Substantial, well-trodden ground already
-   owned by meep/tidy3d/S4 respectively — worth it only if a concrete device need
-   shows up that FDTD/EME genuinely can't address.
+7. **Bigger lift, only if scope grows toward design automation:** adjoint/
+   inverse-design support, periodic/grating structures via an RCWA backend
+   (S4-style) for problems where FDTD/EME are the wrong tool, near-to-far-field
+   transform. For adjoint specifically, `meep.adjoint` (already what FECES's own
+   `FDTDSolver` sits on top of) is the lowest-friction path — it's autograd/JAX-based
+   and gradient computation wraps around any optimization library, so no new solver
+   dependency would be needed, just a FECES-side API for defining a figure of merit
+   over a `HybridSolver` chain's `SMatrix` output. Both tidy3d (moving from a
+   JAX-adjoint plugin to native `autograd` support) and the newer JAX-native FDTDX
+   project (automatic differentiation built into the solver via time-reversibility,
+   not bolted on) confirm autodiff-native is now the field's default direction, not
+   a niche add-on — worth knowing if this ever gets prioritized. Substantial,
+   well-trodden ground already owned by meep/tidy3d/S4/FDTDX respectively — worth it
+   only if a concrete device need shows up that FDTD/EME genuinely can't address.
+8. **Mirror-section reuse in `HybridSolver` (reciprocity across sections, not just
+   within one).** For a left-right mirror-symmetric chain (e.g. `MMI`'s input taper
+   band = output taper band reversed, `DirectionalCoupler`'s input S-bend = output
+   S-bend reversed), the output-side section's transfer matrix is just the
+   input-side section's transpose (mode axes swapped) — the same reciprocity
+   argument `solve_section()` already uses internally, one level up. Today nothing
+   in `HybridSolver` knows this: `directional_coupler_hybrid.py` hand-rolls the
+   reuse by bypassing `HybridSolver.solve()` entirely (manual `solve_section()` +
+   `.transpose()` calls, see its module docstring), getting the true minimum (2 FDTD
+   + 1 EME for the coupler). `mmi_2x2_hybrid.py`, by contrast, goes through the
+   generic `HybridSolver.solve()` cascade and pays for 3 FDTD + 1 EME — the input
+   section and the bar-output section are mirror images of the same physical
+   structure but get simulated twice because `solve()` has no way to express that.
+   Proposed fix: an explicit pairing spec on `HybridSolver` — e.g.
+   `mirror_pairs={3: 0}` (section index -> section index whose transpose it reuses)
+   — plus a way to state the branch-index correspondence for multi-port sides
+   (`output_idx=k` reuses the `input_idx=k` run's transpose), so a paired section
+   skips `solve_section()` and substitutes the partner's cached matrix transposed.
+   Generalizes past the simple palindrome case: a device with 4 sections where only
+   sections 1 and 3 are mirrored (2 stays independent) is expressible as one pair
+   in an otherwise-normal 4-section chain — a dedicated
+   "SymmetricHybridSolver"-style subclass assuming full palindrome symmetry about
+   the center would not cover that. Backward compatible (no `mirror_pairs` = today's
+   behavior, unchanged). Main risk: a wrong pairing silently produces wrong
+   physics (transpose of a section that isn't actually a mirror of its partner) —
+   needs a guardrail, e.g. asserting the two sections' `width_at`/`center_at`
+   profiles match under x-reversal before trusting the reuse, not just accepting the
+   pairing on faith.
 
 ### Geometry
 
@@ -347,7 +403,11 @@ where a category has fewer or lower-priority items.
    but that leaves no way to simulate an arbitrary externally-supplied layout or
    export a FECES geometry as a real `.gds`. A thin, optional adapter (gdsfactory
    `Component` ↔ FECES polygon dict) would restore that interop without
-   reintroducing gdsfactory as a hard dependency.
+   reintroducing gdsfactory as a hard dependency. gdsfactory's PDK ecosystem keeps
+   growing (gdsfactory+ now lists 43+ foundry PDKs, e.g. a 2026 Lightwave Logic
+   high-speed-modulator PDK for GlobalFoundries silicon photonics) — every PDK added
+   there is a real device FECES currently has no way to even load, let alone
+   simulate.
 3. **Y-branch / adiabatic splitter and waveguide crossing.** Common alternatives to
    the MMI splitter and to routing waveguides through each other — neither exists.
 4. **Consolidate the duplicated S-bend logic — done for the coupler.py/modal_mux.py
@@ -374,8 +434,8 @@ where a category has fewer or lower-priority items.
 
 1. **Stop duplicating solver position/size math in the plot functions.**
    `_draw_section_fdtd_markers` (plot/geometry.py) independently recomputes where
-   `FDTDSolver.solve_section()` places its source/monitor apertures, and this
-   session's own bug-hunt found two real mismatches there (marker offset by
+   `FDTDSolver.solve_section()` places its source/monitor apertures, and an
+   earlier bug-hunt found two real mismatches there (marker offset by
    `monitor_margin` when the solver places it flush at the section edge; marker
    always drawn full-height when the solver only does that for `n_measure > 1`).
    Any future change to `solve_section()`'s aperture logic can silently desync the
@@ -393,7 +453,7 @@ where a category has fewer or lower-priority items.
    item: a `plot_convergence(results_by_resolution, metric)` helper that overlays a
    chosen quantity (e.g. L_c, T) across resolutions on one figure, instead of
    eyeballing separate per-resolution plots side by side (what
-   `directional_coupler_mode.ipynb` does today).
+   `directional_coupler_mode.py`/`.ipynb` does today).
 5. **Interactive/3D visualization.** Everything is a static matplotlib PNG; no
    plotly/bokeh option for geometry or field plots, unlike tidy3d's interactive
    viewer.
@@ -417,19 +477,20 @@ where a category has fewer or lower-priority items.
    parameter-sweep utility that zero examples demonstrate — a user has no worked
    reference for the one utility meant to replace ad hoc per-device sweep scripts.
 5. **No example demonstrates mesh-convergence checking as a reusable pattern** beyond
-   the one-off resolution loop hand-built into `directional_coupler_mode.ipynb` this
-   session — worth generalizing into its own example once the Misc convergence
+   the one-off resolution loop hand-built into `directional_coupler_mode.py`/`.ipynb`
+   (a pure meow/MPB even/odd-supermode script that doesn't use any FECES solver
+   class at all) — worth generalizing into its own example once the Misc convergence
    utility exists.
 6. **Ring resonator example** — once the Geometry-section ring/racetrack class
    exists, pair it with an example (and it'd make a good first user of the
-   convergence-utility and passivity-check recommendations above, exercising three
-   new features at once).
+   convergence-utility recommendation above, plus `SMatrix.check_passive()` as
+   standard practice, exercising several new/existing features at once).
 
 ### Misc
 
 1. **Mesh-convergence-loop utility.** The pattern hand-rolled in
-   `directional_coupler_mode.ipynb` (loop over a resolution list, save/plot each
-   into its own subfolder) should be a reusable `feces` utility (e.g.
+   `directional_coupler_mode.py`/`.ipynb` (loop over a resolution list, save/plot
+   each into its own subfolder) should be a reusable `feces` utility (e.g.
    `sweep_resolution(run_fn, resolutions) -> convergence data`) rather than
    hand-rolled per example.
 2. **Result serialization beyond raw pickle.** `SMatrix.save`/`load` use unversioned
@@ -442,10 +503,10 @@ where a category has fewer or lower-priority items.
    JSON-serializable `Simulation` objects) would let standard sweeps run without
    writing Python, and would pair naturally with `ParallelSweep`.
 4. **Output-folder conventions.** `_utils.py` already has `resolve_output_folder`/
-   `make_output_folders`, but usage is inconsistent across examples (some use them,
-   some hand-roll `os.makedirs`/`output_dir` logic, e.g. every `examples/*.py`
-   script this session touched) — worth consolidating on the existing utility
-   everywhere instead of ad hoc per-script path-building.
+   `make_output_folders`, but usage is inconsistent across examples (most
+   `examples/*.py` scripts hand-roll their own `os.makedirs`/`output_dir` logic
+   instead) — worth consolidating on the existing utility everywhere instead of ad
+   hoc per-script path-building.
 
 ## Not recommending
 
