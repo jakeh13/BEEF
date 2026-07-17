@@ -43,7 +43,7 @@ into that cascade.
 | Parallel parameter sweeps | `ParallelSweep` — local `multiprocessing.Pool` grid sweep, but only calls whole-device `solver.solve()`, **not** `HybridSolver`-aware, no cloud/cluster backend beyond an external SLURM Makefile | n/a (user-driven) | n/a | Cloud batch is tidy3d's core value prop | — |
 | Field visualization | Static EME field heatmaps only (`plot_eme_fields`); **no FDTD time-domain field/movie export at all** | `mp.Animate2D`, live field plotting | n/a | Interactive Plotly 3D viewer | — |
 | Interactive/3D visualization | None (matplotlib static PNGs only) | Some (via `mp.plot2D`) | n/a | Yes, core feature | — |
-| Testing | **None** — no `tests/`, no CI, no lint | n/a | n/a | n/a | — |
+| Testing | Fast unit tests (`tests/`, meep/meow-free) run in CI on every push; 4 slow golden-value integration tests (real reduced-res meep/meow sims) run in CI as a manual-only `workflow_dispatch` matrix via conda-forge `pymeep` (`pytest --runslow` locally); no lint/type-checking yet | n/a | n/a | n/a | — |
 
 ## Current library reference
 
@@ -112,7 +112,11 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   default off) generalizes the old `MMIMux`'s neighbor-distance aperture-narrowing
   formula to arbitrary port counts, for devices with several closely-spaced ports
   (e.g. one sitting exactly on the y=0 axis) that the fixed `half_domain_aperture`
-  rule can't isolate.
+  rule can't isolate. `polygons()`/`to_gds_eme()` now also take `input_indices`/
+  `input_idx` (mirroring the existing `output_indices`/`output_idx`), restricting
+  the drawn input stub(s) to a single port — needed for a genuine multi-input
+  device (2×2, etc.) so an EME input cross-section is one waveguide, not an
+  unwanted multi-guide supermode; `examples/mmi_2x2/` is the first consumer.
 - **`DirectionalCoupler`** (`coupler.py`) — symmetric 2-waveguide coupler with
   S-bend I/O transitions; built internally from 4 `SBend` sub-geometries (one per
   arm), composed via the shared `_compose.shift_polys`/`shift_prisms` offset
@@ -170,6 +174,46 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
 - **`plot_splitting_ratio`** — power splitting ratio `T_a/(T_a+T_b)` vs wavelength
   between two named ports, with a 50/50 reference line.
 
+### Testing (`tests/`)
+
+- **Fast unit tests** — `test_geometry.py`, `test_smatrix.py`, `test_hybrid.py`
+  (53 tests). No meep/meow import anywhere (geometry section-cut math is pure
+  Python; `HybridSolver` is tested against a `FakeSolver` with scripted
+  `solve_section()` returns, not real physics), so these run everywhere in
+  well under a second. Run in CI on every push/PR (`.github/workflows/ci.yml`).
+- **Slow golden-value integration tests** — `test_golden_examples.py`, one per
+  target: `mmi_1x2_eme`/`mmi_1x2_fdtd`/`mmi_1x2_hybrid`/
+  `directional_coupler_hybrid` (not `mmi_2x2_*` or `modal_multiplexer_hybrid`
+  yet). Each builds the same device geometry as its example at reduced
+  resolution (`res=20` vs the examples' `res=40`, 3 wavelengths vs 11), runs a
+  real solve, and checks transmission against a recorded reference in
+  `tests/golden/*.json` within a loose (10% relative / 3% absolute) tolerance
+  — a regression guard against real correctness bugs (sign flips, wrong port
+  routing, normalization mistakes — see the Solver #1 passivity-check
+  rationale above), not a physical-accuracy check. Skipped unless
+  `pytest --runslow` is passed; `scripts/generate_golden_values.py`
+  (re)generates the reference JSON. Genuinely slow even at reduced
+  resolution — real per-target wall-clock on a single CPU core: ~7 min
+  (EME), ~12 min (FDTD), ~58 min (hybrid), ~96 min (directional coupler
+  hybrid) — so budget ~3 hours for the full suite and don't expect this to
+  ever be a pre-commit check. The two hybrid targets needed `dpml` doubled
+  (0.5→1.0 µm) versus their examples' value: `HybridSolver`'s interior
+  `solve_section()` spans are short enough that PML is a large fraction of
+  the domain, and at `res=20` the unmodified `dpml` bought only half
+  production's PML pixel count, which diverged (`meep: fields NaN/Inf`)
+  after ~20 min instead of converging. Also runs in CI as a manual-only
+  `workflow_dispatch` (`.github/workflows/slow-tests.yml`), one job per
+  target in parallel via `pymeep` installed from conda-forge — not on every
+  push (too slow for that), and not pip-installed (see High-level
+  recommendation 7: `pyproject.toml`'s `[fdtd]`/`[all]` extras currently
+  declare the wrong `meep` package).
+- **Not covered by either suite**: `FDTDSolver`/`EMESolver` used standalone
+  outside `HybridSolver` (the golden tests only exercise them via `solve()`/
+  `solve_section()` on the four targets above), `mmi_2x2_*`,
+  `modal_multiplexer_hybrid` (deliberately excluded — its numerical accuracy
+  isn't yet trusted enough to lock in as a golden reference), `ParallelSweep`,
+  and all of `feces/plot/`.
+
 ## Recommendations
 
 Sorted into High-level / Solver / Geometry / Plotting / Examples / Misc. Ordered
@@ -179,28 +223,57 @@ where a category has fewer or lower-priority items.
 
 ### High-level
 
-1. **Test suite + CI.** Zero tests exist anywhere in the repo. Prior debugging
-   sessions found and fixed real, silent correctness bugs (FDTD launch aperture
-   width, interior-interface measurement aperture truncating supermode overlap, a
-   plot-only marker-position bug) — every one would have been caught immediately by
-   a regression test against a known-good value. Cheapest high-value additions:
-   (a) fast `solve_section()`-level unit tests with mocked/tiny geometries, no real
-   FDTD/EME needed; (b) one slow "golden value" integration test per example device
-   that runs a real (reduced-resolution) sim and checks T/IL against a recorded
-   reference within tolerance; (c) GitHub Actions CI running both on push.
-2. **Documentation.** No `README`, no docs site, no changelog — the `examples/`
-   scripts are the only tutorials that exist. At minimum a top-level `README.md`
-   (install, the FDTD/EME/Hybrid split, a pointer to `examples/`) and a
-   `CHANGELOG.md` tracking the still-static `__version__ = "0.1.0"`.
-3. **Type checking in CI.** Type hints are used throughout (`from __future__ import
+1. **Test suite + CI — done.** See the Testing library reference above for what
+   exists: (a) fast `tests/test_geometry.py`/`test_smatrix.py`/`test_hybrid.py`,
+   meep/meow-free, run in CI on every push; (b) `tests/test_golden_examples.py`,
+   one slow real-simulation "golden value" test per target (`mmi_1x2_eme`/`fdtd`/
+   `hybrid`, `directional_coupler_hybrid`), `pytest --runslow`; (c) both are
+   CI-wired — the fast suite on every push (`.github/workflows/ci.yml`), the
+   slow suite as a manual-only `workflow_dispatch` 4-way parallel matrix
+   (`.github/workflows/slow-tests.yml`, ~96 min wall-clock for the slowest
+   target instead of ~3hr serial) since it's too slow for every push/PR. The
+   slow-suite CI job installs `pymeep` from conda-forge
+   (`mamba-org/setup-micromamba`), not via pip — see item 7 below for why
+   `pip install feces[fdtd]` doesn't actually work. Still open: `mmi_2x2_*` and
+   `modal_multiplexer_hybrid` have no golden test (items 2/3 below); no
+   lint/type-checking (item 5).
+2. **`mmi_2x2` golden test.** `examples/mmi_2x2/` (EME, FDTD, hybrid — see
+   Examples recommendations) has no golden-value regression test yet, unlike
+   its `mmi_1x2` counterparts. Straightforward to add once the example itself
+   is validated (same pattern as the existing 4 targets), but deliberately
+   deferred until then — no value locking in a reference before trusting the
+   example's own numbers.
+3. **`modal_multiplexer_hybrid` numerical accuracy.** Excluded from the golden
+   suite on the same basis as item 2, but blocked on more than just "add a
+   test": the device's accuracy isn't yet trusted, so this needs an
+   independent correctness check (e.g. against a known-good reference, or at
+   minimum a `check_passive()`-style sanity pass plus manual inspection)
+   *before* a golden test would mean anything — a regression test only
+   guards against drifting away from a value that's already right.
+4. **Documentation.** No docs site, no changelog beyond this `README.md`/
+   `notes.md` pair — the `examples/` scripts are the only tutorials that
+   exist. At minimum a `CHANGELOG.md` tracking the still-static
+   `__version__ = "0.1.0"`.
+5. **Type checking in CI.** Type hints are used throughout (`from __future__ import
    annotations`) but nothing enforces them — no `mypy`/`pyright` config, no `py.typed`
-   marker. Cheap to add once CI exists (item 1c).
-4. **Declare transitive dependencies explicitly.** `gdsfactory`/`tidy3d` are consumed
+   marker. Cheap to add now that CI exists (item 1).
+6. **Declare transitive dependencies explicitly.** `gdsfactory`/`tidy3d` are consumed
    indirectly through `meow-sim` (e.g. `meow.compute_modes_tidy3d`) but aren't
    declared in `pyproject.toml` — a `meow-sim` version bump that drops/renames those
    could silently break FECES. Pin or declare them directly, or guard the import
    with a clear error message.
-5. **Standardize on `logging`, not `print()`.** `EMESolver.solve_section_length_sweep`
+7. **Fix `pyproject.toml`'s `[fdtd]`/`[all]` extras — they install the wrong
+   package.** Found while wiring up slow-suite CI: `fdtd = ["meep"]` and
+   `all = ["meow-sim", "meep"]` declare `meep` as a pip dependency, but PyPI's
+   `meep` package is an unrelated project (a lightweight task runner) — `pip
+   install feces[fdtd]` succeeds with no error and leaves `import meep`
+   completely broken. The real MIT electromagnetics package only ships via
+   conda-forge (`conda install -c conda-forge pymeep`; confirmed working
+   locally and in CI this session). Fix: drop `meep` from these extras (or
+   replace with a clear error message on import failure pointing at the
+   conda-forge install command) and document the conda-forge requirement in
+   `README.md`'s Install section, not just buried in the Testing section.
+8. **Standardize on `logging`, not `print()`.** `EMESolver.solve_section_length_sweep`
    and others `print()` diagnostics unconditionally (e.g. the mid-sweep neff
    diagnostic) while `ParallelSweep` already uses the `logging` module — inconsistent
    for a library whose callers may want to suppress or redirect that output.
@@ -335,8 +408,11 @@ where a category has fewer or lower-priority items.
    composition pattern.
 2. **No example exists for `BendGeometry`** at all, despite it being a public,
    exported class.
-3. **No 2×2 or 1×4 MMI example** — `MMI` supports arbitrary `n_inputs`/`n_outputs`
-   but every example hardcodes 1×2.
+3. **2×2 MMI example — done; 1×4 still missing.** `examples/mmi_2x2/` (EME, FDTD,
+   hybrid variants) exercises a genuine multi-input device — the first consumer
+   of `MMI`'s new `input_idx`/`input_indices` support (see `MMI` in the library
+   reference above). No 1×4 (or other multi-output-only) example yet, though
+   nothing in the geometry blocks one.
 4. **No example uses `ParallelSweep`.** The library ships a generic parallel
    parameter-sweep utility that zero examples demonstrate — a user has no worked
    reference for the one utility meant to replace ad hoc per-device sweep scripts.

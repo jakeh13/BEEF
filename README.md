@@ -44,7 +44,8 @@ from feces import (
 )
 ```
 
-- **Geometry** (`feces/geometry/`) — `MMI` (N×M splitter/combiner, per-port `MMIPort` taper specs),
+- **Geometry** (`feces/geometry/`) — `MMI` (N×M splitter/combiner, per-port `MMIPort` taper specs,
+  `input_idx`/`output_idx` to isolate a single port on multi-port devices like a 2×2),
   `DirectionalCoupler` (2-waveguide coupler w/ S-bend I/O), standalone `Taper`/`SBend` building blocks,
   `CompoundGeometry`/`WaveguideRun` (concatenate several geometries into one cascade), legacy `BendGeometry`
   (90° bend for non-collinear FDTD I/O).
@@ -89,6 +90,8 @@ plot_performance(smat, output_dir="out", title="1x2 MMI Splitter (EME)")
 See `examples/` — one folder per device, each with EME/FDTD/hybrid variants (`.py` + matching `.ipynb`):
 
 - `examples/mmi_1x2/` — 1×2 MMI splitter (EME, FDTD, hybrid)
+- `examples/mmi_2x2/` — 2×2 MMI splitter (EME, FDTD, hybrid) — a genuine multi-input device,
+  exercising `MMI`'s `input_idx`/`input_indices` support
 - `examples/directional_coupler/` — directional coupler (FDTD, FDTD length sweep, hybrid, even/odd
   supermode coupling-length analysis)
 - `examples/modal_multiplexer/` — modal multiplexer (hybrid)
@@ -134,8 +137,11 @@ Real per-target wall-clock times on a single CPU core (macOS laptop, no MPI para
 mmi_1x2_eme ~7 min, mmi_1x2_fdtd ~12 min, mmi_1x2_hybrid ~58 min, directional_coupler_hybrid
 ~96 min — even at reduced resolution, a real FDTD/EME solve is real solve time, not a mock; the
 hybrid targets are the slowest since HybridSolver's short interior `solve_section()` spans need
-`dpml` raised (0.5→1.0 µm) to keep enough PML pixels at `res=20`, which grows the domain. Budget roughly 3 hours to run the full `--runslow` suite; this is why it isn't wired into CI
-(see below).
+`dpml` raised (0.5→1.0 µm) to keep enough PML pixels at `res=20`, which grows the domain.
+
+Budget roughly 3 hours to run the full `--runslow` suite locally. Not covered yet: `mmi_2x2_*`
+and `modal_multiplexer_hybrid` have no golden test (`modal_multiplexer_hybrid` deliberately — its
+numerical accuracy isn't yet trusted enough to lock in as a reference).
 
 To regenerate the recorded references after a deliberate change to solver behavior:
 
@@ -147,6 +153,27 @@ python scripts/generate_golden_values.py mmi_1x2_eme     # one target
 If you're on macOS behind a VPN, `meep`'s MPI backend can crash on interpreter exit with an
 OFI/libfabric error (`OFI poll failed`) — `tests/conftest.py` sets `FI_PROVIDER=tcp` by default to
 avoid this; results are unaffected either way, it's purely a finalize-time crash.
+
+### Slow suite in CI
+
+`.github/workflows/slow-tests.yml` runs the 4 golden targets as a 4-way parallel matrix (one job
+per target, ~96 min wall-clock for the slowest instead of ~3hr serial) — manual trigger only
+(`workflow_dispatch`), not on every push: the repo is public so Actions minutes are free, but
+there's no value in paying the wall-clock cost on every PR for tests this coarse. Trigger it from
+the repo's Actions tab, or:
+
+```bash
+gh workflow run slow-tests.yml
+```
+
+**Packaging note**: this workflow installs `pymeep` from conda-forge (`mamba-org/setup-micromamba`),
+not via `pip install feces[fdtd]`/`feces[all]`. Despite `pyproject.toml` declaring `meep` as a pip
+dependency for those extras, PyPI's `meep` package is an unrelated project (a lightweight task
+runner) — `pip install meep` silently installs the wrong thing with no error, it just leaves
+`import meep` broken. The real MIT electromagnetics package only ships via conda-forge
+(`conda install -c conda-forge pymeep`); this is what actually provides `import meep` on this
+machine too. `pyproject.toml`'s `[fdtd]`/`[all]` extras are misleading as currently declared —
+worth fixing separately (see `notes.md`).
 
 ## Status
 

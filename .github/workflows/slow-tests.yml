@@ -1,0 +1,31 @@
+name: Slow golden-value tests
+
+on:
+  workflow_dispatch:
+
+jobs:
+  golden:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [mmi_1x2_eme, mmi_1x2_fdtd, mmi_1x2_hybrid, directional_coupler_hybrid]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: feces-slow
+          create-args: >-
+            python=3.12
+            -c conda-forge
+            pymeep
+
+      - name: Install feces + meow-sim
+        shell: bash -el {0}
+        run: pip install -e ".[eme]"
+
+      - name: Run golden test
+        shell: bash -el {0}
+        run: pytest tests/test_golden_examples.py --runslow -k "${{ matrix.target }}" -v
