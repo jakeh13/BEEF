@@ -52,7 +52,9 @@ from feces import (
 - **Materials** (`feces/materials/`) — `MaterialStack` (Si/SiO2 layer stack), plus pre-built `SOI_160` /
   `SOI_220` stacks.
 - **Solvers** (`feces/solvers/`) — `EMESolver` (meow-based EME), `FDTDSolver` (meep-based FDTD, 2D or 3D),
-  `HybridSolver` (chains FDTD and EME sections together — the core FECES method).
+  `HybridSolver` (chains FDTD and EME sections together — the core FECES method; optionally skips
+  re-solving a section declared as the x-mirror of an already-solved one via `mirror_pairs`, and can
+  sweep one uniform section's length analytically via `solve_length_sweep()` at no extra simulation cost).
 - **Results** (`feces/results/`) — `SMatrix`, a unified S-parameter result type with transmission/insertion-loss
   helpers and a `check_passive()` sanity check.
 - **Sweep** (`feces/sweep/`) — `ParallelSweep`, a local `multiprocessing`-based parameter grid sweep.

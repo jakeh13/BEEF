@@ -94,7 +94,20 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   section whose kwargs don't vary across multiple `solve()` calls — e.g. once per
   output port — is only ever actually simulated once), then cascades the per-section
   transfer matrices via an `einsum` matrix-chain product contracted over each shared
-  interface's mode index.
+  interface's mode index. Optional `mirror_pairs={k: j}` (plus `mirror_axis`,
+  `mirror_check_samples`/`mirror_check_tol`) declares that section `k` is the
+  x-mirror of already-solved section `j` — its transfer matrix is reused as
+  `mats[j].transpose(0,2,1)` instead of a real `solve_section()` call, guarded
+  every `solve()` call by sampling `geometry.width_at`/`center_at` across both
+  sections' spans under x-reversal (raises `ValueError` on a bad pairing).
+  `solve_length_sweep(geometry, wavelengths, lengths, sweep_section, ...)` sweeps
+  one section's length analytically — that section's solver must implement
+  `solve_section_length_sweep()` (EMESolver does, FDTDSolver doesn't), span a
+  uniform cross-section (guardrail-sampled), and be unmirrored; returns the raw
+  `[n_L, M, out, in]` cascade grid, and non-swept sections' cache keys match
+  `solve()`'s exactly so entries dedupe across both methods. See Solver
+  recommendation #8 (below) for the full design rationale and
+  `mmi_2x2_hybrid.py` for a worked example of both features.
 
 ### Geometries (`feces/geometry/`)
 
@@ -361,33 +374,47 @@ where a category has fewer or lower-priority items.
    well-trodden ground already owned by meep/tidy3d/S4/FDTDX respectively — worth it
    only if a concrete device need shows up that FDTD/EME genuinely can't address.
 8. **Mirror-section reuse in `HybridSolver` (reciprocity across sections, not just
-   within one).** For a left-right mirror-symmetric chain (e.g. `MMI`'s input taper
-   band = output taper band reversed, `DirectionalCoupler`'s input S-bend = output
-   S-bend reversed), the output-side section's transfer matrix is just the
-   input-side section's transpose (mode axes swapped) — the same reciprocity
-   argument `solve_section()` already uses internally, one level up. Today nothing
-   in `HybridSolver` knows this: `directional_coupler_hybrid.py` hand-rolls the
-   reuse by bypassing `HybridSolver.solve()` entirely (manual `solve_section()` +
-   `.transpose()` calls, see its module docstring), getting the true minimum (2 FDTD
-   + 1 EME for the coupler). `mmi_2x2_hybrid.py`, by contrast, goes through the
-   generic `HybridSolver.solve()` cascade and pays for 3 FDTD + 1 EME — the input
-   section and the bar-output section are mirror images of the same physical
-   structure but get simulated twice because `solve()` has no way to express that.
-   Proposed fix: an explicit pairing spec on `HybridSolver` — e.g.
-   `mirror_pairs={3: 0}` (section index -> section index whose transpose it reuses)
-   — plus a way to state the branch-index correspondence for multi-port sides
-   (`output_idx=k` reuses the `input_idx=k` run's transpose), so a paired section
-   skips `solve_section()` and substitutes the partner's cached matrix transposed.
-   Generalizes past the simple palindrome case: a device with 4 sections where only
-   sections 1 and 3 are mirrored (2 stays independent) is expressible as one pair
-   in an otherwise-normal 4-section chain — a dedicated
-   "SymmetricHybridSolver"-style subclass assuming full palindrome symmetry about
-   the center would not cover that. Backward compatible (no `mirror_pairs` = today's
-   behavior, unchanged). Main risk: a wrong pairing silently produces wrong
-   physics (transpose of a section that isn't actually a mirror of its partner) —
-   needs a guardrail, e.g. asserting the two sections' `width_at`/`center_at`
-   profiles match under x-reversal before trusting the reuse, not just accepting the
-   pairing on faith.
+   within one) — done.** `HybridSolver.__init__` now takes `mirror_pairs={k: j}`
+   (plus `mirror_axis`, `mirror_check_samples`/`mirror_check_tol`): section `k`'s
+   transfer matrix is reused as `mats[j].transpose(0,2,1)` instead of a real
+   `solve_section()` call. Declared at construction time (like meep's `mp.Mirror`
+   is declared once on `mp.Simulation`, not per-run) since it's a fact about the
+   device's section topology — but the geometric guardrail
+   (`width_at`/`center_at` sampled across both sections' spans under x-reversal,
+   raising `ValueError` on a mismatch) re-runs every `solve()` call, because
+   `geometry_kwargs` (`input_idx`/`output_idx`) can change which physical port is
+   actually live between calls, unlike meep's truly per-run-structural symmetry.
+   Construction-time checks reject out-of-range/self/forward-referencing/chained
+   pairings and mode-count mismatches up front. A mirror-reused section still
+   populates the shared `cache` dict under its own key. `mmi_2x2_hybrid.py` is the
+   worked example: a second `HybridSolver` instance (`hybrid_mirror_bar`, sharing
+   `solvers`/`boundaries`/`interface_modes`/`cache` with the plain `hybrid`)
+   declares `mirror_pairs={2: 0}` for the bar call only (`output_idx=1` mirrors the
+   fixed `input_idx=1` excitation); the cross call (`output_idx=0`) still solves
+   its output section directly since it doesn't mirror the excited port. Net: 2
+   FDTD + 1 EME, down from 3 FDTD + 1 EME. Tested in `tests/test_hybrid.py`
+   (`TestMirrorPairs`/`TestMirrorPairsConstruction`, mock solvers, no meep/meow).
+   Length-sweep support landed too: `HybridSolver.solve_length_sweep(geometry,
+   wavelengths, lengths, sweep_section, ...)` sweeps one uniform section's length
+   analytically (delegating to that solver's `solve_section_length_sweep()`,
+   which EMESolver implements — modes solved once per wavelength, lengths applied
+   as propagation phases) and returns the raw `[n_L, M, out, in]` cascade grid.
+   Non-swept sections keep byte-identical cache keys to `solve()`, so entries
+   dedupe freely across both methods and across per-port calls;
+   `mmi_2x2_hybrid.py` sweeps its multimode length over 201 points at the same
+   2 FDTD + 1 EME mode-solve budget as the single-length run.
+   **Still open**: `directional_coupler_hybrid.py`'s hand-rolled bypass is left
+   as-is, not migrated onto `mirror_pairs`/`solve_length_sweep` — the length-sweep
+   blocker is now gone, but its full through+cross-from-one-excitation-family
+   pattern (solving both input arms directly and deriving every output via
+   transpose) isn't expressible through `solve()`'s one-call contract even with
+   `mirror_pairs` (same reasoning as `mmi_2x2`'s cross case) — would need a
+   multi-excitation-config `solve()` extension or staying manual. Similarly,
+   getting `mmi_2x2_hybrid.py`'s full 2×2 port-combination matrix "for free"
+   (zero dedicated output solves, matching the DC pattern exactly) isn't done —
+   would require solving both input branches directly rather than one fixed
+   excitation, for no additional savings over the current 2 FDTD + 1 EME on this
+   example's actual bar/cross metric.
 
 ### Geometry
 
