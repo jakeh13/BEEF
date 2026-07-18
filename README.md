@@ -55,6 +55,9 @@ from feces import (
   `HybridSolver` (chains FDTD and EME sections together — the core FECES method; optionally skips
   re-solving a section declared as the x-mirror of an already-solved one via `mirror_pairs`, and can
   sweep one uniform section's length analytically via `solve_length_sweep()` at no extra simulation cost).
+  Every solve-family method (`FDTDSolver.solve()`/`solve_section()`, `EMESolver.solve()`/
+  `solve_section()`/`solve_section_length_sweep()`, `HybridSolver.solve()`/`solve_length_sweep()`)
+  accepts an optional `save_dir` — see Simulation cache below.
 - **Results** (`feces/results/`) — `SMatrix`, a unified S-parameter result type with transmission/insertion-loss
   helpers and a `check_passive()` sanity check.
 - **Sweep** (`feces/sweep/`) — `ParallelSweep`, a local `multiprocessing`-based parameter grid sweep.
@@ -86,6 +89,27 @@ smat = solver.solve(mmi, wavelengths, ports=["out_top"], output_idx=1)
 smat.check_passive()
 plot_performance(smat, output_dir="out", title="1x2 MMI Splitter (EME)")
 ```
+
+## Simulation cache
+
+Every solve-family method accepts an optional `save_dir: str` (default `None`,
+i.e. disabled — no behavior change if you don't pass it). When set, a call is
+fingerprinted from the solver's own parameters, the call's arguments, and the
+exact geometry it draws; a matching prior run is loaded from disk instead of
+re-simulated, and a new run is written there for next time:
+
+```python
+smat = solver.solve(mmi, wavelengths, port="top", input_mode=1, save_dir="sim_cache")
+```
+
+Each cache entry gets its own subfolder (named by a hash of the fingerprint)
+holding `config.json` (human-readable), `result.pkl`, and a `geometry.png`
+preview. `examples/` wires every applicable example up to a shared
+`examples/example_sim_cache/` directory this way — re-running an example, or
+another example that happens to solve an identical section, reuses cached
+results automatically. See Solver recommendation #9 in `notes.md` for the
+full design (including its one known gap: `EMESolver.solve_sweep()` doesn't
+support it yet).
 
 ## Examples
 

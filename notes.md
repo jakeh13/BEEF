@@ -60,7 +60,9 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   six faces, (y,z) cross-section eigenmode solves — the same mode basis EMESolver's
   meow cross-sections use, which is what makes 3-D FDTD sections numerically
   consistent with EME sections in a hybrid chain). `solve()` runs a complete,
-  self-contained whole-device simulation. `solve_section()` is the piece
+  self-contained whole-device simulation, and (like `solve_section()`) now accepts
+  an optional `save_dir` for the persistent on-disk cache — see Solver
+  recommendation #9. `solve_section()` is the piece
   `HybridSolver` calls instead: given any `DeviceGeometry` and an arbitrary
   `[x0, x1]` sub-range (+ optional `stub_left`/`stub_right`), it builds a small
   standalone FDTD cell for just that section, using reciprocity to minimize run
@@ -78,7 +80,10 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   use this in hybrid chains to avoid basis mismatches at FDTD/EME interfaces) or
   `"tidy3d"` (fine for an EME-only solve with no FDTD sections to stay consistent
   with). `solve()`/`solve_sweep()` run a complete whole-device eigenmode expansion
-  (the latter batches wavelengths for memory efficiency). `solve_section()` /
+  (the latter batches wavelengths for memory efficiency). `solve()` (unlike
+  `solve_sweep()`) now also accepts an optional `save_dir`, cached per output
+  port/side since each side builds its own geometry/cells — see Solver
+  recommendation #9. `solve_section()` /
   `solve_section_length_sweep()` are the `HybridSolver`-facing single-cell-per-call
   variants — the latter solves modes once per wavelength and reuses them across many
   trial lengths for free, since a uniform cross-section's modes don't depend on cell
@@ -445,7 +450,7 @@ where a category has fewer or lower-priority items.
    this is a mode-solve-cost gap, and the two would compound in a real
    dispersive-material implementation (interpolating dispersive neff at
    already-sparse solve points).
-9. **Persistent save-folder cache for `solve_section()` — done.** New
+9. **Persistent save-folder cache for `solve_section()`/`solve()` — done.** New
    `feces/cache/` module: `build_run_config(solver, method_name, call_kwargs,
    geometry)` fingerprints a call into a JSON-safe dict — solver params
    (`vars(solver)`, `material_stack` serialized explicitly), the call's own
@@ -471,13 +476,42 @@ where a category has fewer or lower-priority items.
    compose freely. Verified end-to-end (EME hit/miss/negative-miss on a
    `res` change, FDTD hit/miss, a 2-section `HybridSolver` chain) — cache
    hits return bit-identical results in <1ms vs several seconds for a real
-   solve. **Known risk, not fully closed**: config completeness. Any
+   solve.
+   **Extended to the plain whole-device `solve()` methods too.** The
+   original design was section-only: `build_run_config()` requires `x0`/`x1`
+   and fingerprints geometry via `geometry.section_gds(x0, x1, ...)`, which
+   `FDTDSolver.solve()`/`EMESolver.solve()` don't have (no section bounds —
+   they build geometry via `geometry.polygons(stub_length=...)` and
+   `geometry.to_gds_eme(...)` respectively, the same builders `to_meep_prisms()`
+   already calls). A new `build_whole_device_config()` (`feces/cache/config.py`)
+   takes an already-built polygon dict instead of computing one via
+   `section_gds()`, sharing the same JSON-safe fingerprint assembly (factored
+   into a private `_fingerprint()` helper both builders call). `FDTDSolver.solve()`
+   now accepts `save_dir` directly; `EMESolver.solve()` caches per output
+   port/side (its existing `for side in ports:` loop is the natural unit —
+   matches `solve_section()`'s "one call = one geometry" granularity), so
+   `out_top`/`out_bot` calls with different `output_idx` kwargs land in
+   separate cache entries rather than colliding. All 10 examples that call a
+   `save_dir`-capable method now pass `save_dir=os.path.abspath(os.path.join(
+   _HERE, "..", "example_sim_cache"))` (a shared cache dir at
+   `examples/example_sim_cache/`, sibling to each device's own example
+   folder) — the two exceptions, `directional_coupler_mode.py` and
+   `ring_resonator_hybrid.py`, use raw meep/meow with no FECES solver call to
+   attach it to. The two examples that already used the in-memory
+   `HybridSolver` `cache={}` dict (`mmi_1x2_hybrid.py`,
+   `modal_multiplexer_hybrid.py`) now pass both `cache=` and `save_dir=`
+   together, since the two mechanisms compose. `EMESolver.solve_sweep()` (the
+   batched-wavelength whole-device path) does **not** support `save_dir` yet
+   — no example calls it, so it was out of scope here, but it's a real gap
+   now that `solve()` has the parameter and `solve_sweep()` doesn't.
+   **Known risk, not fully closed**: config completeness. Any
    solver/geometry attribute that affects the physical result but isn't
    scalar (so falls outside `vars(solver)`'s generic filter) is excluded
    from the fingerprint with a `logger.warning`, not an error — a future
-   solver attribute added without updating `build_run_config` could produce
-   a silent false-positive cache hit (wrong physics, no error). No
-   regression test guards against this yet.
+   solver attribute added without updating `build_run_config`/
+   `build_whole_device_config` could produce a silent false-positive cache
+   hit (wrong physics, no error). No regression test guards against this
+   yet, for either fingerprint path.
 
 ### Geometry
 
@@ -684,6 +718,8 @@ within section; see Recommendations for full rationale on any item.
    support, RCWA/grating structures, near-to-far-field transform.
 3. Wavelength-interpolation scheme for mode-solve/EME sections — sparse-solve/
    dense-eval API (see `ring_resonator_hybrid.py`'s ad hoc version for the pattern).
+4. Extend `save_dir` caching to `EMESolver.solve_sweep()` — the batched-wavelength
+   whole-device path is the one remaining `solve()`-family method without it.
 
 ### Geometry
 
