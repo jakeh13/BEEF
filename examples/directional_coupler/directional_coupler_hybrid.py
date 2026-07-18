@@ -84,6 +84,7 @@ from feces import (
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "directional_coupler", "directional_coupler_hybrid"))
 os.makedirs(output_dir, exist_ok=True)
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters
@@ -243,13 +244,13 @@ M_in0 = fdtd_solver.solve_section(
     dc, wavelengths, boundaries[0], boundaries[1],
     n_modes_in=1, n_modes_out=N_MODES,
     stub_left=fdtd_solver.waveguide_length, stub_right=0.0,
-    input_idx=0, **_iface_mon,
+    input_idx=0, save_dir=save_dir, **_iface_mon,
 )  # [n_wl, N_MODES, 1] — "in" arm -> body modes
 M_in1 = fdtd_solver.solve_section(
     dc, wavelengths, boundaries[0], boundaries[1],
     n_modes_in=1, n_modes_out=N_MODES,
     stub_left=fdtd_solver.waveguide_length, stub_right=0.0,
-    input_idx=1, **_iface_mon,
+    input_idx=1, save_dir=save_dir, **_iface_mon,
 )  # [n_wl, N_MODES, 1] — "isolated" arm -> body modes
 
 M_out_through = M_in0.transpose(0, 2, 1)  # [n_wl, 1, N_MODES] — mirror-symmetry reuse, not a new simulation
@@ -261,7 +262,7 @@ M_out_cross = M_in1.transpose(0, 2, 1)    # [n_wl, 1, N_MODES]
 body_lengths = coupling_lengths
 M_body = body_solver.solve_section_length_sweep(
     dc, wavelengths, boundaries[1], boundaries[2], body_lengths,
-    n_modes_in=N_MODES, n_modes_out=N_MODES,
+    n_modes_in=N_MODES, n_modes_out=N_MODES, save_dir=save_dir,
 )  # [n_L, n_wl, N_MODES, N_MODES]
 
 tmp = np.einsum("Lwij,wjk->Lwik", M_body, M_in0)                        # [n_L, n_wl, N_MODES, 1]

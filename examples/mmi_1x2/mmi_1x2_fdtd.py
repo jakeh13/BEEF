@@ -30,6 +30,7 @@ from feces import MMI, FDTDSolver, SOI_160, plot_fdtd_geometry
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "mmi_1x2", "mmi_1x2_fdtd"))
 os.makedirs(output_dir, exist_ok=True)
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters
@@ -97,7 +98,7 @@ print(f"Sweeping {len(wavelengths)} wavelengths: "
 print("(single broadband pulse; DFT monitors extract all wavelengths in one sim)")
 
 # Source from top input port; measure coupling to each mode at output monitor
-smat = solver.solve(mmi, wavelengths, port="top", input_mode=1)
+smat = solver.solve(mmi, wavelengths, port="top", input_mode=1, save_dir=save_dir)
 smat.check_passive()  # sanity: total output power must not exceed 1 at any wavelength
 
 # ---------------------------------------------------------------------------

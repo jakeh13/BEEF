@@ -58,6 +58,7 @@ spectrum_dir = os.path.join(output_dir, "spectrums")
 data_dir = os.path.join(output_dir, "data")
 for _d in (output_dir, spectrum_dir, data_dir):
     os.makedirs(_d, exist_ok=True)
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "example_sim_cache"))
 
 # Hybrid example's saved length sweep — overlaid on the aggregate plot when present.
 _HYBRID_SWEEP_NPZ = os.path.abspath(os.path.join(
@@ -134,7 +135,7 @@ def simulate_length(L: float) -> None:
           f"(device total {dc.total_length:.1f} µm, single FDTD run, "
           f"{N_WL} wavelengths {WL_MIN:.2f}–{WL_MAX:.2f} µm)")
 
-    smat = solver.solve(dc, wavelengths, port="bot", input_mode=1)
+    smat = solver.solve(dc, wavelengths, port="bot", input_mode=1, save_dir=save_dir)
     smat.check_passive()  # sanity: total output power must not exceed 1 at any wavelength
     T_through = smat.transmission(port="out_0", in_mode=1, out_mode=1)
     T_cross = smat.transmission(port="out_1", in_mode=1, out_mode=1)

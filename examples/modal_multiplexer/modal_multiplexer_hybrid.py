@@ -78,6 +78,7 @@ from feces import (
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "modal_multiplexer", "modal_multiplexer_hybrid"))
 os.makedirs(output_dir, exist_ok=True)
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters
@@ -253,7 +254,7 @@ smat = None
 for name, k in PORTS:
     smat_port = hybrid.solve(
         mux, wavelengths, in_modes=2, out_modes=1, port=name,
-        cache=section_cache,
+        cache=section_cache, save_dir=save_dir,
         geometry_kwargs={4: {"output_idx": k}},
     )
     if smat is None:

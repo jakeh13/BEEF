@@ -67,6 +67,7 @@ from feces import DirectionalCoupler, FDTDSolver, SOI_220, plot_fdtd_geometry
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "directional_coupler", "directional_coupler_fdtd"))
 os.makedirs(output_dir, exist_ok=True)
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters
@@ -146,7 +147,7 @@ wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
 print(f"\nWavelength sweep: {wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm "
       f"({len(wavelengths)} pts, single FDTD run)\n")
 
-smat = solver.solve(dc, wavelengths, port="bot", input_mode=1)
+smat = solver.solve(dc, wavelengths, port="bot", input_mode=1, save_dir=save_dir)
 smat.check_passive()  # sanity: total output power must not exceed 1 at any wavelength
 
 # ---------------------------------------------------------------------------

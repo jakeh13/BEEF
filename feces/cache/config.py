@@ -58,6 +58,24 @@ def _solver_config(solver) -> Dict[str, Any]:
     return out
 
 
+def _fingerprint(
+    solver, method_name: str, call_kwargs: Dict[str, Any],
+    geometry_class_name: str, geometry_polygons: Dict[Any, Any],
+) -> Dict[str, Any]:
+    """Assemble the JSON-safe fingerprint dict shared by both config builders."""
+    return {
+        "solver_type": type(solver).__name__,
+        "solver_config": _solver_config(solver),
+        "method": method_name,
+        "call_kwargs": _json_safe(call_kwargs),
+        "geometry_class": geometry_class_name,
+        "geometry_polygons": {
+            f"{layer[0]},{layer[1]}": _json_safe(polys)
+            for layer, polys in sorted(geometry_polygons.items())
+        },
+    }
+
+
 def build_run_config(solver, method_name: str, call_kwargs: Dict[str, Any], geometry) -> Dict[str, Any]:
     """Fingerprint one solve_section()/solve_section_length_sweep() call.
 
@@ -88,16 +106,33 @@ def build_run_config(solver, method_name: str, call_kwargs: Dict[str, Any], geom
     section = geometry.section_gds(
         x0, x1, oxide_width, stub_left=stub_left, stub_right=stub_right, **geometry_kwargs
     )
-    geometry_polygons = {
-        f"{layer[0]},{layer[1]}": _json_safe(polys)
-        for layer, polys in sorted(section.items())
-    }
+    return _fingerprint(solver, method_name, call_kwargs, type(geometry).__name__, section)
 
-    return {
-        "solver_type": type(solver).__name__,
-        "solver_config": _solver_config(solver),
-        "method": method_name,
-        "call_kwargs": _json_safe(call_kwargs),
-        "geometry_class": type(geometry).__name__,
-        "geometry_polygons": geometry_polygons,
-    }
+
+def build_whole_device_config(
+    solver, method_name: str, call_kwargs: Dict[str, Any], geometry, geometry_polygons,
+) -> Dict[str, Any]:
+    """Fingerprint one whole-device solve() call (FDTDSolver/EMESolver).
+
+    Same shape as build_run_config(), but for the plain (non-section)
+    solve() methods, which have no x0/x1 to hand to geometry.section_gds().
+    Callers must instead pass the exact polygon dict their own solve() body
+    already builds and hands to the underlying meep/meow simulation —
+    geometry.polygons(stub_length=...) for FDTDSolver.solve() (the same
+    builder to_meep_prisms() calls), geometry.to_gds_eme(...) for
+    EMESolver.solve() — so the fingerprint matches precisely what gets
+    simulated, with no meep/meow objects involved.
+
+    Args:
+        solver: FDTDSolver or EMESolver instance.
+        method_name: "solve".
+        call_kwargs: every argument the method call received that can affect
+            the physical result — save_dir itself must not be included.
+        geometry: the DeviceGeometry instance being solved.
+        geometry_polygons: Dict[layer_tuple, List[polygon]], as already built
+            by the caller (geometry.polygons() or geometry.to_gds_eme()).
+
+    Returns:
+        A JSON-safe dict, same shape as build_run_config()'s return value.
+    """
+    return _fingerprint(solver, method_name, call_kwargs, type(geometry).__name__, geometry_polygons)

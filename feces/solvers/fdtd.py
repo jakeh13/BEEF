@@ -7,7 +7,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from ..cache import build_run_config, load_result, lookup, save_run
+from ..cache import build_run_config, build_whole_device_config, load_result, lookup, save_run
 from ..geometry.base import DeviceGeometry
 from ..materials.stack import MaterialStack, SOI_160
 from ..results.smatrix import SMatrix
@@ -280,6 +280,7 @@ class FDTDSolver:
         wavelengths: np.ndarray,
         port: str = "top",
         input_mode: int = 1,
+        save_dir: Optional[str] = None,
         **kwargs,
     ) -> SMatrix:
         """Run a broadband FDTD simulation for one input port.
@@ -295,6 +296,11 @@ class FDTDSolver:
                   collapse to the same position for a single-input device
                   (1×2 MMI), since input_ys has only one entry there.
             input_mode: 1-based waveguide mode index to excite and normalize against.
+            save_dir: persistent on-disk cache directory (see feces/cache/).
+                None/"" (default) disables the cache — see
+                solve_section()'s save_dir docstring for the full semantics
+                (identical here, fingerprinted via
+                geometry.polygons(stub_length=...) instead of section_gds()).
             **kwargs: forwarded to geometry.source_aperture_at() (e.g.
                   input_idx for DirectionalCoupler) when the geometry
                   provides one — see the source-width note in the body.
@@ -313,6 +319,20 @@ class FDTDSolver:
             )
 
         wavelengths = np.asarray(wavelengths)
+
+        config = None
+        if save_dir:
+            stub_length = self.waveguide_length + self.dpml
+            config = build_whole_device_config(
+                self, "solve",
+                dict(port=port, input_mode=input_mode, wavelengths=wavelengths, kwargs=kwargs),
+                geometry, geometry.polygons(stub_length=stub_length),
+            )
+            hit = lookup(save_dir, config)
+            if hit is not None:
+                logger.info("solve: cache hit at %s", hit)
+                return load_result(hit)
+
         Sx, Sy, wl_center, si_med, sio2_med = self._build_domain(geometry, wavelengths)
         fcen = 1.0 / wl_center
         fwidth = (1.0 / float(wavelengths.min()) - 1.0 / float(wavelengths.max())) * 0.5
@@ -416,6 +436,11 @@ class FDTDSolver:
                 smat.set(alpha, port=out_port, in_mode=input_mode, out_mode=mode_n)
 
         sim.reset_meep()
+
+        if save_dir:
+            folder = save_run(save_dir, config, smat)
+            logger.info("solve: cache saved at %s", folder)
+
         return smat
 
     # ------------------------------------------------------------------

@@ -61,6 +61,7 @@ from feces import MMI, EMESolver, FDTDSolver, HybridSolver, SMatrix, SOI_220, pl
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "mmi_2x2", "mmi_2x2_hybrid"))
 os.makedirs(output_dir, exist_ok=True)
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters
@@ -241,13 +242,13 @@ M_in1 = input_solver.solve_section(
     mmi, wavelengths, boundaries[0], boundaries[1],
     n_modes_in=1, n_modes_out=N_MODES,
     stub_left=input_solver.waveguide_length, stub_right=0.0,
-    input_idx=1,
+    input_idx=1, save_dir=save_dir,
 )  # [n_wl, N_MODES, 1] — excited (top) arm -> body modes
 M_in0 = input_solver.solve_section(
     mmi, wavelengths, boundaries[0], boundaries[1],
     n_modes_in=1, n_modes_out=N_MODES,
     stub_left=input_solver.waveguide_length, stub_right=0.0,
-    input_idx=0,
+    input_idx=0, save_dir=save_dir,
 )  # [n_wl, N_MODES, 1] — bottom arm -> body modes
 
 M_out_bar = M_in1.transpose(0, 2, 1)    # [n_wl, 1, N_MODES] — mirror-symmetry reuse, not a new simulation
@@ -255,7 +256,7 @@ M_out_cross = M_in0.transpose(0, 2, 1)  # [n_wl, 1, N_MODES]
 
 M_body = body_solver.solve_section_length_sweep(
     mmi, wavelengths, boundaries[1], boundaries[2], body_lengths,
-    n_modes_in=N_MODES, n_modes_out=N_MODES,
+    n_modes_in=N_MODES, n_modes_out=N_MODES, save_dir=save_dir,
 )  # [n_L, n_wl, N_MODES, N_MODES]
 
 tmp = np.einsum("Lwij,wjk->Lwik", M_body, M_in1)               # [n_L, n_wl, N_MODES, 1]

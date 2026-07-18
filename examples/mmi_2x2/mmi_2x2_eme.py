@@ -30,6 +30,7 @@ from feces import MMI, EMESolver, SOI_220, plot_eme_geometry, plot_performance
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "mmi_2x2", "mmi_2x2_eme"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters
@@ -100,8 +101,8 @@ print(f"Sweeping {len(wavelengths)} wavelengths: "
 # each end (the two branches are waveguide_offset - waveguide_width = 1.05 µm
 # apart edge-to-edge past the taper, comfortably decoupled). output_idx=1 is
 # the top output (bar), output_idx=0 the bottom output (cross).
-smat_bar   = solver.solve(mmi, wavelengths, ports=["bar"],   input_idx=1, output_idx=1)
-smat_cross = solver.solve(mmi, wavelengths, ports=["cross"], input_idx=1, output_idx=0)
+smat_bar   = solver.solve(mmi, wavelengths, ports=["bar"],   input_idx=1, output_idx=1, save_dir=save_dir)
+smat_cross = solver.solve(mmi, wavelengths, ports=["cross"], input_idx=1, output_idx=0, save_dir=save_dir)
 smat = smat_bar
 smat._data.update(smat_cross._data)
 smat.check_passive()  # sanity: total output power must not exceed 1 at any wavelength

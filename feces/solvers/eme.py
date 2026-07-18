@@ -7,7 +7,7 @@ from typing import List, Optional
 import numpy as np
 
 from .._utils import extrude_polygons
-from ..cache import build_run_config, load_result, lookup, save_run
+from ..cache import build_run_config, build_whole_device_config, load_result, lookup, save_run
 from ..geometry.base import DeviceGeometry
 from ..materials.stack import MaterialStack, SOI_160
 from ..results.smatrix import SMatrix
@@ -303,7 +303,8 @@ class EMESolver:
         return T
 
     def solve(self, geometry: DeviceGeometry, wavelengths: np.ndarray,
-              ports: Optional[List[str]] = None, **kwargs) -> SMatrix:
+              ports: Optional[List[str]] = None, save_dir: Optional[str] = None,
+              **kwargs) -> SMatrix:
         """Run EME simulation across all wavelengths.
 
         Args:
@@ -311,6 +312,12 @@ class EMESolver:
             wavelengths: [M] wavelength array (µm).
             ports: list of port sides to simulate.
                    Defaults to ["top", "bot"] for 2-output devices.
+            save_dir: persistent on-disk cache directory (see feces/cache/).
+                None/"" (default) disables the cache — see
+                solve_section()'s save_dir docstring for the full semantics
+                (identical here, fingerprinted via geometry.to_gds_eme()
+                instead of section_gds()). Cached per port side, since each
+                side builds its own geometry/cells.
             **kwargs: forwarded to geometry.to_gds_eme() (e.g. output_idx to
                       restrict the drawn output branch to a single port).
 
@@ -327,6 +334,23 @@ class EMESolver:
         modes_per_cell = self._modes_per_cell()
 
         for side in ports:
+            config = None
+            if save_dir:
+                gds_polys = geometry.to_gds_eme(
+                    straight_length=self.straight_length, oxide_width=self.oxide_width,
+                    x_start=0.0, side=side, **kwargs,
+                )
+                config = build_whole_device_config(
+                    self, "solve",
+                    dict(side=side, wavelengths=wavelengths, kwargs=kwargs),
+                    geometry, gds_polys,
+                )
+                hit = lookup(save_dir, config)
+                if hit is not None:
+                    logger.info("solve: cache hit at %s", hit)
+                    smat.set(load_result(hit), port=side)
+                    continue
+
             cells = self._build_cells(geometry, side=side, **kwargs)
             amplitudes = np.zeros(len(wavelengths), dtype=complex)
 
@@ -336,6 +360,10 @@ class EMESolver:
                 modes = [self.compute_modes(cs, nm) for cs, nm in zip(css, modes_per_cell)]
                 S, _ = mw.compute_s_matrix(modes, cells=cells)
                 amplitudes[wl_idx] = S[0, 1]
+
+            if save_dir:
+                folder = save_run(save_dir, config, amplitudes)
+                logger.info("solve: cache saved at %s", folder)
 
             smat.set(amplitudes, port=side)
 

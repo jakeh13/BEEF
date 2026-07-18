@@ -33,6 +33,7 @@ from feces import MMI, EMESolver, FDTDSolver, HybridSolver, SOI_160, plot_hybrid
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "mmi_1x2", "mmi_1x2_hybrid"))
 os.makedirs(output_dir, exist_ok=True)
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters
@@ -191,9 +192,9 @@ print(f"\nHybrid sweep: {wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm "
       f"({len(wavelengths)} pts, {N_MODES} interface modes)\n")
 
 section_cache = {}
-smat_top = hybrid.solve(mmi, wavelengths, port="out_top", cache=section_cache,
+smat_top = hybrid.solve(mmi, wavelengths, port="out_top", cache=section_cache, save_dir=save_dir,
                          geometry_kwargs={2: {"output_idx": 1}})
-smat_bot = hybrid.solve(mmi, wavelengths, port="out_bot", cache=section_cache,
+smat_bot = hybrid.solve(mmi, wavelengths, port="out_bot", cache=section_cache, save_dir=save_dir,
                          geometry_kwargs={2: {"output_idx": 0}})
 
 T_top   = smat_top.transmission(port="out_top")

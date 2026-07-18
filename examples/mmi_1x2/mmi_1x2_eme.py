@@ -26,6 +26,7 @@ from feces import MMI, EMESolver, SOI_160, plot_eme_geometry, plot_performance
 # Output to a top-level example_output/ folder outside the repo
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "mmi_1x2", "mmi_1x2_eme"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters
@@ -98,8 +99,8 @@ print(f"Sweeping {len(wavelengths)} wavelengths: "
 # `waveguide_offset - waveguide_width` = 0.65 µm apart edge-to-edge past the
 # taper, comfortably decoupled). Results are merged into one SMatrix, same
 # as mmi_1x2_fdtd.py/mmi_1x2_hybrid.py's two-output reporting.
-smat_top = solver.solve(mmi, wavelengths, ports=["out_top"], output_idx=1)
-smat_bot = solver.solve(mmi, wavelengths, ports=["out_bot"], output_idx=0)
+smat_top = solver.solve(mmi, wavelengths, ports=["out_top"], output_idx=1, save_dir=save_dir)
+smat_bot = solver.solve(mmi, wavelengths, ports=["out_bot"], output_idx=0, save_dir=save_dir)
 smat = smat_top
 smat._data.update(smat_bot._data)
 smat.check_passive()  # sanity: total output power must not exceed 1 at any wavelength
