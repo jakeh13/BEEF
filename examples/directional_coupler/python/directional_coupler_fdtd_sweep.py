@@ -30,10 +30,10 @@ Outputs (example_output/directional_coupler/directional_coupler_fdtd_sweep/):
 
 Run:
     # one length per SLURM array task (see run_directional_coupler_fdtd_sweep.batch):
-    python /path/to/examples/directional_coupler/directional_coupler_fdtd_sweep.py <index 0..30>
+    python /path/to/examples/directional_coupler/python/directional_coupler_fdtd_sweep.py <index 0..30>
 
     # or the whole sweep serially (slow — batch queue strongly preferred):
-    python /path/to/examples/directional_coupler/directional_coupler_fdtd_sweep.py
+    python /path/to/examples/directional_coupler/python/directional_coupler_fdtd_sweep.py
 
 Every invocation ends by (re)aggregating whatever lengths have finished so
 far, writing the aggregate plot/data atomically — so concurrent array tasks
@@ -53,12 +53,12 @@ from feces import DirectionalCoupler, FDTDSolver, SOI_220
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(
-    _HERE, "..", "..", "..", "example_output", "directional_coupler", "directional_coupler_fdtd_sweep"))
+    _HERE, "..", "..", "..", "..", "example_output", "directional_coupler", "directional_coupler_fdtd_sweep"))
 spectrum_dir = os.path.join(output_dir, "spectrums")
 data_dir = os.path.join(output_dir, "data")
 for _d in (output_dir, spectrum_dir, data_dir):
     os.makedirs(_d, exist_ok=True)
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
 
 # Hybrid example's saved length sweep — overlaid on the aggregate plot when present.
 _HYBRID_SWEEP_NPZ = os.path.abspath(os.path.join(

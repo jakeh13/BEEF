@@ -61,7 +61,7 @@ one reverse launch per body supermode) + 3 (output, one reverse launch per
 port) — plus one EME mode-solve per wavelength per MMI body.
 
 Run:
-    python /path/to/examples/modal_multiplexer/modal_multiplexer_hybrid.py
+    python /path/to/examples/modal_multiplexer/python/modal_multiplexer_hybrid.py
 """
 
 import os
@@ -76,9 +76,9 @@ from feces import (
 )
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "modal_multiplexer", "modal_multiplexer_hybrid"))
+output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "modal_multiplexer", "modal_multiplexer_hybrid"))
 os.makedirs(output_dir, exist_ok=True)
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters

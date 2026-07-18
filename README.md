@@ -113,7 +113,8 @@ support it yet).
 
 ## Examples
 
-See `examples/` — one folder per device, each with EME/FDTD/hybrid variants (`.py` + matching `.ipynb`):
+See `examples/` — one folder per device, each with a `python/` subfolder (`.py` scripts) and,
+where a notebook version exists, a `notebooks/` subfolder (matching `.ipynb`):
 
 - `examples/mmi_1x2/` — 1×2 MMI splitter (EME, FDTD, hybrid)
 - `examples/mmi_2x2/` — 2×2 MMI splitter (EME, FDTD, hybrid) — a genuine multi-input device,
@@ -128,7 +129,7 @@ See `examples/` — one folder per device, each with EME/FDTD/hybrid variants (`
 Run any example directly:
 
 ```bash
-python examples/mmi_1x2/mmi_1x2_eme.py
+python examples/mmi_1x2/python/mmi_1x2_eme.py
 ```
 
 Output (geometry/field/performance plots, `smatrix.pkl`) goes to `example_output/<device>/<example>/`.

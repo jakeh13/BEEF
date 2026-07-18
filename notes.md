@@ -429,7 +429,7 @@ where a category has fewer or lower-priority items.
    sample a dense wavelength grid nearly for free (one broadband pulse, many
    frequencies in one run). Resonant devices need thousands of wavelength
    points to resolve a linewidth that's a small fraction of the sweep span —
-   `examples/ring_resonator/ring_resonator_hybrid.py` hits this directly: an
+   `examples/ring_resonator/python/ring_resonator_hybrid.py` hits this directly: an
    FSR of ~13 nm across a 100 nm C-band sweep needs a ~2000-point grid to
    plot resonance dips cleanly, but only solves `neff(lambda)` at 13 sparse
    points (each a real mode solve) and fits a degree-2 polynomial before
@@ -520,7 +520,7 @@ where a category has fewer or lower-priority items.
    `DeviceGeometry` interface (bus waveguide + coupled ring, `section_prisms`/
    `width_at`/`center_at` following the `DirectionalCoupler` pattern), and directly
    exercises `HybridSolver`'s generic cascading (bus straights as FDTD/EME + coupling
-   region). **Partially addressed** — `examples/ring_resonator/ring_resonator_hybrid.py`
+   region). **Partially addressed** — `examples/ring_resonator/python/ring_resonator_hybrid.py`
    proves out the physics (closed-form all-pass feedback assembly, not a
    `HybridSolver` chain — a ring is a loop, not a cascade), but does so entirely in
    raw meep/meow, bypassing the geometry layer and every solver class. What's still
@@ -654,7 +654,7 @@ where a category has fewer or lower-priority items.
    class at all) — worth generalizing into its own example once the Misc convergence
    utility exists.
 4. **Ring resonator example — done, but as a raw-meep script, not paired with a
-   `RingResonator` `DeviceGeometry`.** `examples/ring_resonator/ring_resonator_hybrid.py`
+   `RingResonator` `DeviceGeometry`.** `examples/ring_resonator/python/ring_resonator_hybrid.py`
    exists (see Geometry recommendation #1) and does call `SMatrix.check_passive()`
    as standard practice, but doesn't use the convergence-utility recommendation
    above (no resolution sweep) and can't use `plot_fdtd_geometry`/`plot_hybrid_geometry`

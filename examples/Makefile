@@ -44,42 +44,42 @@ modal_multiplexer: $(MODAL_MULTIPLEXER_EXAMPLES)
 ring_resonator: $(RING_RESONATOR_EXAMPLES)
 
 mmi_1x2_eme:
-	$(runner) $(my_python) mmi_1x2/mmi_1x2_eme.py
+	$(runner) $(my_python) mmi_1x2/python/mmi_1x2_eme.py
 
 mmi_1x2_fdtd:
-	$(runner) $(my_python) mmi_1x2/mmi_1x2_fdtd.py
+	$(runner) $(my_python) mmi_1x2/python/mmi_1x2_fdtd.py
 
 mmi_1x2_hybrid:
-	$(runner) $(my_python) mmi_1x2/mmi_1x2_hybrid.py
+	$(runner) $(my_python) mmi_1x2/python/mmi_1x2_hybrid.py
 
 mmi_2x2_eme:
-	$(runner) $(my_python) mmi_2x2/mmi_2x2_eme.py
+	$(runner) $(my_python) mmi_2x2/python/mmi_2x2_eme.py
 
 mmi_2x2_fdtd:
-	$(runner) $(my_python) mmi_2x2/mmi_2x2_fdtd.py
+	$(runner) $(my_python) mmi_2x2/python/mmi_2x2_fdtd.py
 
 mmi_2x2_hybrid:
-	$(runner) $(my_python) mmi_2x2/mmi_2x2_hybrid.py
+	$(runner) $(my_python) mmi_2x2/python/mmi_2x2_hybrid.py
 
 directional_coupler_hybrid:
-	$(runner) $(my_python) directional_coupler/directional_coupler_hybrid.py
+	$(runner) $(my_python) directional_coupler/python/directional_coupler_hybrid.py
 
 directional_coupler_mode:
-	$(my_python) directional_coupler/directional_coupler_mode.py
+	$(my_python) directional_coupler/python/directional_coupler_mode.py
 
 directional_coupler_fdtd:
-	$(runner) $(my_python) directional_coupler/directional_coupler_fdtd.py
+	$(runner) $(my_python) directional_coupler/python/directional_coupler_fdtd.py
 
 directional_coupler_fdtd_sweep:
-	$(runner) $(my_python) directional_coupler/directional_coupler_fdtd_sweep.py $(SWEEP_INDEX)
+	$(runner) $(my_python) directional_coupler/python/directional_coupler_fdtd_sweep.py $(SWEEP_INDEX)
 
 modal_multiplexer_hybrid:
-	$(runner) $(my_python) modal_multiplexer/modal_multiplexer_hybrid.py
+	$(runner) $(my_python) modal_multiplexer/python/modal_multiplexer_hybrid.py
 
 # RING_TEST_MODE=0 forces the full-res 3-D production run (defaults to the
 # fast 2-D smoke test otherwise — see the script's own TEST_MODE docstring).
 ring_resonator_hybrid:
-	RING_TEST_MODE=0 $(runner) $(my_python) ring_resonator/ring_resonator_hybrid.py
+	RING_TEST_MODE=0 $(runner) $(my_python) ring_resonator/python/ring_resonator_hybrid.py
 
 clean:
 	rm -rf ../../example_output

@@ -68,7 +68,7 @@ Assembly (closed-form all-pass resonator, NOT a HybridSolver cascade):
     T = |E_thru|**2
 
 Run:
-    python /path/to/examples/ring_resonator/ring_resonator_hybrid.py
+    python /path/to/examples/ring_resonator/python/ring_resonator_hybrid.py
 """
 
 import os
@@ -88,7 +88,7 @@ from feces.materials import SOI_220
 from feces.results import SMatrix
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "ring_resonator", "ring_resonator_hybrid"))
+output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "ring_resonator", "ring_resonator_hybrid"))
 os.makedirs(output_dir, exist_ok=True)
 
 # ---------------------------------------------------------------------------

@@ -47,7 +47,7 @@ hand-rolls the einsum cascade instead of calling the generic API. See
 notes.md Solver recommendation #7 ("still open").
 
 Run:
-    python /path/to/examples/mmi_2x2/mmi_2x2_hybrid.py
+    python /path/to/examples/mmi_2x2/python/mmi_2x2_hybrid.py
 """
 
 import os
@@ -59,9 +59,9 @@ import matplotlib.pyplot as plt
 from feces import MMI, EMESolver, FDTDSolver, HybridSolver, SMatrix, SOI_220, plot_hybrid_geometry
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "mmi_2x2", "mmi_2x2_hybrid"))
+output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_2x2", "mmi_2x2_hybrid"))
 os.makedirs(output_dir, exist_ok=True)
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters

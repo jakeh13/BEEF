@@ -16,7 +16,7 @@ for validation and for devices where EME is inaccurate (high-contrast bends,
 scattering geometries).
 
 Run from any directory:
-    python /path/to/examples/mmi_1x2/mmi_1x2_fdtd.py
+    python /path/to/examples/mmi_1x2/python/mmi_1x2_fdtd.py
 """
 
 import os
@@ -28,9 +28,9 @@ import matplotlib.pyplot as plt
 from feces import MMI, FDTDSolver, SOI_160, plot_fdtd_geometry
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "mmi_1x2", "mmi_1x2_fdtd"))
+output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_1x2", "mmi_1x2_fdtd"))
 os.makedirs(output_dir, exist_ok=True)
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters

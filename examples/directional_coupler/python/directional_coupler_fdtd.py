@@ -53,7 +53,7 @@ library, shown here for the tutorial value):
     hybrid path does for its sections.
 
 Run:
-    python /path/to/examples/directional_coupler/directional_coupler_fdtd.py
+    python /path/to/examples/directional_coupler/python/directional_coupler_fdtd.py
 """
 
 import os
@@ -65,9 +65,9 @@ import matplotlib.pyplot as plt
 from feces import DirectionalCoupler, FDTDSolver, SOI_220, plot_fdtd_geometry
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "directional_coupler", "directional_coupler_fdtd"))
+output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "directional_coupler", "directional_coupler_fdtd"))
 os.makedirs(output_dir, exist_ok=True)
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters

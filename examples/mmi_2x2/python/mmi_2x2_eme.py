@@ -18,7 +18,7 @@ one input sends ~50% to the output on the same side ("bar") and ~50% to the
 opposite side ("cross"), so each port carries an ideal −3 dB.
 
 Run from any directory:
-    python /path/to/examples/mmi_2x2/mmi_2x2_eme.py
+    python /path/to/examples/mmi_2x2/python/mmi_2x2_eme.py
 """
 
 import os
@@ -29,8 +29,8 @@ matplotlib.use("Agg")           # headless — swap for "Qt5Agg" for interactive
 from feces import MMI, EMESolver, SOI_220, plot_eme_geometry, plot_performance
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_output", "mmi_2x2", "mmi_2x2_eme"))
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "example_sim_cache"))
+output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_2x2", "mmi_2x2_eme"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters
