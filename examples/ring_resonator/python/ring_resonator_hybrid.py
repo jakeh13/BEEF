@@ -78,11 +78,13 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import matplotlib.path as mpath
 
 import meep as mp
 import meow as mw
 
 from feces import extrude_polygons
+from feces.cache import load_result, lookup, save_run
 from feces.geometry.base import polygons_to_prisms
 from feces.materials import SOI_220
 from feces.results import SMatrix
@@ -90,6 +92,16 @@ from feces.results import SMatrix
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "ring_resonator", "ring_resonator_hybrid"))
 os.makedirs(output_dir, exist_ok=True)
+
+# Persistent on-disk simulation cache (see feces/cache/) — same shared
+# examples/example_sim_cache/ directory every other example's FDTDSolver/
+# EMESolver save_dir points at. This script hand-rolls raw meep/meow sims
+# instead of going through those solver classes (see module docstring), so
+# it fingerprints+stores/loads each run itself via feces.cache's lookup()/
+# save_run()/load_result() directly rather than the solver-specific
+# build_run_config()/build_whole_device_config() helpers (those expect a
+# DeviceGeometry + solver instance this script doesn't have).
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # 0. Test-mode knob — TEST_MODE=True runs in minutes (2-D, low res, few
@@ -276,6 +288,39 @@ def get_coeffs(sim, mon, band=1, forward=True):
     return coeff.alpha[0, :, 0 if forward else 1]
 
 
+def _json_polys(polys):
+    """Polygon vertex lists -> plain JSON-safe floats, for a cache config's
+    geometry_polygons (mirrors feces.cache.config's own float-rounding, so
+    a cache hit is exact-equality-safe against JSON round-tripping)."""
+    return [[[round(float(x), 9), round(float(y), 9)] for x, y in poly] for poly in polys]
+
+
+def _sim_params():
+    """Every module-level constant that affects the physical result of
+    run_coupler_fdtd()/run_bend_fdtd() — the raw-meep equivalent of
+    FDTDSolver's vars(solver) (see feces/cache/config.py's _solver_config).
+    Changing any of these must change the cache key, or a stale run could be
+    served for a different simulation."""
+    return {
+        "waveguide_width": WAVEGUIDE_WIDTH,
+        "gap": GAP,
+        "R": R,
+        "L_C": L_C,
+        "resolution": RESOLUTION,
+        "three_d": THREE_D,
+        "sim_height": SIM_HEIGHT,
+        "dpml": DPML,
+        "decay_tol": DECAY_TOL,
+        "source_margin": SOURCE_MARGIN,
+        "monitor_margin": MONITOR_MARGIN,
+        "port_aperture": PORT_APERTURE,
+        "y_below": Y_BELOW,
+        "stub_len": STUB_LEN,
+        "s_mon": S_MON,
+        "material_stack": {"wg_height": MATERIAL_STACK.wg_height, "sz": MATERIAL_STACK.sz},
+    }
+
+
 def get_norm_calibrated(sim, mon, forward=True):
     """Normalization amplitude for a source-adjacent monitor, magnitude
     calibrated against raw Poynting flux (mp.get_fluxes), phase taken from
@@ -302,10 +347,28 @@ def get_norm_calibrated(sim, mon, forward=True):
 # ---------------------------------------------------------------------------
 # 6. Coupler-section FDTD — two excitations, four ports each run.
 # ---------------------------------------------------------------------------
-def run_coupler_fdtd(excite, wavelengths):
+def run_coupler_fdtd(excite, wavelengths, save_dir=None):
     """excite: "bus" (run A) or "ring" (run B, source on the left stub,
     launched -y into the bend). Returns a dict of complex coefficient
-    arrays [len(wavelengths)] keyed by physical quantity name."""
+    arrays [len(wavelengths)] keyed by physical quantity name.
+
+    save_dir: persistent on-disk cache directory (see feces/cache/).
+        None/"" (default) disables the cache — every call re-simulates."""
+    config = None
+    if save_dir:
+        config = {
+            "solver_type": "ring_resonator_hybrid.run_coupler_fdtd",
+            "method": excite,
+            "geometry_class": "RingResonatorCoupler",
+            "geometry_polygons": {"2,0": _json_polys(build_coupler_polys())},
+            "wavelengths": [round(float(w), 9) for w in wavelengths],
+            **_sim_params(),
+        }
+        hit = lookup(save_dir, config)
+        if hit is not None:
+            print(f"  [cache] run_coupler_fdtd({excite!r}) hit -> {hit}")
+            return load_result(hit)
+
     wl_center = (WL_MIN + WL_MAX) / 2
     fcen = 1.0 / wl_center
     fwidth = (1.0 / WL_MIN - 1.0 / WL_MAX) * 0.5
@@ -346,20 +409,42 @@ def run_coupler_fdtd(excite, wavelengths):
         t = get_coeffs(sim, bus_r_mon, forward=True) / a_norm
         k1 = get_coeffs(sim, ring_r_mon, forward=True) / a_norm
         sim.reset_meep()
-        return {"t": t, "k1": k1}
+        result = {"t": t, "k1": k1}
     else:
         # launched -y — flux-calibrated normalization, see get_norm_calibrated()
         a_norm = get_norm_calibrated(sim, norm_mon, forward=False)
         t_ring = get_coeffs(sim, ring_r_mon, forward=True) / a_norm
         k2 = get_coeffs(sim, bus_r_mon, forward=True) / a_norm
         sim.reset_meep()
-        return {"t_ring": t_ring, "k2": k2}
+        result = {"t_ring": t_ring, "k2": k2}
+
+    if save_dir:
+        folder = save_run(save_dir, config, result)
+        print(f"  [cache] run_coupler_fdtd({excite!r}) saved -> {folder}")
+    return result
 
 
 # ---------------------------------------------------------------------------
 # 7. Standalone 90-degree bend FDTD
 # ---------------------------------------------------------------------------
-def run_bend_fdtd(wavelengths):
+def run_bend_fdtd(wavelengths, save_dir=None):
+    """save_dir: persistent on-disk cache directory (see feces/cache/).
+    None/"" (default) disables the cache — every call re-simulates."""
+    config = None
+    if save_dir:
+        config = {
+            "solver_type": "ring_resonator_hybrid.run_bend_fdtd",
+            "method": "run_bend_fdtd",
+            "geometry_class": "RingResonatorBend",
+            "geometry_polygons": {"2,0": _json_polys(build_bend_polys())},
+            "wavelengths": [round(float(w), 9) for w in wavelengths],
+            **_sim_params(),
+        }
+        hit = lookup(save_dir, config)
+        if hit is not None:
+            print(f"  [cache] run_bend_fdtd hit -> {hit}")
+            return load_result(hit)
+
     wl_center = (WL_MIN + WL_MAX) / 2
     fcen = 1.0 / wl_center
     fwidth = (1.0 / WL_MIN - 1.0 / WL_MAX) * 0.5
@@ -381,6 +466,10 @@ def run_bend_fdtd(wavelengths):
     a_norm = get_coeffs(sim, norm_mon, forward=True)
     b_raw = get_coeffs(sim, out_mon, forward=True) / a_norm
     sim.reset_meep()
+
+    if save_dir:
+        folder = save_run(save_dir, config, b_raw)
+        print(f"  [cache] run_bend_fdtd saved -> {folder}")
     return b_raw
 
 
@@ -392,7 +481,30 @@ MESH_WIDTH = 4.0
 MESH_HEIGHT = 2.0
 
 
-def solve_neff(wl):
+def solve_neff(wl, save_dir=None):
+    """save_dir: persistent on-disk cache directory (see feces/cache/).
+    None/"" (default) disables the cache — every call re-solves."""
+    config = None
+    if save_dir:
+        config = {
+            "solver_type": "ring_resonator_hybrid.solve_neff",
+            "method": "solve_neff",
+            "geometry_class": "BareStrip",
+            "geometry_polygons": {
+                "2,0": _json_polys([rect_poly(0.0, -W / 2, 1.0, W / 2)]),
+                "1,0": _json_polys([rect_poly(0.0, -MESH_WIDTH / 2, 1.0, MESH_WIDTH / 2)]),
+            },
+            "waveguide_width": WAVEGUIDE_WIDTH,
+            "resolution": RESOLUTION,
+            "mesh_width": MESH_WIDTH,
+            "mesh_height": MESH_HEIGHT,
+            "material_stack": {"wg_height": MATERIAL_STACK.wg_height, "sz": MATERIAL_STACK.sz},
+            "wavelength": round(float(wl), 9),
+        }
+        hit = lookup(save_dir, config)
+        if hit is not None:
+            return load_result(hit)
+
     length = 1.0
     wg_poly = rect_poly(0.0, -W / 2, length, W / 2)
     ox_poly = rect_poly(0.0, -MESH_WIDTH / 2, length, MESH_WIDTH / 2)
@@ -409,7 +521,11 @@ def solve_neff(wl):
 
     from meow import compute_modes_meep
     modes = compute_modes_meep(cs, num_modes=1)
-    return float(np.real(modes[0].neff))
+    neff = float(np.real(modes[0].neff))
+
+    if save_dir:
+        save_run(save_dir, config, neff)
+    return neff
 
 
 # ---------------------------------------------------------------------------
@@ -450,10 +566,19 @@ def find_dips(wl_dense, T):
 # ---------------------------------------------------------------------------
 def plot_cell(polys, cell_size, geometry_center, monitors, path, title):
     fig, ax = plt.subplots(figsize=(7, 5))
-    for poly in polys:
-        ax.add_patch(mpatches.Polygon(poly, closed=True, facecolor="steelblue", edgecolor="k", lw=0.3))
     cx, cy = geometry_center
     sx, sy = cell_size
+
+    outer = mpatches.Rectangle((cx - sx / 2, cy - sy / 2), sx, sy)
+    inner = mpatches.Rectangle((cx - sx / 2 + DPML, cy - sy / 2 + DPML), sx - 2 * DPML, sy - 2 * DPML)
+    pml_path = mpath.Path.make_compound_path(
+        mpath.Path(outer.get_verts()[::-1]), mpath.Path(inner.get_verts())
+    )
+    ax.add_patch(mpatches.PathPatch(pml_path, facecolor="crimson", alpha=0.15, edgecolor="none",
+                                     zorder=0, label="PML"))
+
+    for poly in polys:
+        ax.add_patch(mpatches.Polygon(poly, closed=True, facecolor="steelblue", edgecolor="k", lw=0.3))
     ax.add_patch(mpatches.Rectangle((cx - sx / 2, cy - sy / 2), sx, sy, fill=False, edgecolor="gray", lw=0.8))
     ax.add_patch(mpatches.Rectangle((cx - sx / 2 + DPML, cy - sy / 2 + DPML), sx - 2 * DPML, sy - 2 * DPML,
                                      fill=False, edgecolor="gray", linestyle=":", lw=0.8))
@@ -467,6 +592,8 @@ def plot_cell(polys, cell_size, geometry_center, monitors, path, title):
     ax.set_xlabel("x (um)")
     ax.set_ylabel("y (um)")
     ax.set_title(title)
+    ax.legend(handles=[mpatches.Patch(facecolor="crimson", alpha=0.15, label=f"PML (d={DPML} um)")],
+              loc="upper right", fontsize=7)
     plt.tight_layout()
     fig.savefig(path, dpi=200)
     plt.close("all")
@@ -509,15 +636,15 @@ print(f"Geometry preview plots saved -> {output_dir}/geometry_coupler.png, geome
 wl_fdtd = np.linspace(WL_MIN, WL_MAX, N_WL_FDTD)
 
 print("\n[1/3] Coupler-section FDTD, bus-excited...")
-res_a = run_coupler_fdtd("bus", wl_fdtd)
+res_a = run_coupler_fdtd("bus", wl_fdtd, save_dir=save_dir)
 t, k1 = res_a["t"], res_a["k1"]
 
 print("[2/3] Coupler-section FDTD, ring-excited...")
-res_b = run_coupler_fdtd("ring", wl_fdtd)
+res_b = run_coupler_fdtd("ring", wl_fdtd, save_dir=save_dir)
 t_ring, k2 = res_b["t_ring"], res_b["k2"]
 
 print("[3/3] Standalone bend FDTD...")
-b_raw = run_bend_fdtd(wl_fdtd)
+b_raw = run_bend_fdtd(wl_fdtd, save_dir=save_dir)
 
 mid = N_WL_FDTD // 2
 conserve_a = np.abs(t[mid]) ** 2 + np.abs(k1[mid]) ** 2
@@ -533,7 +660,7 @@ print(f"  reciprocity check: |k1|={np.abs(k1[mid]):.4f} vs |k2|={np.abs(k2[mid])
 # ---------------------------------------------------------------------------
 print(f"\nMode solve at {N_WL_SOLVE} wavelengths...")
 wl_solve = np.linspace(WL_MIN, WL_MAX, N_WL_SOLVE)
-neff_solve = np.array([solve_neff(wl) for wl in wl_solve])
+neff_solve = np.array([solve_neff(wl, save_dir=save_dir) for wl in wl_solve])
 neff_fit = np.polyfit(wl_solve, neff_solve, deg=2)
 neff_resid = neff_solve - np.polyval(neff_fit, wl_solve)
 print(f"  neff fit residual (max abs): {np.max(np.abs(neff_resid)):.2e}")
