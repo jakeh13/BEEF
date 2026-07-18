@@ -173,8 +173,11 @@ def rect_poly(x0, y0, x1, y1):
 W = WAVEGUIDE_WIDTH
 Y_RING = W + GAP
 STUB_X = L_C / 2 + R                    # x of both vertical stub columns
-INNER_X_HALF = STUB_X + 1.0              # bus extends this far past the stub columns (inner, no PML)
-Y_BELOW = 2.0                            # inner clearance below the bus
+Y_BELOW = 2.0                            # inner clearance below the bus (also reused below as the
+                                          # ring-port monitors' PORT_APERTURE/2 + margin clearance)
+INNER_X_HALF = STUB_X + Y_BELOW          # bus extends this far past the stub columns (inner, no PML) —
+                                          # sized so ring_L/ring_R's transverse PORT_APERTURE/2 window
+                                          # clears the PML, same margin as Y_BELOW gives the bus monitors
 Y_TOP = Y_RING + R + STUB_LEN            # inner y of the ring-port stub tops
 
 COUPLER_SX = 2 * (INNER_X_HALF + DPML)
@@ -203,8 +206,13 @@ def build_coupler_polys():
 #    coupled-section simulation).
 # ---------------------------------------------------------------------------
 # Built in a natural frame: input stub x in [-STUB_LEN, 0], arc center (0, R), output stub y in [R, R+STUB_LEN].
-BEND_X_MIN, BEND_X_MAX = -STUB_LEN - DPML, R + DPML
-BEND_Y_MIN, BEND_Y_MAX = -DPML, R + STUB_LEN + DPML
+# X_MAX/Y_MIN widened past the bare bend radius by Y_BELOW (the same
+# PORT_APERTURE/2 + margin clearance the coupler section uses below its bus
+# straight, section 3) — without it, the arc's own outer radius (R+W/2) and
+# the out_mon/norm_mon transverse mode-decomposition apertures
+# (PORT_APERTURE/2 each) clip into the PML.
+BEND_X_MIN, BEND_X_MAX = -STUB_LEN - DPML, R + Y_BELOW + DPML
+BEND_Y_MIN, BEND_Y_MAX = -Y_BELOW - DPML, R + STUB_LEN + DPML
 BEND_SX = BEND_X_MAX - BEND_X_MIN
 BEND_SY = BEND_Y_MAX - BEND_Y_MIN
 BEND_X_CENTER = (BEND_X_MAX + BEND_X_MIN) / 2.0
