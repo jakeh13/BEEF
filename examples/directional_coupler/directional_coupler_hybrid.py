@@ -219,8 +219,8 @@ plot_hybrid_geometry(
     # .transpose() (see module docstring) — so it gets no sub-region plot
     # and is hatched/labeled as mirrored in the full-device overview above.
     sub_region_configs=[
-        ("in", [{"input_idx": 0, **_iface_mon}, {}, {}], {2: 0}),
-        ("isolated", [{"input_idx": 1, **_iface_mon}, {}, {}], {2: 0}),
+        ("in", {0: {"input_idx": 0, **_iface_mon}}, {2: 0}),
+        ("isolated", {0: {"input_idx": 1, **_iface_mon}}, {2: 0}),
     ],
 )
 print(f"Geometry plot saved → {output_dir}/geometry_hybrid.png")

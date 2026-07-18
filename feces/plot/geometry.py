@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
+from ..solvers.fdtd import section_fdtd_layout
+
 __all__ = ["plot_eme_geometry", "plot_fdtd_geometry", "plot_hybrid_geometry"]
 
 
@@ -394,10 +396,13 @@ def plot_hybrid_geometry(
         sub_region_configs: list of (name, geometry_kwargs) or
             (name, geometry_kwargs, mirror_pairs) entries, where
             geometry_kwargs is either a single dict (applied to every
-            section) or a list of len(solver.solvers) dicts (one per
-            section, matching HybridSolver.solve()'s own geometry_kwargs
-            convention) — e.g. [("through", [{}, {}, {"output_idx": 0}]),
-            ("cross", [{}, {}, {"output_idx": 1}])] for a device whose
+            section), a sparse {section_idx: kwargs} dict mapping only the
+            sections that need kwargs (unnamed sections get {}; a dict with
+            int keys is always read as this sparse form), or a list of
+            len(solver.solvers) dicts (one per section) — all matching
+            HybridSolver.solve()'s own geometry_kwargs convention. E.g.
+            [("through", {2: {"output_idx": 0}}),
+            ("cross", {2: {"output_idx": 1}})] for a device whose
             physical output port varies per hybrid.solve() call. A section
             is only re-rendered once per *distinct* kwargs value it actually
             takes across configs — e.g. an input section whose kwargs never
@@ -460,12 +465,34 @@ def plot_hybrid_geometry(
     for entry in configs:
         name, cfg = entry[0], entry[1]
         mirror = dict(entry[2]) if len(entry) > 2 else default_mirror
-        per_section = [cfg] * K if isinstance(cfg, dict) else list(cfg)
+        if isinstance(cfg, dict) and any(isinstance(key, int) for key in cfg):
+            # Sparse per-section mapping {section_idx: kwargs}, same
+            # convention HybridSolver._kwargs_per_section() accepts —
+            # unnamed sections get {}.
+            if not all(isinstance(key, int) for key in cfg):
+                raise ValueError(
+                    f"sub_region_configs entry {name!r} mixes int section "
+                    f"indices with other keys; use either a sparse "
+                    f"{{section_idx: kwargs}} mapping or a single plain "
+                    f"kwargs dict, not both."
+                )
+            bad = [key for key in cfg if not (0 <= key < K)]
+            if bad:
+                raise ValueError(
+                    f"sub_region_configs entry {name!r}: section indices "
+                    f"must be in [0, {K - 1}], got {sorted(bad)}."
+                )
+            per_section = [dict(cfg.get(i, {})) for i in range(K)]
+        elif isinstance(cfg, dict):
+            per_section = [cfg] * K
+        else:
+            per_section = list(cfg)
         if len(per_section) != K:
             raise ValueError(
                 f"sub_region_configs entry {name!r} has {len(per_section)} "
-                f"geometry_kwargs entries, expected a single dict or a "
-                f"list of len(solver.solvers) = {K}."
+                f"geometry_kwargs entries, expected a single dict, a sparse "
+                f"{{section_idx: kwargs}} mapping, or a list of "
+                f"len(solver.solvers) = {K}."
             )
         normalized.append((name, per_section, mirror))
     n_configs = len(normalized)
@@ -522,117 +549,38 @@ def _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub
     """Source/monitor markers for one HybridSolver FDTD section, in the
     section's own local frame — left edge of its section_gds()/
     section_prisms() domain (i.e. x0-stub_left) at x_local=0, matching the
-    frame the fixed FDTDSolver.solve_section() itself now builds its meep
-    cell in. Mirrors that method exactly:
+    frame FDTDSolver.solve_section() itself builds its meep cell in.
 
-    - excite from whichever side has fewer modes (n_out <= n_in launches
-      backward from the right — the "reverse simulated" case for an output
-      section);
-    - source_margin/monitor_margin offset the source and its co-located
-      normalization monitor from the PML *inner* edge on the excited side —
-      x_local=0 on the left, x_local=L on the right, where
-      L = (x1-x0)+stub_left+stub_right is this section's own local domain
-      width (stub included, PML not) — not from the device-frame x0/x1
-      boundary directly (those only coincide when the relevant stub is 0,
-      i.e. an interior cut). The interface/measurement monitor on the
-      *other* side gets neither margin — it sits exactly at that side's
-      local edge (x_local=0 or L), flush with the PML, matching
-      FDTDSolver.solve_section()'s own mea_x = lo_m/hi_m exactly (see its
-      docstring in feces/solvers/fdtd.py for why: it must line up with the
-      adjacent section's own assumed boundary at that same x);
-    - if the excited side carries exactly 1 mode and the geometry itself
-      provides a launch window there (geometry.source_aperture_at()
-      non-None — e.g. an MMI's closely-spaced output branches), source + its co-located
-      normalization monitor span exactly that window, centered on the
-      excited arm and clamped to the non-PML domain, taking precedence
-      over half_domain_aperture below — mirroring FDTDSolver.
-      solve_section()'s own priority order;
-    - otherwise, if sub_solver.half_domain_aperture is set (see its docstring
-      in feces/solvers/fdtd.py) and the excited side carries exactly 1 mode,
-      source + its co-located normalization monitor span only *half* the
-      domain height: from the shared symmetry axis (y=0) out to the near
-      PML on whichever side the excited arm actually sits (a port sitting
-      exactly *on* the axis has no "near" side to pick, so it gets the
-      *full* height instead). Otherwise (the default) they span the full
-      sim_width, centered on the excited arm's own position;
-    - the interface/measurement monitor on the *other* side is sized exactly
-      like FDTDSolver.solve_section()'s own w_meas: the full sim_width
-      (both PML inner edges) whenever that side must resolve >1 mode (a
-      true per-interface decomposition that may need to see every arm/
-      supermode present there, e.g. the coupling-region interface), but
-      geometry.width_at() — the bare local cross-section, no PML-clearance
-      padding — for a genuine single-mode measurement (a well-isolated
-      waveguide, e.g. an MMI's single output arm), centered on
-      geometry.center_at() at that side exactly like the excited side is —
-      unless monitor_center/monitor_size are given, which override that
-      monitor's centre/span exactly like solve_section()'s own parameters
-      of the same names.
+    All position/size math (which side excites vs. measures, source/monitor
+    apertures, the source_aperture_at()/half_domain_aperture priority order)
+    comes from section_fdtd_layout() — the same function
+    FDTDSolver.solve_section() calls — so this plot can't independently
+    drift out of sync with what actually gets simulated; see that
+    function's docstring in feces/solvers/fdtd.py for the full rules.
     """
-    source_margin = getattr(sub_solver, "source_margin", 0.0)
-    monitor_margin = getattr(sub_solver, "monitor_margin", 0.25)
     dpml = getattr(sub_solver, "dpml", 0.0) or 0.0
     sim_width = getattr(sub_solver, "sim_width", oxide_width - 2 * dpml)
-    L = (x1 - x0) + stub_left + stub_right
 
-    eps = min(1e-3, (x1 - x0) * 0.01)
-    c_left = geometry.center_at(x0 + eps, **geometry_kwargs)
-    c_right = geometry.center_at(x1 - eps, **geometry_kwargs)
-    w_left = geometry.width_at(x0 + eps, **geometry_kwargs)
-    w_right = geometry.width_at(x1 - eps, **geometry_kwargs)
+    layout = section_fdtd_layout(
+        geometry, x0, x1, stub_left, stub_right, n_in, n_out, sim_width,
+        getattr(sub_solver, "source_margin", 0.0),
+        getattr(sub_solver, "monitor_margin", 0.25),
+        getattr(sub_solver, "half_domain_aperture", False),
+        geometry_kwargs, monitor_center=monitor_center, monitor_size=monitor_size,
+    )
 
     y_top, y_bot = oxide_width / 2 - dpml, -(oxide_width / 2 - dpml)
 
-    def _half_span(c):
-        if c > 0:
-            return 0.0, y_top
-        if c < 0:
-            return y_bot, 0.0
-        return y_bot, y_top  # on-axis port, no companion arm to avoid -> full height
+    def _clamped_span(c, width):
+        return max(c - width / 2, y_bot), min(c + width / 2, y_top)
 
-    def _full_span(c, width=None):
-        w = sim_width if width is None else width
-        return max(c - w / 2, y_bot), min(c + w / 2, y_top)
+    src_label = "source (reverse)" if layout.reverse else "source"
+    y_lo, y_hi = _clamped_span(layout.src_c, layout.src_width)
+    _draw_marker(ax, layout.src_x, y_lo, y_hi, src_label, "crimson", "-")
+    _draw_marker(ax, layout.norm_x, y_lo, y_hi, "norm mon", "darkorange", "--")
 
-    n_excite = n_out if n_out <= n_in else n_in
-    n_measure = n_in if n_out <= n_in else n_out
-    half_domain = n_excite == 1 and getattr(sub_solver, "half_domain_aperture", False)
-
-    if n_out <= n_in:
-        src_x, norm_x, mea_x = L - source_margin, L - monitor_margin, 0.0
-        src_c, mea_c, mea_w = c_right, c_left, w_left
-        src_ap_x = x1 - eps
-        src_label = "source (reverse)"
-    else:
-        src_x, norm_x, mea_x = source_margin, monitor_margin, L
-        src_c, mea_c, mea_w = c_left, c_right, w_right
-        src_ap_x = x0 + eps
-        src_label = "source"
-
-    # Same aperture priority as FDTDSolver.solve_section(): a geometry-
-    # provided single-mode launch window (source_aperture_at, clamped to the
-    # non-PML domain) wins over half_domain_aperture, which wins over the
-    # full sim_width.
-    src_aperture = None
-    if n_excite == 1:
-        _aperture_at = getattr(geometry, "source_aperture_at", None)
-        if _aperture_at is not None:
-            src_aperture = _aperture_at(src_ap_x, **geometry_kwargs)
-    if src_aperture is not None:
-        y_lo, y_hi = _full_span(src_c, width=min(src_aperture, sim_width - 2.0 * abs(src_c)))
-    elif half_domain:
-        y_lo, y_hi = _half_span(src_c)
-    else:
-        y_lo, y_hi = _full_span(src_c)
-    _draw_marker(ax, src_x, y_lo, y_hi, src_label, "crimson", "-")
-    _draw_marker(ax, norm_x, y_lo, y_hi, "norm mon", "darkorange", "--")
-
-    if monitor_center is not None:
-        mea_c = monitor_center
-    mea_lo, mea_hi = _full_span(
-        mea_c,
-        width=(None if n_measure > 1 else mea_w) if monitor_size is None else monitor_size,
-    )
-    _draw_marker(ax, mea_x, mea_lo, mea_hi, "interface mon", "seagreen", "--")
+    mea_lo, mea_hi = _clamped_span(layout.mea_c, layout.mea_w)
+    _draw_marker(ax, layout.mea_x, mea_lo, mea_hi, "interface mon", "seagreen", "--")
 
 
 def _draw_pml_rect(ax, xa, xb, ya, yb, label=None):

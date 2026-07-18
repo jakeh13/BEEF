@@ -45,11 +45,14 @@ to the HybridSolver instance, so sections still dedupe across both.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
 from ..results.smatrix import SMatrix
+
+logger = logging.getLogger(__name__)
 
 
 class HybridSolver:
@@ -237,10 +240,15 @@ class HybridSolver:
             out_modes: mode count at the true right (output) port. Usually 1.
             port: port label to store the result under in the returned SMatrix.
             geometry_kwargs: forwarded to solve_section() calls. Either a
-                single dict applied to every section, or a list of
-                len(solvers) dicts giving different kwargs per section (e.g.
-                port_idx only on the section that actually branches — see
-                cache below for why this distinction matters). Entries that
+                single dict applied to every section, a list of
+                len(solvers) dicts giving different kwargs per section, or a
+                sparse {section_idx: kwargs} dict mapping only the sections
+                that need kwargs — unnamed sections get {} (e.g.
+                {2: {"output_idx": 1}} targets just the section that
+                actually branches, with no empty-dict padding — see cache
+                below for why the per-section distinction matters; a dict
+                whose keys are ints is always read as this sparse form, so
+                a plain shared dict must not use int keys). Entries that
                 match a solver's own solve_section() named parameters (e.g.
                 FDTDSolver's monitor_center/monitor_size overrides) bind to
                 those parameters rather than reaching the geometry hooks, so
@@ -369,6 +377,30 @@ class HybridSolver:
         if geometry_kwargs is None:
             return [{}] * K
         if isinstance(geometry_kwargs, dict):
+            if any(isinstance(key, int) for key in geometry_kwargs):
+                # Sparse per-section mapping {section_idx: kwargs} — sections
+                # not named get {}. Saves callers from padding a full list
+                # with empties just to target one section.
+                if not all(isinstance(key, int) for key in geometry_kwargs):
+                    raise ValueError(
+                        f"geometry_kwargs dict mixes int section indices with "
+                        f"other keys ({sorted(map(repr, geometry_kwargs))}); use "
+                        f"either a sparse {{section_idx: kwargs}} mapping or a "
+                        f"single plain kwargs dict, not both."
+                    )
+                bad = [key for key in geometry_kwargs if not (0 <= key < K)]
+                if bad:
+                    raise ValueError(
+                        f"geometry_kwargs section indices must be in [0, {K - 1}], "
+                        f"got {sorted(bad)}."
+                    )
+                for key, val in geometry_kwargs.items():
+                    if not isinstance(val, dict):
+                        raise ValueError(
+                            f"geometry_kwargs[{key}] must be a kwargs dict, "
+                            f"got {type(val).__name__}."
+                        )
+                return [dict(geometry_kwargs.get(k, {})) for k in range(K)]
             return [geometry_kwargs] * K
         kwargs_per_section = list(geometry_kwargs)
         if len(kwargs_per_section) != K:
@@ -422,7 +454,7 @@ class HybridSolver:
                 if is_swept:
                     cache_key = cache_key + (("lengths", tuple(float(L) for L in lengths)),)
                 if cache_key in cache:
-                    print(f"[Hybrid] Section {k + 1}/{K}: {type(solver).__name__} (cached)")
+                    logger.info("Section %d/%d: %s (cached)", k + 1, K, type(solver).__name__)
                     mats.append(cache[cache_key])
                     continue
 
@@ -430,12 +462,11 @@ class HybridSolver:
                 j = self.mirror_pairs[k]
                 self._validate_mirror_pair(geometry, k, j, kwargs, kwargs_per_section[j])
                 mat = mats[j].transpose(0, 2, 1).copy()
-                print(f"[Hybrid] Section {k + 1}/{K}: {type(solver).__name__} (mirror of section {j + 1})")
+                logger.info("Section %d/%d: %s (mirror of section %d)", k + 1, K, type(solver).__name__, j + 1)
             elif is_swept:
-                print(
-                    f"[Hybrid] Section {k + 1}/{K}: {type(solver).__name__} "
-                    f"x=[{x0:.3f}, {x1:.3f}]  modes {n_in_list[k]}->{n_out_list[k]} "
-                    f"(length sweep, {len(lengths)} lengths)"
+                logger.info(
+                    "Section %d/%d: %s x=[%.3f, %.3f]  modes %s->%s (length sweep, %d lengths)",
+                    k + 1, K, type(solver).__name__, x0, x1, n_in_list[k], n_out_list[k], len(lengths),
                 )
                 mat = solver.solve_section_length_sweep(
                     geometry, wavelengths, x0, x1, lengths,
@@ -445,9 +476,9 @@ class HybridSolver:
                 )
                 mat = np.asarray(mat, dtype=complex)  # [n_L, M, out, in]
             else:
-                print(
-                    f"[Hybrid] Section {k + 1}/{K}: {type(solver).__name__} "
-                    f"x=[{x0:.3f}, {x1:.3f}]  modes {n_in_list[k]}->{n_out_list[k]}"
+                logger.info(
+                    "Section %d/%d: %s x=[%.3f, %.3f]  modes %s->%s",
+                    k + 1, K, type(solver).__name__, x0, x1, n_in_list[k], n_out_list[k],
                 )
                 mat = solver.solve_section(
                     geometry, wavelengths, x0, x1,

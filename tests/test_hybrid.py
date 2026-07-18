@@ -272,6 +272,95 @@ class TestMirrorPairs:
         assert s0.call_count == 1 and s1.call_count == 1 and s2.call_count == 0
 
 
+class RecordingSolver(FakeSolver):
+    """FakeSolver that also records the extra kwargs of every call."""
+
+    def __init__(self, matrix):
+        super().__init__(matrix)
+        self.seen_kwargs = []
+
+    def solve_section(self, geometry, wavelengths, x0, x1,
+                       n_modes_in, n_modes_out, stub_left=0.0, stub_right=0.0,
+                       **kwargs):
+        self.seen_kwargs.append(dict(kwargs))
+        return super().solve_section(geometry, wavelengths, x0, x1,
+                                     n_modes_in, n_modes_out,
+                                     stub_left=stub_left, stub_right=stub_right,
+                                     **kwargs)
+
+
+class TestSparseKwargs:
+    def _make_chain(self):
+        s0 = RecordingSolver([[1.0], [0.5]])                 # 1 -> 2 modes
+        s1 = RecordingSolver([[1.0, 2.0], [0.0, 1.0]])       # 2 -> 2 modes
+        s2 = RecordingSolver([[3.0, 4.0]])                   # 2 -> 1
+        hybrid = HybridSolver(
+            [s0, s1, s2], boundaries=[-2.0, -1.0, 1.0, 2.0],
+            interface_modes=[2, 2],
+        )
+        return hybrid, s0, s1, s2
+
+    def test_sparse_routes_to_named_section_only(self):
+        geom = FakeGeometry()
+        hybrid, s0, s1, s2 = self._make_chain()
+        hybrid.solve(geometry=geom, wavelengths=WAVELENGTHS,
+                     geometry_kwargs={2: {"output_idx": 1}})
+        assert s0.seen_kwargs == [{}]
+        assert s1.seen_kwargs == [{}]
+        assert s2.seen_kwargs == [{"output_idx": 1}]
+
+    def test_sparse_equivalent_to_list_form_in_cache(self):
+        geom = FakeGeometry()
+        hybrid, s0, s1, s2 = self._make_chain()
+        cache: dict = {}
+        hybrid.solve(geometry=geom, wavelengths=WAVELENGTHS, cache=cache,
+                     geometry_kwargs=[{}, {}, {"output_idx": 1}])
+        hybrid.solve(geometry=geom, wavelengths=WAVELENGTHS, cache=cache,
+                     geometry_kwargs={2: {"output_idx": 1}})
+        # identical per-section expansion -> identical cache keys -> no resolves
+        assert s0.call_count == 1 and s1.call_count == 1 and s2.call_count == 1
+
+    def test_sparse_bad_index_raises(self):
+        geom = FakeGeometry()
+        hybrid, *_ = self._make_chain()
+        with pytest.raises(ValueError, match=r"section indices must be in \[0, 2\]"):
+            hybrid.solve(geometry=geom, wavelengths=WAVELENGTHS,
+                         geometry_kwargs={5: {"output_idx": 1}})
+
+    def test_sparse_mixed_keys_raises(self):
+        geom = FakeGeometry()
+        hybrid, *_ = self._make_chain()
+        with pytest.raises(ValueError, match="mixes int section indices"):
+            hybrid.solve(geometry=geom, wavelengths=WAVELENGTHS,
+                         geometry_kwargs={2: {"output_idx": 1}, "input_idx": 0})
+
+    def test_sparse_non_dict_value_raises(self):
+        geom = FakeGeometry()
+        hybrid, *_ = self._make_chain()
+        with pytest.raises(ValueError, match=r"geometry_kwargs\[2\] must be a kwargs dict"):
+            hybrid.solve(geometry=geom, wavelengths=WAVELENGTHS,
+                         geometry_kwargs={2: 1})
+
+    def test_plain_shared_dict_still_broadcasts(self):
+        geom = FakeGeometry()
+        hybrid, s0, s1, s2 = self._make_chain()
+        hybrid.solve(geometry=geom, wavelengths=WAVELENGTHS,
+                     geometry_kwargs={"input_idx": 1})
+        assert s0.seen_kwargs == s1.seen_kwargs == s2.seen_kwargs == [{"input_idx": 1}]
+
+    def test_sparse_works_in_length_sweep(self):
+        geom = FakeGeometry()
+        s0 = RecordingSolver([[1.0], [0.5]])
+        s1 = FakeSweepSolver([[1.0, 2.0], [0.0, 1.0]])
+        s2 = RecordingSolver([[3.0, 4.0]])
+        hybrid = HybridSolver([s0, s1, s2], boundaries=[-2.0, -1.0, 1.0, 2.0],
+                              interface_modes=[2, 2])
+        hybrid.solve_length_sweep(geom, WAVELENGTHS, LENGTHS, sweep_section=1,
+                                  geometry_kwargs={2: {"output_idx": 1}})
+        assert s0.seen_kwargs == [{}]
+        assert s2.seen_kwargs == [{"output_idx": 1}]
+
+
 class TestLengthSweep:
     def _make_chain(self, mirror_pairs=None, s2_matrix=None):
         s0 = FakeSolver([[1.0], [0.5]])                     # 1 -> 2 modes

@@ -89,7 +89,9 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   mix/order of solver instances implementing `solve_section()`), `boundaries`
   (`len(solvers)+1` x-cuts in device frame), and `interface_modes` (mode count
   carried at each internal cut). `solve()` calls every section's `solve_section()`
-  (forwarding `geometry_kwargs` — one shared dict or a per-section list — and an
+  (forwarding `geometry_kwargs` — one shared dict, a per-section list, or a sparse
+  `{section_idx: kwargs}` dict naming only the sections that need kwargs (unnamed
+  sections get `{}`; int keys always mean the sparse form) — and an
   optional `cache` dict keyed by solver identity/x-range/mode-counts/kwargs, so a
   section whose kwargs don't vary across multiple `solve()` calls — e.g. once per
   output port — is only ever actually simulated once), then cascades the per-section
@@ -106,8 +108,13 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   uniform cross-section (guardrail-sampled), and be unmirrored; returns the raw
   `[n_L, M, out, in]` cascade grid, and non-swept sections' cache keys match
   `solve()`'s exactly so entries dedupe across both methods. See Solver
-  recommendation #8 (below) for the full design rationale and
-  `mmi_2x2_hybrid.py` for a worked example of both features.
+  recommendation #7 (below) for the full design rationale; worked examples of
+  both features live in `tests/test_hybrid.py` (`TestMirrorPairs`/
+  `TestLengthSweep`) — the hybrid examples themselves (`mmi_2x2_hybrid.py`,
+  `directional_coupler_hybrid.py`) hand-roll the same reuse manually because
+  their cross/through paths mix two excitations' matrices in one cascade,
+  which the one-call contract can't express (see recommendation #7's "still
+  open").
 
 ### Geometries (`feces/geometry/`)
 
@@ -313,10 +320,15 @@ where a category has fewer or lower-priority items.
    replace with a clear error message on import failure pointing at the
    conda-forge install command) and document the conda-forge requirement in
    `README.md`'s Install section, not just buried in the Testing section.
-7. **Standardize on `logging`, not `print()`.** `EMESolver.solve_section_length_sweep`
-   and others `print()` diagnostics unconditionally (e.g. the mid-sweep neff
-   diagnostic) while `ParallelSweep` already uses the `logging` module — inconsistent
-   for a library whose callers may want to suppress or redirect that output.
+7. **Standardize on `logging`, not `print()` — done.** The 5 unconditional
+   `print()` calls in `feces/solvers/` (`HybridSolver.solve()`'s 4
+   per-section progress lines, `EMESolver.solve_section_length_sweep`'s
+   mid-sweep neff diagnostic) are now `logger.info()`/`logger.debug()` via
+   `logging.getLogger(__name__)`, matching `ParallelSweep`'s existing
+   convention — silent by default for any caller that hasn't configured a
+   handler, instead of always writing to stdout. Examples' own `print()`s
+   are intentionally untouched (user-facing tutorial output, not library
+   diagnostics).
 
 ### Solver
 
@@ -351,15 +363,11 @@ where a category has fewer or lower-priority items.
    whole-device `solver.solve()`; it doesn't know about `HybridSolver.solve()`'s
    `cache=` mechanism, so a parallel sweep over a hybrid device would redundantly
    re-simulate cached sections across worker processes.
-5. **Non-uniform/graded meshing.** `res` is a single isotropic scalar shared across
-   the whole mesh (both FDTD and EME's `Mesh2D`) — no finer mesh near the waveguide
-   core and coarser in cladding, unlike tidy3d's automatic adaptive meshing. Would
-   cut cell count for a given accuracy target.
-6. **Automatic mesh-resolution convergence.** Beyond the manual "run a list of
+5. **Automatic mesh-resolution convergence.** Beyond the manual "run a list of
    resolutions and eyeball it" pattern (see Misc/Examples below) — meep/tidy3d both
    have some form of resolution auto-selection; FECES has none, always a fixed
    user-chosen `res`.
-7. **Bigger lift, only if scope grows toward design automation:** adjoint/
+6. **Bigger lift, only if scope grows toward design automation:** adjoint/
    inverse-design support, periodic/grating structures via an RCWA backend
    (S4-style) for problems where FDTD/EME are the wrong tool, near-to-far-field
    transform. For adjoint specifically, `meep.adjoint` (already what FECES's own
@@ -373,7 +381,7 @@ where a category has fewer or lower-priority items.
    a niche add-on — worth knowing if this ever gets prioritized. Substantial,
    well-trodden ground already owned by meep/tidy3d/S4/FDTDX respectively — worth it
    only if a concrete device need shows up that FDTD/EME genuinely can't address.
-8. **Mirror-section reuse in `HybridSolver` (reciprocity across sections, not just
+7. **Mirror-section reuse in `HybridSolver` (reciprocity across sections, not just
    within one) — done.** `HybridSolver.__init__` now takes `mirror_pairs={k: j}`
    (plus `mirror_axis`, `mirror_check_samples`/`mirror_check_tol`): section `k`'s
    transfer matrix is reused as `mats[j].transpose(0,2,1)` instead of a real
@@ -386,36 +394,32 @@ where a category has fewer or lower-priority items.
    actually live between calls, unlike meep's truly per-run-structural symmetry.
    Construction-time checks reject out-of-range/self/forward-referencing/chained
    pairings and mode-count mismatches up front. A mirror-reused section still
-   populates the shared `cache` dict under its own key. `mmi_2x2_hybrid.py` is the
-   worked example: a second `HybridSolver` instance (`hybrid_mirror_bar`, sharing
-   `solvers`/`boundaries`/`interface_modes`/`cache` with the plain `hybrid`)
-   declares `mirror_pairs={2: 0}` for the bar call only (`output_idx=1` mirrors the
-   fixed `input_idx=1` excitation); the cross call (`output_idx=0`) still solves
-   its output section directly since it doesn't mirror the excited port. Net: 2
-   FDTD + 1 EME, down from 3 FDTD + 1 EME. Tested in `tests/test_hybrid.py`
-   (`TestMirrorPairs`/`TestMirrorPairsConstruction`, mock solvers, no meep/meow).
+   populates the shared `cache` dict under its own key. Tested in
+   `tests/test_hybrid.py` (`TestMirrorPairs`/`TestMirrorPairsConstruction`, mock
+   solvers, no meep/meow).
    Length-sweep support landed too: `HybridSolver.solve_length_sweep(geometry,
    wavelengths, lengths, sweep_section, ...)` sweeps one uniform section's length
    analytically (delegating to that solver's `solve_section_length_sweep()`,
    which EMESolver implements — modes solved once per wavelength, lengths applied
    as propagation phases) and returns the raw `[n_L, M, out, in]` cascade grid.
    Non-swept sections keep byte-identical cache keys to `solve()`, so entries
-   dedupe freely across both methods and across per-port calls;
-   `mmi_2x2_hybrid.py` sweeps its multimode length over 201 points at the same
-   2 FDTD + 1 EME mode-solve budget as the single-length run.
-   **Still open**: `directional_coupler_hybrid.py`'s hand-rolled bypass is left
-   as-is, not migrated onto `mirror_pairs`/`solve_length_sweep` — the length-sweep
-   blocker is now gone, but its full through+cross-from-one-excitation-family
-   pattern (solving both input arms directly and deriving every output via
-   transpose) isn't expressible through `solve()`'s one-call contract even with
-   `mirror_pairs` (same reasoning as `mmi_2x2`'s cross case) — would need a
-   multi-excitation-config `solve()` extension or staying manual. Similarly,
-   getting `mmi_2x2_hybrid.py`'s full 2×2 port-combination matrix "for free"
-   (zero dedicated output solves, matching the DC pattern exactly) isn't done —
-   would require solving both input branches directly rather than one fixed
-   excitation, for no additional savings over the current 2 FDTD + 1 EME on this
-   example's actual bar/cross metric.
-9. **Wavelength-interpolation scheme for mode-solve/EME-driven sections.** A
+   dedupe freely across both methods and across per-port calls. Tested in
+   `tests/test_hybrid.py` (`TestLengthSweep`).
+   **Still open — and now the single remaining blocker**: neither hybrid example
+   actually calls the generic API anymore. `mmi_2x2_hybrid.py` was migrated onto
+   `directional_coupler_hybrid.py`'s hand-rolled pattern (solve the input section
+   once per input arm, derive every output-side matrix by mirror transpose, one
+   manual einsum cascade — zero dedicated output solves, same 2 FDTD + 1 EME
+   budget, full 2×2 excitation family available from the same matrices). That
+   through+cross-from-one-excitation-family composition pairs one arm's
+   transposed matrix with the *other* arm's excitation in a single cascade,
+   which `solve()`/`solve_length_sweep()`'s one-call contract can't express even
+   with `mirror_pairs` — a multi-excitation-config `solve()` extension (declare
+   several excitation kwargs up front, get every port-combination coefficient
+   out of one call) would let both examples migrate off the manual einsum
+   composition. `mirror_pairs`/`solve_length_sweep` remain fully supported and
+   tested; they're just not exercised by an example at the moment.
+8. **Wavelength-interpolation scheme for mode-solve/EME-driven sections.** A
    real MPB mode solve is expensive per wavelength, while FDTD DFT monitors
    sample a dense wavelength grid nearly for free (one broadband pulse, many
    frequencies in one run). Resonant devices need thousands of wavelength
@@ -495,56 +499,94 @@ where a category has fewer or lower-priority items.
 
 ### Plotting
 
-1. **Stop duplicating solver position/size math in the plot functions.**
-   `_draw_section_fdtd_markers` (plot/geometry.py) independently recomputes where
-   `FDTDSolver.solve_section()` places its source/monitor apertures, and an
-   earlier bug-hunt found two real mismatches there (marker offset by
-   `monitor_margin` when the solver places it flush at the section edge; marker
-   always drawn full-height when the solver only does that for `n_measure > 1`).
-   Any future change to `solve_section()`'s aperture logic can silently desync the
-   plot again. Factor the position/size computation into a shared helper both
-   `solve_section()` and the plotting code call, so they can't drift apart.
+1. **Stop duplicating solver position/size math in the plot functions — done.**
+   `_draw_section_fdtd_markers` (plot/geometry.py) used to independently
+   recompute where `FDTDSolver.solve_section()` places its source/monitor
+   apertures, and an earlier bug-hunt found two real mismatches there
+   (marker offset by `monitor_margin` when the solver places it flush at
+   the section edge; marker always drawn full-height when the solver only
+   does that for `n_measure > 1`). Both now call one shared function,
+   `section_fdtd_layout()` (`feces/solvers/fdtd.py`, module-level, no meep
+   import needed): given the section bounds/mode counts/solver settings, it
+   returns which side excites vs. measures and every source/monitor
+   position and y-aperture, in the section's local frame (0 at
+   `x0-stub_left`, `L` at `x1+stub_right`). `solve_section()` shifts those
+   into its own meep-centered frame; the plot draws them directly, clamped
+   to the non-PML domain for display only (the clamp is cosmetic — it never
+   feeds back into what's actually simulated). Refactoring surfaced one
+   more latent mismatch of the same kind: the old plot special-cased an
+   on-axis (`center_at()==0`) `half_domain_aperture` port to draw a
+   full-height marker, but `solve_section()` itself always halves that
+   port's aperture regardless of axis position — the plot now matches the
+   solver by construction instead of by two independently-maintained
+   copies agreeing (or not) with each other. Verified against real meep:
+   both excitation directions, `half_domain_aperture`, and the
+   `monitor_center`/`monitor_size` override path all reproduce their
+   pre-refactor numbers.
 2. **FDTD time-domain field/movie export.** `plot_eme_fields` only covers EME (static
    `|component|(x,z)` heatmaps via `mw.propagate_modes`); there's no equivalent for
    FDTD at all — no meep `Animate2D`-style field snapshot or movie export anywhere in
    the package.
-3. **Phase / group-delay plots.** `SMatrix` stores full complex coefficients, but
+3. **Cascaded full-device field plots for `HybridSolver`.** `plot_eme_fields` only
+   ever excites one pure input mode via `mw.propagate_modes(..., excite_mode_l=exc,
+   ...)` (a single int, not a superposition), and there's no FDTD field-array export
+   at all (see item 2 above) — so today there's no way to visualize the actual field
+   distribution through a whole hybrid-simmed device, section by section, the way
+   `plot_hybrid_geometry` already stitches the *geometry*. Feasible — meep's
+   `add_dft_fields()`/`get_dft_array()` gives the full field array over an FDTD
+   section's cell at each DFT frequency, in the *same* sims `solve_section()`
+   already runs (one per excited basis mode, unit amplitude) — no extra sims needed
+   for extraction itself. The real work: (a) `HybridSolver.solve()`'s cascade loop
+   computes the running partial matrix-product at each boundary but only returns
+   the final end-to-end result — getting per-section actual excitation amplitudes
+   needs that intermediate state exposed (small API change: return/callback the
+   per-boundary vectors, or reconstruct from the per-section matrices the loop
+   already builds); (b) the true field is a **superposition** of the unit-basis-mode
+   field solutions weighted by that amplitude vector (valid by linearity — Σ_k a_k ·
+   field_for_mode_k) — needed on both the FDTD side (weight the per-mode DFT arrays)
+   and the EME side (`propagate_modes` only takes one mode index, so multi-mode
+   interfaces need the same weighted-sum trick, one call per basis mode);
+   (c) stitching across sections into shared device-frame coordinates, mirroring
+   `plot_hybrid_geometry`'s existing polygon-stitching approach, with FDTD's
+   meep-resolution grid and EME's `z=np.linspace(...,500)` grid at different pixel
+   densities per panel — a multi-panel composite with consistent color-scale
+   normalization, not one seamless array. Cost-bounded only if scoped as opt-in,
+   single-wavelength (never bolted onto the routine full-sweep S-matrix solve
+   path) — DFT field arrays over a whole 3-D cell × many wavelengths × up to ~15
+   excited modes is a lot of data. No fundamental blocker (unlike the y-normal-
+   monitor gap for bends/rings) — squarely within what meep+meow already expose,
+   just a real multi-piece feature: `HybridSolver` API addition + opt-in
+   `FDTDSolver.solve_section()` field-extraction mode + superposition-aware EME
+   field call + a stitching/plotting layer.
+4. **Phase / group-delay plots.** `SMatrix` stores full complex coefficients, but
    `plot_performance`/`plot_splitting_ratio` only ever plot `|coeff|^2` (linear T) and
    dB insertion loss — phase and group delay (from phase vs. wavelength) are never
    visualized despite being available in the data.
-4. **A shared convergence plot.** Complements the Misc/Examples resolution-sweep
+5. **A shared convergence plot.** Complements the Misc/Examples resolution-sweep
    item: a `plot_convergence(results_by_resolution, metric)` helper that overlays a
    chosen quantity (e.g. L_c, T) across resolutions on one figure, instead of
    eyeballing separate per-resolution plots side by side (what
    `directional_coupler_mode.py`/`.ipynb` does today).
-5. **Interactive/3D visualization.** Everything is a static matplotlib PNG; no
+6. **Interactive/3D visualization.** Everything is a static matplotlib PNG; no
    plotly/bokeh option for geometry or field plots, unlike tidy3d's interactive
    viewer.
 
 ### Examples
 
-1. **No standalone example for `Taper`/`SBend`/`CompoundGeometry` used directly.**
-   All three currently only appear as internal building blocks (inside `MMI`,
-   `DirectionalCoupler`, and the modal-multiplexer script's two-`MMI`-plus-connector
-   composition) — a minimal script instantiating one on its own through a lone
-   `FDTDSolver`/`HybridSolver` section would double as living documentation for the
-   composition pattern.
-2. **No example exists for `BendGeometry`** at all, despite it being a public,
-   exported class.
-3. **2×2 MMI example — done; 1×4 still missing.** `examples/mmi_2x2/` (EME, FDTD,
+1. **2×2 MMI example — done; 1×4 still missing.** `examples/mmi_2x2/` (EME, FDTD,
    hybrid variants) exercises a genuine multi-input device — the first consumer
    of `MMI`'s new `input_idx`/`input_indices` support (see `MMI` in the library
    reference above). No 1×4 (or other multi-output-only) example yet, though
    nothing in the geometry blocks one.
-4. **No example uses `ParallelSweep`.** The library ships a generic parallel
+2. **No example uses `ParallelSweep`.** The library ships a generic parallel
    parameter-sweep utility that zero examples demonstrate — a user has no worked
    reference for the one utility meant to replace ad hoc per-device sweep scripts.
-5. **No example demonstrates mesh-convergence checking as a reusable pattern** beyond
+3. **No example demonstrates mesh-convergence checking as a reusable pattern** beyond
    the one-off resolution loop hand-built into `directional_coupler_mode.py`/`.ipynb`
    (a pure meow/MPB even/odd-supermode script that doesn't use any FECES solver
    class at all) — worth generalizing into its own example once the Misc convergence
    utility exists.
-6. **Ring resonator example — done, but as a raw-meep script, not paired with a
+4. **Ring resonator example — done, but as a raw-meep script, not paired with a
    `RingResonator` `DeviceGeometry`.** `examples/ring_resonator/ring_resonator_hybrid.py`
    exists (see Geometry recommendation #1) and does call `SMatrix.check_passive()`
    as standard practice, but doesn't use the convergence-utility recommendation
@@ -582,3 +624,84 @@ where a category has fewer or lower-priority items.
   this well; FECES's value is the orchestration layer on top, not the field solver.
 - Matching tidy3d's cloud/GPU infrastructure — out of scope for what is currently a
   single-machine/HPC-Makefile-driven library.
+
+## To-Do
+
+Condensed, actionable version of the Recommendations above — done items dropped,
+partially-done items trimmed to just the remaining work. Same section order/order
+within section; see Recommendations for full rationale on any item.
+
+### High-level
+
+1. `mmi_2x2` golden test — add once the example's own numbers are trusted.
+2. `modal_multiplexer_hybrid` numerical accuracy — needs an independent correctness
+   check before a golden test would mean anything.
+3. Documentation — docs site / `CHANGELOG.md` (version still static `0.1.0`).
+4. Type checking in CI — `mypy`/`pyright` config, `py.typed` marker.
+5. Declare transitive dependencies explicitly — `gdsfactory`/`tidy3d` pulled in via
+   `meow-sim`, undeclared in `pyproject.toml`.
+6. Fix `pyproject.toml`'s `[fdtd]`/`[all]` extras — they install the wrong `meep`
+   package (PyPI name collision); real one is conda-forge `pymeep`.
+
+### Solver
+
+1. Automatic mesh-resolution convergence — no auto-selection, user picks `res` by
+   hand.
+2. Bigger lift, only if scope grows toward design automation: adjoint/inverse-design
+   support, RCWA/grating structures, near-to-far-field transform.
+3. Wavelength-interpolation scheme for mode-solve/EME sections — sparse-solve/
+   dense-eval API (see `ring_resonator_hybrid.py`'s ad hoc version for the pattern).
+
+### Geometry
+
+1. Ring/racetrack resonator, first-class version — needs a `RingResonator`
+   `DeviceGeometry`, y-normal monitor support in `FDTDSolver`, and a feedback-loop
+   assembly mode in `HybridSolver` (see `ring_resonator_hybrid.py` for the raw-meep
+   proof of physics).
+2. GDS import/export — thin gdsfactory `Component` <-> FECES polygon-dict adapter.
+3. Y-branch/adiabatic splitter and waveguide crossing geometries.
+4. Rebuild `BendGeometry` on top of `SBend` (or a new arc primitive) — still a
+   separate, non-`DeviceGeometry`-integrated legacy 90° bend.
+5. `Taper`: polynomial/Euler-spiral width profile; standalone `Taper`/`SBend`
+   example.
+
+### Plotting
+
+1. FDTD time-domain field/movie export (EME-only today).
+2. Cascaded full-device field plots for `HybridSolver` — stitch per-section FDTD
+   DFT field arrays + EME `propagate_modes` output, mode-superposition-weighted
+   by each section's actual cascade amplitude (not unit excitation); needs a
+   small `HybridSolver` API addition to expose per-boundary amplitudes.
+   Feasible, no blocker — moderate-to-substantial, opt-in/single-wavelength only.
+3. Phase / group-delay plots — `SMatrix` has the data, nothing plots it.
+4. A shared `plot_convergence()` helper.
+
+### Examples
+
+1. 1×4 (or other multi-output-only) MMI example.
+2. `ParallelSweep` example.
+3. Mesh-convergence-checking example.
+4. Ring resonator example paired with a real `RingResonator` `DeviceGeometry`
+   (proper `plot_*_geometry` integration, resolution-sweep convergence check).
+
+### Misc
+
+1. Mesh-convergence-loop utility (`sweep_resolution(run_fn, resolutions)`-style).
+2. Result serialization beyond raw pickle — Touchstone `.sNp` or JSON/HDF5.
+3. Declarative simulation runner — YAML/JSON device+solver+sweep spec.
+4. Output-folder conventions — consolidate examples on `resolve_output_folder`/
+   `make_output_folders` everywhere.
+
+### To-do (later)
+
+Deferred, not dropped — lower near-term priority than the sections above.
+
+1. Lossy/dispersive material support (Solver) — `MaterialStack` does nearest-
+   tabulated-wavelength real-index lookup only, no interpolation/loss.
+2. Symmetry exploitation in `FDTDSolver` (Solver) — opt-in `mp.Mirror` for
+   symmetric devices.
+3. Circuit-level S-matrix composition (Solver) — no way to cascade
+   independently-solved `SMatrix` results into a larger circuit.
+4. `ParallelSweep` + `HybridSolver` integration (Solver) — sweep doesn't use
+   `HybridSolver`'s `cache=` mechanism.
+5. Interactive/3D visualization (Plotting) — matplotlib-only today.

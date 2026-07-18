@@ -1,6 +1,7 @@
 """EMESolver: meow-based eigenmode expansion solver."""
 from __future__ import annotations
 
+import logging
 from typing import List, Optional
 
 import numpy as np
@@ -9,6 +10,8 @@ from .._utils import extrude_polygons
 from ..geometry.base import DeviceGeometry
 from ..materials.stack import MaterialStack, SOI_160
 from ..results.smatrix import SMatrix
+
+logger = logging.getLogger(__name__)
 
 
 class EMESolver:
@@ -236,7 +239,7 @@ class EMESolver:
                 # would explain a single-arm launch failing to couple into
                 # one of them.
                 neffs = [m.neff for m in modes[0]]
-                print(f"[diagnostic] EME cross-section neff @ λ={wl:.3f} µm: {neffs}")
+                logger.debug("EME cross-section neff @ λ=%.3f µm: %s", wl, neffs)
 
             for L_idx, L in enumerate(lengths):
                 S, port_map = mw.compute_s_matrix(modes, cells=cells, cell_lengths=[float(L)])

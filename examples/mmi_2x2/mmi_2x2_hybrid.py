@@ -19,27 +19,32 @@ sections use half_domain_aperture to isolate the excited/measured port from
 its neighbor. The top input is excited (input_idx=1); the top output is the
 "bar" port (output_idx=1) and the bottom output the "cross" port (output_idx=0).
 
-Sim count: 2 FDTD + 1 EME mode-solve (mirror reuse on the bar-output
-section via HybridSolver's mirror_pairs). The MMI is left-right
-mirror-symmetric, so the output section with output_idx=1 ("bar") is
-exactly the x-mirror of the input section with input_idx=1 (the fixed
-excitation) — its transfer matrix is just the input section's transposed,
-not resimulated. The cross output (output_idx=0) does NOT mirror the fixed
-input_idx=1 excitation (it would only mirror an input_idx=0 excitation,
-which is never run here), so it's still solved directly; getting cross "for
-free" too would need the directional_coupler_hybrid.py-style manual bypass
-(solving both input branches directly and deriving every output via
-transpose) — not done here since it saves nothing further for this
-example's bar/cross metric.
+One hybrid pass, directional_coupler_hybrid.py-style: **2 FDTD + 1 EME
+mode-solve total, and the output section is NEVER separately simulated.**
+The MMI is left-right mirror-symmetric (same tapers/ports on both sides of
+the rectangular body), so by reciprocity the output section with
+output_idx=k is exactly the x-mirror of the input section with input_idx=k:
+solving the input section once per input arm (input_idx=1 "in_top", the
+excited arm, and input_idx=0 "in_bot") gives *both* the input- and
+output-side transfer matrices — the bar (output_idx=1) and cross
+(output_idx=0) output matrices are just those two results transposed (mode
+axes swapped), not resimulated. The same matrices also compose into the
+full 2x2 excitation family (launching the bottom arm instead) for free,
+though that's numerically identical to the top-arm launch by up-down
+symmetry and isn't separately plotted.
 
-On top of the single-length result, the multimode-section length is swept
-via HybridSolver.solve_length_sweep() — the EME body is a uniform
-mm_width slab, so its modes are solved once per wavelength and each swept
-length is applied as an analytic propagation phase (same trick as
-directional_coupler_hybrid.py's coupling-length sweep, but through the
-generic HybridSolver API instead of a manual bypass). The whole sweep adds
-zero FDTD simulations and zero extra mode solves over the single-length
-run: still 2 FDTD + 1 EME mode-solve total.
+The multimode-section length sweep rides the same pass: the EME body is a
+uniform mm_width slab, so EMESolver.solve_section_length_sweep() solves its
+modes once per wavelength and applies each swept length as an analytic
+propagation phase. Zero extra FDTD simulations, zero extra mode solves vs.
+a single-length run.
+
+This composes matrices from two different excitations (the cross path pairs
+M_in0-transposed with the M_in1 excitation) in one cascade — the pattern
+HybridSolver.solve()/solve_length_sweep()'s one-call contract can't
+express, which is why this example (like directional_coupler_hybrid.py)
+hand-rolls the einsum cascade instead of calling the generic API. See
+notes.md Solver recommendation #7 ("still open").
 
 Run:
     python /path/to/examples/mmi_2x2/mmi_2x2_hybrid.py
@@ -145,7 +150,10 @@ def make_section_solver(method: str, half_domain_aperture: bool = False):
 
 # Both sides have two closely-spaced ports, so both the input and output
 # sections need the narrower half-domain aperture (unlike the 1×2, whose lone
-# input keeps the full sim_width).
+# input keeps the full sim_width). output_solver is never actually run — the
+# output section's transfer matrices are mirror-derived from the input
+# section's (see module docstring) — it exists only so the HybridSolver
+# below labels the section map correctly in the geometry plot.
 input_solver = make_section_solver(INPUT_METHOD, half_domain_aperture=True)
 body_solver = make_section_solver(BODY_METHOD)
 output_solver = make_section_solver(OUTPUT_METHOD, half_domain_aperture=True)
@@ -176,27 +184,15 @@ interface_modes = [N_MODES, N_MODES]
 mm_lengths = np.linspace(16.0, 40.0, 201)   # µm; nominal 28.0 lands exactly on index 100
 body_lengths = mm_lengths - 2 * body_stub   # EME body section's physical length
 
+# Used for the geometry/section-map plot only — step 5 composes the section
+# matrices manually (the cross path mixes two excitations' matrices in one
+# cascade, which HybridSolver's one-call contract can't express; see module
+# docstring).
 hybrid = HybridSolver(
     solvers=[input_solver, body_solver, output_solver],
     boundaries=boundaries,
     interface_modes=interface_modes,
 )
-
-# Second instance sharing the same solvers/boundaries/interface_modes, with
-# the output section (idx 2) declared as the x-mirror of the input section
-# (idx 0) — valid only when output_idx == input_idx (see module docstring).
-# Used for the "bar" call only; "cross" still goes through the plain
-# `hybrid` above since output_idx=0 != the fixed input_idx=1.
-hybrid_mirror_bar = HybridSolver(
-    solvers=[input_solver, body_solver, output_solver],
-    boundaries=boundaries,
-    interface_modes=interface_modes,
-    mirror_pairs={2: 0},
-)
-
-# The top input is excited for every solve below (input_idx=1); only the
-# output section's output_idx varies (1 = top = bar, 0 = bottom = cross).
-IN_KW = {"input_idx": 1}
 
 # ---------------------------------------------------------------------------
 # 4. Geometry plot — shows which solver covers which section
@@ -209,31 +205,31 @@ plot_hybrid_geometry(
     sub_region_dir=os.path.join(output_dir, "sections"),
     sub_region_show_pml=True,
     sub_region_show_eme_detail=True,
-    # One sub-region plot per simulation actually run in step 5. The input
-    # section (fixed input_idx=1) and body section don't vary between ports,
-    # so they render once. The bar config declares hybrid_mirror_bar's
-    # mirror_pairs, so its output section (mirror-derived, never simulated)
-    # gets no sub-region plot — only the cross output (genuinely solved)
-    # does — and the overview above hatches/labels the mirrored region.
+    # One sub-region plot per simulation actually run in step 5: the input
+    # section is solved once per input arm (input_idx=1 "in_top" — the
+    # excited arm — and input_idx=0 "in_bot"). Both configs declare the
+    # output section (index 2) as the x-mirror of the input section — the
+    # same reuse step 5 hand-rolls with .transpose() — so it gets no
+    # sub-region plot and is hatched/labeled as mirrored in the full-device
+    # overview above.
     sub_region_configs=[
-        ("bar",   [IN_KW, {}, {"output_idx": 1}], hybrid_mirror_bar.mirror_pairs),
-        ("cross", [IN_KW, {}, {"output_idx": 0}]),
+        ("in_top", {0: {"input_idx": 1}}, {2: 0}),
+        ("in_bot", {0: {"input_idx": 0}}, {2: 0}),
     ],
 )
 print(f"Geometry plot saved → {output_dir}/geometry_hybrid.png")
 print(f"Sub-region plots saved → {output_dir}/sections/")
 
 # ---------------------------------------------------------------------------
-# 5. Run hybrid length sweep — once per output port. input_idx=1 (top input)
-#    is fixed across both calls, so with a shared cache the input and body
-#    sections are only ever simulated once. The bar call's output section
-#    (output_idx=1, matching the fixed input_idx=1) is mirror-derived via
-#    hybrid_mirror_bar instead of resimulated; the cross call's output
-#    section (output_idx=0) is genuinely different from the excited port
-#    and is solved directly through the plain (unmirrored) hybrid. The body
-#    section is length-swept analytically from a single mode solve. Total:
-#    2 FDTD (input, cross-output) + 1 EME mode-solve (body) — identical to
-#    a single-length run, now yielding all 201 lengths.
+# 5. Run the hybrid pass — one manual cascade, directional_coupler_hybrid.py
+#    style: 2 FDTD solves (input section, once per input arm) + 1 EME
+#    mode-solve per wavelength (body, length-swept analytically). The output
+#    section is never simulated: by mirror symmetry + reciprocity, the bar
+#    output matrix is M_in1 transposed and the cross output matrix is M_in0
+#    transposed (see module docstring). No cache needed — nothing is ever
+#    re-solved. The cross path pairs M_in0's transpose with the M_in1
+#    excitation in one cascade, which is why this composes matrices manually
+#    instead of calling HybridSolver.solve_length_sweep().
 # ---------------------------------------------------------------------------
 wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
 print(f"\nHybrid sweep: {wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm "
@@ -241,13 +237,30 @@ print(f"\nHybrid sweep: {wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm "
       f"mm_length {mm_lengths[0]:.1f} – {mm_lengths[-1]:.1f} µm "
       f"({len(mm_lengths)} pts)\n")
 
-section_cache = {}
-coeffs_bar = hybrid_mirror_bar.solve_length_sweep(
-    mmi, wavelengths, body_lengths, sweep_section=1, cache=section_cache,
-    geometry_kwargs=[IN_KW, {}, {"output_idx": 1}])   # [n_L, n_wl, 1, 1]
-coeffs_cross = hybrid.solve_length_sweep(
-    mmi, wavelengths, body_lengths, sweep_section=1, cache=section_cache,
-    geometry_kwargs=[IN_KW, {}, {"output_idx": 0}])
+M_in1 = input_solver.solve_section(
+    mmi, wavelengths, boundaries[0], boundaries[1],
+    n_modes_in=1, n_modes_out=N_MODES,
+    stub_left=input_solver.waveguide_length, stub_right=0.0,
+    input_idx=1,
+)  # [n_wl, N_MODES, 1] — excited (top) arm -> body modes
+M_in0 = input_solver.solve_section(
+    mmi, wavelengths, boundaries[0], boundaries[1],
+    n_modes_in=1, n_modes_out=N_MODES,
+    stub_left=input_solver.waveguide_length, stub_right=0.0,
+    input_idx=0,
+)  # [n_wl, N_MODES, 1] — bottom arm -> body modes
+
+M_out_bar = M_in1.transpose(0, 2, 1)    # [n_wl, 1, N_MODES] — mirror-symmetry reuse, not a new simulation
+M_out_cross = M_in0.transpose(0, 2, 1)  # [n_wl, 1, N_MODES]
+
+M_body = body_solver.solve_section_length_sweep(
+    mmi, wavelengths, boundaries[1], boundaries[2], body_lengths,
+    n_modes_in=N_MODES, n_modes_out=N_MODES,
+)  # [n_L, n_wl, N_MODES, N_MODES]
+
+tmp = np.einsum("Lwij,wjk->Lwik", M_body, M_in1)               # [n_L, n_wl, N_MODES, 1]
+coeffs_bar = np.einsum("wij,Lwjk->Lwik", M_out_bar, tmp)       # [n_L, n_wl, 1, 1]
+coeffs_cross = np.einsum("wij,Lwjk->Lwik", M_out_cross, tmp)   # [n_L, n_wl, 1, 1]
 
 T_bar_grid   = np.abs(coeffs_bar[:, :, 0, 0]) ** 2    # [n_L, n_wl]
 T_cross_grid = np.abs(coeffs_cross[:, :, 0, 0]) ** 2

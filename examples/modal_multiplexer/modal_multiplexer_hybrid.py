@@ -229,7 +229,7 @@ plot_hybrid_geometry(
     sub_region_show_pml=True,
     sub_region_show_eme_detail=True,
     sub_region_configs=[
-        (f"port_{name}", [{}, {}, {}, {}, {"output_idx": k}]) for name, k in PORTS
+        (f"port_{name}", {4: {"output_idx": k}}) for name, k in PORTS
     ],
 )
 print(f"Geometry plot saved → {output_dir}/geometry_hybrid.png")
@@ -254,7 +254,7 @@ for name, k in PORTS:
     smat_port = hybrid.solve(
         mux, wavelengths, in_modes=2, out_modes=1, port=name,
         cache=section_cache,
-        geometry_kwargs=[{}, {}, {}, {}, {"output_idx": k}],
+        geometry_kwargs={4: {"output_idx": k}},
     )
     if smat is None:
         smat = smat_port

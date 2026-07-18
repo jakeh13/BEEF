@@ -164,12 +164,14 @@ plot_hybrid_geometry(
     sub_region_show_pml=True,
     sub_region_show_eme_detail=True,
     # One set of sub-region plots per output port — matches the two
-    # hybrid.solve() calls below (geometry_kwargs=[{}, {}, {"output_idx": ..}]):
-    # only the output section's kwargs actually vary, so the input/body
-    # sections are each rendered once (not once per output port).
+    # hybrid.solve() calls below (geometry_kwargs={2: {"output_idx": ..}},
+    # the sparse per-section form: only section 2's kwargs are named, the
+    # input/body sections implicitly get {}): only the output section's
+    # kwargs actually vary, so the input/body sections are each rendered
+    # once (not once per output port).
     sub_region_configs=[
-        ("out_top", [{}, {}, {"output_idx": 1}]),
-        ("out_bot", [{}, {}, {"output_idx": 0}]),
+        ("out_top", {2: {"output_idx": 1}}),
+        ("out_bot", {2: {"output_idx": 0}}),
     ],
 )
 print(f"Geometry plot saved → {output_dir}/geometry_hybrid.png")
@@ -190,9 +192,9 @@ print(f"\nHybrid sweep: {wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm "
 
 section_cache = {}
 smat_top = hybrid.solve(mmi, wavelengths, port="out_top", cache=section_cache,
-                         geometry_kwargs=[{}, {}, {"output_idx": 1}])
+                         geometry_kwargs={2: {"output_idx": 1}})
 smat_bot = hybrid.solve(mmi, wavelengths, port="out_bot", cache=section_cache,
-                         geometry_kwargs=[{}, {}, {"output_idx": 0}])
+                         geometry_kwargs={2: {"output_idx": 0}})
 
 T_top   = smat_top.transmission(port="out_top")
 T_bot   = smat_bot.transmission(port="out_bot")

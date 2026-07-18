@@ -1,13 +1,128 @@
 """FDTDSolver: meep-based FDTD solver for MMI and related photonic devices."""
 from __future__ import annotations
 
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
 
 import numpy as np
 
 from ..geometry.base import DeviceGeometry
 from ..materials.stack import MaterialStack, SOI_160
 from ..results.smatrix import SMatrix
+
+
+@dataclass
+class SectionFDTDLayout:
+    """Source/monitor position + size for one solve_section() call, in the
+    section's own local frame: x_local=0 at x0-stub_left, x_local=L at
+    x1+stub_right — the same frame geometry.section_gds()/section_prisms()
+    build their geometry in. Returned by section_fdtd_layout(), the single
+    place this math lives; solve_section() shifts it into its own
+    meep-centered frame (x_meep = x_local - L/2), and
+    feces/plot/geometry.py's _draw_section_fdtd_markers() draws directly in
+    this local frame — see section_fdtd_layout()'s docstring."""
+    L: float
+    n_excite: int
+    n_measure: int
+    reverse: bool  # True: excite from the right (n_out <= n_in)
+    src_x: float
+    norm_x: float
+    mea_x: float
+    src_c: float
+    src_width: float
+    mea_c: float
+    mea_w: float
+    kpoint: Tuple[float, float, float]
+    alpha_idx: int  # 0 forward / 1 backward
+
+
+def section_fdtd_layout(
+    geometry,
+    x0: float,
+    x1: float,
+    stub_left: float,
+    stub_right: float,
+    n_in: int,
+    n_out: int,
+    sim_width: float,
+    source_margin: float,
+    monitor_margin: float,
+    half_domain_aperture: bool,
+    geometry_kwargs: dict,
+    monitor_center: Optional[float] = None,
+    monitor_size: Optional[float] = None,
+) -> SectionFDTDLayout:
+    """Shared position/size math for one FDTDSolver.solve_section() call —
+    which boundary excites vs. measures, the source/monitor y-centre and
+    y-span on each side, and where they sit along x — factored out so
+    solve_section() and the plotting code that visualizes it
+    (_draw_section_fdtd_markers in feces/plot/geometry.py) can't drift
+    apart; each previously reimplemented this independently, and an earlier
+    bug-hunt found real mismatches between the two copies.
+
+    Excites from whichever boundary has fewer modes (reciprocity makes the
+    resulting transfer matrix identical either way — see solve_section()'s
+    own docstring). The excited/normalization side's aperture follows a
+    priority order: a geometry-provided single-mode launch window
+    (geometry.source_aperture_at(), e.g. an MMI's closely-spaced output
+    branches) wins over half_domain_aperture (span only sim_width/2, from
+    the shared y=0 axis to the near PML edge, for a genuinely single-mode
+    port with an unexcited neighbor nearby), which wins over the full
+    sim_width. The measured/interface side is sized to sim_width whenever
+    it must resolve >1 mode, else to the bare local waveguide width;
+    monitor_center/monitor_size override that side's centre/span outright.
+
+    Returns everything in the section's local frame (0..L, stub included,
+    PML not) — callers needing a different frame (e.g. solve_section()'s
+    own meep-centered one) shift the returned x positions themselves.
+    """
+    L = (x1 - x0) + stub_left + stub_right
+    eps = min(1e-3, (x1 - x0) * 0.01)
+    c_left = geometry.center_at(x0 + eps, **geometry_kwargs)
+    c_right = geometry.center_at(x1 - eps, **geometry_kwargs)
+    w_left = geometry.width_at(x0 + eps, **geometry_kwargs)
+    w_right = geometry.width_at(x1 - eps, **geometry_kwargs)
+
+    reverse = n_out <= n_in
+    n_excite = n_out if reverse else n_in
+    n_measure = n_in if reverse else n_out
+
+    if reverse:
+        src_x, norm_x, mea_x = L - source_margin, L - monitor_margin, 0.0
+        src_c, mea_c, mea_w0 = c_right, c_left, w_left
+        src_ap_x = x1 - eps
+        kpoint = (-1.0, 0.0, 0.0)
+        alpha_idx = 1
+    else:
+        src_x, norm_x, mea_x = source_margin, monitor_margin, L
+        src_c, mea_c, mea_w0 = c_left, c_right, w_right
+        src_ap_x = x0 + eps
+        kpoint = (1.0, 0.0, 0.0)
+        alpha_idx = 0
+
+    if monitor_center is not None:
+        mea_c = monitor_center
+    mea_w = (sim_width if n_measure > 1 else mea_w0) if monitor_size is None else monitor_size
+
+    src_aperture = None
+    if n_excite == 1:
+        _aperture_at = getattr(geometry, "source_aperture_at", None)
+        if _aperture_at is not None:
+            src_aperture = _aperture_at(src_ap_x, **geometry_kwargs)
+    if src_aperture is not None:
+        src_width = min(src_aperture, sim_width - 2.0 * abs(src_c))
+    elif n_excite == 1 and half_domain_aperture:
+        src_width = sim_width / 2.0
+        src_c = sim_width / 4.0 if src_c > 0 else (-sim_width / 4.0 if src_c < 0 else 0.0)
+    else:
+        src_width = sim_width
+
+    return SectionFDTDLayout(
+        L=L, n_excite=n_excite, n_measure=n_measure, reverse=reverse,
+        src_x=src_x, norm_x=norm_x, mea_x=mea_x,
+        src_c=src_c, src_width=src_width, mea_c=mea_c, mea_w=mea_w,
+        kpoint=kpoint, alpha_idx=alpha_idx,
+    )
 
 
 class FDTDSolver:
@@ -389,25 +504,19 @@ class FDTDSolver:
         )
 
         span = x1 - x0
-        eps = min(1e-3, span * 0.01)
-        # The launch aperture must span most of the non-PML domain — not just
-        # the local waveguide core — so MPB's eigenmode solve for the source
-        # includes the mode's evanescent tail; a source/monitor sized to the
-        # bare core (e.g. a 0.35 µm single-mode waveguide in a 5 µm domain)
-        # truncates that tail and corrupts the mode solve, which then
-        # corrupts every normalization downstream. The far (measurement) side
-        # is correctly sized to the local cross-section width ONLY when it's
-        # a genuine single-mode port (well-isolated waveguide, small tail).
-        # Whenever that side must resolve >1 mode (e.g. a directional
-        # coupler's coupled-pair interface), width_at() there is just the
-        # bare silicon span with zero cladding margin — nowhere near enough
-        # room for MPB to resolve closely-spaced supermodes, whose whole
-        # distinguishing feature is the evanescent tail shape. Widened to
-        # self.sim_width below once n_measure is known.
-        c_left = geometry.center_at(x0 + eps, **geometry_kwargs)
-        c_right = geometry.center_at(x1 - eps, **geometry_kwargs)
-        w_meas_left = geometry.width_at(x0 + eps, **geometry_kwargs)
-        w_meas_right = geometry.width_at(x1 - eps, **geometry_kwargs)
+        # Position/size math (which side excites vs. measures, source/monitor
+        # apertures, the source_aperture_at()/half_domain_aperture priority
+        # order) lives in section_fdtd_layout() — shared with the plotting
+        # code in feces/plot/geometry.py's _draw_section_fdtd_markers(), so
+        # the two can't drift apart (see that function's docstring). Returned
+        # in the section's local frame (0..L); shifted into this method's
+        # own meep-centered frame below.
+        layout = section_fdtd_layout(
+            geometry, x0, x1, stub_left, stub_right,
+            n_modes_in, n_modes_out, self.sim_width,
+            self.source_margin, self.monitor_margin, self.half_domain_aperture,
+            geometry_kwargs, monitor_center=monitor_center, monitor_size=monitor_size,
+        )
 
         Sx = span + stub_left + stub_right + 2 * self.dpml
         Sy = self.sim_width + 2 * self.dpml
@@ -442,81 +551,20 @@ class FDTDSolver:
 
         T = np.zeros((len(wavelengths), n_modes_out, n_modes_in), dtype=complex)
 
-        # Excite from whichever boundary has fewer modes — min(n_in, n_out)
-        # simulations instead of always n_modes_in. Reciprocity guarantees
-        # the same coefficient matrix either way (see docstring).
-        #
         # source_margin/monitor_margin are documented (see class docstring) as
         # offsets from the PML *inner* edge — i.e. from lo/hi (device frame),
         # not from x0/x1 directly; those only coincide when stub_left/right is
-        # 0 (a pure interior cut). Shifted into the meep frame: lo - x_center
-        # and hi - x_center. monitor_margin only offsets the source-side
-        # normalization monitor (norm_x, collocated with the source, kept
-        # clear of its near-field launch region). The measured/interface side
-        # (mea_x) sits exactly at the PML interface (lo_m/hi_m, with no
-        # margin) so that this section's measured plane exactly matches an
-        # adjacent section's own modeled boundary at that same x — e.g.
-        # EMESolver.solve_section()'s `length = (x1-x0)+stub_left+stub_right`
-        # starts/ends exactly at x0/x1, not at x0+margin/x1-margin.
-        lo_m, hi_m = lo - x_center, hi - x_center
-        if n_modes_out <= n_modes_in:
-            n_excite, n_measure = n_modes_out, n_modes_in
-            src_x, norm_x, mea_x = hi_m - self.source_margin, hi_m - self.monitor_margin, lo_m
-            src_c, mea_c = c_right, c_left
-            src_ap_x = x1 - eps
-            w_meas = self.sim_width if n_measure > 1 else w_meas_left
-            kpoint = mp.Vector3(-1, 0, 0)
-            alpha_idx = 1  # backward amplitude
-        else:
-            n_excite, n_measure = n_modes_in, n_modes_out
-            src_x, norm_x, mea_x = lo_m + self.source_margin, lo_m + self.monitor_margin, hi_m
-            src_c, mea_c = c_left, c_right
-            src_ap_x = x0 + eps
-            w_meas = self.sim_width if n_measure > 1 else w_meas_right
-            kpoint = mp.Vector3(1, 0, 0)
-            alpha_idx = 0  # forward amplitude
-
-        # Explicit measured/interface-monitor overrides (see docstring) —
-        # applied after the side selection so they win over both the
-        # geometry-driven centre and the multi-mode width rule.
-        if monitor_center is not None:
-            mea_c = monitor_center
-        if monitor_size is not None:
-            w_meas = monitor_size
-
-        # n_excite == 1 means this boundary is a genuinely single-mode port
-        # (e.g. one arm of a directional coupler, well after its S-bend). A
-        # full sim_width aperture centered on the arm would also reach a
-        # second, physically-present-but-unexcited waveguide sitting nearby
-        # (and, for an off-axis arm, the PML). Two narrowing rules, in
-        # priority order:
-        #   1. a geometry-provided window (source_aperture_at() non-None,
-        #      e.g. an MMI's closely-spaced output branches ~1 µm apart): the source
-        #      + norm monitor shrink to that window, centered on the arm and
-        #      clamped so it never reaches into the PML — the drawn geometry
-        #      stays complete;
-        #   2. half_domain_aperture: span only sim_width/2 — from the shared
-        #      symmetry axis (y=0) out to the near PML edge on whichever
-        #      side the arm sits — centered at +-sim_width/4, matching the
-        #      legacy reference implementation's validated convention (see
-        #      half_domain_aperture's docstring).
-        # A multi-mode excite side (e.g. the coupling-region interface,
-        # where the aperture must see every arm) always keeps the full
-        # sim_width, centered on its own src_c.
-        src_aperture = None
-        if n_excite == 1:
-            _aperture_at = getattr(geometry, "source_aperture_at", None)
-            if _aperture_at is not None:
-                src_aperture = _aperture_at(src_ap_x, **geometry_kwargs)
-        if src_aperture is not None:
-            src_width = min(src_aperture, self.sim_width - 2.0 * abs(src_c))
-            src_c_ap = src_c
-        elif n_excite == 1 and self.half_domain_aperture:
-            src_width = self.sim_width / 2.0
-            src_c_ap = self.sim_width / 4.0 if src_c > 0 else (-self.sim_width / 4.0 if src_c < 0 else 0.0)
-        else:
-            src_width = self.sim_width
-            src_c_ap = src_c
+        # 0 (a pure interior cut). layout's positions are in the local frame
+        # (0 at lo, L at hi) and shift into this method's meep-centered frame
+        # by -L/2 == lo - x_center.
+        n_excite, n_measure = layout.n_excite, layout.n_measure
+        src_x = layout.src_x + lo - x_center
+        norm_x = layout.norm_x + lo - x_center
+        mea_x = layout.mea_x + lo - x_center
+        src_c_ap, src_width = layout.src_c, layout.src_width
+        mea_c, w_meas = layout.mea_c, layout.mea_w
+        kpoint = mp.Vector3(*layout.kpoint)
+        alpha_idx = layout.alpha_idx
 
         for k in range(1, n_excite + 1):
             src = mp.EigenModeSource(
@@ -554,7 +602,7 @@ class FDTDSolver:
             for m in range(1, n_measure + 1):
                 c = sim.get_eigenmode_coefficients(mea_flux, [m], eig_parity=mp.NO_PARITY)
                 coeff = c.alpha[0, :, alpha_idx] / src_alpha
-                if n_modes_out <= n_modes_in:
+                if layout.reverse:
                     T[:, k - 1, m - 1] = coeff  # excited=out(k), measured=in(m)
                 else:
                     T[:, m - 1, k - 1] = coeff  # excited=in(k), measured=out(m)
