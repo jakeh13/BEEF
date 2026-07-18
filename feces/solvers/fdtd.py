@@ -1,14 +1,18 @@
 """FDTDSolver: meep-based FDTD solver for MMI and related photonic devices."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import numpy as np
 
+from ..cache import build_run_config, load_result, lookup, save_run
 from ..geometry.base import DeviceGeometry
 from ..materials.stack import MaterialStack, SOI_160
 from ..results.smatrix import SMatrix
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -430,6 +434,7 @@ class FDTDSolver:
         stub_right: float = 0.0,
         monitor_center: Optional[float] = None,
         monitor_size: Optional[float] = None,
+        save_dir: Optional[str] = None,
         **geometry_kwargs,
     ) -> np.ndarray:
         """Modal transfer matrix for the device section [x0, x1] (device frame).
@@ -472,6 +477,15 @@ class FDTDSolver:
                 PML inner edge. None (default) keeps the rule. Neither
                 override touches the source/norm monitor on the excited side
                 (see source_aperture_at / half_domain_aperture for those).
+            save_dir: persistent on-disk cache directory (see feces/cache/).
+                None/"" (default) disables the cache entirely — every call
+                re-runs the simulation, same as before this parameter
+                existed. When set, a call whose full config (solver params +
+                these args + the exact section geometry) matches a prior
+                saved run loads that run's result instead of re-simulating;
+                otherwise the simulation runs as usual and its result,
+                config, and a geometry plot are written to save_dir for
+                future calls to match against.
             **geometry_kwargs: forwarded to geometry.section_prisms/width_at/
                 center_at (e.g. port_idx for a branching output geometry).
 
@@ -481,6 +495,22 @@ class FDTDSolver:
         import meep as mp
 
         wavelengths = np.asarray(wavelengths)
+
+        if save_dir:
+            config = build_run_config(
+                self, "solve_section",
+                dict(x0=x0, x1=x1, wavelengths=wavelengths,
+                     n_modes_in=n_modes_in, n_modes_out=n_modes_out,
+                     stub_left=stub_left, stub_right=stub_right,
+                     monitor_center=monitor_center, monitor_size=monitor_size,
+                     geometry_kwargs=geometry_kwargs),
+                geometry,
+            )
+            hit = lookup(save_dir, config)
+            if hit is not None:
+                logger.info("solve_section: cache hit at %s", hit)
+                return load_result(hit)
+
         wl_center = float(np.mean(wavelengths))
         si_med = self.material_stack.si_medium(wl_center)
         sio2_med = self.material_stack.sio2_medium(wl_center)
@@ -608,5 +638,9 @@ class FDTDSolver:
                     T[:, m - 1, k - 1] = coeff  # excited=in(k), measured=out(m)
 
             sim.reset_meep()
+
+        if save_dir:
+            folder = save_run(save_dir, config, T)
+            logger.info("solve_section: cache saved at %s", folder)
 
         return T

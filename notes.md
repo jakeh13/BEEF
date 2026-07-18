@@ -445,6 +445,39 @@ where a category has fewer or lower-priority items.
    this is a mode-solve-cost gap, and the two would compound in a real
    dispersive-material implementation (interpolating dispersive neff at
    already-sparse solve points).
+9. **Persistent save-folder cache for `solve_section()` — done.** New
+   `feces/cache/` module: `build_run_config(solver, method_name, call_kwargs,
+   geometry)` fingerprints a call into a JSON-safe dict — solver params
+   (`vars(solver)`, `material_stack` serialized explicitly), the call's own
+   args, and the exact section geometry via `geometry.section_gds(x0, x1,
+   ...)` (plain vertex data, no meep/meow objects, so it's the precise shape
+   solved rather than the whole-device layout). `lookup()`/`save_run()`
+   (`feces/cache/store.py`) hash that dict into a `save_dir` subfolder named
+   by `sha256(...)[:16]`; a hash hit still gets a full `config.json`
+   equality check before being trusted, guarding against truncated-hash
+   collisions or config-schema drift across code versions. Each subfolder
+   holds `config.json` (human-readable, for manual comparison), `result.pkl`,
+   and `geometry.png`. Wired into `FDTDSolver.solve_section()`,
+   `EMESolver.solve_section()`/`solve_section_length_sweep()` via a new
+   `save_dir: Optional[str] = None` parameter (falsy = disabled, matching
+   `HybridSolver.solve(cache=None)`/`ParallelSweep(output_dir=None)`), and
+   threaded through `HybridSolver.solve()`/`solve_length_sweep()` — forwarded
+   to each section's `solve_section()` call only when that solver's own
+   signature accepts `save_dir` (`_supports_save_dir()`, so a custom solver
+   type without the parameter still works, per the module's minimal
+   `solve_section()` contract). Separate mechanism from `HybridSolver`'s
+   in-memory `cache` dict: `cache` dedupes within/across `solve()` calls in
+   one process; `save_dir` persists to disk across process runs; the two
+   compose freely. Verified end-to-end (EME hit/miss/negative-miss on a
+   `res` change, FDTD hit/miss, a 2-section `HybridSolver` chain) — cache
+   hits return bit-identical results in <1ms vs several seconds for a real
+   solve. **Known risk, not fully closed**: config completeness. Any
+   solver/geometry attribute that affects the physical result but isn't
+   scalar (so falls outside `vars(solver)`'s generic filter) is excluded
+   from the fingerprint with a `logger.warning`, not an error — a future
+   solver attribute added without updating `build_run_config` could produce
+   a silent false-positive cache hit (wrong physics, no error). No
+   regression test guards against this yet.
 
 ### Geometry
 

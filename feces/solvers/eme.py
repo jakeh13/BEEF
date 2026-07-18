@@ -7,6 +7,7 @@ from typing import List, Optional
 import numpy as np
 
 from .._utils import extrude_polygons
+from ..cache import build_run_config, load_result, lookup, save_run
 from ..geometry.base import DeviceGeometry
 from ..materials.stack import MaterialStack, SOI_160
 from ..results.smatrix import SMatrix
@@ -136,6 +137,7 @@ class EMESolver:
         n_modes_out: int = 1,
         stub_left: float = 0.0,
         stub_right: float = 0.0,
+        save_dir: Optional[str] = None,
         **geometry_kwargs,
     ) -> np.ndarray:
         """Modal transfer matrix for the device section [x0, x1] (device frame).
@@ -143,6 +145,12 @@ class EMESolver:
         Single-cell EME over the section — mode expansion naturally gives the
         full n_modes_out x n_modes_in block in one solve (no per-mode source
         runs needed), unlike FDTD.
+
+        Args:
+            save_dir: persistent on-disk cache directory (see feces/cache/).
+                None/"" (default) disables the cache — see
+                FDTDSolver.solve_section()'s save_dir docstring for the full
+                semantics (identical here).
 
         Returns:
             Complex ndarray [len(wavelengths), n_modes_out, n_modes_in].
@@ -152,6 +160,20 @@ class EMESolver:
         wavelengths = np.asarray(wavelengths)
         n_modes = max(n_modes_in, n_modes_out)
         length = (x1 - x0) + stub_left + stub_right
+
+        if save_dir:
+            config = build_run_config(
+                self, "solve_section",
+                dict(x0=x0, x1=x1, wavelengths=wavelengths,
+                     n_modes_in=n_modes_in, n_modes_out=n_modes_out,
+                     stub_left=stub_left, stub_right=stub_right,
+                     geometry_kwargs=geometry_kwargs),
+                geometry,
+            )
+            hit = lookup(save_dir, config)
+            if hit is not None:
+                logger.info("solve_section: cache hit at %s", hit)
+                return load_result(hit)
 
         gds_polys = geometry.section_gds(
             x0, x1, self.oxide_width,
@@ -177,6 +199,10 @@ class EMESolver:
                     j_in = port_map[f"left@{j}"]
                     T[wl_idx, i, j] = S[i_out, j_in]
 
+        if save_dir:
+            folder = save_run(save_dir, config, T)
+            logger.info("solve_section: cache saved at %s", folder)
+
         return T
 
     def solve_section_length_sweep(
@@ -190,6 +216,7 @@ class EMESolver:
         n_modes_out: int = 1,
         stub_left: float = 0.0,
         stub_right: float = 0.0,
+        save_dir: Optional[str] = None,
         **geometry_kwargs,
     ) -> np.ndarray:
         """Modal transfer matrices for [x0, x1] swept over many section
@@ -208,6 +235,12 @@ class EMESolver:
         solve_section() call (one mode solve per wavelength), regardless of
         how many lengths are swept.
 
+        Args:
+            save_dir: persistent on-disk cache directory (see feces/cache/).
+                None/"" (default) disables the cache — see
+                FDTDSolver.solve_section()'s save_dir docstring for the full
+                semantics (identical here; lengths is included in the config).
+
         Returns:
             Complex ndarray [len(lengths), len(wavelengths), n_modes_out, n_modes_in].
         """
@@ -216,6 +249,20 @@ class EMESolver:
         wavelengths = np.asarray(wavelengths)
         lengths = np.asarray(lengths)
         n_modes = max(n_modes_in, n_modes_out)
+
+        if save_dir:
+            config = build_run_config(
+                self, "solve_section_length_sweep",
+                dict(x0=x0, x1=x1, wavelengths=wavelengths, lengths=lengths,
+                     n_modes_in=n_modes_in, n_modes_out=n_modes_out,
+                     stub_left=stub_left, stub_right=stub_right,
+                     geometry_kwargs=geometry_kwargs),
+                geometry,
+            )
+            hit = lookup(save_dir, config)
+            if hit is not None:
+                logger.info("solve_section_length_sweep: cache hit at %s", hit)
+                return load_result(hit)
 
         gds_polys = geometry.section_gds(
             x0, x1, self.oxide_width,
@@ -248,6 +295,10 @@ class EMESolver:
                         i_out = port_map[f"right@{i}"]
                         j_in = port_map[f"left@{j}"]
                         T[L_idx, wl_idx, i, j] = S[i_out, j_in]
+
+        if save_dir:
+            folder = save_run(save_dir, config, T)
+            logger.info("solve_section_length_sweep: cache saved at %s", folder)
 
         return T
 
