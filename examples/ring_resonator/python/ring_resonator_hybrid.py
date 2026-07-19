@@ -452,7 +452,7 @@ def run_bend_fdtd(wavelengths, save_dir=None):
     polys = build_bend_polys()
     sim = make_sim(polys, wl_center, (BEND_SX, BEND_SY), (BEND_X_CENTER, BEND_Y_CENTER))
 
-    src_x = -STUB_LEN - DPML + SOURCE_MARGIN
+    src_x = -STUB_LEN + SOURCE_MARGIN
     sim.sources = [mp.EigenModeSource(
         mp.GaussianSource(fcen, fwidth=fwidth),
         center=mp.Vector3(src_x, 0.0), size=mp.Vector3(0, PORT_APERTURE, _mon_sz),
