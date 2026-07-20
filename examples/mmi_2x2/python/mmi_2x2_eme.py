@@ -1,5 +1,5 @@
 """
-Tutorial: simulate a 2x2 MMI splitter with the FECES library using EME.
+Tutorial: simulate a 2x2 MMI splitter with the BEEF library using EME.
 
 Geometry:
     - Two single-mode input waveguides → MMI body → two output waveguides
@@ -26,7 +26,7 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")           # headless — swap for "Qt5Agg" for interactive
 
-from feces import MMI, EMESolver, SOI_220, plot_eme_geometry, plot_performance
+from beef import MMI, EMESolver, SOI_220, plot_eme_geometry, plot_performance
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_2x2", "mmi_2x2_eme"))

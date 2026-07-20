@@ -1,5 +1,5 @@
 """
-Tutorial: 2×2 MMI — FDTD/EME hybrid simulation (FECES method).
+Tutorial: 2×2 MMI — FDTD/EME hybrid simulation (BEEF method).
 
 HybridSolver is a generic N-section cascade: any solver type, in any order,
 any count >= 2. Here we chain three sections —
@@ -56,7 +56,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from feces import MMI, EMESolver, FDTDSolver, HybridSolver, SMatrix, SOI_220, plot_hybrid_geometry
+from beef import MMI, EMESolver, FDTDSolver, HybridSolver, SMatrix, SOI_220, plot_hybrid_geometry
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_2x2", "mmi_2x2_hybrid"))

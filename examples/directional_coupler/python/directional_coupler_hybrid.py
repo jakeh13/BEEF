@@ -1,5 +1,5 @@
 """
-Tutorial: standard directional coupler — FDTD/EME hybrid simulation (FECES method).
+Tutorial: standard directional coupler — FDTD/EME hybrid simulation (BEEF method).
 
 Geometry (220 nm SOI, C-band):
 
@@ -54,7 +54,7 @@ characterization — without any additional FDTD or EME simulations:
     supermodes once per wavelength and reuses them for every length in the
     sweep, each just a cheap diagonal phase-matrix evaluation
     (S_ii(L) = exp(2j*pi*neff_i/wavelength*L); see its docstring in
-    feces/solvers/eme.py). Total solver cost is the same as a single fixed
+    beef/solvers/eme.py). Total solver cost is the same as a single fixed
     coupling_length run — 2 FDTD solves + 1 EME mode-solve per
     wavelength — regardless of sweeping 101 lengths instead of 1.
   - The FDTD input/output sections end exactly at the S-bend/coupling-region
@@ -77,7 +77,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from feces import (
+from beef import (
     DirectionalCoupler, EMESolver, FDTDSolver, HybridSolver, SMatrix, SOI_220, plot_hybrid_geometry,
 )
 

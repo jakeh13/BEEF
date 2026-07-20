@@ -16,13 +16,13 @@ jobs:
 
       - uses: mamba-org/setup-micromamba@v2
         with:
-          environment-name: feces-slow
+          environment-name: beef-slow
           create-args: >-
             python=3.12
             -c conda-forge
             pymeep
 
-      - name: Install feces + meow-sim
+      - name: Install beef + meow-sim
         shell: bash -el {0}
         run: pip install -e ".[eme]"
 

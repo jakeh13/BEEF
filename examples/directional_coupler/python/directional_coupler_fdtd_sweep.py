@@ -49,7 +49,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from feces import DirectionalCoupler, FDTDSolver, SOI_220
+from beef import DirectionalCoupler, FDTDSolver, SOI_220
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(

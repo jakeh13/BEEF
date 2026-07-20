@@ -24,7 +24,7 @@ import pathlib
 import numpy as np
 import pytest
 
-from feces import (
+from beef import (
     MMI, DirectionalCoupler, EMESolver, FDTDSolver, HybridSolver, SMatrix, SOI_160, SOI_220,
 )
 

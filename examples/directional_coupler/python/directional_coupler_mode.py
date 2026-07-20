@@ -1,6 +1,6 @@
 """
 Tutorial: directional-coupler coupling length via even/odd supermode analysis
-(meep's own eigenmode/MPB solver — no time-domain FDTD, no FECES solvers).
+(meep's own eigenmode/MPB solver — no time-domain FDTD, no BEEF solvers).
 
 Method, per Ansys/Lumerical's "Evanescent waveguide couplers":
 https://optics.ansys.com/hc/en-us/articles/360042304694-Evanescent-waveguide-couplers
@@ -39,10 +39,10 @@ per-wavelength/per-gap CROSS-SECTION property, solved once each) which is
 exactly why the "solve two supermodes and take the beat length" method is
 the standard way to characterize a directional coupler.
 
-Only reuses feces.materials.SOI_220 for the Si/SiO2 dispersion + extrusion
+Only reuses beef.materials.SOI_220 for the Si/SiO2 dispersion + extrusion
 rules (so the material model matches directional_coupler_hybrid.py exactly)
 — everything else (GDS layout, meow calls, mode solving) is done directly,
-without going through any FECES solver class.
+without going through any BEEF solver class.
 
 Run:
     python /path/to/examples/directional_coupler/python/directional_coupler_mode.py
@@ -57,8 +57,8 @@ import matplotlib.pyplot as plt
 
 import meow as mw
 
-from feces import extrude_polygons
-from feces.materials import SOI_220
+from beef import extrude_polygons
+from beef.materials import SOI_220
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "directional_coupler", "directional_coupler_mode"))

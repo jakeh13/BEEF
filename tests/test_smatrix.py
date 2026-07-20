@@ -1,4 +1,4 @@
-"""Fast unit tests for feces.results.smatrix.SMatrix — no solver/meep needed."""
+"""Fast unit tests for beef.results.smatrix.SMatrix — no solver/meep needed."""
 from __future__ import annotations
 
 import warnings
@@ -6,7 +6,7 @@ import warnings
 import numpy as np
 import pytest
 
-from feces.results.smatrix import SMatrix
+from beef.results.smatrix import SMatrix
 
 
 def _wavelengths():

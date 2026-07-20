@@ -1,4 +1,4 @@
-"""Fast, meep/meow-free unit tests for feces.geometry.
+"""Fast, meep/meow-free unit tests for beef.geometry.
 
 These exercise the pure-Python parts of the DeviceGeometry contract
 (width_at/center_at/eme_lengths/section_gds's cut validation) without ever
@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import pytest
 
-from feces.geometry.compound import CompoundGeometry, WaveguideRun
-from feces.geometry.coupler import DirectionalCoupler
-from feces.geometry.mmi import MMI, MMIPort
-from feces.geometry.sbend import SBend
-from feces.geometry.taper import Taper
+from beef.geometry.compound import CompoundGeometry, WaveguideRun
+from beef.geometry.coupler import DirectionalCoupler
+from beef.geometry.mmi import MMI, MMIPort
+from beef.geometry.sbend import SBend
+from beef.geometry.taper import Taper
 
 
 # ---------------------------------------------------------------------------

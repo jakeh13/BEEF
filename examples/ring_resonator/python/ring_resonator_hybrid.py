@@ -1,6 +1,6 @@
 """
-Tutorial: racetrack ring resonator — FDTD/EME hybrid simulation (FECES method),
-built with raw meep/meow instead of FECES's solver classes.
+Tutorial: racetrack ring resonator — FDTD/EME hybrid simulation (BEEF method),
+built with raw meep/meow instead of BEEF's solver classes.
 
 Geometry (220 nm SOI, C-band):
 
@@ -18,10 +18,10 @@ Geometry (220 nm SOI, C-band):
 
 Why this device needs raw meep, not FDTDSolver/HybridSolver:
     FDTDSolver only ever builds x-normal (y-z plane) sources/monitors
-    (`mp.Vector3(0, w, h)` everywhere in feces/solvers/fdtd.py). The two ring
+    (`mp.Vector3(0, w, h)` everywhere in beef/solvers/fdtd.py). The two ring
     ports on top of the near-left/near-right bends are y-normal (x-z) planes
-    — nothing in FECES draws or measures those today, and there's no
-    rotation helper anywhere in feces/geometry/_compose.py (translation
+    — nothing in BEEF draws or measures those today, and there's no
+    rotation helper anywhere in beef/geometry/_compose.py (translation
     only). So this example hand-builds the two FDTD simulations directly
     with meep, the same way examples/directional_coupler/directional_coupler_mode.py
     hand-builds a meow cross-section without going through EMESolver. See
@@ -40,7 +40,7 @@ Simulation count — 3 FDTD runs + 13 mode solves total:
     (c) Standalone 90 degree bend FDTD     -> b(lambda), reused for BOTH far
         corners (they're geometrically identical to each other and far
         enough from the bus to not need their own coupled-section run)
-    Mode solve on the bare single-mode strip (meow direct, no FECES solver
+    Mode solve on the bare single-mode strip (meow direct, no BEEF solver
     class — same pattern as directional_coupler_mode.py) at 13 wavelengths
     -> neff(lambda), used for the 3 straight-propagation phases (2 side
     straights + 1 far straight) AND to reference-plane-correct b(lambda).
@@ -83,21 +83,21 @@ import matplotlib.path as mpath
 import meep as mp
 import meow as mw
 
-from feces import extrude_polygons
-from feces.cache import load_result, lookup, save_run
-from feces.geometry.base import polygons_to_prisms
-from feces.materials import SOI_220
-from feces.results import SMatrix
+from beef import extrude_polygons
+from beef.cache import load_result, lookup, save_run
+from beef.geometry.base import polygons_to_prisms
+from beef.materials import SOI_220
+from beef.results import SMatrix
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "ring_resonator", "ring_resonator_hybrid"))
 os.makedirs(output_dir, exist_ok=True)
 
-# Persistent on-disk simulation cache (see feces/cache/) — same shared
+# Persistent on-disk simulation cache (see beef/cache/) — same shared
 # examples/example_sim_cache/ directory every other example's FDTDSolver/
 # EMESolver save_dir points at. This script hand-rolls raw meep/meow sims
 # instead of going through those solver classes (see module docstring), so
-# it fingerprints+stores/loads each run itself via feces.cache's lookup()/
+# it fingerprints+stores/loads each run itself via beef.cache's lookup()/
 # save_run()/load_result() directly rather than the solver-specific
 # build_run_config()/build_whole_device_config() helpers (those expect a
 # DeviceGeometry + solver instance this script doesn't have).
@@ -159,7 +159,7 @@ if TEST_MODE:
 # ---------------------------------------------------------------------------
 def arc_polygon(cx, cy, r_inner, r_outer, theta0_deg, theta1_deg, n_pts=64):
     """Quarter-annulus wedge vertex list — same construction as
-    feces/geometry/bend.py's _arc_polygon (cribbed here rather than
+    beef/geometry/bend.py's _arc_polygon (cribbed here rather than
     importing a private function from that legacy, non-DeviceGeometry
     module)."""
     t0, t1 = np.radians(theta0_deg), np.radians(theta1_deg)
@@ -279,7 +279,7 @@ def get_coeffs(sim, mon, band=1, forward=True):
     direction (+x for an x-normal/zero-x-extent monitor, +y for a
     y-normal/zero-y-extent monitor — meep infers this from the FluxRegion's
     own zero-extent axis, same as every x-normal monitor in
-    feces/solvers/fdtd.py, none of which pass direction= explicitly either).
+    beef/solvers/fdtd.py, none of which pass direction= explicitly either).
     alpha[0,:,1] is the opposite-traveling mode. forward=False is needed
     exactly once in this script: run B's source launches -y (down into the
     bend), so its own norm monitor (below the source, catching the leading
@@ -290,7 +290,7 @@ def get_coeffs(sim, mon, band=1, forward=True):
 
 def _json_polys(polys):
     """Polygon vertex lists -> plain JSON-safe floats, for a cache config's
-    geometry_polygons (mirrors feces.cache.config's own float-rounding, so
+    geometry_polygons (mirrors beef.cache.config's own float-rounding, so
     a cache hit is exact-equality-safe against JSON round-tripping)."""
     return [[[round(float(x), 9), round(float(y), 9)] for x, y in poly] for poly in polys]
 
@@ -298,7 +298,7 @@ def _json_polys(polys):
 def _sim_params():
     """Every module-level constant that affects the physical result of
     run_coupler_fdtd()/run_bend_fdtd() — the raw-meep equivalent of
-    FDTDSolver's vars(solver) (see feces/cache/config.py's _solver_config).
+    FDTDSolver's vars(solver) (see beef/cache/config.py's _solver_config).
     Changing any of these must change the cache key, or a stale run could be
     served for a different simulation."""
     return {
@@ -352,7 +352,7 @@ def run_coupler_fdtd(excite, wavelengths, save_dir=None):
     launched -y into the bend). Returns a dict of complex coefficient
     arrays [len(wavelengths)] keyed by physical quantity name.
 
-    save_dir: persistent on-disk cache directory (see feces/cache/).
+    save_dir: persistent on-disk cache directory (see beef/cache/).
         None/"" (default) disables the cache — every call re-simulates."""
     config = None
     if save_dir:
@@ -428,7 +428,7 @@ def run_coupler_fdtd(excite, wavelengths, save_dir=None):
 # 7. Standalone 90-degree bend FDTD
 # ---------------------------------------------------------------------------
 def run_bend_fdtd(wavelengths, save_dir=None):
-    """save_dir: persistent on-disk cache directory (see feces/cache/).
+    """save_dir: persistent on-disk cache directory (see beef/cache/).
     None/"" (default) disables the cache — every call re-simulates."""
     config = None
     if save_dir:
@@ -475,14 +475,14 @@ def run_bend_fdtd(wavelengths, save_dir=None):
 
 # ---------------------------------------------------------------------------
 # 8. Mode solve — bare single-mode strip neff(lambda), meow direct (no
-#    FECES solver class), same pattern as directional_coupler_mode.py.
+#    BEEF solver class), same pattern as directional_coupler_mode.py.
 # ---------------------------------------------------------------------------
 MESH_WIDTH = 4.0
 MESH_HEIGHT = 2.0
 
 
 def solve_neff(wl, save_dir=None):
-    """save_dir: persistent on-disk cache directory (see feces/cache/).
+    """save_dir: persistent on-disk cache directory (see beef/cache/).
     None/"" (default) disables the cache — every call re-solves."""
     config = None
     if save_dir:

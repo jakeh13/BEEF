@@ -1,5 +1,5 @@
 """
-Tutorial: simulate a 1x2 MMI splitter with the FECES library using FDTD.
+Tutorial: simulate a 1x2 MMI splitter with the BEEF library using FDTD.
 
 Geometry:
     - Single-mode input waveguide → MMI body → two output waveguides
@@ -25,7 +25,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from feces import MMI, FDTDSolver, SOI_160, plot_fdtd_geometry
+from beef import MMI, FDTDSolver, SOI_160, plot_fdtd_geometry
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_1x2", "mmi_1x2_fdtd"))

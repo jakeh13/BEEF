@@ -1,9 +1,9 @@
 """
 Tutorial: modal (mode-division) multiplexer — 2-stage MMI, 5-section
-FDTD/EME hybrid simulation (FECES method).
+FDTD/EME hybrid simulation (BEEF method).
 
 Device (160 nm SOI, O-band) — the legacy library's cascaded MMI MUX
-(FECES_Legacy/masters/mmi_mux_master.py, configs_mmi/config_mux.json): a 1×3
+(BEEF_Legacy/masters/mmi_mux_master.py, configs_mmi/config_mux.json): a 1×3
 MMI followed by a 3×3 MMI, joined by three short single-mode waveguides. The
 geometry is built by composing two independent MMI devices and a
 WaveguideRun connector into one CompoundGeometry, rather than a single
@@ -70,7 +70,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from feces import (
+from beef import (
     MMI, MMIPort, CompoundGeometry, WaveguideRun,
     EMESolver, FDTDSolver, HybridSolver, SOI_160, plot_hybrid_geometry,
 )
@@ -90,7 +90,7 @@ N_WL = 11           # number of wavelength points
 
 # ---------------------------------------------------------------------------
 # 1. Geometry — the legacy cascaded MUX, dimensions straight from
-#    FECES_Legacy/configs_mmi/config_mux.json (160 nm SOI), rebuilt as two
+#    BEEF_Legacy/configs_mmi/config_mux.json (160 nm SOI), rebuilt as two
 #    MMI devices + a WaveguideRun connector instead of one hand-rolled class.
 # ---------------------------------------------------------------------------
 TAPER_L = 2.0                # every taper's length (µm)
@@ -100,7 +100,7 @@ MM_WIDTH = 2.8               # both MMI body widths (µm)
 
 # (y, waveguide_width, taper_width) for the three inter-stage/output
 # branches, top -> mid -> bot — same ordering/values as
-# FECES_Legacy/configs_mmi/config_mux.json.
+# BEEF_Legacy/configs_mmi/config_mux.json.
 BRANCH_SPECS = [
     (+WO, 0.33, 0.725),   # top
     (0.0, 0.35, 1.15),    # mid

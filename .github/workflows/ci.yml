@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install feces + test deps
+      - name: Install beef + test deps
         run: pip install -e ".[dev]"
 
       - name: Run fast test suite

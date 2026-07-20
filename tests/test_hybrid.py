@@ -1,4 +1,4 @@
-"""Fast unit tests for feces.solvers.hybrid.HybridSolver.
+"""Fast unit tests for beef.solvers.hybrid.HybridSolver.
 
 Uses fake solvers with a scripted solve_section() — no real FDTD/EME, no
 meep/meow import — to check the matrix-chain cascade math, geometry_kwargs
@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from feces.solvers.hybrid import HybridSolver
+from beef.solvers.hybrid import HybridSolver
 
 WAVELENGTHS = np.array([1.53, 1.55, 1.57])
 LENGTHS = np.array([0.5, 1.0, 2.0])

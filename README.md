@@ -1,15 +1,15 @@
-# BEAF
+# BEEF
 
-**B**ridged **E**ME **A**nd **F**DTD — for photonic MMI/coupler devices.
+**B**ridged **E**ngine for **E**ME and **F**DTD — for photonic MMI/coupler devices.
 
-> Package/import name is unchanged (`pip install -e .` still gives you `import feces`) —
-> this rename covers the project's name/branding only, not the Python package itself.
+> The Python package/import name was renamed to match: `pip install -e .` now gives you
+> `import beef` (previously `import feces`).
 
-BEAF is a hybrid-methodology orchestration layer on top of [meep](https://meep.readthedocs.io/) (FDTD),
+BEEF is a hybrid-methodology orchestration layer on top of [meep](https://meep.readthedocs.io/) (FDTD),
 [meow](https://github.com/flaport/meow)/MPB (eigenmode expansion), and optionally
 [tidy3d](https://www.flexcompute.com/tidy3d/)'s mode solver — plus a small parametrized photonic-device
 geometry library. It is not a competing raw solver; meep/meow/tidy3d do the actual field/mode math.
-BEAF's real contribution is `HybridSolver`: a generic N-section FDTD/EME cascade (any solver type, any
+BEEF's real contribution is `HybridSolver`: a generic N-section FDTD/EME cascade (any solver type, any
 order, any count ≥ 2) with reciprocity-based excitation (minimum simulation count) and a shared
 `section_prisms/section_gds/width_at/center_at` interface that lets any geometry slot into that cascade.
 A fresh pass over the OSS photonics landscape (meep, tidy3d, gdsfactory, SAX/Simphony, FDTDX, and
@@ -30,7 +30,7 @@ Requires Python ≥3.10.
 ## Public API
 
 ```python
-from feces import (
+from beef import (
     # geometry
     MMI, MMIPort, BendGeometry, DirectionalCoupler, Taper, SBend,
     CompoundGeometry, WaveguideRun,
@@ -50,30 +50,30 @@ from feces import (
 )
 ```
 
-- **Geometry** (`feces/geometry/`) — `MMI` (N×M splitter/combiner, per-port `MMIPort` taper specs,
+- **Geometry** (`beef/geometry/`) — `MMI` (N×M splitter/combiner, per-port `MMIPort` taper specs,
   `input_idx`/`output_idx` to isolate a single port on multi-port devices like a 2×2),
   `DirectionalCoupler` (2-waveguide coupler w/ S-bend I/O), standalone `Taper`/`SBend` building blocks,
   `CompoundGeometry`/`WaveguideRun` (concatenate several geometries into one cascade), legacy `BendGeometry`
   (90° bend for non-collinear FDTD I/O).
-- **Materials** (`feces/materials/`) — `MaterialStack` (Si/SiO2 layer stack), plus pre-built `SOI_160` /
+- **Materials** (`beef/materials/`) — `MaterialStack` (Si/SiO2 layer stack), plus pre-built `SOI_160` /
   `SOI_220` stacks.
-- **Solvers** (`feces/solvers/`) — `EMESolver` (meow-based EME), `FDTDSolver` (meep-based FDTD, 2D or 3D),
-  `HybridSolver` (chains FDTD and EME sections together — the core BEAF method; optionally skips
+- **Solvers** (`beef/solvers/`) — `EMESolver` (meow-based EME), `FDTDSolver` (meep-based FDTD, 2D or 3D),
+  `HybridSolver` (chains FDTD and EME sections together — the core BEEF method; optionally skips
   re-solving a section declared as the x-mirror of an already-solved one via `mirror_pairs`, and can
   sweep one uniform section's length analytically via `solve_length_sweep()` at no extra simulation cost).
   Every solve-family method (`FDTDSolver.solve()`/`solve_section()`, `EMESolver.solve()`/
   `solve_section()`/`solve_section_length_sweep()`, `HybridSolver.solve()`/`solve_length_sweep()`)
   accepts an optional `save_dir` — see Simulation cache below.
-- **Results** (`feces/results/`) — `SMatrix`, a unified S-parameter result type with transmission/insertion-loss
+- **Results** (`beef/results/`) — `SMatrix`, a unified S-parameter result type with transmission/insertion-loss
   helpers and a `check_passive()` sanity check.
-- **Sweep** (`feces/sweep/`) — `ParallelSweep`, a local `multiprocessing`-based parameter grid sweep.
-- **Plot** (`feces/plot/`) — geometry, field, and performance (transmission/insertion-loss/splitting-ratio) plots.
+- **Sweep** (`beef/sweep/`) — `ParallelSweep`, a local `multiprocessing`-based parameter grid sweep.
+- **Plot** (`beef/plot/`) — geometry, field, and performance (transmission/insertion-loss/splitting-ratio) plots.
 
 ## Quick start
 
 ```python
 import numpy as np
-from feces import MMI, EMESolver, SOI_160, plot_performance
+from beef import MMI, EMESolver, SOI_160, plot_performance
 
 mmi = MMI(
     n_inputs=1, n_outputs=2,
@@ -206,7 +206,7 @@ gh workflow run slow-tests.yml
 ```
 
 **Packaging note**: this workflow installs `pymeep` from conda-forge (`mamba-org/setup-micromamba`),
-not via `pip install feces[fdtd]`/`feces[all]`. Despite `pyproject.toml` declaring `meep` as a pip
+not via `pip install beef[fdtd]`/`beef[all]`. Despite `pyproject.toml` declaring `meep` as a pip
 dependency for those extras, PyPI's `meep` package is an unrelated project (a lightweight task
 runner) — `pip install meep` silently installs the wrong thing with no error, it just leaves
 `import meep` broken. The real MIT electromagnetics package only ships via conda-forge
