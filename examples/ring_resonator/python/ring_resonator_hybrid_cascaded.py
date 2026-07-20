@@ -117,7 +117,7 @@ save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
 # ---------------------------------------------------------------------------
 # 0. Test-mode knob — see ring_resonator_hybrid.py's identical knob.
 # ---------------------------------------------------------------------------
-TEST_MODE = bool(int(os.environ.get("RING_TEST_MODE", "1")))
+TEST_MODE = bool(int(os.environ.get("RING_TEST_MODE", "0")))
 
 # ---------------------------------------------------------------------------
 # 1. Global simulation / geometry parameters (220 nm SOI, C-band) — identical

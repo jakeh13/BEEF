@@ -109,7 +109,7 @@ save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
 #    orientation/sign, assembly) before committing to the multi-hour full-res
 #    3-D production run. Set to False for the real result.
 # ---------------------------------------------------------------------------
-TEST_MODE = bool(int(os.environ.get("RING_TEST_MODE", "1")))
+TEST_MODE = bool(int(os.environ.get("RING_TEST_MODE", "0")))
 
 # ---------------------------------------------------------------------------
 # 1. Global simulation / geometry parameters (220 nm SOI, C-band)
