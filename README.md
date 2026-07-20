@@ -9,6 +9,9 @@ geometry library. It is not a competing raw solver; meep/meow/tidy3d do the actu
 FECES's real contribution is `HybridSolver`: a generic N-section FDTD/EME cascade (any solver type, any
 order, any count ≥ 2) with reciprocity-based excitation (minimum simulation count) and a shared
 `section_prisms/section_gds/width_at/center_at` interface that lets any geometry slot into that cascade.
+A fresh pass over the OSS photonics landscape (meep, tidy3d, gdsfactory, SAX/Simphony, FDTDX, and
+others — see `notes.md`) didn't turn up another open-source tool that does this specific thing: a
+generic, reciprocity-based FDTD/EME cascade over an arbitrary number of sections.
 
 ## Install
 
@@ -107,9 +110,12 @@ holding `config.json` (human-readable), `result.pkl`, and a `geometry.png`
 preview. `examples/` wires every applicable example up to a shared
 `examples/example_sim_cache/` directory this way — re-running an example, or
 another example that happens to solve an identical section, reuses cached
-results automatically. See Solver recommendation #9 in `notes.md` for the
-full design (including its one known gap: `EMESolver.solve_sweep()` doesn't
-support it yet).
+results automatically; every example's `.py` script and its paired `.ipynb`
+notebook fingerprint identically too, so running either one hits a cache
+entry the other left behind. See the "Persistent on-disk cache" entry in
+`notes.md`'s Current library reference for the full design (including its
+one known gap: `EMESolver.solve_sweep()` doesn't support it yet, see Solver
+recommendation #1).
 
 ## Examples
 
