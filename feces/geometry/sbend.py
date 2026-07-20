@@ -66,6 +66,15 @@ def _extrude_centerline(x: np.ndarray, y: np.ndarray, width: float) -> List[Tupl
     """Constant-width ribbon polygon around a centerline, via finite-difference normals."""
     dxp = np.gradient(x)
     dyp = np.gradient(y)
+    # Both S-bend centerlines (_bezier_sbend_centerline, _circular_sbend_centerline)
+    # have an exactly horizontal analytic tangent at both endpoints, but
+    # np.gradient's one-sided boundary estimate is only approximately
+    # zero-slope (O(1/n_pts) error) — that tilts the endpoint normal
+    # slightly off-vertical and leaves a small jog where the ribbon meets
+    # the flush-vertical straight-section cap. Force the exact tangent at
+    # the two endpoints; interior points keep the finite-difference estimate.
+    dxp[0], dyp[0] = 1.0, 0.0
+    dxp[-1], dyp[-1] = 1.0, 0.0
     norm = np.hypot(dxp, dyp)
     norm[norm == 0] = 1.0
     nx, ny = -dyp / norm, dxp / norm

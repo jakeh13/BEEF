@@ -163,7 +163,7 @@ def _finalize(fig, ax, title, geometry, output_path):
         parent = os.path.dirname(output_path)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        fig.savefig(output_path, dpi=300, bbox_inches="tight")
+        fig.savefig(output_path, dpi=600, bbox_inches="tight")
 
 
 # ---------------------------------------------------------------------------
@@ -774,5 +774,5 @@ def _plot_hybrid_sub_regions(geometry, solver, oxide_width, in_modes, out_modes,
             fname = f"section_{k}_{type(sub_solver).__name__}"
             if config_name:
                 fname += f"_{config_name}"
-            fig.savefig(os.path.join(output_dir, f"{fname}.png"), dpi=300, bbox_inches="tight")
+            fig.savefig(os.path.join(output_dir, f"{fname}.png"), dpi=600, bbox_inches="tight")
             plt.close(fig)
