@@ -12,10 +12,16 @@ solve_section(), EMESolver.solve()/solve_section()/
 solve_section_length_sweep(), and threaded through HybridSolver via a new
 save_dir parameter — empty/None disables the feature everywhere, matching the
 HybridSolver.solve(cache=None) / ParallelSweep(output_dir=None) convention.
+
+cache_only=True (same call sites) demands a cache hit instead of falling back
+to simulating on a miss — raises CacheMissError. Notebooks (not scripts) set
+this so re-running for documentation/rendering purposes can never silently
+kick off a real (possibly multi-hour) simulation.
 """
 from .config import build_run_config, build_whole_device_config
-from .store import lookup, load_result, save_run
+from .store import CacheMissError, lookup, load_result, save_run
 
 __all__ = [
-    "build_run_config", "build_whole_device_config", "lookup", "load_result", "save_run",
+    "build_run_config", "build_whole_device_config", "CacheMissError",
+    "lookup", "load_result", "save_run",
 ]

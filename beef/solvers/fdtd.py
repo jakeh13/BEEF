@@ -7,7 +7,9 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from ..cache import build_run_config, build_whole_device_config, load_result, lookup, save_run
+from ..cache import (
+    CacheMissError, build_run_config, build_whole_device_config, load_result, lookup, save_run,
+)
 from ..geometry.base import DeviceGeometry
 from ..materials.stack import MaterialStack, SOI_160
 from ..results.smatrix import SMatrix
@@ -281,6 +283,7 @@ class FDTDSolver:
         port: str = "top",
         input_mode: int = 1,
         save_dir: Optional[str] = None,
+        cache_only: bool = False,
         **kwargs,
     ) -> SMatrix:
         """Run a broadband FDTD simulation for one input port.
@@ -301,6 +304,9 @@ class FDTDSolver:
                 solve_section()'s save_dir docstring for the full semantics
                 (identical here, fingerprinted via
                 geometry.polygons(stub_length=...) instead of section_gds()).
+            cache_only: if True, never run the simulation — return the
+                cached result or raise CacheMissError. See solve_section()'s
+                cache_only docstring for the full semantics (identical here).
             **kwargs: forwarded to geometry.source_aperture_at() (e.g.
                   input_idx for DirectionalCoupler) when the geometry
                   provides one — see the source-width note in the body.
@@ -332,6 +338,12 @@ class FDTDSolver:
             if hit is not None:
                 logger.info("solve: cache hit at %s", hit)
                 return load_result(hit)
+        if cache_only:
+            raise CacheMissError(
+                f"solve(): cache_only=True but no cached run found for this "
+                f"config (save_dir={save_dir!r}). Run once with cache_only=False "
+                f"to populate the cache."
+            )
 
         Sx, Sy, wl_center, si_med, sio2_med = self._build_domain(geometry, wavelengths)
         fcen = 1.0 / wl_center
@@ -460,6 +472,7 @@ class FDTDSolver:
         monitor_center: Optional[float] = None,
         monitor_size: Optional[float] = None,
         save_dir: Optional[str] = None,
+        cache_only: bool = False,
         **geometry_kwargs,
     ) -> np.ndarray:
         """Modal transfer matrix for the device section [x0, x1] (device frame).
@@ -511,6 +524,12 @@ class FDTDSolver:
                 otherwise the simulation runs as usual and its result,
                 config, and a geometry plot are written to save_dir for
                 future calls to match against.
+            cache_only: if True, never run the simulation — a cache hit
+                returns as usual, a miss raises CacheMissError instead of
+                falling through to meep. Intended for notebooks/docs
+                rendering that must reuse a script's already-populated
+                cache rather than silently kicking off a fresh (possibly
+                multi-hour) run. False (default) is the normal behavior.
             **geometry_kwargs: forwarded to geometry.section_prisms/width_at/
                 center_at (e.g. port_idx for a branching output geometry).
 
@@ -535,6 +554,12 @@ class FDTDSolver:
             if hit is not None:
                 logger.info("solve_section: cache hit at %s", hit)
                 return load_result(hit)
+        if cache_only:
+            raise CacheMissError(
+                f"solve_section(): cache_only=True but no cached run found for "
+                f"this config (save_dir={save_dir!r}). Run once with "
+                f"cache_only=False to populate the cache."
+            )
 
         wl_center = float(np.mean(wavelengths))
         si_med = self.material_stack.si_medium(wl_center)

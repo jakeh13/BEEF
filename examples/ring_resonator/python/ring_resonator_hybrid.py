@@ -84,7 +84,7 @@ import meep as mp
 import meow as mw
 
 from beef import extrude_polygons
-from beef.cache import load_result, lookup, save_run
+from beef.cache import CacheMissError, load_result, lookup, save_run
 from beef.geometry.base import polygons_to_prisms
 from beef.materials import SOI_220
 from beef.results import SMatrix
@@ -347,13 +347,18 @@ def get_norm_calibrated(sim, mon, forward=True):
 # ---------------------------------------------------------------------------
 # 6. Coupler-section FDTD — two excitations, four ports each run.
 # ---------------------------------------------------------------------------
-def run_coupler_fdtd(excite, wavelengths, save_dir=None):
+def run_coupler_fdtd(excite, wavelengths, save_dir=None, cache_only=False):
     """excite: "bus" (run A) or "ring" (run B, source on the left stub,
     launched -y into the bend). Returns a dict of complex coefficient
     arrays [len(wavelengths)] keyed by physical quantity name.
 
     save_dir: persistent on-disk cache directory (see beef/cache/).
-        None/"" (default) disables the cache — every call re-simulates."""
+        None/"" (default) disables the cache — every call re-simulates.
+    cache_only: if True, never run the simulation — a cache hit returns as
+        usual, a miss raises CacheMissError instead of falling through to
+        meep. Intended for notebooks that must reuse the script's
+        already-populated cache rather than silently kicking off a fresh
+        (possibly multi-hour) run."""
     config = None
     if save_dir:
         config = {
@@ -368,6 +373,12 @@ def run_coupler_fdtd(excite, wavelengths, save_dir=None):
         if hit is not None:
             print(f"  [cache] run_coupler_fdtd({excite!r}) hit -> {hit}")
             return load_result(hit)
+    if cache_only:
+        raise CacheMissError(
+            f"run_coupler_fdtd({excite!r}): cache_only=True but no cached run "
+            f"found for this config (save_dir={save_dir!r}). Run once with "
+            f"cache_only=False to populate the cache."
+        )
 
     wl_center = (WL_MIN + WL_MAX) / 2
     fcen = 1.0 / wl_center
@@ -427,9 +438,11 @@ def run_coupler_fdtd(excite, wavelengths, save_dir=None):
 # ---------------------------------------------------------------------------
 # 7. Standalone 90-degree bend FDTD
 # ---------------------------------------------------------------------------
-def run_bend_fdtd(wavelengths, save_dir=None):
+def run_bend_fdtd(wavelengths, save_dir=None, cache_only=False):
     """save_dir: persistent on-disk cache directory (see beef/cache/).
-    None/"" (default) disables the cache — every call re-simulates."""
+    None/"" (default) disables the cache — every call re-simulates.
+    cache_only: if True, never run the simulation — see
+    run_coupler_fdtd()'s cache_only docstring for the full semantics."""
     config = None
     if save_dir:
         config = {
@@ -444,6 +457,12 @@ def run_bend_fdtd(wavelengths, save_dir=None):
         if hit is not None:
             print(f"  [cache] run_bend_fdtd hit -> {hit}")
             return load_result(hit)
+    if cache_only:
+        raise CacheMissError(
+            f"run_bend_fdtd(): cache_only=True but no cached run found for "
+            f"this config (save_dir={save_dir!r}). Run once with "
+            f"cache_only=False to populate the cache."
+        )
 
     wl_center = (WL_MIN + WL_MAX) / 2
     fcen = 1.0 / wl_center
@@ -481,9 +500,11 @@ MESH_WIDTH = 4.0
 MESH_HEIGHT = 2.0
 
 
-def solve_neff(wl, save_dir=None):
+def solve_neff(wl, save_dir=None, cache_only=False):
     """save_dir: persistent on-disk cache directory (see beef/cache/).
-    None/"" (default) disables the cache — every call re-solves."""
+    None/"" (default) disables the cache — every call re-solves.
+    cache_only: if True, never run the solve — see run_coupler_fdtd()'s
+    cache_only docstring for the full semantics."""
     config = None
     if save_dir:
         config = {
@@ -504,6 +525,12 @@ def solve_neff(wl, save_dir=None):
         hit = lookup(save_dir, config)
         if hit is not None:
             return load_result(hit)
+    if cache_only:
+        raise CacheMissError(
+            f"solve_neff(wl={wl!r}): cache_only=True but no cached run found "
+            f"for this config (save_dir={save_dir!r}). Run once with "
+            f"cache_only=False to populate the cache."
+        )
 
     length = 1.0
     wg_poly = rect_poly(0.0, -W / 2, length, W / 2)

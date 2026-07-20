@@ -18,6 +18,11 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+class CacheMissError(RuntimeError):
+    """Raised when cache_only=True but no cached run matches the requested
+    config — the caller asked to never fall back to actually simulating."""
+
+
 def _hash_config(config: Dict[str, Any]) -> str:
     blob = json.dumps(config, sort_keys=True).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()[:16]

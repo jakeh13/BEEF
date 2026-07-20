@@ -49,6 +49,8 @@ dedupes in-memory, within/across calls in one process) — see beef/cache/.
 Forwarded to each section solver's solve_section()/
 solve_section_length_sweep() call, opt-in per solver (only solvers that
 implement a save_dir parameter receive it; see _supports_save_dir()).
+`cache_only` rides alongside it the same way (see _supports_cache_only()) —
+demands a cache hit per section instead of falling back to simulating.
 """
 from __future__ import annotations
 
@@ -65,6 +67,10 @@ logger = logging.getLogger(__name__)
 
 def _supports_save_dir(method) -> bool:
     return "save_dir" in inspect.signature(method).parameters
+
+
+def _supports_cache_only(method) -> bool:
+    return "cache_only" in inspect.signature(method).parameters
 
 
 class HybridSolver:
@@ -242,6 +248,7 @@ class HybridSolver:
         geometry_kwargs: Optional[Any] = None,
         cache: Optional[Dict[Any, np.ndarray]] = None,
         save_dir: Optional[str] = None,
+        cache_only: bool = False,
     ) -> SMatrix:
         """Run every section solver and cascade the resulting transfer matrices.
 
@@ -283,6 +290,14 @@ class HybridSolver:
                 cache dedupes within/across solve() calls in one process;
                 save_dir persists results to disk across process runs. The
                 two compose freely.
+            cache_only: forwarded to every section solver's solve_section()/
+                solve_section_length_sweep() call that accepts a cache_only
+                parameter (same opt-in-per-solver rule as save_dir, via
+                _supports_cache_only()). A section already served from the
+                in-memory cache: is unaffected (that's already a hit); a
+                section that must hit the solver raises CacheMissError on a
+                disk-cache miss instead of running. False (default) is the
+                normal behavior.
 
         Returns:
             SMatrix with coeff(port=port, in_mode=i, out_mode=o) = alpha_full[m].
@@ -293,7 +308,7 @@ class HybridSolver:
 
         mats = self._solve_sections(
             geometry, wavelengths, kwargs_per_section, n_in_list, n_out_list, cache,
-            save_dir=save_dir,
+            save_dir=save_dir, cache_only=cache_only,
         )
 
         # Cascade: full[m] = mats[-1][m] @ ... @ mats[0][m]
@@ -318,6 +333,7 @@ class HybridSolver:
         geometry_kwargs: Optional[Any] = None,
         cache: Optional[Dict[Any, np.ndarray]] = None,
         save_dir: Optional[str] = None,
+        cache_only: bool = False,
     ) -> np.ndarray:
         """Cascade with one section's length swept analytically.
 
@@ -343,7 +359,7 @@ class HybridSolver:
             lengths: [n_L] physical propagation lengths (µm) for the swept
                 section, forwarded verbatim to solve_section_length_sweep().
             sweep_section: index of the section to sweep.
-            in_modes/out_modes/geometry_kwargs/cache/save_dir: as in solve().
+            in_modes/out_modes/geometry_kwargs/cache/save_dir/cache_only: as in solve().
 
         Returns:
             Complex ndarray [n_L, M, out_modes, in_modes] — the full-device
@@ -388,6 +404,7 @@ class HybridSolver:
         mats = self._solve_sections(
             geometry, wavelengths, kwargs_per_section, n_in_list, n_out_list, cache,
             sweep_section=sweep_section, lengths=lengths, save_dir=save_dir,
+            cache_only=cache_only,
         )
 
         n_L = len(lengths)
@@ -465,6 +482,7 @@ class HybridSolver:
         sweep_section: Optional[int] = None,
         lengths: Optional[np.ndarray] = None,
         save_dir: Optional[str] = None,
+        cache_only: bool = False,
     ) -> List[np.ndarray]:
         K = len(self.solvers)
         mats = []
@@ -498,6 +516,8 @@ class HybridSolver:
                 sweep_kwargs = dict(kwargs)
                 if save_dir and _supports_save_dir(solver.solve_section_length_sweep):
                     sweep_kwargs["save_dir"] = save_dir
+                if cache_only and _supports_cache_only(solver.solve_section_length_sweep):
+                    sweep_kwargs["cache_only"] = cache_only
                 mat = solver.solve_section_length_sweep(
                     geometry, wavelengths, x0, x1, lengths,
                     n_modes_in=n_in_list[k], n_modes_out=n_out_list[k],
@@ -513,6 +533,8 @@ class HybridSolver:
                 section_kwargs = dict(kwargs)
                 if save_dir and _supports_save_dir(solver.solve_section):
                     section_kwargs["save_dir"] = save_dir
+                if cache_only and _supports_cache_only(solver.solve_section):
+                    section_kwargs["cache_only"] = cache_only
                 mat = solver.solve_section(
                     geometry, wavelengths, x0, x1,
                     n_modes_in=n_in_list[k], n_modes_out=n_out_list[k],

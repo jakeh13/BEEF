@@ -7,7 +7,9 @@ from typing import List, Optional
 import numpy as np
 
 from .._utils import extrude_polygons
-from ..cache import build_run_config, build_whole_device_config, load_result, lookup, save_run
+from ..cache import (
+    CacheMissError, build_run_config, build_whole_device_config, load_result, lookup, save_run,
+)
 from ..geometry.base import DeviceGeometry
 from ..materials.stack import MaterialStack, SOI_160
 from ..results.smatrix import SMatrix
@@ -138,6 +140,7 @@ class EMESolver:
         stub_left: float = 0.0,
         stub_right: float = 0.0,
         save_dir: Optional[str] = None,
+        cache_only: bool = False,
         **geometry_kwargs,
     ) -> np.ndarray:
         """Modal transfer matrix for the device section [x0, x1] (device frame).
@@ -151,6 +154,10 @@ class EMESolver:
                 None/"" (default) disables the cache — see
                 FDTDSolver.solve_section()'s save_dir docstring for the full
                 semantics (identical here).
+            cache_only: if True, never run the solve — a cache hit returns as
+                usual, a miss raises CacheMissError. See
+                FDTDSolver.solve_section()'s cache_only docstring for the
+                full semantics (identical here).
 
         Returns:
             Complex ndarray [len(wavelengths), n_modes_out, n_modes_in].
@@ -174,6 +181,12 @@ class EMESolver:
             if hit is not None:
                 logger.info("solve_section: cache hit at %s", hit)
                 return load_result(hit)
+        if cache_only:
+            raise CacheMissError(
+                f"solve_section(): cache_only=True but no cached run found for "
+                f"this config (save_dir={save_dir!r}). Run once with "
+                f"cache_only=False to populate the cache."
+            )
 
         gds_polys = geometry.section_gds(
             x0, x1, self.oxide_width,
@@ -217,6 +230,7 @@ class EMESolver:
         stub_left: float = 0.0,
         stub_right: float = 0.0,
         save_dir: Optional[str] = None,
+        cache_only: bool = False,
         **geometry_kwargs,
     ) -> np.ndarray:
         """Modal transfer matrices for [x0, x1] swept over many section
@@ -240,6 +254,10 @@ class EMESolver:
                 None/"" (default) disables the cache — see
                 FDTDSolver.solve_section()'s save_dir docstring for the full
                 semantics (identical here; lengths is included in the config).
+            cache_only: if True, never run the solve — a cache hit returns as
+                usual, a miss raises CacheMissError. See
+                FDTDSolver.solve_section()'s cache_only docstring for the
+                full semantics (identical here).
 
         Returns:
             Complex ndarray [len(lengths), len(wavelengths), n_modes_out, n_modes_in].
@@ -263,6 +281,12 @@ class EMESolver:
             if hit is not None:
                 logger.info("solve_section_length_sweep: cache hit at %s", hit)
                 return load_result(hit)
+        if cache_only:
+            raise CacheMissError(
+                f"solve_section_length_sweep(): cache_only=True but no cached "
+                f"run found for this config (save_dir={save_dir!r}). Run once "
+                f"with cache_only=False to populate the cache."
+            )
 
         gds_polys = geometry.section_gds(
             x0, x1, self.oxide_width,
@@ -304,6 +328,7 @@ class EMESolver:
 
     def solve(self, geometry: DeviceGeometry, wavelengths: np.ndarray,
               ports: Optional[List[str]] = None, save_dir: Optional[str] = None,
+              cache_only: bool = False,
               **kwargs) -> SMatrix:
         """Run EME simulation across all wavelengths.
 
@@ -318,6 +343,11 @@ class EMESolver:
                 (identical here, fingerprinted via geometry.to_gds_eme()
                 instead of section_gds()). Cached per port side, since each
                 side builds its own geometry/cells.
+            cache_only: if True, never run the solve — a cache hit for a
+                given port returns as usual, a miss raises CacheMissError
+                immediately (fail-fast — does not check the remaining
+                ports first). See solve_section()'s cache_only docstring for
+                the full semantics.
             **kwargs: forwarded to geometry.to_gds_eme() (e.g. output_idx to
                       restrict the drawn output branch to a single port).
 
@@ -350,6 +380,12 @@ class EMESolver:
                     logger.info("solve: cache hit at %s", hit)
                     smat.set(load_result(hit), port=side)
                     continue
+            if cache_only:
+                raise CacheMissError(
+                    f"solve(): cache_only=True but no cached run found for "
+                    f"port={side!r} (save_dir={save_dir!r}). Run once with "
+                    f"cache_only=False to populate the cache."
+                )
 
             cells = self._build_cells(geometry, side=side, **kwargs)
             amplitudes = np.zeros(len(wavelengths), dtype=complex)
