@@ -1,12 +1,15 @@
-# FECES
+# BEAF
 
-**F**DTD/**E**ME **C**ascaded **E**lectromagnetic **S**olver — for photonic MMI/coupler devices.
+**B**ridged **E**ME **A**nd **F**DTD — for photonic MMI/coupler devices.
 
-FECES is a hybrid-methodology orchestration layer on top of [meep](https://meep.readthedocs.io/) (FDTD),
+> Package/import name is unchanged (`pip install -e .` still gives you `import feces`) —
+> this rename covers the project's name/branding only, not the Python package itself.
+
+BEAF is a hybrid-methodology orchestration layer on top of [meep](https://meep.readthedocs.io/) (FDTD),
 [meow](https://github.com/flaport/meow)/MPB (eigenmode expansion), and optionally
 [tidy3d](https://www.flexcompute.com/tidy3d/)'s mode solver — plus a small parametrized photonic-device
 geometry library. It is not a competing raw solver; meep/meow/tidy3d do the actual field/mode math.
-FECES's real contribution is `HybridSolver`: a generic N-section FDTD/EME cascade (any solver type, any
+BEAF's real contribution is `HybridSolver`: a generic N-section FDTD/EME cascade (any solver type, any
 order, any count ≥ 2) with reciprocity-based excitation (minimum simulation count) and a shared
 `section_prisms/section_gds/width_at/center_at` interface that lets any geometry slot into that cascade.
 A fresh pass over the OSS photonics landscape (meep, tidy3d, gdsfactory, SAX/Simphony, FDTDX, and
@@ -55,7 +58,7 @@ from feces import (
 - **Materials** (`feces/materials/`) — `MaterialStack` (Si/SiO2 layer stack), plus pre-built `SOI_160` /
   `SOI_220` stacks.
 - **Solvers** (`feces/solvers/`) — `EMESolver` (meow-based EME), `FDTDSolver` (meep-based FDTD, 2D or 3D),
-  `HybridSolver` (chains FDTD and EME sections together — the core FECES method; optionally skips
+  `HybridSolver` (chains FDTD and EME sections together — the core BEAF method; optionally skips
   re-solving a section declared as the x-mirror of an already-solved one via `mirror_pairs`, and can
   sweep one uniform section's length analytically via `solve_length_sweep()` at no extra simulation cost).
   Every solve-family method (`FDTDSolver.solve()`/`solve_section()`, `EMESolver.solve()`/

@@ -1,19 +1,21 @@
-# FECES capability gap analysis vs. meep / meow / tidy3d / other open-source EM tools
+# BEAF capability gap analysis vs. meep / meow / tidy3d / other open-source EM tools
 
-Research memo — comparison of FECES against meep, meow, tidy3d, and the wider open-source
+Research memo — comparison of BEAF against meep, meow, tidy3d, and the wider open-source
 photonics/EM landscape, plus a prioritized list of open items. Everything under
 "Recommendations" is unimplemented unless the item text says otherwise; "Current library
 reference" is the descriptive record of what's actually in the tree today. Last refreshed
 2026-07-20 against the current `feces/` source and a fresh pass over the OSS landscape (see
-sources inline in the table).
+sources inline in the table). Project renamed FECES → BEAF (Bridged EME And FDTD) in
+branding/docs only — the Python package/import path stays `feces` throughout this file and
+the codebase.
 
-**What FECES actually is**: a hybrid-methodology orchestration layer on top of meep
+**What BEAF actually is**: a hybrid-methodology orchestration layer on top of meep
 (FDTD), MPB/meow (mode solving), and optionally tidy3d's mode solver — plus a small
 parametrized photonic-device geometry library (`MMI` with per-port `MMIPort` taper
 specs, `DirectionalCoupler`, standalone `Taper`/`SBend` building blocks, `CompoundGeometry`/
 `WaveguideRun` for composing several devices into one cascade, and legacy `BendGeometry`).
 It is **not** a competing raw solver;
-meep/meow/tidy3d do all the actual field/mode math. FECES's real contribution is
+meep/meow/tidy3d do all the actual field/mode math. BEAF's real contribution is
 `HybridSolver`: a generic N-section FDTD/EME cascade (any solver type, any order, any
 count ≥ 2) with reciprocity-based excitation (minimum-simulation-count) and a shared
 `section_prisms/section_gds/width_at/center_at` interface that lets any geometry slot
@@ -21,11 +23,11 @@ into that cascade.
 
 ## Comparison table
 
-| Capability | FECES today | meep | meow | tidy3d | Other OSS |
+| Capability | BEAF today | meep | meow | tidy3d | Other OSS |
 |---|---|---|---|---|---|
 | Time-domain FDTD | 2D or 3D via `FDTDSolver(three_d=...)`, single fixed uniform `res` | Native, mature, adaptive subpixel smoothing | — | Cloud GPU FDTD, auto mesh refinement | openEMS (general 3D FDTD, antenna-focused); **FDTDX** (JAX-based, GPU-accelerated, native autodiff via time-reversibility, published in JOSS 2026 — 10-415x faster than traditional FDTD per its own benchmarks); Ceviche/EMopt (earlier autograd-based FDTD); GSvit (GPU-accelerated) |
 | Eigenmode expansion (EME) | `EMESolver` wraps meow's cross-section mode-match + `compute_s_matrix` | — | Native (this *is* meow's job) | Has an EME plugin (steady-state frequency-domain alternative to its FDTD solver) | EMEpy (pure-Python, neural-net-accelerated mode profiles); CAMFR (older EME framework) |
-| Hybrid FDTD+EME chaining | **Yes — `HybridSolver`, FECES's actual differentiator** | No | No | No (closest: manually stitching, no generic N-section cascade) | Not found in a fresh landscape pass (`awesome_photonics`, direct searches) — closest is `simphox` (Stanford Solgaard Lab, bundles FDTD/beam-propagation/circuit solvers), but it isn't documented as a generic reciprocity-based N-section cascade the way `HybridSolver` is |
+| Hybrid FDTD+EME chaining | **Yes — `HybridSolver`, BEAF's actual differentiator** | No | No | No (closest: manually stitching, no generic N-section cascade) | Not found in a fresh landscape pass (`awesome_photonics`, direct searches) — closest is `simphox` (Stanford Solgaard Lab, bundles FDTD/beam-propagation/circuit solvers), but it isn't documented as a generic reciprocity-based N-section cascade the way `HybridSolver` is |
 | Dispersive materials | Nearest-tabulated-wavelength real-index lookup (`np.argmin` on meow's built-in Si/SiO2 tables) — no interpolation, no loss | Full Lorentzian/Drude/Debye susceptibility fits | Has real material models (used via meow calls) | Automatic dispersion-fitting plugin | — |
 | Nonlinear materials (χ2/χ3) | None | Yes (Kerr, χ2) | No | Yes | — |
 | Lossy/absorptive materials | None (imaginary index discarded) | Yes | Partial | Yes | — |
@@ -37,7 +39,7 @@ into that cascade.
 | Near-to-far-field transform | None | `add_near2far` | No | Yes | — |
 | Mesh auto-refinement / convergence checking | None — manual `res`, user must sweep by hand | Manual (subpixel smoothing helps, not auto-refine) | n/a | Automatic adaptive meshing | — |
 | Device geometry library | `MMI` (N×M, per-port `MMIPort` taper size/placement), `DirectionalCoupler`, standalone `Taper`/`SBend` building blocks, `CompoundGeometry`/`WaveguideRun` (compose several devices into one cascade), `BendGeometry` (legacy, poorly integrated) | n/a (raw geometry primitives only) | n/a | Has some parametric primitives + PDK support | **gdsfactory** — the dominant OSS parametric photonic component library (3M+ downloads; gdsfactory+ lists 43+ foundry PDKs as of 2026); **picwriter**, **phidl** (lighter-weight alternatives) |
-| GDS import/export, PDK interop | **None** — gdsfactory dependency was actively removed (commit `ffcbf5a`); geometries are FECES-internal polygon dicts only, can't simulate a real fab layout or export one for tape-out | n/a | Uses gdsfactory `Component`s | Has gdsfactory integration | gdsfactory itself |
+| GDS import/export, PDK interop | **None** — gdsfactory dependency was actively removed (commit `ffcbf5a`); geometries are BEAF-internal polygon dicts only, can't simulate a real fab layout or export one for tape-out | n/a | Uses gdsfactory `Component`s | Has gdsfactory integration | gdsfactory itself |
 | Ring/racetrack resonator | Proof-of-physics only (`examples/ring_resonator/`, raw meep/meow, see Geometry recommendation #1) — no `DeviceGeometry` yet | n/a | n/a | n/a | gdsfactory has one |
 | Grating coupler / edge coupler geometry | Missing | n/a | n/a | n/a | gdsfactory |
 | Circuit-level composition (cascade many devices' S-matrices into one chip netlist) | **None** — `SMatrix` has no `+`/`@`/composition operators | n/a | n/a | n/a | **SAX** (JAX/netlist-driven, differentiable) and **Simphony** (component-library/plugin-based, itself built on SAX) are the two standard choices; **opics**, **lekkersim**, **photontorch** (adds time-domain circuit analysis) round out the space |
@@ -95,7 +97,7 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   trial lengths for free, since a uniform cross-section's modes don't depend on cell
   length (only the analytic propagation phase does) — this is what backs the
   coupling-length sweep in `directional_coupler_hybrid.py`.
-- **`HybridSolver`** — FECES's actual differentiator: a generic N-section (≥2)
+- **`HybridSolver`** — BEAF's actual differentiator: a generic N-section (≥2)
   FDTD/EME cascade over a single `DeviceGeometry`. Constructed from `solvers` (any
   mix/order of solver instances implementing `solve_section()`), `boundaries`
   (`len(solvers)+1` x-cuts in device frame), and `interface_modes` (mode count
@@ -145,7 +147,7 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   diffed every cache-fingerprinting call site key-for-key between each pair's `.py`
   and `.ipynb` form and found zero drift, so running either form hits the other's
   cached results. Two examples (`directional_coupler_mode.py`,
-  `ring_resonator_hybrid.py`) use raw meep/meow with no FECES solver call to attach
+  `ring_resonator_hybrid.py`) use raw meep/meow with no BEAF solver call to attach
   `save_dir` to; `ring_resonator_hybrid.py` instead fingerprints/caches its own runs
   directly via `feces.cache`'s `lookup()`/`save_run()`/`load_result()` (see that
   script's module docstring). `EMESolver.solve_sweep()` is the one remaining
@@ -359,7 +361,7 @@ lives in "Current library reference" above, not here.
 5. **Declare transitive dependencies explicitly.** `gdsfactory`/`tidy3d` are consumed
    indirectly through `meow-sim` (e.g. `meow.compute_modes_tidy3d`) but aren't
    declared in `pyproject.toml` — a `meow-sim` version bump that drops/renames those
-   could silently break FECES. Pin or declare them directly, or guard the import
+   could silently break BEAF. Pin or declare them directly, or guard the import
    with a clear error message.
 6. **Fix `pyproject.toml`'s `[fdtd]`/`[all]` extras — they install the wrong
    package.** `fdtd = ["meep"]` and `all = ["meow-sim", "meep"]` declare `meep`
@@ -424,7 +426,7 @@ lives in "Current library reference" above, not here.
    complements the reciprocity-based min-simulation-count optimization already there.
 7. **Automatic mesh-resolution convergence.** Beyond the manual "run a list of
    resolutions and eyeball it" pattern (see Misc/Examples below) — meep/tidy3d both
-   have some form of resolution auto-selection; FECES has none, always a fixed
+   have some form of resolution auto-selection; BEAF has none, always a fixed
    user-chosen `res`.
 8. **Wavelength-interpolation scheme for mode-solve/EME-driven sections.** A
    real MPB mode solve is expensive per wavelength, while FDTD DFT monitors
@@ -456,10 +458,10 @@ lives in "Current library reference" above, not here.
    inverse-design support, periodic/grating structures via an RCWA backend
    (S4/Meent/FMMAX-style) for problems where FDTD/EME are the wrong tool,
    near-to-far-field transform. For adjoint specifically, `meep.adjoint`
-   (already what FECES's own `FDTDSolver` sits on top of) is the
+   (already what BEAF's own `FDTDSolver` sits on top of) is the
    lowest-friction path — it's autograd/JAX-based and gradient computation
    wraps around any optimization library, so no new solver dependency would
-   be needed, just a FECES-side API for defining a figure of merit over a
+   be needed, just a BEAF-side API for defining a figure of merit over a
    `HybridSolver` chain's `SMatrix` output. tidy3d (native `autograd`
    support) and the newer JAX-native FDTDX project (automatic
    differentiation built into the solver via time-reversibility, published
@@ -489,12 +491,12 @@ lives in "Current library reference" above, not here.
    not a resonator sum.
 2. **GDS import (read a real/foundry/gdsfactory layout) and export (tape-out-ready
    output).** The gdsfactory dependency was deliberately removed from the internal
-   pipeline (raw polygon dicts are faster/simpler for FECES's own parametric shapes),
+   pipeline (raw polygon dicts are faster/simpler for BEAF's own parametric shapes),
    but that leaves no way to simulate an arbitrary externally-supplied layout or
-   export a FECES geometry as a real `.gds`. A thin, optional adapter (gdsfactory
-   `Component` ↔ FECES polygon dict) would restore that interop without
+   export a BEAF geometry as a real `.gds`. A thin, optional adapter (gdsfactory
+   `Component` ↔ BEAF polygon dict) would restore that interop without
    reintroducing gdsfactory as a hard dependency — every one of gdsfactory+'s 43+
-   foundry PDKs is a real device FECES currently has no way to even load, let alone
+   foundry PDKs is a real device BEAF currently has no way to even load, let alone
    simulate.
 3. **Y-branch / adiabatic splitter and waveguide crossing.** Common alternatives to
    the MMI splitter and to routing waveguides through each other — neither exists.
@@ -570,7 +572,7 @@ lives in "Current library reference" above, not here.
    reference for the one utility meant to replace ad hoc per-device sweep scripts.
 3. **No example demonstrates mesh-convergence checking as a reusable pattern** beyond
    the one-off resolution loop hand-built into `directional_coupler_mode.py`/`.ipynb`
-   (a pure meow/MPB even/odd-supermode script that doesn't use any FECES solver
+   (a pure meow/MPB even/odd-supermode script that doesn't use any BEAF solver
    class at all) — worth generalizing into its own example once the Misc convergence
    utility exists.
 4. **Ring resonator example paired with a real `RingResonator` `DeviceGeometry`.**
@@ -593,7 +595,7 @@ lives in "Current library reference" above, not here.
    `pickle` — no schema, no forward/backward-compatibility story, and no interop
    format. Touchstone `.sNp` is the standard RF/photonics interop format and isn't
    supported; a JSON or HDF5 option would also let results be inspected without
-   unpickling FECES's own classes.
+   unpickling BEAF's own classes.
 3. **Declarative simulation runner.** Every example is a bespoke Python script; a
    YAML/JSON "device + solver + sweep" spec (in the spirit of tidy3d's
    JSON-serializable `Simulation` objects) would let standard sweeps run without
@@ -606,7 +608,7 @@ lives in "Current library reference" above, not here.
 
 ## Not recommending
 
-- Building FECES's own raw FDTD/EME numerical core — meep and MPB/meow already do
-  this well; FECES's value is the orchestration layer on top, not the field solver.
+- Building BEAF's own raw FDTD/EME numerical core — meep and MPB/meow already do
+  this well; BEAF's value is the orchestration layer on top, not the field solver.
 - Matching tidy3d's cloud/GPU infrastructure — out of scope for what is currently a
   single-machine/HPC-Makefile-driven library.
