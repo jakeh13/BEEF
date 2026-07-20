@@ -751,7 +751,40 @@ print(f"  |t|={np.abs(t_d[idx]):.4f}  |k1|={np.abs(k1_d[idx]):.4f}  |k2|={np.abs
 print(f"  T_through = {T[idx]:.4f}  IL = {10*np.log10(max(T[idx],1e-20)):.2f} dB")
 
 # ---------------------------------------------------------------------------
-# 14. Save and plot
+# 14. Independent bend / coupler-region transmission plots
+# ---------------------------------------------------------------------------
+T_bend = np.abs(b_d) ** 2  # note: the reference-plane phase correction (-> b_corrected)
+                            # only rotates the phase, so it doesn't change |b|^2 — this
+                            # magnitude curve is the same whether read off b_d or b_corrected
+
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.plot(wl_dense, T_bend, color="steelblue")
+ax.set_xlabel("Wavelength (um)")
+ax.set_ylabel("Transmission")
+ax.set_title("Standalone 90 deg Bend — Transmission")
+ax.grid(True)
+ax.set_ylim(0, 1.05)
+plt.tight_layout()
+fig.savefig(os.path.join(output_dir, "bend_transmission.png"), dpi=300)
+plt.close("all")
+
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.plot(wl_dense, np.abs(t_d) ** 2, label="bus->bus |t|^2")
+ax.plot(wl_dense, np.abs(k1_d) ** 2, linestyle="--", label="bus->ring |k1|^2")
+ax.plot(wl_dense, np.abs(k2_d) ** 2, linestyle=":", label="ring->bus |k2|^2")
+ax.plot(wl_dense, np.abs(t_ring_d) ** 2, linestyle="-.", label="ring->ring |t_ring|^2")
+ax.set_xlabel("Wavelength (um)")
+ax.set_ylabel("Transmission / coupling")
+ax.set_title("Coupler Section — Transmission & Coupling Coefficients")
+ax.legend()
+ax.grid(True)
+plt.tight_layout()
+fig.savefig(os.path.join(output_dir, "coupler_transmission.png"), dpi=300)
+plt.close("all")
+print(f"Bend/coupler transmission plots saved -> {output_dir}/bend_transmission.png, coupler_transmission.png")
+
+# ---------------------------------------------------------------------------
+# 15. Save and plot
 # ---------------------------------------------------------------------------
 smat = SMatrix(wavelengths=wl_dense)
 smat.set(E_thru, port="through")
