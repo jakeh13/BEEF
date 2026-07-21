@@ -31,7 +31,7 @@ DEVICES = mmi_1x2 mmi_2x2 directional_coupler modal_multiplexer ring_resonator
 # whole sweep serially.
 SWEEP_INDEX ?=
 
-.PHONY: all $(DEVICES) $(EXAMPLES) directional_coupler_fdtd_sweep clean clean_directional_coupler_fdtd_sweep
+.PHONY: all $(DEVICES) $(EXAMPLES) directional_coupler_fdtd_sweep directional_coupler_hybrid_modes_sweep clean clean_directional_coupler_fdtd_sweep clean_directional_coupler_hybrid_modes_sweep
 
 all: $(EXAMPLES)
 
@@ -73,6 +73,9 @@ directional_coupler_fdtd:
 directional_coupler_fdtd_sweep:
 	$(runner) $(my_python) directional_coupler/python/directional_coupler_fdtd_sweep.py $(SWEEP_INDEX)
 
+directional_coupler_hybrid_modes_sweep:
+	$(runner) $(my_python) directional_coupler/python/directional_coupler_hybrid_modes_sweep.py $(SWEEP_INDEX)
+
 modal_multiplexer_hybrid:
 	$(runner) $(my_python) modal_multiplexer/python/modal_multiplexer_hybrid.py
 
@@ -89,3 +92,6 @@ clean:
 
 clean_directional_coupler_fdtd_sweep:
 	rm -rf ../../example_output/directional_coupler/directional_coupler_fdtd_sweep
+
+clean_directional_coupler_hybrid_modes_sweep:
+	rm -rf ../../example_output/directional_coupler/directional_coupler_hybrid_modes_sweep
