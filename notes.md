@@ -126,7 +126,7 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   `directional_coupler_hybrid.py`) still hand-roll the same reuse manually because
   their cross/through paths mix two excitations' matrices in one cascade, which the
   one-call `solve()` contract can't express even with `mirror_pairs` (see Solver
-  recommendation #5).
+  recommendation #2).
 - **Persistent on-disk cache** (`beef/cache/`) — every solve-family method
   (`FDTDSolver.solve()`/`solve_section()`, `EMESolver.solve()`/`solve_section()`/
   `solve_section_length_sweep()`, `HybridSolver.solve()`/`solve_length_sweep()`)
@@ -139,7 +139,17 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   into a `save_dir` subfolder holding `config.json` (human-readable), `result.pkl`,
   and `geometry.png`; a hash hit still gets a full `config.json` equality check
   before being trusted, guarding against truncated-hash collisions or
-  config-schema drift across code versions. This is a separate mechanism from
+  config-schema drift across code versions. `save_dir` also accumulates a
+  top-level `index.jsonl` (one compact summary line — hash, solver_type,
+  method, geometry_class, key call kwargs — appended per `save_run()` call,
+  long numeric arrays like `wavelengths`/`lengths` collapsed to
+  `{count, min, max}`) so the whole cache can be `grep`/`jq`-scanned without
+  opening every subfolder's `config.json`; not deduplicated (re-saving an
+  already-cached config just appends another line for the same hash) and
+  failure-isolated (a manifest-write error is logged and doesn't affect the
+  actual cache save), same pattern as `geometry.png`'s own best-effort save
+  (the first half of what was Solver recommendation #3 — see further down
+  this entry for the folder-naming half). This is a separate mechanism from
   `HybridSolver`'s in-memory `cache={}` dict (dedupes within/across `solve()` calls
   in one process; `save_dir` persists to disk across process runs) — the two
   compose freely. All 12 example `.py`/`.ipynb` pairs across every device folder
@@ -152,14 +162,82 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   directly via `beef.cache`'s `lookup()`/`save_run()`/`load_result()` (see that
   script's module docstring). `EMESolver.solve_sweep()` is the one remaining
   solve-family method without `save_dir` support (see Solver recommendation #1).
-  **Known structural risk, not fully closed**: any solver/geometry attribute that
-  affects the physical result but isn't scalar falls outside `vars(solver)`'s
-  generic filter and is silently excluded from the fingerprint (`logger.warning`,
-  not an error) — a future attribute added without updating the config builders, or
-  a code change to how a position/quantity is *derived* from already-tracked inputs
-  (the fingerprint stores ingredients like margins and geometry spans, not derived
-  absolute coordinates), could produce a silent false-positive cache hit. No
-  regression test guards against this yet (see Solver recommendation #4).
+  Every fingerprint also carries a hand-bumped `cache_schema_version` int
+  (`_CACHE_SCHEMA_VERSION` in `beef/cache/config.py`) — bumping it on a
+  solver-internals change (even one no single config field would ever
+  capture by hand) invalidates every existing cache entry outright, since
+  the hash changes; old entries are never read/deleted, just no longer
+  matched, and get transparently resimulated/re-saved under the new hash.
+  `_solver_config()` is also now scoped per `(solver_type, method_name)` to a
+  hand-traced allowlist of the attributes that method actually reads
+  (`_METHOD_ATTRS`, same file) rather than the raw `vars(solver)` dump — e.g.
+  `FDTDSolver.solve_section()`'s cache key no longer includes
+  `num_input_modes`/`num_output_modes` (constructor params only `solve()`
+  reads), so two solvers differing only in those no longer fork the cache
+  for what's actually the same physical result; an unrecognized
+  `(solver_type, method_name)` pair falls back to the old "include
+  everything" behavior (the safe direction — over-inclusion costs a spurious
+  miss, under-inclusion risks a silent false-positive hit). Finally,
+  `FDTDSolver.solve_section()` fingerprints the fully-resolved
+  `SectionFDTDLayout` (`resolved_layout` in its `call_kwargs`, computed
+  before the cache-config block precisely so it can be), not just the
+  `monitor_center`/`monitor_size`/margin ingredients that derive it — a
+  future change to that derivation logic now shows up as a config diff
+  instead of silently returning a stale result for the same nominal inputs
+  (this and the two paragraphs above fully close what was Solver
+  recommendation #4 — see `tests/test_cache_config.py` for the
+  allowlist/schema-version/resolved-layout regression coverage).
+  `beef/cache/store.py`'s folder-naming scheme is now `{slug}_{hash(config)}`
+  (`_slug()`/`_folder()`) — a human-readable `{solver_type}_{method}_
+  {geometry_class}` prefix ahead of the hash, so `ls save_dir` is directly
+  browsable — with `lookup()` falling back to the pre-slug bare-hash path so
+  every cache entry from before this change stays reachable at its old
+  location; only new writes get the new name (closes Solver recommendation
+  #3 in full).
+  A second, orthogonal lookup path — `lookup_superset()`/
+  `update_family_pointer()` — lets a request for fewer modes than a prior
+  call already computed reuse that larger result by slicing its mode axes,
+  instead of resimulating: both `FDTDSolver.solve_section()`'s and
+  `EMESolver.solve_section()`/`solve_section_length_sweep()`'s mode-solve
+  paths decode/compute each mode independently of how many others are
+  requested (confirmed by reading `sim.get_eigenmode_coefficients()`'s
+  per-band loop and meow's `compute_modes_meep()`'s per-`band_num` loop
+  respectively), so a run performed at a larger mode count already contains
+  everything a smaller request needs. A "family" config — the same
+  fingerprint with the mode-count fields dropped (plus, for FDTDSolver only,
+  an explicit `reverse` field standing in for them, and gated on
+  `monitor_size` being pinned — see below) — points at the largest
+  mode-count result computed so far for that family
+  (`save_dir/_mode_family_pointers/`, one small JSON file per family,
+  atomically written since concurrent SLURM array tasks may race to update
+  it); a request whose mode counts are all `<=` the pointer's recorded dims
+  is served by slicing, a request that exceeds it falls through to a real
+  simulation whose result then becomes the new family maximum (if it
+  dominates the old one — an incomparable growth pattern, e.g. one axis
+  growing while another shrinks, just isn't recorded as a new maximum,
+  falling back to a plain resimulation next time too). Two preconditions
+  gate this for `FDTDSolver.solve_section()` specifically, both because mode
+  count can otherwise change the actual simulated geometry, not just how
+  many bands get decoded from it: (a) `monitor_size` must be explicitly
+  passed (its *default* width depends on whether `n_measure > 1`, which
+  would make the physical monitor itself mode-count-dependent), and (b) the
+  family key includes `layout.reverse` (which side excites vs. measures) so
+  requests that would flip it — e.g. crossing `n_modes_out` from 1 to
+  2 while `n_modes_in=1` — correctly form separate families rather than
+  incorrectly reusing across a boundary where the simulation is physically
+  different. `EMESolver` has no such asymmetry (a single joint mode solve
+  serves both the in/out split with no monitor concept), so its family key
+  is just the mode-count-free fingerprint, no extra preconditions. Verified
+  against real (non-cache) solves for both solvers — a direct small-N
+  computation matches a large-N computation sliced down — subject to the
+  same near-degenerate-mode-reordering caveat noted below (fully closes what
+  was Solver recommendation #2; see `tests/test_cache_superset.py`).
+  **Known structural risk, still open**: any solver/geometry attribute that
+  affects the physical result but isn't JSON-safe still falls outside
+  `_solver_config()`'s filter and is silently excluded from the fingerprint
+  (`logger.warning`, not an error) — a future non-scalar attribute added
+  without updating the config builders could still produce a silent
+  false-positive cache hit. No regression test guards against this.
 
 ### Geometries (`beef/geometry/`)
 
@@ -271,7 +349,7 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   practice. `save()`/`load()` round-trip via pickle (unversioned, no interop
   format — see Misc recommendation #2). No composition operators (`+`/`@`) to
   cascade several already-solved `SMatrix` results into a larger circuit (see
-  Solver recommendation #6).
+  Solver recommendation #3).
 
 ### Sweep (`beef/sweep/`)
 
@@ -282,7 +360,7 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   which builds a fresh geometry/solver instance and calls plain
   `solver.solve(geometry, wavelengths)` — **always the whole-device `solve()`
   API, never `HybridSolver.solve()`'s `cache=` mechanism** (see Solver
-  recommendation #7), so sweeping a hybrid device redundantly resimulates every
+  recommendation #4), so sweeping a hybrid device redundantly resimulates every
   cached section once per worker/grid point. Returns `Dict[param_tuple,
   SMatrix]`; optionally pickles each point's `SMatrix` under
   `output_dir/<param-tag>/data/smatrix.pkl` and a `sweep_results.pkl`
@@ -292,10 +370,18 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
 
 ### Testing (`tests/`)
 
-- **Fast unit tests** — `test_geometry.py`, `test_smatrix.py`, `test_hybrid.py`
-  (77 tests). No meep/meow import anywhere (geometry section-cut math is pure
+- **Fast unit tests** — `test_geometry.py`, `test_smatrix.py`, `test_hybrid.py`,
+  `test_cache.py`, `test_cache_config.py`, `test_cache_superset.py` (116
+  tests). No meep/meow import anywhere (geometry section-cut math is pure
   Python; `HybridSolver` is tested against a `FakeSolver` with scripted
-  `solve_section()` returns, not real physics), so these run everywhere in
+  `solve_section()` returns, not real physics; the cache tests use bare fake
+  objects plus real `FDTDSolver`/`EMESolver` instances constructed but never
+  actually solved — `solve()`/`solve_section()`/`solve_section_length_sweep()`
+  all do an unconditional `import meep`/`import meow` even down a
+  cache-hit/`cache_only=True` path, so exercising that wiring means calling
+  `section_fdtd_layout()`/`build_run_config()`/`lookup_superset()` etc.
+  directly instead — see `test_cache_config.py`/`test_cache_superset.py`'s
+  own module docstrings), so these run everywhere in
   well under a second. Run in CI on every push/PR (`.github/workflows/ci.yml`,
   Python 3.10/3.11/3.12 matrix) — no lint or type-checking step (see High-level
   recommendation #4).
@@ -382,98 +468,7 @@ lives in "Current library reference" above, not here.
    the batched-wavelength whole-device path is the one remaining gap. No
    example calls `solve_sweep()` today, so it hasn't blocked anything yet, but
    it's a real inconsistency now that `solve()` has the parameter.
-2. **Cache reuse across mode counts (FDTD `solve_section()` / EME
-   `solve_section()`/`solve_section_length_sweep()`).** Both mode solvers decode
-   each requested mode independently of how many others are requested in the
-   same call: `FDTDSolver.solve_section()` runs meep's time-domain simulation
-   once per excited mode, then decodes the *already-recorded* mode-monitor flux
-   into coefficients in a separate per-band loop
-   (`for m in range(1, n_measure+1): sim.get_eigenmode_coefficients(mea_flux, [m], ...)`)
-   — nothing about the simulation itself depends on how many total bands get
-   decoded. `EMESolver` (via meow's `compute_modes_meep()`) does the same thing
-   one level down: `sim.get_eigenmode(band_num=mode_num, ...)` is called
-   independently per band index up to `num_modes`, with one final
-   `sorted(..., key=neff, reverse=True)` at the end. So in principle, a run
-   performed at a larger mode count could serve any smaller mode-count request
-   for free, just by decoding/keeping fewer bands from the same underlying
-   solve — provided monitor/mesh geometry is pinned identically across calls
-   (today `solve_section()`'s default monitor width depends on whether
-   `n_measure > 1`, so callers must pass an explicit `monitor_center`/
-   `monitor_size` to keep it mode-count-independent, as
-   `directional_coupler_hybrid.py`/its N_MODES sweep already do). None of this
-   is exploited today: `build_run_config()` (`beef/cache/config.py`)
-   fingerprints `n_modes_in`/`n_modes_out` (or EME's `num_modes`) straight into
-   the cache key, so two calls differing only in mode count hash to two fully
-   disjoint, non-overlapping cache entries — confirmed at every call site in
-   `beef/solvers/fdtd.py`/`beef/solvers/eme.py`. Fix sketch: decouple "modes
-   actually computed" from "modes the caller wants back" — cache keyed on
-   solver/geometry/monitor config *without* mode count, storing the
-   largest-yet-requested mode count's full result; a request with
-   `n_modes_out <= cached_n_modes` is served by slicing the cached matrix's
-   mode axis, only falling through to a real simulation when the request
-   exceeds what's cached so far (the fresh, larger run then replaces the
-   cached entry). `directional_coupler_hybrid_modes_sweep.py`'s N_MODES=2..12
-   convergence sweep is the direct motivating case — today 11 independent
-   FDTD+EME cache misses (one per N, despite `n_modes_in=1` never changing on
-   the FDTD excitation side); with this, effectively 1 real run (at N=12) plus
-   10 free slices. Caveat: the top-k slice of an N-mode solve should equal a
-   direct k-mode solve *except* in the rare case where two modes are
-   near-degenerate enough that solver convergence swaps their relative order
-   between differently-sized runs — worth a regression test comparing a
-   direct small-N solve against a sliced large-N solve before relying on this
-   in production sweeps.
-3. **Human-readable cache directory naming / index.** The persistent cache
-   (`beef/cache/store.py`) names each entry's folder purely by
-   `sha256(config)[:16]` (`_hash_config`/`_folder`) — a real cache directory
-   (`examples/example_sim_cache/`, ~85 entries today) is just opaque hash
-   names with no way to tell what's inside without opening each one's
-   `config.json` individually. Each folder is already self-describing once
-   opened (`config.json` is human-readable, plus a `geometry.png`), but
-   there's no way to browse or grep the cache at the directory-listing level.
-   Fix sketch: (a) prefix each folder name with a short slug derived from the
-   config (`{solver_type}_{method}_{geometry_class}_{hash}`, still
-   hash-suffixed for uniqueness/collision-safety), and/or (b) a single
-   top-level manifest (e.g. `example_sim_cache/index.jsonl`, one line appended
-   per `save_run()` call: hash, solver_type, method, geometry_class, and the
-   handful of most-identifying call kwargs) so the whole cache is
-   `grep`/`jq`-scannable without touching individual folders. Purely
-   additive — doesn't change lookup/hashing behavior, so it can land
-   independently of Solver recommendation #2 above.
-4. **Config completeness: guarantee against false-positive cache hits from
-   derivation-logic changes.** The "Known structural risk" already called out
-   above (silent exclusion of non-JSON-safe solver attributes) is one gap; a
-   second, related one found while investigating recommendation #2:
-   `build_run_config()`'s fingerprint stores *ingredient* parameters (e.g.
-   `monitor_center`/`monitor_size`/margins, or EME's `oxide_width`/
-   `oxide_height`) rather than the *fully resolved* absolute source/monitor
-   positions that `section_fdtd_layout()` (or the EME equivalent) actually
-   derives from them — so a future code change to that derivation logic (e.g.
-   a bug fix in how a default monitor position is computed from
-   `geometry.center_at()`) would leave an old cache entry's `config.json`
-   looking identical to a new call's fingerprint, even though the two runs
-   would actually simulate different physical positions, producing a silent
-   stale-cache hit. Two complementary fixes: (a) fingerprint the
-   fully-resolved layout (the actual `src_x`/`norm_x`/`mea_x`/`src_c_ap`/
-   `mea_c`/etc. values `section_fdtd_layout()` returns, not just its inputs)
-   so any change in how those are derived shows up as a config diff; (b)
-   stamp every config with a coarse code-version marker (package
-   `__version__`, or a git commit hash at dev time) so any solver-internals
-   change — including ones no single field would ever capture by hand —
-   invalidates old entries outright. (b) is the cheaper, more robust of the
-   two and worth doing regardless of (a). A related but opposite-direction
-   gap confirmed on disk while investigating this: `_solver_config()`
-   (`beef/cache/config.py`) dumps *all* of `vars(solver)` rather than only the
-   attributes the method being called actually reads — e.g. an
-   `FDTDSolver.solve_section()` cache entry's `config.json` includes
-   `num_input_modes`/`num_output_modes`, constructor params `solve_section()`
-   never touches (they only matter to `solve()`). Two otherwise-identical
-   `FDTDSolver` instances differing only in such unrelated attributes
-   currently get two disjoint cache entries for the same physical
-   `solve_section()` result — a spurious-miss cost, the mirror image of the
-   false-positive-hit risk above. Fix: scope `_solver_config()` per
-   `method_name` to a curated allowlist of attributes that method actually
-   consumes, rather than the generic `vars(solver)` dump.
-5. **Multi-excitation `HybridSolver.solve()` API.** `mirror_pairs`/
+2. **Multi-excitation `HybridSolver.solve()` API.** `mirror_pairs`/
    `solve_length_sweep()` (see Current library reference above) are fully
    implemented and tested, but neither hybrid example actually calls the
    generic `solve()` API for its full through+cross result: `mmi_2x2_hybrid.py`
@@ -485,7 +480,7 @@ lives in "Current library reference" above, not here.
    A multi-excitation-config `solve()` extension (declare several excitation
    kwargs up front, get every port-combination coefficient out of one call)
    would let both examples migrate off the manual einsum composition.
-6. **Circuit-level S-matrix composition.** `SMatrix` has no way to combine several
+3. **Circuit-level S-matrix composition.** `SMatrix` has no way to combine several
    devices' results into a larger circuit (e.g. cascading an MMI's `SMatrix` with a
    directional coupler's). `HybridSolver` already does exactly this kind of
    matrix-chain cascading *within* one device across sections — generalizing that
@@ -497,11 +492,11 @@ lives in "Current library reference" above, not here.
    built from several `DeviceGeometry` parts as one cascade *before* solving, but
    doesn't let two already-*solved* `SMatrix` results be combined after the fact,
    which is what this item is about.)
-7. **`ParallelSweep` + `HybridSolver` integration.** The sweep utility only calls
+4. **`ParallelSweep` + `HybridSolver` integration.** The sweep utility only calls
    whole-device `solver.solve()`; it doesn't know about `HybridSolver.solve()`'s
    `cache=` mechanism, so a parallel sweep over a hybrid device would redundantly
    re-simulate cached sections across worker processes.
-8. **Lossy/dispersive material support.** `MaterialStack.si_medium(wl)`/
+5. **Lossy/dispersive material support.** `MaterialStack.si_medium(wl)`/
    `sio2_medium(wl)` (`materials/stack.py`) build an `mp.Medium(index=...)` from
    whichever *tabulated* wavelength in meow's built-in Si/SiO2 data is nearest to
    the requested one (`np.argmin`) — a nearest-neighbor lookup, not interpolation,
@@ -510,57 +505,57 @@ lives in "Current library reference" above, not here.
    fitting (or reusing `meep.materials` directly) into `MaterialStack` would enable
    real loss/broadband dispersion and open the door to SiN, III-V, or lossy/doped
    silicon.
-9. **Symmetry exploitation in `FDTDSolver`.** `MMI`/`DirectionalCoupler` are
+6. **Symmetry exploitation in `FDTDSolver`.** `MMI`/`DirectionalCoupler` are
    frequently mirror-symmetric about y=0; `solve_section()` currently always draws
    and simulates the full cross-section. An opt-in `mp.Mirror` symmetry when the
    geometry/excitation is actually symmetric could roughly halve FDTD cost for free —
    complements the reciprocity-based min-simulation-count optimization already there.
-10. **Automatic mesh-resolution convergence.** Beyond the manual "run a list of
-    resolutions and eyeball it" pattern (see Misc/Examples below) — meep/tidy3d both
-    have some form of resolution auto-selection; BEEF has none, always a fixed
-    user-chosen `res`.
-11. **Wavelength-interpolation scheme for mode-solve/EME-driven sections.** A
-    real MPB mode solve is expensive per wavelength, while FDTD DFT monitors
-    sample a dense wavelength grid nearly for free (one broadband pulse, many
-    frequencies in one run). Resonant devices need thousands of wavelength
-    points to resolve a linewidth that's a small fraction of the sweep span —
-    `examples/ring_resonator/python/ring_resonator_hybrid.py` hits this directly: an
-    FSR of ~13 nm across a 100 nm C-band sweep needs a ~2000-point grid to
-    plot resonance dips cleanly, but only solves `neff(lambda)` at 13 sparse
-    points (each a real mode solve) and fits a degree-2 polynomial before
-    evaluating on the dense grid — piecewise-linear interpolation would put a
-    kink in `d(phi)/d(lambda)` at every solve node and corrupt resonance
-    positions, so the fit has to be smooth in `neff` itself, not in phase
-    (which winds too fast to interpolate directly — that example's FDTD-
-    coefficient interpolation is magnitude + `np.unwrap`'d phase for the same
-    reason). Done ad hoc, entirely inside that example script, because
-    nothing in `beef/solvers/eme.py` supports it. A library-level version
-    could look like sparse-solve/dense-eval wavelength arguments on
-    `EMESolver.solve_section()` (solve modes at a caller-chosen sparse subset,
-    fit, evaluate the returned transfer matrix at every wavelength in a
-    separate dense array), or a standalone reusable `NeffTable`/mode-fit
-    utility both `EMESolver` and examples could share. Related to, but
-    distinct from, Solver recommendation #8 (`MaterialStack`'s nearest-
-    tabulated-wavelength index lookup) — that's a materials-dispersion gap;
-    this is a mode-solve-cost gap, and the two would compound in a real
-    dispersive-material implementation (interpolating dispersive neff at
-    already-sparse solve points).
-12. **Bigger lift, only if scope grows toward design automation:** adjoint/
-    inverse-design support, periodic/grating structures via an RCWA backend
-    (S4/Meent/FMMAX-style) for problems where FDTD/EME are the wrong tool,
-    near-to-far-field transform. For adjoint specifically, `meep.adjoint`
-    (already what BEEF's own `FDTDSolver` sits on top of) is the
-    lowest-friction path — it's autograd/JAX-based and gradient computation
-    wraps around any optimization library, so no new solver dependency would
-    be needed, just a BEEF-side API for defining a figure of merit over a
-    `HybridSolver` chain's `SMatrix` output. tidy3d (native `autograd`
-    support) and the newer JAX-native FDTDX project (automatic
-    differentiation built into the solver via time-reversibility, published
-    in JOSS 2026) confirm autodiff-native is now the field's default
-    direction, not a niche add-on — worth knowing if this ever gets
-    prioritized. Substantial, well-trodden ground already owned by
-    meep/tidy3d/FDTDX/the RCWA tools respectively — worth it only if a
-    concrete device need shows up that FDTD/EME genuinely can't address.
+7. **Automatic mesh-resolution convergence.** Beyond the manual "run a list of
+   resolutions and eyeball it" pattern (see Misc/Examples below) — meep/tidy3d both
+   have some form of resolution auto-selection; BEEF has none, always a fixed
+   user-chosen `res`.
+8. **Wavelength-interpolation scheme for mode-solve/EME-driven sections.** A
+   real MPB mode solve is expensive per wavelength, while FDTD DFT monitors
+   sample a dense wavelength grid nearly for free (one broadband pulse, many
+   frequencies in one run). Resonant devices need thousands of wavelength
+   points to resolve a linewidth that's a small fraction of the sweep span —
+   `examples/ring_resonator/python/ring_resonator_hybrid.py` hits this directly: an
+   FSR of ~13 nm across a 100 nm C-band sweep needs a ~2000-point grid to
+   plot resonance dips cleanly, but only solves `neff(lambda)` at 13 sparse
+   points (each a real mode solve) and fits a degree-2 polynomial before
+   evaluating on the dense grid — piecewise-linear interpolation would put a
+   kink in `d(phi)/d(lambda)` at every solve node and corrupt resonance
+   positions, so the fit has to be smooth in `neff` itself, not in phase
+   (which winds too fast to interpolate directly — that example's FDTD-
+   coefficient interpolation is magnitude + `np.unwrap`'d phase for the same
+   reason). Done ad hoc, entirely inside that example script, because
+   nothing in `beef/solvers/eme.py` supports it. A library-level version
+   could look like sparse-solve/dense-eval wavelength arguments on
+   `EMESolver.solve_section()` (solve modes at a caller-chosen sparse subset,
+   fit, evaluate the returned transfer matrix at every wavelength in a
+   separate dense array), or a standalone reusable `NeffTable`/mode-fit
+   utility both `EMESolver` and examples could share. Related to, but
+   distinct from, Solver recommendation #5 (`MaterialStack`'s nearest-
+   tabulated-wavelength index lookup) — that's a materials-dispersion gap;
+   this is a mode-solve-cost gap, and the two would compound in a real
+   dispersive-material implementation (interpolating dispersive neff at
+   already-sparse solve points).
+9. **Bigger lift, only if scope grows toward design automation:** adjoint/
+   inverse-design support, periodic/grating structures via an RCWA backend
+   (S4/Meent/FMMAX-style) for problems where FDTD/EME are the wrong tool,
+   near-to-far-field transform. For adjoint specifically, `meep.adjoint`
+   (already what BEEF's own `FDTDSolver` sits on top of) is the
+   lowest-friction path — it's autograd/JAX-based and gradient computation
+   wraps around any optimization library, so no new solver dependency would
+   be needed, just a BEEF-side API for defining a figure of merit over a
+   `HybridSolver` chain's `SMatrix` output. tidy3d (native `autograd`
+   support) and the newer JAX-native FDTDX project (automatic
+   differentiation built into the solver via time-reversibility, published
+   in JOSS 2026) confirm autodiff-native is now the field's default
+   direction, not a niche add-on — worth knowing if this ever gets
+   prioritized. Substantial, well-trodden ground already owned by
+   meep/tidy3d/FDTDX/the RCWA tools respectively — worth it only if a
+   concrete device need shows up that FDTD/EME genuinely can't address.
 
 ### Geometry
 

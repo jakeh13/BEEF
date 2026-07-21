@@ -4,7 +4,7 @@ JSON-safe dict, for the persistent save-folder cache (see beef/cache/__init__.py
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import numpy as np
 
@@ -13,6 +13,56 @@ from ..materials.stack import MaterialStack
 logger = logging.getLogger(__name__)
 
 _PRECISION = 9
+
+# Bump this whenever solver-internals derivation logic changes in a way that
+# could change a simulated result without changing any tracked config field
+# (e.g. a bug fix to how a default monitor/source position is computed from
+# already-tracked ingredients) — every existing cache entry's hash changes,
+# so old entries are simply never matched again (not read, not deleted) and
+# get transparently resimulated/re-saved under the new hash on next use. Not
+# tied to beef.__version__ (currently static, see High-level recommendation
+# #3 in notes.md) — a plain hand-bumped counter is the cheaper, more robust
+# half of Solver recommendation #4's two complementary fixes; the other half
+# (fingerprinting fully-resolved positions, not just their ingredients) is
+# handled per-method where it applies — see FDTDSolver.solve_section()'s use
+# of SectionFDTDLayout in its call_kwargs.
+_CACHE_SCHEMA_VERSION = 1
+
+# Per (solver_type, method_name) allowlist of solver attributes that method
+# actually reads (including transitively, through helper properties/methods
+# it calls) — traced by hand against the current beef/solvers/*.py source.
+# Scoping _solver_config() to this instead of dumping all of vars(solver)
+# closes the opposite-direction gap from the schema-version bump above: two
+# solver instances differing only in an attribute a given method never
+# touches (e.g. FDTDSolver.num_input_modes, which solve_section() never
+# reads) would otherwise get two disjoint cache entries for what is actually
+# the same physical result. A (solver_type, method_name) pair with no entry
+# here falls back to the old "dump everything" behavior (see
+# _solver_config()) — under-including an attribute that DOES matter would
+# risk a silent false-positive cache hit, which is strictly worse than the
+# spurious-miss cost of over-including, so "unknown pair -> include
+# everything" is the safe default direction for this fallback.
+_METHOD_ATTRS: Dict[Tuple[str, str], Tuple[str, ...]] = {
+    ("FDTDSolver", "solve"): (
+        "res", "sim_width", "sim_height", "three_d", "dpml", "source_margin",
+        "monitor_margin", "num_output_modes", "output_monitor_centers",
+        "output_monitor_widths", "material_stack", "decay_tol", "waveguide_length",
+    ),
+    ("FDTDSolver", "solve_section"): (
+        "res", "sim_width", "sim_height", "three_d", "dpml", "source_margin",
+        "monitor_margin", "half_domain_aperture", "material_stack", "decay_tol",
+    ),
+    ("EMESolver", "solve_section"): (
+        "material_stack", "oxide_width", "oxide_height", "res", "temperature", "mode_solver",
+    ),
+    ("EMESolver", "solve_section_length_sweep"): (
+        "material_stack", "oxide_width", "oxide_height", "res", "temperature", "mode_solver",
+    ),
+    ("EMESolver", "solve"): (
+        "num_modes", "num_cells", "lengths", "straight_length", "oxide_width",
+        "oxide_height", "res", "material_stack", "temperature", "mode_solver",
+    ),
+}
 
 
 def _json_safe(obj: Any, precision: int = _PRECISION) -> Any:
@@ -31,8 +81,12 @@ def _json_safe(obj: Any, precision: int = _PRECISION) -> Any:
     raise TypeError(f"cannot serialize {type(obj)!r} into a cache config")
 
 
-def _solver_config(solver) -> Dict[str, Any]:
-    """vars(solver) filtered to JSON-safe scalars/lists/dicts.
+def _solver_config(solver, method_name: str) -> Dict[str, Any]:
+    """vars(solver) filtered to JSON-safe scalars/lists/dicts, and scoped to
+    the attributes _METHOD_ATTRS says method_name actually reads (falling
+    back to every attribute when (solver_type, method_name) has no entry —
+    see _METHOD_ATTRS' module-level docstring for why that's the safe
+    fallback direction).
 
     material_stack is an object (not a scalar), so it's serialized
     explicitly; any other non-scalar attribute a solver subclass might carry
@@ -40,8 +94,11 @@ def _solver_config(solver) -> Dict[str, Any]:
     attribute that actually affects the physical result would produce a
     silent false-positive cache hit — see beef/cache/__init__.py.
     """
+    allowlist = _METHOD_ATTRS.get((type(solver).__name__, method_name))
     out: Dict[str, Any] = {}
     for key, value in vars(solver).items():
+        if allowlist is not None and key not in allowlist:
+            continue
         if isinstance(value, MaterialStack):
             out[key] = {"wg_height": value.wg_height, "sz": value.sz}
             continue
@@ -64,8 +121,9 @@ def _fingerprint(
 ) -> Dict[str, Any]:
     """Assemble the JSON-safe fingerprint dict shared by both config builders."""
     return {
+        "cache_schema_version": _CACHE_SCHEMA_VERSION,
         "solver_type": type(solver).__name__,
-        "solver_config": _solver_config(solver),
+        "solver_config": _solver_config(solver, method_name),
         "method": method_name,
         "call_kwargs": _json_safe(call_kwargs),
         "geometry_class": geometry_class_name,
@@ -85,7 +143,15 @@ def build_run_config(solver, method_name: str, call_kwargs: Dict[str, Any], geom
         call_kwargs: every argument the method call received that can affect
             the physical result (x0, x1, wavelengths, n_modes_in/out,
             stub_left/right, monitor_center/size, lengths, geometry_kwargs,
-            ...) — save_dir itself must not be included.
+            ...) — save_dir itself must not be included. If any of those
+            arguments are optional/defaulted and get *resolved* into derived
+            absolute positions before the simulation runs (e.g.
+            FDTDSolver.solve_section()'s monitor_center/monitor_size ->
+            SectionFDTDLayout), include the resolved values too (as a
+            separate key, not a replacement) — otherwise a future change to
+            that derivation logic leaves an old config.json looking
+            identical to a new call's fingerprint despite simulating
+            different physical positions (Solver recommendation #4).
         geometry: the DeviceGeometry instance being solved.
 
     Returns:

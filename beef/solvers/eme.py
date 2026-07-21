@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import List, Optional
 
 import numpy as np
 
 from .._utils import extrude_polygons
 from ..cache import (
-    CacheMissError, build_run_config, build_whole_device_config, load_result, lookup, save_run,
+    CacheMissError, build_run_config, build_whole_device_config, load_result, lookup,
+    lookup_superset, save_run, update_family_pointer,
 )
 from ..geometry.base import DeviceGeometry
 from ..materials.stack import MaterialStack, SOI_160
@@ -168,7 +170,27 @@ class EMESolver:
         n_modes = max(n_modes_in, n_modes_out)
         length = (x1 - x0) + stub_left + stub_right
 
+        # A request for fewer modes than a prior call already computed can
+        # reuse that larger result by slicing its mode axes — unlike FDTD,
+        # EME has no excited/measured-side asymmetry and no monitor geometry
+        # to pin, since compute_modes(cs, n_modes) solves the full
+        # cross-section once regardless of how the n_modes_in/n_modes_out
+        # split is drawn from it, so no extra precondition/invariant is
+        # needed beyond dropping the mode counts from the family config
+        # (Solver recommendation #2). Caveat: this assumes the top-k slice
+        # of an N-mode solve matches a direct k-mode solve, which holds as
+        # long as meow's mode solver doesn't reorder near-degenerate modes
+        # differently between differently-sized requests — see
+        # tests/test_cache_config.py's EME superset-reuse coverage.
+        family_config = None
         if save_dir:
+            family_config = build_run_config(
+                self, "solve_section",
+                dict(x0=x0, x1=x1, wavelengths=wavelengths,
+                     stub_left=stub_left, stub_right=stub_right,
+                     geometry_kwargs=geometry_kwargs),
+                geometry,
+            )
             config = build_run_config(
                 self, "solve_section",
                 dict(x0=x0, x1=x1, wavelengths=wavelengths,
@@ -181,6 +203,11 @@ class EMESolver:
             if hit is not None:
                 logger.info("solve_section: cache hit at %s", hit)
                 return load_result(hit)
+            superset = lookup_superset(save_dir, family_config, (n_modes_out, n_modes_in))
+            if superset is not None:
+                folder, _stored_dims = superset
+                logger.info("solve_section: superset cache hit at %s (sliced)", folder)
+                return load_result(folder)[:, :n_modes_out, :n_modes_in]
         if cache_only:
             raise CacheMissError(
                 f"solve_section(): cache_only=True but no cached run found for "
@@ -215,6 +242,9 @@ class EMESolver:
         if save_dir:
             folder = save_run(save_dir, config, T)
             logger.info("solve_section: cache saved at %s", folder)
+            update_family_pointer(
+                save_dir, family_config, (n_modes_out, n_modes_in), os.path.basename(folder),
+            )
 
         return T
 
@@ -268,7 +298,20 @@ class EMESolver:
         lengths = np.asarray(lengths)
         n_modes = max(n_modes_in, n_modes_out)
 
+        # See solve_section()'s comment on family_config/lookup_superset —
+        # same reuse mechanism, same no-extra-precondition reasoning; lengths
+        # stays part of the family key (unchanged, only mode counts dropped)
+        # since it's a real physical input, not something mode-count reuse
+        # can vary (Solver recommendation #2).
+        family_config = None
         if save_dir:
+            family_config = build_run_config(
+                self, "solve_section_length_sweep",
+                dict(x0=x0, x1=x1, wavelengths=wavelengths, lengths=lengths,
+                     stub_left=stub_left, stub_right=stub_right,
+                     geometry_kwargs=geometry_kwargs),
+                geometry,
+            )
             config = build_run_config(
                 self, "solve_section_length_sweep",
                 dict(x0=x0, x1=x1, wavelengths=wavelengths, lengths=lengths,
@@ -281,6 +324,11 @@ class EMESolver:
             if hit is not None:
                 logger.info("solve_section_length_sweep: cache hit at %s", hit)
                 return load_result(hit)
+            superset = lookup_superset(save_dir, family_config, (n_modes_out, n_modes_in))
+            if superset is not None:
+                folder, _stored_dims = superset
+                logger.info("solve_section_length_sweep: superset cache hit at %s (sliced)", folder)
+                return load_result(folder)[:, :, :n_modes_out, :n_modes_in]
         if cache_only:
             raise CacheMissError(
                 f"solve_section_length_sweep(): cache_only=True but no cached "
@@ -323,6 +371,9 @@ class EMESolver:
         if save_dir:
             folder = save_run(save_dir, config, T)
             logger.info("solve_section_length_sweep: cache saved at %s", folder)
+            update_family_pointer(
+                save_dir, family_config, (n_modes_out, n_modes_in), os.path.basename(folder),
+            )
 
         return T
 

@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+import os
+from dataclasses import asdict, dataclass
 from typing import List, Optional, Tuple
 
 import numpy as np
 
 from ..cache import (
-    CacheMissError, build_run_config, build_whole_device_config, load_result, lookup, save_run,
+    CacheMissError, build_run_config, build_whole_device_config, load_result, lookup,
+    lookup_superset, save_run, update_family_pointer,
 )
 from ..geometry.base import DeviceGeometry
 from ..materials.stack import MaterialStack, SOI_160
@@ -540,6 +542,48 @@ class FDTDSolver:
 
         wavelengths = np.asarray(wavelengths)
 
+        # Position/size math (which side excites vs. measures, source/monitor
+        # apertures, the source_aperture_at()/half_domain_aperture priority
+        # order) lives in section_fdtd_layout() — shared with the plotting
+        # code in beef/plot/geometry.py's _draw_section_fdtd_markers(), so
+        # the two can't drift apart (see that function's docstring). Returned
+        # in the section's local frame (0..L); shifted into this method's
+        # own meep-centered frame below. Computed before the cache-config
+        # block (moved up from its previous spot further down) so its
+        # fully-resolved positions can be fingerprinted alongside the
+        # monitor_center/monitor_size/margin *ingredients* that derive
+        # them — a future change to that derivation logic then shows up as
+        # a config diff instead of a silent stale-cache hit (Solver
+        # recommendation #4).
+        layout = section_fdtd_layout(
+            geometry, x0, x1, stub_left, stub_right,
+            n_modes_in, n_modes_out, self.sim_width,
+            self.source_margin, self.monitor_margin, self.half_domain_aperture,
+            geometry_kwargs, monitor_center=monitor_center, monitor_size=monitor_size,
+        )
+
+        # A request for fewer modes than a prior call already computed can
+        # reuse that larger result by slicing its mode axes, IF the two
+        # calls are otherwise physically identical — same excited/measured
+        # side (layout.reverse) and a pinned monitor_size (the default
+        # monitor width depends on whether n_measure > 1, so without an
+        # explicit monitor_size the *simulated* monitor geometry itself
+        # would differ across mode counts, not just the number of bands
+        # decoded from it — see lookup_superset()'s docstring). family_config
+        # is exactly build_run_config()'s usual fingerprint with the mode
+        # counts themselves removed and layout.reverse added in their place
+        # (Solver recommendation #2).
+        family_config = None
+        if save_dir and monitor_size is not None:
+            family_config = build_run_config(
+                self, "solve_section",
+                dict(x0=x0, x1=x1, wavelengths=wavelengths,
+                     stub_left=stub_left, stub_right=stub_right,
+                     monitor_center=monitor_center, monitor_size=monitor_size,
+                     geometry_kwargs=geometry_kwargs, reverse=layout.reverse),
+                geometry,
+            )
+
         if save_dir:
             config = build_run_config(
                 self, "solve_section",
@@ -547,13 +591,20 @@ class FDTDSolver:
                      n_modes_in=n_modes_in, n_modes_out=n_modes_out,
                      stub_left=stub_left, stub_right=stub_right,
                      monitor_center=monitor_center, monitor_size=monitor_size,
-                     geometry_kwargs=geometry_kwargs),
+                     geometry_kwargs=geometry_kwargs,
+                     resolved_layout=asdict(layout)),
                 geometry,
             )
             hit = lookup(save_dir, config)
             if hit is not None:
                 logger.info("solve_section: cache hit at %s", hit)
                 return load_result(hit)
+            if family_config is not None:
+                superset = lookup_superset(save_dir, family_config, (n_modes_out, n_modes_in))
+                if superset is not None:
+                    folder, _stored_dims = superset
+                    logger.info("solve_section: superset cache hit at %s (sliced)", folder)
+                    return load_result(folder)[:, :n_modes_out, :n_modes_in]
         if cache_only:
             raise CacheMissError(
                 f"solve_section(): cache_only=True but no cached run found for "
@@ -584,20 +635,6 @@ class FDTDSolver:
         )
 
         span = x1 - x0
-        # Position/size math (which side excites vs. measures, source/monitor
-        # apertures, the source_aperture_at()/half_domain_aperture priority
-        # order) lives in section_fdtd_layout() — shared with the plotting
-        # code in beef/plot/geometry.py's _draw_section_fdtd_markers(), so
-        # the two can't drift apart (see that function's docstring). Returned
-        # in the section's local frame (0..L); shifted into this method's
-        # own meep-centered frame below.
-        layout = section_fdtd_layout(
-            geometry, x0, x1, stub_left, stub_right,
-            n_modes_in, n_modes_out, self.sim_width,
-            self.source_margin, self.monitor_margin, self.half_domain_aperture,
-            geometry_kwargs, monitor_center=monitor_center, monitor_size=monitor_size,
-        )
-
         Sx = span + stub_left + stub_right + 2 * self.dpml
         Sy = self.sim_width + 2 * self.dpml
 
@@ -692,5 +729,9 @@ class FDTDSolver:
         if save_dir:
             folder = save_run(save_dir, config, T)
             logger.info("solve_section: cache saved at %s", folder)
+            if family_config is not None:
+                update_family_pointer(
+                    save_dir, family_config, (n_modes_out, n_modes_in), os.path.basename(folder),
+                )
 
         return T

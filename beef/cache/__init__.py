@@ -17,11 +17,22 @@ cache_only=True (same call sites) demands a cache hit instead of falling back
 to simulating on a miss — raises CacheMissError. Notebooks (not scripts) set
 this so re-running for documentation/rendering purposes can never silently
 kick off a real (possibly multi-hour) simulation.
+
+lookup_superset()/update_family_pointer() (store.py) add a second, orthogonal
+lookup path: a request for fewer modes than a prior call already computed
+(same solver/geometry/monitor "family", mode counts aside) is served by
+slicing that larger result's mode axes instead of resimulating. See
+lookup_superset()'s docstring for the physical preconditions this relies on
+(same excited/measured side, pinned monitor geometry) — solve_section()/
+solve_section_length_sweep() are responsible for only attempting it when
+those hold.
 """
 from .config import build_run_config, build_whole_device_config
-from .store import CacheMissError, lookup, load_result, save_run
+from .store import (
+    CacheMissError, lookup, lookup_superset, load_result, save_run, update_family_pointer,
+)
 
 __all__ = [
     "build_run_config", "build_whole_device_config", "CacheMissError",
-    "lookup", "load_result", "save_run",
+    "lookup", "lookup_superset", "load_result", "save_run", "update_family_pointer",
 ]
