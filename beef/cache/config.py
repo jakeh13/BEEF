@@ -62,6 +62,10 @@ _METHOD_ATTRS: Dict[Tuple[str, str], Tuple[str, ...]] = {
         "num_modes", "num_cells", "lengths", "straight_length", "oxide_width",
         "oxide_height", "res", "material_stack", "temperature", "mode_solver",
     ),
+    ("EMESolver", "solve_length_sweep"): (
+        "num_modes", "num_cells", "lengths", "straight_length", "oxide_width",
+        "oxide_height", "res", "material_stack", "temperature", "mode_solver",
+    ),
 }
 
 

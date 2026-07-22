@@ -116,6 +116,33 @@ class EMESolver:
             out.extend([n_modes] * n_cells)
         return out
 
+    def _flat_cell_lengths(self, region_lengths: Optional[List[float]] = None) -> List[float]:
+        """Flat per-cell length list (one entry per cell), from region lengths
+        divided evenly across each region's num_cells. Defaults to
+        self.lengths — the same Ls _build_cells() hands to mw.create_cells()."""
+        lengths = self.lengths if region_lengths is None else region_lengths
+        out: List[float] = []
+        for region_len, n_cells in zip(lengths, self.num_cells):
+            out.extend([region_len / n_cells] * n_cells)
+        return out
+
+    def _region_cell_span(self, region_idx: int) -> tuple:
+        """(start, stop) indices of region_idx's cells within the flat cell list."""
+        start = sum(self.num_cells[:region_idx])
+        return start, start + self.num_cells[region_idx]
+
+    def _infer_sweep_region(self) -> int:
+        """The unique region index with num_cells > 1 — i.e. the subdivided
+        taper region a length sweep varies. Raises if that's ambiguous."""
+        variable = [i for i, n in enumerate(self.num_cells) if n > 1]
+        if len(variable) != 1:
+            raise ValueError(
+                f"cannot infer sweep_region: expected exactly one region with "
+                f"num_cells > 1, found indices {variable} (num_cells={self.num_cells}). "
+                "Pass sweep_region explicitly."
+            )
+        return variable[0]
+
     def compute_modes(self, cross_section, num_modes: int) -> list:
         """Compute modes for a single cross-section (exposed for caching).
 
@@ -455,6 +482,136 @@ class EMESolver:
             smat.set(amplitudes, port=side)
 
         return smat
+
+    def solve_length_sweep(
+        self,
+        geometry: DeviceGeometry,
+        wavelengths: np.ndarray,
+        lengths: np.ndarray,
+        ports: Optional[List[str]] = None,
+        sweep_region: Optional[int] = None,
+        save_dir: Optional[str] = None,
+        cache_only: bool = False,
+        **kwargs,
+    ) -> List[SMatrix]:
+        """Whole-device S-matrices for many device lengths, from ONE mode
+        solve per wavelength — the mode basis is reused across every length.
+
+        The cross-section *shape* an EME cell samples depends only on the
+        taper fraction (i+0.5)/num_cells the solver evaluates, never on a
+        region's physical length: a linear taper at fraction t has the same
+        width regardless of how long the taper is (only Δx-per-cell scales).
+        meow's S-matrix factors cleanly into an interface part (depends only
+        on the modes) and a propagation part (the only place a cell's
+        physical length enters — as exp(2j·π·neff/wl·L_cell)); see
+        meow.eme.compute_propagation_s_matrix. So sweeping one region's
+        length changes only a cell_lengths list handed to the cascade, never
+        the modes or interfaces — turning an N-length sweep from N mode
+        solves per wavelength into one. This is the multi-cell generalization
+        of solve_section_length_sweep()'s single-uniform-cell trick.
+
+        Only a region whose cross-section scales with its length (a taper or a
+        straight) may be swept. sweep_region selects which self.lengths entry
+        varies; it defaults to the unique region with num_cells > 1 (the
+        subdivided taper). num_cells for that region is held FIXED across the
+        sweep — it's the cross-section-staircase resolution (an accuracy dial,
+        checkable by raising it), independent of the physical length, which
+        only sets each cell's propagation length lengths[k]/num_cells.
+
+        The geometry is drawn once, at whatever reference length it was built
+        with, purely to sample those (length-independent) cross-section
+        shapes — its swept-region length does not affect the result; only the
+        values in `lengths` do. Every other (non-swept) region keeps its
+        self.lengths value, so those must already match the real device
+        (e.g. fixed access-waveguide stubs).
+
+        Args:
+            geometry: device geometry, built at any reference length for the
+                swept region.
+            wavelengths: [M] wavelength array (µm).
+            lengths: [K] swept-region lengths to evaluate (µm).
+            ports: port sides to simulate (as in solve()); defaults to
+                ["top", "bot"].
+            sweep_region: index into self.lengths that varies (default: the
+                unique num_cells > 1 region — see _infer_sweep_region()).
+            save_dir: persistent on-disk cache directory (see beef/cache/).
+                None/"" (default) disables the cache. The full [K, M] result
+                array is cached per port side, keyed on the solver config, the
+                reference geometry, `lengths`, and sweep_region.
+            cache_only: if True, never run the solve — a cache hit returns as
+                usual, a miss raises CacheMissError (fail-fast per port).
+            **kwargs: forwarded to geometry.to_gds_eme() (e.g. output_idx).
+
+        Returns:
+            list[SMatrix] aligned with `lengths`: result[k] is the SMatrix for
+            device length lengths[k], keyed by port name (same convention as
+            solve()).
+        """
+        import meow as mw
+
+        if ports is None:
+            ports = ["top", "bot"]
+        if sweep_region is None:
+            sweep_region = self._infer_sweep_region()
+
+        wavelengths = np.asarray(wavelengths)
+        lengths = np.asarray(lengths)
+        modes_per_cell = self._modes_per_cell()
+        ref_cell_lengths = self._flat_cell_lengths()
+        c_start, c_stop = self._region_cell_span(sweep_region)
+        n_region_cells = c_stop - c_start
+
+        results = [SMatrix(wavelengths=wavelengths) for _ in lengths]
+
+        for side in ports:
+            config = None
+            if save_dir:
+                gds_polys = geometry.to_gds_eme(
+                    straight_length=self.straight_length, oxide_width=self.oxide_width,
+                    x_start=0.0, side=side, **kwargs,
+                )
+                config = build_whole_device_config(
+                    self, "solve_length_sweep",
+                    dict(side=side, wavelengths=wavelengths, lengths=lengths,
+                         sweep_region=sweep_region, kwargs=kwargs),
+                    geometry, gds_polys,
+                )
+                hit = lookup(save_dir, config)
+                if hit is not None:
+                    logger.info("solve_length_sweep: cache hit at %s", hit)
+                    amps = load_result(hit)
+                    for k in range(len(lengths)):
+                        results[k].set(amps[k], port=side)
+                    continue
+            if cache_only:
+                raise CacheMissError(
+                    f"solve_length_sweep(): cache_only=True but no cached run "
+                    f"found for port={side!r} (save_dir={save_dir!r}). Run once "
+                    f"with cache_only=False to populate the cache."
+                )
+
+            cells = self._build_cells(geometry, side=side, **kwargs)
+            amps = np.zeros((len(lengths), len(wavelengths)), dtype=complex)
+
+            for wl_idx, wl in enumerate(wavelengths):
+                env = mw.Environment(wl=float(wl), T=self.temperature)
+                css = [mw.CrossSection.from_cell(cell=c, env=env) for c in cells]
+                modes = [self.compute_modes(cs, nm) for cs, nm in zip(css, modes_per_cell)]
+                for k, L in enumerate(lengths):
+                    cell_lengths = list(ref_cell_lengths)
+                    for j in range(c_start, c_stop):
+                        cell_lengths[j] = float(L) / n_region_cells
+                    S, _ = mw.compute_s_matrix(modes, cells=cells, cell_lengths=cell_lengths)
+                    amps[k, wl_idx] = S[0, 1]
+
+            if save_dir:
+                folder = save_run(save_dir, config, amps)
+                logger.info("solve_length_sweep: cache saved at %s", folder)
+
+            for k in range(len(lengths)):
+                results[k].set(amps[k], port=side)
+
+        return results
 
     def solve_sweep(self, geometry: DeviceGeometry, wavelengths: np.ndarray,
                     ports: Optional[List[str]] = None,
