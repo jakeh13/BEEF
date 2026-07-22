@@ -9,6 +9,7 @@ Core public API:
         DirectionalCoupler         — 2-waveguide directional coupler w/ S-bend I/O
         Taper, SBend               — standalone taper / S-bend building-block geometries
         CompoundGeometry, WaveguideRun — concatenate several geometries end-to-end
+        GdsGeometry, load_gds_polygons — import polygons from an on-disk .gds file
 
     Materials:
         MaterialStack              — Si/SiO2 layer definitions
@@ -42,7 +43,7 @@ __version__ = "0.1.0"
 from ._utils import extrude_polygons
 from .geometry import (
     MMI, MMIPort, BendGeometry, DirectionalCoupler, Taper, SBend,
-    CompoundGeometry, WaveguideRun,
+    CompoundGeometry, WaveguideRun, GdsGeometry, load_gds_polygons,
 )
 from .materials import MaterialStack, SOI_160, SOI_220
 from .results import SMatrix
@@ -60,6 +61,7 @@ __all__ = [
     "DirectionalCoupler",
     "Taper", "SBend",
     "CompoundGeometry", "WaveguideRun",
+    "GdsGeometry", "load_gds_polygons",
     # materials
     "MaterialStack", "SOI_160", "SOI_220",
     # results
