@@ -88,6 +88,48 @@ class TestRealSolverAllowlists:
         assert _solver_config(a, "solve") != _solver_config(b, "solve")
 
 
+class _StackWithCacheKey:
+    """Stand-in for a custom (non-MaterialStack) material stack that opts into
+    cache fingerprinting via cache_key() — deliberately NOT JSON-safe on its
+    own (has no __dict__ entry _json_safe could handle) to prove the hook,
+    not a lucky fallback, is what includes it."""
+
+    __slots__ = ("_params",)
+
+    def __init__(self, **params):
+        self._params = params
+
+    def cache_key(self):
+        return dict(self._params)
+
+
+class _StackNoCacheKey:
+    __slots__ = ("_params",)
+
+    def __init__(self, **params):
+        self._params = params
+
+
+class TestCacheKeyHook:
+    def test_cache_key_object_is_included_and_sensitive(self):
+        a = _Fake(material_stack=_StackWithCacheKey(t=0.16))
+        b = _Fake(material_stack=_StackWithCacheKey(t=0.30))
+        assert _solver_config(a, "m") != _solver_config(b, "m")
+
+    def test_cache_key_object_equal_when_params_equal(self):
+        a = _Fake(material_stack=_StackWithCacheKey(t=0.16, s=4.5))
+        b = _Fake(material_stack=_StackWithCacheKey(t=0.16, s=4.5))
+        assert _solver_config(a, "m") == _solver_config(b, "m")
+
+    def test_object_without_cache_key_is_dropped_with_warning(self, caplog):
+        import logging
+        a = _Fake(material_stack=_StackNoCacheKey(t=0.16))
+        with caplog.at_level(logging.WARNING):
+            cfg = _solver_config(a, "m")
+        assert "material_stack" not in cfg
+        assert any("cache_key" in r.message for r in caplog.records)
+
+
 class TestSchemaVersion:
     def test_fingerprint_includes_schema_version(self):
         solver = _Fake(x=1)
