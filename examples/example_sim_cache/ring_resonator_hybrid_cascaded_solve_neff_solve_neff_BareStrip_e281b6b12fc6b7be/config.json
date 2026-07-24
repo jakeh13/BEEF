@@ -1,0 +1,56 @@
+{
+  "geometry_class": "BareStrip",
+  "geometry_polygons": {
+    "1,0": [
+      [
+        [
+          0.0,
+          -2.0
+        ],
+        [
+          1.0,
+          -2.0
+        ],
+        [
+          1.0,
+          2.0
+        ],
+        [
+          0.0,
+          2.0
+        ]
+      ]
+    ],
+    "2,0": [
+      [
+        [
+          0.0,
+          -0.225
+        ],
+        [
+          1.0,
+          -0.225
+        ],
+        [
+          1.0,
+          0.225
+        ],
+        [
+          0.0,
+          0.225
+        ]
+      ]
+    ]
+  },
+  "material_stack": {
+    "sz": 2.0,
+    "wg_height": 0.22
+  },
+  "mesh_height": 2.0,
+  "mesh_width": 4.0,
+  "method": "solve_neff",
+  "resolution": 40.0,
+  "solver_type": "ring_resonator_hybrid_cascaded.solve_neff",
+  "waveguide_width": 0.45,
+  "wavelength": 1.525
+}
