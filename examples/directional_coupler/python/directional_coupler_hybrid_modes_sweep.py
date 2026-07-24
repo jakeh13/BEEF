@@ -8,7 +8,7 @@ default), this sweeps
     N_MODES = 2, 3, 4, ..., 12   (11 values)
 
 — the number of EME supermodes carried across the two coupling-region
-interfaces — while still sweeping the full 201-point coupling_length range
+interfaces — while still sweeping the full 200-point coupling_length range
 at each N_MODES value. hybrid.py's own module docstring claims each arm is
 single-mode by design, so 2 modes (even + odd) should fully capture the
 coupling physics, and its N_MODES=6 default is set generously above that
@@ -40,7 +40,7 @@ Outputs (example_output/directional_coupler/directional_coupler_hybrid_modes_swe
 
 Run:
     # one N_MODES value per SLURM array task (see
-    # run_directional_coupler_hybrid_modes_sweep.batch):
+    # sweep/run_directional_coupler_hybrid_modes_sweep.batch):
     python /path/to/examples/directional_coupler/python/directional_coupler_hybrid_modes_sweep.py <index 0..10>
 
     # or the whole sweep serially (slow — batch queue strongly preferred):
@@ -86,7 +86,14 @@ WL_MIN = 1.50       # wavelength sweep start (µm)
 WL_MAX = 1.60       # wavelength sweep end (µm)
 N_WL = 11           # number of wavelength points
 
-coupling_lengths = np.linspace(0.0, 60.0, 201)   # µm — same 201-pt range as hybrid.py
+# µm of the straight coupling region folded into each FDTD section, past the
+# S-bend/coupling-region discontinuity — same value/reasoning as hybrid.py's
+# own BODY_STUB (see its step-3 comments). The sweep starts at
+# 2*BODY_STUB because a device shorter than both stubs put together can't be
+# split into these three sections at all.
+BODY_STUB = 0.25   # µm
+
+coupling_lengths = np.linspace(2 * BODY_STUB, 60.0, 200)   # µm — same 200-pt range as hybrid.py
 wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
 
 NUM_MODES_SWEEP = np.arange(2, 13)   # 2..12 inclusive, 11 values — the swept knob
@@ -138,16 +145,33 @@ fdtd_solver = FDTDSolver(**_fdtd_common)
 
 half_body = dc.coupling_length / 2
 half_total = dc.total_length / 2
-boundaries = [-half_total, -half_body, +half_body, +half_total]
+boundaries = [-half_total, -half_body + BODY_STUB, +half_body - BODY_STUB, +half_total]
 
-# Interface-monitor override for the input-section FDTD runs — see
+# Interface-monitor pin for the input-section FDTD runs — see
 # directional_coupler_hybrid.py's own comment for the full reasoning: spans
 # the full non-PML domain centered on the coupled pair's shared y=0 axis, so
 # it matches the EME body's own y=0-centered supermode basis.
 _iface_mon = dict(monitor_center=0.0, monitor_size=fdtd_solver.sim_width)
 
+# EME body length per swept coupling_length: each FDTD section already folds
+# BODY_STUB µm of the straight coupling region into itself, so the three
+# sections' straight coverage adds back up to exactly coupling_length.
+body_lengths = coupling_lengths - 2 * BODY_STUB
+# >= 0, not > 0: the shortest swept length is exactly 2*BODY_STUB — the
+# degenerate device whose whole coupling region lives in the two FDTD sections
+# and whose EME body is zero-length (an identity propagation matrix).
+assert body_lengths[0] >= 0, (
+    f"coupling_lengths must start at >= 2*BODY_STUB ({2 * BODY_STUB:.2f} µm); "
+    f"got {coupling_lengths[0]:.2f} µm"
+)
+assert np.allclose(body_lengths + 2 * BODY_STUB, coupling_lengths)
+
 print(f"Directional coupler total length: {dc.total_length:.2f} µm "
       f"(coupling pitch {dc.coupling_pitch:.3f} µm, far pitch {dc.waveguide_offset:.2f} µm)")
+print(f"Coupling-length budget: 2 x {BODY_STUB:.2f} µm inside the FDTD sections "
+      f"+ EME body {body_lengths[0]:.2f}–{body_lengths[-1]:.2f} µm "
+      f"= {coupling_lengths[0]:.2f}–{coupling_lengths[-1]:.2f} µm total "
+      f"(interface monitors at x = ±{abs(boundaries[1]):.2f} µm)")
 print(f"N_MODES sweep: {NUM_MODES_SWEEP[0]}..{NUM_MODES_SWEEP[-1]} "
       f"({len(NUM_MODES_SWEEP)} values), each over {len(coupling_lengths)} coupling "
       f"lengths x {N_WL} wavelengths")
@@ -184,9 +208,9 @@ def simulate_n_modes(N: int) -> None:
     M_out_cross = M_in1.transpose(0, 2, 1)
 
     M_body = body_solver.solve_section_length_sweep(
-        dc, wavelengths, boundaries[1], boundaries[2], coupling_lengths,
+        dc, wavelengths, boundaries[1], boundaries[2], body_lengths,
         n_modes_in=N, n_modes_out=N, save_dir=save_dir,
-    )  # [n_L, n_wl, N, N]
+    )  # [n_L, n_wl, N, N] — plotted/saved against coupling_lengths (the physical total)
 
     tmp = np.einsum("Lwij,wjk->Lwik", M_body, M_in0)               # [n_L, n_wl, N, 1]
     full_through = np.einsum("wij,Lwjk->Lwik", M_out_through, tmp) # [n_L, n_wl, 1, 1]

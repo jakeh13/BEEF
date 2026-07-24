@@ -32,7 +32,7 @@ Outputs (example_output/directional_coupler/directional_coupler_hybrid_resolutio
 
 Run:
     # one resolution per SLURM array task (see
-    # run_directional_coupler_hybrid_resolution_sweep.batch):
+    # sweep/run_directional_coupler_hybrid_resolution_sweep.batch):
     python /path/to/examples/directional_coupler/python/directional_coupler_hybrid_resolution_sweep.py <index 0..10>
 
     # or the whole sweep serially (slow — batch queue strongly preferred):
@@ -73,7 +73,7 @@ save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
 # Global simulation parameters — identical to directional_coupler_hybrid.py,
 # except RESOLUTION is swept instead of pinned, and coupling_length is fixed
 # to the same value directional_coupler_fdtd_resolution_sweep.py uses (rather
-# than hybrid.py's own 201-point length sweep) so the two resolution studies
+# than hybrid.py's own 200-point length sweep) so the two resolution studies
 # are directly comparable.
 # ---------------------------------------------------------------------------
 WL_MIN = 1.50       # wavelength sweep start (µm)
@@ -83,6 +83,12 @@ N_WL = 11           # number of wavelength points
 N_MODES = 6   # even + odd supermodes carried at the two body interfaces — hybrid.py's default, pinned here
 
 COUPLING_LENGTH = 13.5   # µm — same ~3 dB length as directional_coupler_fdtd_resolution_sweep.py
+
+# µm of the straight coupling region folded into each FDTD section, past the
+# S-bend/coupling-region discontinuity — same value/reasoning as hybrid.py's
+# own BODY_STUB (see its step-3 comments). Must satisfy
+# 2*BODY_STUB <= COUPLING_LENGTH.
+BODY_STUB = 0.25   # µm
 
 RESOLUTION_SWEEP = np.arange(20.0, 120.0 + 1e-9, 10.0)   # px/µm — 20:10:120, 11 values — the swept knob
 
@@ -119,9 +125,18 @@ dc = DirectionalCoupler(
 
 half_body = dc.coupling_length / 2
 half_total = dc.total_length / 2
-boundaries = [-half_total, -half_body, +half_body, +half_total]
+boundaries = [-half_total, -half_body + BODY_STUB, +half_body - BODY_STUB, +half_total]
 
-# Interface-monitor override for the input-section FDTD runs — see
+# EME body length: each FDTD section already folds BODY_STUB µm of the
+# straight coupling region into itself, so the three sections' straight
+# coverage adds back up to exactly COUPLING_LENGTH.
+BODY_LENGTH = COUPLING_LENGTH - 2 * BODY_STUB
+assert BODY_LENGTH >= 0, (
+    f"COUPLING_LENGTH ({COUPLING_LENGTH:.2f} µm) must be at least 2*BODY_STUB "
+    f"({2 * BODY_STUB:.2f} µm)"
+)
+
+# Interface-monitor pin for the input-section FDTD runs — see
 # directional_coupler_hybrid.py's own comment for the full reasoning: spans
 # the full non-PML domain centered on the coupled pair's shared y=0 axis, so
 # it matches the EME body's own y=0-centered supermode basis. Fixed
@@ -133,6 +148,9 @@ _iface_mon = dict(monitor_center=0.0, monitor_size=_SIM_WIDTH)
 print(f"Directional coupler total length: {dc.total_length:.2f} µm "
       f"(coupling length {dc.coupling_length:.2f} µm, "
       f"coupling pitch {dc.coupling_pitch:.3f} µm, far pitch {dc.waveguide_offset:.2f} µm)")
+print(f"Coupling-length budget: 2 x {BODY_STUB:.2f} µm inside the FDTD sections "
+      f"+ EME body {BODY_LENGTH:.2f} µm = {BODY_LENGTH + 2 * BODY_STUB:.2f} µm total "
+      f"(nominal {COUPLING_LENGTH:.2f} µm; interface monitors at x = ±{abs(boundaries[1]):.2f} µm)")
 print(f"Resolution sweep: {RESOLUTION_SWEEP[0]:.0f}..{RESOLUTION_SWEEP[-1]:.0f} px/µm "
       f"({len(RESOLUTION_SWEEP)} values), N_MODES={N_MODES}, {N_WL} wavelengths")
 
@@ -183,7 +201,7 @@ def simulate_resolution(R: float) -> None:
     M_out_cross = M_in1.transpose(0, 2, 1)
 
     M_body = body_solver.solve_section_length_sweep(
-        dc, wavelengths, boundaries[1], boundaries[2], np.array([COUPLING_LENGTH]),
+        dc, wavelengths, boundaries[1], boundaries[2], np.array([BODY_LENGTH]),
         n_modes_in=N_MODES, n_modes_out=N_MODES, save_dir=save_dir,
     )[0]  # [n_wl, N_MODES, N_MODES] — single-element length axis dropped
 

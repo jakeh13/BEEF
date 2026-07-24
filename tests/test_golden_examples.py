@@ -137,15 +137,22 @@ def run_directional_coupler_hybrid() -> SMatrix:
 
     half_body = dc.coupling_length / 2
     half_total = dc.total_length / 2
-    boundaries = [-half_total, -half_body, half_body, half_total]
+    # Same convention as the example (and as the MMI replicas above): each FDTD
+    # section folds body_stub µm of the straight coupling region into itself,
+    # past the S-bend/coupling-region discontinuity, so the interface mode
+    # decomposition lands on a uniform coupled-pair cross-section. HybridSolver
+    # takes the EME body's length from the boundaries, so the three sections
+    # still cover exactly coupling_length of straight between them.
+    body_stub = 0.25
+    boundaries = [-half_total, -half_body + body_stub, half_body - body_stub, half_total]
     hybrid = HybridSolver(
         solvers=[fdtd_solver, body_solver, fdtd_solver],
         boundaries=boundaries, interface_modes=[n_modes, n_modes],
     )
-    # Re-center the S-bend/coupling-region interior interface monitor on the
-    # shared y=0 axis (matches the EME body's own supermode basis) — same
-    # override examples/directional_coupler/python/directional_coupler_hybrid.py
-    # applies manually via _iface_mon; needed on both the input and output
+    # Pin the interior interface monitor to the full non-PML domain, centered on
+    # the shared y=0 axis (matches the EME body's own supermode basis) — same
+    # pin examples/directional_coupler/python/directional_coupler_hybrid.py
+    # applies manually via _iface_mon; passed on both the input and output
     # sections here since (unlike that example's reciprocity shortcut) each
     # section below is actually simulated, not reused via transpose.
     iface_mon = dict(monitor_center=0.0, monitor_size=fdtd_solver.sim_width)

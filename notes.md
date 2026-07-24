@@ -460,6 +460,19 @@ lives in "Current library reference" above, not here.
    message on import failure pointing at the conda-forge install command) and
    document the conda-forge requirement in `README.md`'s Install section, not
    just buried in the Testing section.
+7. **Golden tests shouldn't re-implement the examples they guard.** Each
+   `run_*()` in `tests/test_golden_examples.py` rebuilds its example's
+   geometry, solver config and `HybridSolver` boundaries by hand at reduced
+   resolution/wavelength/mode counts — a second copy of the thing under test.
+   When the directional-coupler hybrid moved its interfaces 0.25 µm into the
+   coupling region (2026-07-24), the replica had to be edited to match and its
+   golden JSON regenerated; had it been left alone it would have kept passing
+   happily against the *old* convention, i.e. guarding a configuration no
+   example uses any more. Better: have each example expose its build as a
+   factory the test imports (parametrized by resolution/wavelength count so the
+   test can still run cheap), or failing that, add a test asserting the shared
+   invariants — boundary positions relative to the geometry, solver flags —
+   agree between example module and replica.
 
 ### Solver
 
@@ -479,7 +492,12 @@ lives in "Current library reference" above, not here.
    which `solve()`'s one-call contract can't express even with `mirror_pairs`.
    A multi-excitation-config `solve()` extension (declare several excitation
    kwargs up front, get every port-combination coefficient out of one call)
-   would let both examples migrate off the manual einsum composition.
+   would let both examples migrate off the manual einsum composition. Side
+   effect of the bypass worth fixing with it: because `solve()` derives each
+   section's length from the boundaries, it can't get the section lengths
+   wrong — the hand-rolled path can, so each example now asserts its own
+   length budget (FDTD stubs + EME body == the nominal body length) in
+   script-level code that a `solve()`-based version wouldn't need at all.
 3. **Circuit-level S-matrix composition.** `SMatrix` has no way to combine several
    devices' results into a larger circuit (e.g. cascading an MMI's `SMatrix` with a
    directional coupler's). `HybridSolver` already does exactly this kind of
@@ -540,22 +558,99 @@ lives in "Current library reference" above, not here.
    this is a mode-solve-cost gap, and the two would compound in a real
    dispersive-material implementation (interpolating dispersive neff at
    already-sparse solve points).
-9. **Bigger lift, only if scope grows toward design automation:** adjoint/
-   inverse-design support, periodic/grating structures via an RCWA backend
-   (S4/Meent/FMMAX-style) for problems where FDTD/EME are the wrong tool,
-   near-to-far-field transform. For adjoint specifically, `meep.adjoint`
-   (already what BEEF's own `FDTDSolver` sits on top of) is the
-   lowest-friction path — it's autograd/JAX-based and gradient computation
-   wraps around any optimization library, so no new solver dependency would
-   be needed, just a BEEF-side API for defining a figure of merit over a
-   `HybridSolver` chain's `SMatrix` output. tidy3d (native `autograd`
-   support) and the newer JAX-native FDTDX project (automatic
-   differentiation built into the solver via time-reversibility, published
-   in JOSS 2026) confirm autodiff-native is now the field's default
-   direction, not a niche add-on — worth knowing if this ever gets
-   prioritized. Substantial, well-trodden ground already owned by
-   meep/tidy3d/FDTDX/the RCWA tools respectively — worth it only if a
-   concrete device need shows up that FDTD/EME genuinely can't address.
+9. **Make the two section types agree on the material at a given wavelength.**
+   Within one `HybridSolver` chain the FDTD and EME sections currently look up
+   silicon/oxide differently: `FDTDSolver` builds both media **once**, at the
+   mean of the requested wavelength array (`_build_domain`, `solvers/fdtd.py`
+   lines 274-278, and `solve_section()`'s own copy at lines 615-617), so every
+   wavelength in a sweep is simulated in the *same* frozen structure, while
+   `EMESolver` rebuilds the cross-section per wavelength (`mw.Environment(wl=...)`
+   + `CrossSection.from_cell()`, `solvers/eme.py:256-257` and its four sibling
+   loops), letting meow's own nearest-tabulated lookup pick a different index at
+   each one. Two consequences, both invisible today:
+   - The FDTD half of a hybrid chain has no dispersion across the sweep at all,
+     by construction — not a nearest-neighbor approximation of it, none.
+   - At the same wavelength the two halves can be using *different* silicon.
+     With meow's built-in Si table the C-band examples straddle a tabulated
+     point (1.532 and 1.600 µm are the only entries in 1.49-1.61 µm), so an
+     11-point 1.50-1.60 µm sweep has its EME sections on n=3.4784 below
+     ~1.566 µm and n=3.4710 above it, while its FDTD sections sit on n=3.4784
+     (the 1.55 µm center) throughout. ~0.0074 in index — small, but it is a
+     silent inconsistency *inside a single device solve*, not a modeling
+     choice anyone made.
+   Cheapest honest fix, independent of recommendation #5: give `FDTDSolver` a
+   per-wavelength material path (or, where one broadband pulse must cover the
+   whole sweep, have it evaluate at the same nearest-tabulated grid meow uses
+   and say so in the log), and have `HybridSolver` assert the two section types
+   resolve the same index at the same wavelength. Recommendation #5 (real
+   Lorentzian dispersion) subsumes the first half of this but not the second —
+   the agreement check is worth having either way.
+
+   **Subpixel-smoothing coupling, worth knowing before #5 is attempted.**
+   Everything above is what currently keeps every material non-dispersive
+   (`mp.Medium(index=...)`, `materials/stack.py:41-59`), and meep only
+   subpixel-averages the *instantaneous* epsilon. So today smoothing applies in
+   full on both paths — meow sets `eps_averaging=True` explicitly for its mode
+   solve (`meow/fde/meep.py:97`) and `FDTDSolver` inherits meep's `True`
+   default (it never passes the flag, nor `subpixel_tol`/`subpixel_maxeval`) —
+   and it is not a small effect on the mode basis: disabling it shifts the
+   fundamental-mode `neff` of the 0.45x0.22 µm strip by 0.050 (meow-style 2-D
+   cross-section solve, res 40) and 0.033 (3-D prism, eigenmode on an x-normal
+   plane, res 30). Swapping in Lorentzian susceptibilities changes that: meep
+   averages only the ε∞ part and assigns the susceptibility terms per pixel
+   unsmoothed, so the *same* ε(ω) expressed dispersively rather than as a fixed
+   index yields interface pixels differing by up to ~0.23 in ε. A "just the
+   materials" change would therefore quietly move the mode basis and the
+   mesh-convergence point along with it — budget a re-run of the resolution
+   sweeps (`sweep/run_directional_coupler_*_resolution_sweep.batch`) as part of
+   #5, not as a follow-up. While in there: `FDTDSolver` neither exposes nor
+   logs `eps_averaging`/`subpixel_tol`/`subpixel_maxeval`, so a knob that
+   demonstrably moves `neff` at the second decimal is set entirely by meep's
+   default — and, since `_solver_config()` fingerprints only the solver's own
+   attributes (`vars(solver)` filtered by `_METHOD_ATTRS`), a meep version
+   that changed that default would not invalidate a single cached run. Making
+   them real `FDTDSolver` params on the allowlist fixes both.
+10. **Give hybrid interface placement a library-level story.** Every hybrid
+    example folds a stub of the adjacent uniform region into its FDTD sections
+    so the interface mode decomposition lands past a cross-section
+    discontinuity, and every one picks the amount by hand, with no shared
+    rationale: 0.25 µm in `mmi_1x2_hybrid.py:139`, `mmi_2x2_hybrid.py:168` and
+    (since 2026-07-24) `directional_coupler_hybrid.py`, 0.75 µm in
+    `modal_multiplexer_hybrid.py:162`, 1.0 µm as `IFACE_BUFFER` in
+    `ring_resonator_hybrid_cascaded.py:212` — and the directional coupler used
+    **zero** (interfaces exactly on the S-bend/coupling-region seam) until that
+    date. The library offers no help here: `HybridSolver` takes raw boundary
+    positions, and geometries validate only their own hard constraints
+    (`DirectionalCoupler._check_cut` rejects a cut strictly inside an S-bend,
+    but a cut exactly *on* the seam — the worst case for the decomposition,
+    since `section_fdtd_layout()` puts the interface monitor exactly at the
+    section boundary, giving the bend's near field zero relaxation length —
+    is legal and silent). Three concrete pieces: (a) a geometry-level
+    `discontinuities()` (or recommended-stub hint) so `HybridSolver` can warn
+    when a boundary coincides with a cross-section change; (b) promote the
+    empirical procedure — `directional_coupler_hybrid_stub_sweep.py` (in
+    `examples/directional_coupler/python/`) sweeps the stub 0:0.25:2 µm on
+    one fixed device and plots the 50:50 split length against it, which is the
+    convergence check that justifies a value — into something reusable beyond
+    the directional coupler (pairs naturally with the sweep harness in Misc #5);
+    (c) once each geometry family has a defensible number, keep it in one place
+    instead of four example-local constants.
+11. **Bigger lift, only if scope grows toward design automation:** adjoint/
+    inverse-design support, periodic/grating structures via an RCWA backend
+    (S4/Meent/FMMAX-style) for problems where FDTD/EME are the wrong tool,
+    near-to-far-field transform. For adjoint specifically, `meep.adjoint`
+    (already what BEEF's own `FDTDSolver` sits on top of) is the
+    lowest-friction path — it's autograd/JAX-based and gradient computation
+    wraps around any optimization library, so no new solver dependency would
+    be needed, just a BEEF-side API for defining a figure of merit over a
+    `HybridSolver` chain's `SMatrix` output. tidy3d (native `autograd`
+    support) and the newer JAX-native FDTDX project (automatic
+    differentiation built into the solver via time-reversibility, published
+    in JOSS 2026) confirm autodiff-native is now the field's default
+    direction, not a niche add-on — worth knowing if this ever gets
+    prioritized. Substantial, well-trodden ground already owned by
+    meep/tidy3d/FDTDX/the RCWA tools respectively — worth it only if a
+    concrete device need shows up that FDTD/EME genuinely can't address.
 
 ### Geometry
 
@@ -691,6 +786,34 @@ lives in "Current library reference" above, not here.
    `examples/*.py` scripts hand-roll their own `os.makedirs`/`output_dir` logic
    instead) — worth consolidating on the existing utility everywhere instead of ad
    hoc per-script path-building.
+5. **Array-task sweep harness.** Five sweep drivers now exist under
+   `examples/directional_coupler/python/` —
+   `directional_coupler_fdtd_sweep.py`, `..._fdtd_resolution_sweep.py`,
+   `..._hybrid_modes_sweep.py`, `..._hybrid_resolution_sweep.py`, and
+   `..._hybrid_stub_sweep.py` — and every one hand-copies the same harness:
+   a `_tag()` filename scheme, `_atomic_replace_write()`, a
+   "SLURM array index selects one swept value, no index runs the whole sweep
+   serially" CLI, per-value `data/*.npz` + `plots/*.png` writes, aggregation
+   that re-reads whatever landed so far, and an "n/N done" annotation for
+   partially-drained arrays. Only the physics in the middle differs. A
+   `beef.sweep` harness taking (swept values, a per-value run function
+   returning arrays, an aggregate-plot hook) would leave each example holding
+   just its physics — and their batch scripts in `sweep/` are equally
+   near-identical, differing only in make target and array range. Distinct from
+   Examples #2 (`ParallelSweep` is a local `multiprocessing` grid over
+   whole-device `solve()`, not a cluster array) and broader than Misc #1
+   (resolution-specific).
+6. **Pair notebooks to scripts instead of mirroring them by hand.** Twelve
+   examples ship as a `.py` plus a hand-maintained `.ipynb` copy of the same
+   code (`directional_coupler_hybrid`, `mmi_2x2_hybrid`,
+   `modal_multiplexer_hybrid`, `ring_resonator_hybrid_cascaded`, …), with the
+   notebook differing only in `CACHE_ONLY = True`, ASCII-ised units, and
+   `plt.show()` in place of `savefig`. Nothing enforces that they stay in sync:
+   the 2026-07-24 directional-coupler interface change had to be applied twice
+   and verified by executing the notebook's setup cells by hand, and a missed
+   mirror would leave a published tutorial silently teaching the old
+   convention. jupytext pairing (or generating the notebooks from the scripts)
+   plus a CI check that the pair is in sync removes the whole class of drift.
 
 ## Not recommending
 

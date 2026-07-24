@@ -23,17 +23,18 @@ EXAMPLES = $(MMI_1X2_EXAMPLES) $(MMI_2X2_EXAMPLES) $(DIRECTIONAL_COUPLER_EXAMPLE
 DEVICES = mmi_1x2 mmi_2x2 directional_coupler modal_multiplexer ring_resonator
 
 # The brute-force FDTD coupling-length sweep (and the N_MODES / mesh-
-# resolution convergence sweeps below) are deliberately NOT in EXAMPLES or the
-# directional_coupler aggregate: each is a long production sweep with its own
-# batch script (run_directional_coupler_*_sweep.batch, one SLURM array task
-# per swept value), and keeping their names out of every other script's list
-# is what guarantees no other batch script's per-example cleanup ever removes
-# their output folders. SWEEP_INDEX selects one value from the relevant
-# sweep's list (length 0..30, N_MODES/resolution 0..10); empty runs the whole
-# sweep serially.
+# resolution / body-stub convergence sweeps below) are deliberately NOT in
+# EXAMPLES or the directional_coupler aggregate: each is a long production
+# sweep with its own batch script (sweep/run_directional_coupler_*_sweep.batch
+# at the duty root, one SLURM array task per swept value), and keeping their
+# names out of every other script's list is what guarantees no other batch
+# script's per-example cleanup ever removes their output folders. SWEEP_INDEX
+# selects one value from the relevant sweep's list (length 0..30,
+# N_MODES/resolution 0..10, body stub 0..8); empty runs the whole sweep
+# serially.
 SWEEP_INDEX ?=
 
-.PHONY: all $(DEVICES) $(EXAMPLES) directional_coupler_fdtd_sweep directional_coupler_hybrid_modes_sweep directional_coupler_fdtd_resolution_sweep directional_coupler_hybrid_resolution_sweep clean clean_directional_coupler_fdtd_sweep clean_directional_coupler_hybrid_modes_sweep clean_directional_coupler_fdtd_resolution_sweep clean_directional_coupler_hybrid_resolution_sweep
+.PHONY: all $(DEVICES) $(EXAMPLES) directional_coupler_fdtd_sweep directional_coupler_hybrid_modes_sweep directional_coupler_fdtd_resolution_sweep directional_coupler_hybrid_resolution_sweep directional_coupler_hybrid_stub_sweep clean clean_directional_coupler_fdtd_sweep clean_directional_coupler_hybrid_modes_sweep clean_directional_coupler_fdtd_resolution_sweep clean_directional_coupler_hybrid_resolution_sweep clean_directional_coupler_hybrid_stub_sweep
 
 all: $(EXAMPLES)
 
@@ -84,6 +85,9 @@ directional_coupler_fdtd_resolution_sweep:
 directional_coupler_hybrid_resolution_sweep:
 	$(runner) $(my_python) directional_coupler/python/directional_coupler_hybrid_resolution_sweep.py $(SWEEP_INDEX)
 
+directional_coupler_hybrid_stub_sweep:
+	$(runner) $(my_python) directional_coupler/python/directional_coupler_hybrid_stub_sweep.py $(SWEEP_INDEX)
+
 modal_multiplexer_hybrid:
 	$(runner) $(my_python) modal_multiplexer/python/modal_multiplexer_hybrid.py
 
@@ -109,3 +113,6 @@ clean_directional_coupler_fdtd_resolution_sweep:
 
 clean_directional_coupler_hybrid_resolution_sweep:
 	rm -rf ../../example_output/directional_coupler/directional_coupler_hybrid_resolution_sweep
+
+clean_directional_coupler_hybrid_stub_sweep:
+	rm -rf ../../example_output/directional_coupler/directional_coupler_hybrid_stub_sweep
