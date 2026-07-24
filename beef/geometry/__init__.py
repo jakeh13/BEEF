@@ -5,6 +5,7 @@ from .coupler import DirectionalCoupler
 from .taper import Taper
 from .sbend import SBend
 from .compound import CompoundGeometry, WaveguideRun
+from .gds_import import GdsGeometry, load_gds_polygons
 
 __all__ = [
     "DeviceGeometry",
@@ -14,4 +15,5 @@ __all__ = [
     "Taper",
     "SBend",
     "CompoundGeometry", "WaveguideRun",
+    "GdsGeometry", "load_gds_polygons",
 ]

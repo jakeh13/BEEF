@@ -62,6 +62,10 @@ _METHOD_ATTRS: Dict[Tuple[str, str], Tuple[str, ...]] = {
         "num_modes", "num_cells", "lengths", "straight_length", "oxide_width",
         "oxide_height", "res", "material_stack", "temperature", "mode_solver",
     ),
+    ("EMESolver", "solve_length_sweep"): (
+        "num_modes", "num_cells", "lengths", "straight_length", "oxide_width",
+        "oxide_height", "res", "material_stack", "temperature", "mode_solver",
+    ),
 }
 
 
@@ -88,16 +92,23 @@ def _solver_config(solver, method_name: str) -> Dict[str, Any]:
     see _METHOD_ATTRS' module-level docstring for why that's the safe
     fallback direction).
 
-    material_stack is an object (not a scalar), so it's serialized
-    explicitly; any other non-scalar attribute a solver subclass might carry
-    is skipped with a warning rather than silently dropped, since an omitted
-    attribute that actually affects the physical result would produce a
-    silent false-positive cache hit — see beef/cache/__init__.py.
+    A non-scalar attribute (e.g. a material stack) is serialized via its own
+    cache_key() method if it has one — the general hook any custom material
+    stack or other solver-attribute object should implement to fingerprint
+    itself (see MaterialStack's special-case below for the built-in stacks).
+    An object with neither cache_key() nor a JSON-safe form is skipped with a
+    warning rather than silently dropped, since an omitted attribute that
+    actually affects the physical result would produce a silent false-
+    positive cache hit — see beef/cache/__init__.py.
     """
     allowlist = _METHOD_ATTRS.get((type(solver).__name__, method_name))
     out: Dict[str, Any] = {}
     for key, value in vars(solver).items():
         if allowlist is not None and key not in allowlist:
+            continue
+        cache_key = getattr(value, "cache_key", None)
+        if callable(cache_key):
+            out[key] = _json_safe(cache_key())
             continue
         if isinstance(value, MaterialStack):
             out[key] = {"wg_height": value.wg_height, "sz": value.sz}
@@ -106,10 +117,11 @@ def _solver_config(solver, method_name: str) -> Dict[str, Any]:
             out[key] = _json_safe(value)
         except TypeError:
             logger.warning(
-                "cache: solver attribute %r (%s) is not JSON-safe and was "
-                "excluded from the cache config — if it affects the "
-                "physical result, cache hits involving this solver may be "
-                "false positives.",
+                "cache: solver attribute %r (%s) is not JSON-safe and has no "
+                "cache_key() method, so it was excluded from the cache config "
+                "— if it affects the physical result, cache hits involving "
+                "this solver may be false positives. Give it a cache_key() "
+                "returning a JSON-safe fingerprint to fix this.",
                 key, type(value).__name__,
             )
     return out

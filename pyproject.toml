@@ -15,7 +15,8 @@ dependencies = [
 [project.optional-dependencies]
 eme = ["meow-sim"]
 fdtd = ["meep"]
-all = ["meow-sim", "meep"]
+gds = ["gdstk"]
+all = ["meow-sim", "meep", "gdstk"]
 dev = ["pytest"]
 
 [tool.setuptools.packages.find]
