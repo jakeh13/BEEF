@@ -19,6 +19,96 @@ from ..results.smatrix import SMatrix
 logger = logging.getLogger(__name__)
 
 
+def monitor_freq_grid(wavelengths: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """DFT-monitor frequencies for `wavelengths`, plus the index map that puts
+    meep's results back into the caller's wavelength order.
+
+    Every monitor in this module must be built from this explicit frequency
+    list, never from meep's ``(fcen, df, nfreq)`` triple. That triple spreads
+    nfreq points evenly over ``[fcen - df/2, fcen + df/2]`` *in frequency*, so
+    it cannot reproduce a wavelength array that is linear in λ, and it orders
+    them ascending in frequency — i.e. **descending in wavelength**. Indexing
+    such a result against an ascending-λ array mislabels every point but the
+    centre one, silently: with the ``df = (1/λ_min - 1/λ_max) * 0.5`` this
+    module used to pass, a 1.50–1.60 µm 11-point sweep actually sampled
+    1.5254–1.5754 µm — half the requested span, reversed, up to 75 nm off. It
+    made every FDTD result here report a directional coupler's coupling as
+    *weakening* with wavelength (backwards), and made HybridSolver chains
+    contract an EME section at one wavelength against an FDTD section at a
+    different one. See dc_validation.md.
+
+    Returns:
+        mon_freqs: strictly ascending frequencies (1/µm), for
+            ``sim.add_mode_monitor(mon_freqs, ...)``.
+        wl_order: index array such that ``alpha[wl_order]`` reorders a
+            monitor-ordered result back onto `wavelengths` as given.
+    """
+    freqs = 1.0 / np.asarray(wavelengths, dtype=float)
+    order = np.argsort(freqs)              # ascending-freq position -> caller index
+    return freqs[order], np.argsort(order)  # caller index -> ascending-freq position
+
+
+# Relative bandwidth used when a caller asks for a single wavelength, where the
+# requested span is zero and there is nothing to scale: 0.1 * fcen before the
+# factor, i.e. meep's usual fwidth = 0.2 * fcen at the default factor of 2.
+_SINGLE_WL_REL_BANDWIDTH = 0.1
+
+
+def source_fwidth(wavelengths: np.ndarray, factor: float) -> float:
+    """Gaussian-pulse `fwidth` covering the requested wavelength span.
+
+    `factor` multiplies the *full* frequency span ``1/λ_min - 1/λ_max``. It has
+    to exceed 1: meep's Gaussian falls as ``exp(-2π²(Δf/fwidth)²)``, so at
+    ``factor = 1`` the band edges sit at 0.005 of peak amplitude and at
+    ``factor = 1.5`` at 0.097 — the default 2.0 puts them at 0.27, comfortably
+    above the 10% floor `check_source_coverage()` warns below. The ratio is
+    what matters, so this holds for any band or point count.
+
+    Before the frequency-grid fix (see `monitor_freq_grid`) this was
+    ``span * 0.5``, which looked adequate only because the monitors shared the
+    same value and therefore sampled the same too-narrow band.
+    """
+    wl = np.asarray(wavelengths, dtype=float)
+    span = 1.0 / wl.min() - 1.0 / wl.max()
+    if span <= 0.0:                        # single wavelength — nothing to span
+        return factor * _SINGLE_WL_REL_BANDWIDTH / float(wl.mean())
+    return factor * span
+
+
+def check_source_coverage(fcen: float, fwidth: float, wavelengths: np.ndarray,
+                          min_fraction: float = 0.1) -> np.ndarray:
+    """Warn if the pulse barely reaches some requested wavelength.
+
+    A starved point still yields a well-conditioned transmission — the source
+    spectrum cancels in the measured/normalization amplitude ratio — but it
+    spends the simulation's dynamic range, and `decay_tol` is applied to DFT
+    fields that are orders of magnitude smaller there. Cheap to check, and the
+    failure it guards against is silent.
+
+    Returns the per-wavelength amplitude as a fraction of peak.
+    """
+    import meep as mp
+
+    src = mp.GaussianSource(fcen, fwidth=fwidth)
+    amp = np.array([abs(src.fourier_transform(1.0 / float(w))) for w in wavelengths])
+    peak = amp.max()
+    if peak <= 0.0:
+        logger.warning("source carries no power at any requested wavelength "
+                       "(fcen=%.5f, fwidth=%.5f)", fcen, fwidth)
+        return amp
+    frac = amp / peak
+    if frac.min() < min_fraction:
+        worst = int(np.argmin(frac))
+        logger.warning(
+            "source is starved at %d/%d requested wavelengths (fcen=%.5f, "
+            "fwidth=%.5f): worst is λ=%.4f µm at %.2g of peak amplitude, below "
+            "the %.0f%% floor. Raise FDTDSolver(source_bandwidth_factor=...).",
+            int((frac < min_fraction).sum()), len(frac), fcen, fwidth,
+            float(wavelengths[worst]), frac[worst], 100 * min_fraction,
+        )
+    return frac
+
+
 @dataclass
 class SectionFDTDLayout:
     """Source/monitor position + size for one solve_section() call, in the
@@ -204,6 +294,13 @@ class FDTDSolver:
         material_stack: material index lookup for Si / SiO₂.
         decay_tol: DFT field decay tolerance for early-stop criterion.
             Lower = more accurate but slower; 1e-9 is faster, 1e-11 is tight.
+        source_bandwidth_factor: Gaussian pulse width as a multiple of the
+            requested frequency span 1/λ_min - 1/λ_max (see source_fwidth()).
+            Must exceed 1 or the band edges are starved — the default 2.0
+            leaves them at 0.27 of peak amplitude, and every solve warns
+            (check_source_coverage()) if any requested wavelength drops below
+            10%. For a single-wavelength request, where there is no span to
+            scale, it multiplies a 10%-of-fcen relative bandwidth instead.
 
     Derived attribute:
         waveguide_length = max(source_margin, monitor_margin) + 0.25 (µm)
@@ -227,6 +324,7 @@ class FDTDSolver:
         three_d: bool = False,
         material_stack: MaterialStack = SOI_160,
         decay_tol: float = 1e-11,
+        source_bandwidth_factor: float = 2.0,
     ):
         self.res = res
         self.sim_width = sim_width
@@ -242,6 +340,7 @@ class FDTDSolver:
         self.half_domain_aperture = half_domain_aperture     # True → half-domain aperture for single-mode ports
         self.material_stack = material_stack
         self.decay_tol = decay_tol
+        self.source_bandwidth_factor = source_bandwidth_factor
         # Derived: stub long enough that source + monitors sit in physical waveguide
         self.waveguide_length = max(source_margin, monitor_margin) + 0.25
 
@@ -349,8 +448,9 @@ class FDTDSolver:
 
         Sx, Sy, wl_center, si_med, sio2_med = self._build_domain(geometry, wavelengths)
         fcen = 1.0 / wl_center
-        fwidth = (1.0 / float(wavelengths.min()) - 1.0 / float(wavelengths.max())) * 0.5
-        nfreq = len(wavelengths)
+        fwidth = source_fwidth(wavelengths, self.source_bandwidth_factor)
+        mon_freqs, wl_order = monitor_freq_grid(wavelengths)
+        check_source_coverage(fcen, fwidth, wavelengths)
 
         geometry_meep = geometry.to_meep_prisms(
             si_med, stub_length=self.waveguide_length + self.dpml,
@@ -409,7 +509,7 @@ class FDTDSolver:
 
         # Input normalization monitor — same aperture as the source
         in_flux = sim.add_mode_monitor(
-            fcen, fwidth, nfreq,
+            mon_freqs,
             mp.FluxRegion(center=mp.Vector3(in_mon_x, src_yo),
                           size=mp.Vector3(0, src_width, self._mon_sz)),
         )
@@ -422,7 +522,7 @@ class FDTDSolver:
         )
         out_fluxes = [
             sim.add_mode_monitor(
-                fcen, fwidth, nfreq,
+                mon_freqs,
                 mp.FluxRegion(
                     center=mp.Vector3(out_mon_x, yc),
                     size=mp.Vector3(0, yw, self._mon_sz),
@@ -437,7 +537,7 @@ class FDTDSolver:
         in_coeff = sim.get_eigenmode_coefficients(
             in_flux, [input_mode], eig_parity=mp.NO_PARITY
         )
-        src_alpha = in_coeff.alpha[0, :, 0]  # [nfreq] forward amplitude
+        src_alpha = in_coeff.alpha[0, :, 0]  # [nfreq] forward amplitude, monitor order
 
         smat = SMatrix(wavelengths=wavelengths)
         for i, flux_mon in enumerate(out_fluxes):
@@ -446,7 +546,9 @@ class FDTDSolver:
                 coeff = sim.get_eigenmode_coefficients(
                     flux_mon, [mode_n], eig_parity=mp.NO_PARITY
                 )
-                alpha = coeff.alpha[0, :, 0] / src_alpha
+                # [wl_order] lifts the ratio out of meep's ascending-frequency
+                # monitor order back onto `wavelengths` as the caller gave it.
+                alpha = (coeff.alpha[0, :, 0] / src_alpha)[wl_order]
                 smat.set(alpha, port=out_port, in_mode=input_mode, out_mode=mode_n)
 
         sim.reset_meep()
@@ -651,8 +753,9 @@ class FDTDSolver:
         x_center = (lo + hi) / 2.0
 
         fcen = 1.0 / wl_center
-        fwidth = (1.0 / float(wavelengths.min()) - 1.0 / float(wavelengths.max())) * 0.5
-        nfreq = len(wavelengths)
+        fwidth = source_fwidth(wavelengths, self.source_bandwidth_factor)
+        mon_freqs, wl_order = monitor_freq_grid(wavelengths)
+        check_source_coverage(fcen, fwidth, wavelengths)
 
         # shift prisms from device frame into the meep-centered frame,
         # preserving each prism's own z placement/extrusion (vertex z and
@@ -701,12 +804,12 @@ class FDTDSolver:
                 default_material=sio2_med,
             )
             norm_flux = sim.add_mode_monitor(
-                fcen, fwidth, nfreq,
+                mon_freqs,
                 mp.FluxRegion(center=mp.Vector3(norm_x, src_c_ap),
                               size=mp.Vector3(0, src_width, self._mon_sz)),
             )
             mea_flux = sim.add_mode_monitor(
-                fcen, fwidth, nfreq,
+                mon_freqs,
                 mp.FluxRegion(center=mp.Vector3(mea_x, mea_c),
                               size=mp.Vector3(0, w_meas, self._mon_sz)),
             )
@@ -718,7 +821,9 @@ class FDTDSolver:
 
             for m in range(1, n_measure + 1):
                 c = sim.get_eigenmode_coefficients(mea_flux, [m], eig_parity=mp.NO_PARITY)
-                coeff = c.alpha[0, :, alpha_idx] / src_alpha
+                # [wl_order] lifts the ratio out of meep's ascending-frequency
+                # monitor order back onto `wavelengths` as the caller gave it.
+                coeff = (c.alpha[0, :, alpha_idx] / src_alpha)[wl_order]
                 if layout.reverse:
                     T[:, k - 1, m - 1] = coeff  # excited=out(k), measured=in(m)
                 else:

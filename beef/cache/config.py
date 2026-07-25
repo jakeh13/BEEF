@@ -47,10 +47,12 @@ _METHOD_ATTRS: Dict[Tuple[str, str], Tuple[str, ...]] = {
         "res", "sim_width", "sim_height", "three_d", "dpml", "source_margin",
         "monitor_margin", "num_output_modes", "output_monitor_centers",
         "output_monitor_widths", "material_stack", "decay_tol", "waveguide_length",
+        "source_bandwidth_factor",
     ),
     ("FDTDSolver", "solve_section"): (
         "res", "sim_width", "sim_height", "three_d", "dpml", "source_margin",
         "monitor_margin", "half_domain_aperture", "material_stack", "decay_tol",
+        "source_bandwidth_factor",
     ),
     ("EMESolver", "solve_section"): (
         "material_stack", "oxide_width", "oxide_height", "res", "temperature", "mode_solver",

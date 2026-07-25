@@ -40,7 +40,7 @@ Outputs (example_output/directional_coupler/directional_coupler_hybrid_modes_swe
 
 Run:
     # one N_MODES value per SLURM array task (see
-    # sweep/run_directional_coupler_hybrid_modes_sweep.batch):
+    # batch/sweep/run_directional_coupler_hybrid_modes_sweep.batch):
     python /path/to/examples/directional_coupler/python/directional_coupler_hybrid_modes_sweep.py <index 0..10>
 
     # or the whole sweep serially (slow — batch queue strongly preferred):

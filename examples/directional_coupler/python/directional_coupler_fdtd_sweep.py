@@ -29,7 +29,7 @@ Outputs (example_output/directional_coupler/directional_coupler_fdtd_sweep/):
     length_sweep.npz                     aggregate grid over completed lengths
 
 Run:
-    # one length per SLURM array task (see sweep/run_directional_coupler_fdtd_sweep.batch):
+    # one length per SLURM array task (see batch/sweep/run_directional_coupler_fdtd_sweep.batch):
     python /path/to/examples/directional_coupler/python/directional_coupler_fdtd_sweep.py <index 0..30>
 
     # or the whole sweep serially (slow — batch queue strongly preferred):

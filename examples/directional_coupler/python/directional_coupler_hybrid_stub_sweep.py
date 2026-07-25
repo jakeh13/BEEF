@@ -56,7 +56,7 @@ Outputs (example_output/directional_coupler/directional_coupler_hybrid_stub_swee
 
 Run:
     # one BODY_STUB per SLURM array task (see
-    # sweep/run_directional_coupler_hybrid_stub_sweep.batch):
+    # batch/sweep/run_directional_coupler_hybrid_stub_sweep.batch):
     python /path/to/examples/directional_coupler/python/directional_coupler_hybrid_stub_sweep.py <index 0..8>
 
     # or the whole sweep serially (slow — batch queue strongly preferred):

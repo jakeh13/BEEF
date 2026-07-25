@@ -32,7 +32,7 @@ Outputs (example_output/directional_coupler/directional_coupler_hybrid_resolutio
 
 Run:
     # one resolution per SLURM array task (see
-    # sweep/run_directional_coupler_hybrid_resolution_sweep.batch):
+    # batch/sweep/run_directional_coupler_hybrid_resolution_sweep.batch):
     python /path/to/examples/directional_coupler/python/directional_coupler_hybrid_resolution_sweep.py <index 0..10>
 
     # or the whole sweep serially (slow — batch queue strongly preferred):

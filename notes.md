@@ -602,7 +602,7 @@ lives in "Current library reference" above, not here.
    index yields interface pixels differing by up to ~0.23 in ε. A "just the
    materials" change would therefore quietly move the mode basis and the
    mesh-convergence point along with it — budget a re-run of the resolution
-   sweeps (`sweep/run_directional_coupler_*_resolution_sweep.batch`) as part of
+   sweeps (`batch/sweep/run_directional_coupler_*_resolution_sweep.batch`) as part of
    #5, not as a follow-up. While in there: `FDTDSolver` neither exposes nor
    logs `eps_averaging`/`subpixel_tol`/`subpixel_maxeval`, so a knob that
    demonstrably moves `neff` at the second decimal is set entirely by meep's

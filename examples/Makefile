@@ -25,7 +25,7 @@ DEVICES = mmi_1x2 mmi_2x2 directional_coupler modal_multiplexer ring_resonator
 # The brute-force FDTD coupling-length sweep (and the N_MODES / mesh-
 # resolution / body-stub convergence sweeps below) are deliberately NOT in
 # EXAMPLES or the directional_coupler aggregate: each is a long production
-# sweep with its own batch script (sweep/run_directional_coupler_*_sweep.batch
+# sweep with its own batch script (batch/sweep/run_directional_coupler_*_sweep.batch
 # at the duty root, one SLURM array task per swept value), and keeping their
 # names out of every other script's list is what guarantees no other batch
 # script's per-example cleanup ever removes their output folders. SWEEP_INDEX
@@ -34,7 +34,13 @@ DEVICES = mmi_1x2 mmi_2x2 directional_coupler modal_multiplexer ring_resonator
 # serially.
 SWEEP_INDEX ?=
 
-.PHONY: all $(DEVICES) $(EXAMPLES) directional_coupler_fdtd_sweep directional_coupler_hybrid_modes_sweep directional_coupler_fdtd_resolution_sweep directional_coupler_hybrid_resolution_sweep directional_coupler_hybrid_stub_sweep clean clean_directional_coupler_fdtd_sweep clean_directional_coupler_hybrid_modes_sweep clean_directional_coupler_fdtd_resolution_sweep clean_directional_coupler_hybrid_resolution_sweep clean_directional_coupler_hybrid_stub_sweep
+# TEMPORARY — verification harness for dc_validation.md items 1-2, kept out of
+# EXAMPLES for the same reason the sweeps are (nothing else's cleanup should
+# touch its output). Delete this target, clean_verification, and
+# examples/verification/ once those items are signed off.
+VERIFICATION = verify_items_1_2
+
+.PHONY: all $(DEVICES) $(EXAMPLES) directional_coupler_fdtd_sweep directional_coupler_hybrid_modes_sweep directional_coupler_fdtd_resolution_sweep directional_coupler_hybrid_resolution_sweep directional_coupler_hybrid_stub_sweep $(VERIFICATION) clean clean_directional_coupler_fdtd_sweep clean_directional_coupler_hybrid_modes_sweep clean_directional_coupler_fdtd_resolution_sweep clean_directional_coupler_hybrid_resolution_sweep clean_directional_coupler_hybrid_stub_sweep clean_verification
 
 all: $(EXAMPLES)
 
@@ -88,6 +94,12 @@ directional_coupler_hybrid_resolution_sweep:
 directional_coupler_hybrid_stub_sweep:
 	$(runner) $(my_python) directional_coupler/python/directional_coupler_hybrid_stub_sweep.py $(SWEEP_INDEX)
 
+# TEMPORARY (see VERIFICATION above). VERIFY_ARGS=--static-only runs just the
+# no-meep checks, which is safe on a login node.
+VERIFY_ARGS ?=
+verify_items_1_2:
+	$(runner) $(my_python) verification/python/verify_items_1_2.py $(VERIFY_ARGS)
+
 modal_multiplexer_hybrid:
 	$(runner) $(my_python) modal_multiplexer/python/modal_multiplexer_hybrid.py
 
@@ -116,3 +128,6 @@ clean_directional_coupler_hybrid_resolution_sweep:
 
 clean_directional_coupler_hybrid_stub_sweep:
 	rm -rf ../../example_output/directional_coupler/directional_coupler_hybrid_stub_sweep
+
+clean_verification:
+	rm -rf ../../example_output/verification
