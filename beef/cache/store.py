@@ -12,6 +12,11 @@ can be grep/jq-scanned without opening every subfolder's config.json — see
 _manifest_entry()'s docstring. lookup_superset()/update_family_pointer() add
 a second, orthogonal lookup path — see their own docstrings — that lets a
 smaller mode-count request reuse a larger mode-count result already on disk.
+
+Reads happen on every rank; **writes happen only on the master rank** (see
+_is_master()/_barrier()). Under `srun -n 48` every rank runs the whole solve
+redundantly and so reached every write path here, which raced on the shared
+filesystem — dc_validation.md item 4.
 """
 from __future__ import annotations
 
@@ -21,6 +26,8 @@ import logging
 import os
 import pickle
 import re
+import socket
+import sys
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
@@ -28,6 +35,78 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 _FAMILY_POINTER_DIR = "_mode_family_pointers"
+
+
+_LAUNCHER_RANK_VARS = ("SLURM_PROCID", "OMPI_COMM_WORLD_RANK", "PMI_RANK", "PMIX_RANK")
+
+
+def _is_master() -> bool:
+    """True on exactly one process per job — the only one allowed to write to
+    save_dir.
+
+    Deliberately a bool and not a rank: nothing here needs to know *which*
+    rank it is, and meep cannot cheaply say (see below), so returning a number
+    would mean inventing one that later callers could misuse.
+
+    Sources are consulted in order of authority, and **nothing is imported
+    that isn't already loaded** — importing mpi4py into a serial process would
+    call MPI_Init behind meep's back:
+
+    1. meep, if the process has imported it. It owns MPI wherever it is
+       loaded, which is every FDTD run. `am_really_master()`, not
+       `am_master()`: the latter is per-group under
+       `divide_parallel_processes` and would elect one writer per group.
+    2. mpi4py, if something else already initialized it.
+    3. The launcher's environment. EME-only runs import neither of the above
+       (meow/MPB don't pull meep in) yet are still launched under `srun -n 48`,
+       so without this every rank would call itself master — exactly the bug
+       this exists to prevent. srun sets SLURM_PROCID; mpirun sets the
+       OMPI/PMI variables.
+    """
+    mp = sys.modules.get("meep")
+    if mp is not None:
+        try:
+            return bool(mp.am_really_master())
+        except Exception:  # meep present but MPI not initialized yet
+            pass
+    mpi4py_mpi = sys.modules.get("mpi4py.MPI")
+    if mpi4py_mpi is not None:
+        try:
+            return int(mpi4py_mpi.COMM_WORLD.Get_rank()) == 0
+        except Exception:
+            pass
+    for var in _LAUNCHER_RANK_VARS:
+        value = os.environ.get(var)
+        if value is not None:
+            try:
+                return int(value) == 0
+            except ValueError:
+                pass
+    return True
+
+
+def _barrier() -> None:
+    """Hold all ranks until the master's cache write is visible, so a later
+    lookup() cannot return a hit on one rank and a miss on another. That
+    divergence is the dangerous failure: ranks disagreeing about whether to
+    simulate leaves meep's collective calls unmatched and the job hangs until
+    it burns its wall clock, which is exactly what happened to stub-sweep
+    tasks 4 and 5.
+
+    Only meep can do this — a run that never imported it has no collective
+    calls to desynchronize, so skipping the barrier there is safe (the worst
+    case is one rank redundantly recomputing an EME result it could have
+    loaded). Callers must therefore invoke this from *all* ranks or none: every
+    save_run()/update_family_pointer() call site is guarded by conditions
+    derived from the solver config, never from per-rank data, so they do.
+    """
+    mp = sys.modules.get("meep")
+    if mp is None:
+        return
+    try:
+        mp.all_wait()
+    except Exception:
+        logger.debug("cache: MPI barrier unavailable", exc_info=True)
 
 
 class CacheMissError(RuntimeError):
@@ -168,21 +247,30 @@ def save_run(save_dir: str, config: Dict[str, Any], result: np.ndarray) -> str:
     """Write config.json + result.pkl + geometry.png to a new/overwritten
     subfolder of save_dir, named {slug}_{hash(config)} (Solver recommendation
     #3 — see _folder()); also append a summary line to save_dir/index.jsonl.
-    Returns the folder path."""
+    Returns the folder path.
+
+    **Only the master rank writes.** Every rank runs the whole solve
+    redundantly under `srun`, so without this all 48 would race on the same
+    config.json/result.pkl and interleave their appends to the single shared
+    index.jsonl. Non-master ranks still get the folder path back, since callers
+    pass it to update_family_pointer(). Collective: called from all ranks or
+    none — see _barrier()."""
     folder = _folder(save_dir, config)
-    os.makedirs(folder, exist_ok=True)
-    with open(os.path.join(folder, "config.json"), "w") as f:
-        json.dump(config, f, indent=2, sort_keys=True)
-    with open(os.path.join(folder, "result.pkl"), "wb") as f:
-        pickle.dump(result, f)
-    try:
-        _save_geometry_plot(config, os.path.join(folder, "geometry.png"))
-    except Exception:
-        logger.warning("cache: failed to save geometry plot at %s", folder, exc_info=True)
-    try:
-        _append_manifest(save_dir, config, folder)
-    except Exception:
-        logger.warning("cache: failed to append manifest entry at %s", save_dir, exc_info=True)
+    if _is_master():
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "config.json"), "w") as f:
+            json.dump(config, f, indent=2, sort_keys=True)
+        with open(os.path.join(folder, "result.pkl"), "wb") as f:
+            pickle.dump(result, f)
+        try:
+            _save_geometry_plot(config, os.path.join(folder, "geometry.png"))
+        except Exception:
+            logger.warning("cache: failed to save geometry plot at %s", folder, exc_info=True)
+        try:
+            _append_manifest(save_dir, config, folder)
+        except Exception:
+            logger.warning("cache: failed to append manifest entry at %s", save_dir, exc_info=True)
+    _barrier()
     return folder
 
 
@@ -191,8 +279,17 @@ def _atomic_write_json(path: str, data: Dict[str, Any]) -> None:
     file — same pattern the example sweep scripts already use for their own
     aggregate outputs, needed here because update_family_pointer() can be
     called by concurrent SLURM array tasks writing the same family's pointer
-    file (see that function's docstring)."""
-    tmp = f"{path}.tmp.{os.getpid()}"
+    file (see that function's docstring).
+
+    The temp name carries host as well as PID because PIDs are allocated per
+    host, so a PID-only name is not unique on a shared filesystem spanning
+    nodes. That collision is one way stub-sweep tasks 4 and 5 could have found
+    `path` empty; concurrent os.replace/read against the shared filesystem from
+    48 ranks is an equally good explanation, and a 48-rank 2-node probe on
+    2026-07-25 saw no PID reuse, so the specific mechanism is unproven. The
+    rank gate on the callers removes every version of it; this is belt-and-
+    braces for any future concurrent writer."""
+    tmp = f"{path}.tmp.{socket.gethostname()}.{os.getpid()}"
     with open(tmp, "w") as f:
         json.dump(data, f)
     os.replace(tmp, path)
@@ -201,6 +298,37 @@ def _atomic_write_json(path: str, data: Dict[str, Any]) -> None:
 def _family_pointer_path(save_dir: str, family_config: Dict[str, Any]) -> str:
     name = f"{_slug(family_config)}_{_hash_config(family_config)}.json"
     return os.path.join(save_dir, _FAMILY_POINTER_DIR, name)
+
+
+def _read_family_pointer(path: str) -> Optional[Dict[str, Any]]:
+    """The pointer file's contents, or None if it is absent, empty, truncated,
+    or missing the keys it should have.
+
+    A pointer is a reuse hint, never data — the result it names is also
+    reachable through the plain lookup() path — so an unreadable one is a
+    cache miss, exactly like lookup()'s config-mismatch guard, and never an
+    exception. Empty and truncated files are the specific damage the pre-fix
+    multi-rank write race left behind, so any left on disk now heal on the
+    next write instead of killing the job that reads them."""
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path) as f:
+            pointer = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        logger.warning(
+            "cache: family pointer at %s is unreadable — treating as absent. "
+            "This is the fingerprint of the pre-fix concurrent-write race; the "
+            "file will be rewritten by the next save.", path,
+        )
+        return None
+    if not isinstance(pointer, dict) or "dims" not in pointer or "result_hash" not in pointer:
+        logger.warning(
+            "cache: family pointer at %s is missing dims/result_hash — "
+            "treating as absent (schema drift).", path,
+        )
+        return None
+    return pointer
 
 
 def lookup_superset(
@@ -232,10 +360,9 @@ def lookup_superset(
     the pointer refers to a folder that's gone missing.
     """
     path = _family_pointer_path(save_dir, family_config)
-    if not os.path.isfile(path):
+    pointer = _read_family_pointer(path)
+    if pointer is None:
         return None
-    with open(path) as f:
-        pointer = json.load(f)
     stored_dims = tuple(pointer["dims"])
     if len(stored_dims) != len(dims):
         logger.warning(
@@ -267,21 +394,31 @@ def update_family_pointer(
     hash by save_run() and reachable via the plain lookup()/exact-config
     path, just not eligible to serve future superset lookups for this
     family. This is a read-then-atomic-write, not a fully atomic
-    check-and-set — under concurrent writers (e.g. a SLURM array sweeping
-    mode count) the worst case is a missed reuse opportunity (a smaller
-    dims value briefly recorded after a larger one, later overwritten by
-    the next call that dominates it), never an incorrect one:
-    lookup_superset() only trusts a pointer whose target folder actually
-    exists and whose recorded dims came from that exact result_hash, so a
-    stale/lost update can only cause an unnecessary resimulation, not a
-    wrong answer.
+    check-and-set.
+
+    **Only the master rank writes** (see save_run()); collective, so call it
+    from all ranks or none. Across *separate processes* — the case this cannot
+    serialize, e.g. a SLURM array sweeping mode count, where each task is its
+    own job — the worst case is a missed reuse opportunity (a smaller dims
+    value briefly recorded after a larger one, later overwritten by the next
+    call that dominates it), never an incorrect one: lookup_superset() only
+    trusts a pointer whose target folder actually exists and whose recorded
+    dims came from that exact result_hash, so a stale or lost update can only
+    cause an unnecessary resimulation, not a wrong answer.
+
+    That guarantee did *not* previously extend to ranks within a single job,
+    which is what killed stub-sweep tasks 4 and 5: they raised here reading a
+    pointer file that had ended up empty under 48 concurrent writers (see
+    _atomic_write_json() for why the exact mechanism is unproven). An
+    unreadable pointer is now treated as absent and overwritten rather than
+    raised on, so a cache can never be the thing that kills a run.
     """
-    path = _family_pointer_path(save_dir, family_config)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    if os.path.isfile(path):
-        with open(path) as f:
-            existing = json.load(f)
-        existing_dims = tuple(existing["dims"])
-        if not all(new >= old for new, old in zip(dims, existing_dims)):
-            return
-    _atomic_write_json(path, {"dims": list(dims), "result_hash": result_hash})
+    if _is_master():
+        path = _family_pointer_path(save_dir, family_config)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        existing = _read_family_pointer(path)
+        if existing is None or all(
+            new >= old for new, old in zip(dims, tuple(existing["dims"]))
+        ):
+            _atomic_write_json(path, {"dims": list(dims), "result_hash": result_hash})
+    _barrier()

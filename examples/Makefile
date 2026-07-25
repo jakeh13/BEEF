@@ -38,7 +38,7 @@ SWEEP_INDEX ?=
 # EXAMPLES for the same reason the sweeps are (nothing else's cleanup should
 # touch its output). Delete this target, clean_verification, and
 # examples/verification/ once those items are signed off.
-VERIFICATION = verify_items_1_2
+VERIFICATION = verify_items_1_2 verify_cache_multirank verify_item_5_ground_truth
 
 .PHONY: all $(DEVICES) $(EXAMPLES) directional_coupler_fdtd_sweep directional_coupler_hybrid_modes_sweep directional_coupler_fdtd_resolution_sweep directional_coupler_hybrid_resolution_sweep directional_coupler_hybrid_stub_sweep $(VERIFICATION) clean clean_directional_coupler_fdtd_sweep clean_directional_coupler_hybrid_modes_sweep clean_directional_coupler_fdtd_resolution_sweep clean_directional_coupler_hybrid_resolution_sweep clean_directional_coupler_hybrid_stub_sweep clean_verification
 
@@ -99,6 +99,24 @@ directional_coupler_hybrid_stub_sweep:
 VERIFY_ARGS ?=
 verify_items_1_2:
 	$(runner) $(my_python) verification/python/verify_items_1_2.py $(VERIFY_ARGS)
+
+# Cache write-gate check (item 4). Needs >=2 NODES to mean anything -- a
+# single-node run cannot race across hosts -- and save_dir must be on shared
+# storage, so run it through srun directly rather than the $(runner) default:
+#   srun -A <account> -q inferno -N 2 --ntasks-per-node=24 -t 10 \
+#        --mem-per-cpu=2G --mpi=pmi2 make verify_cache_multirank
+verify_cache_multirank:
+	$(runner) $(my_python) verification/python/verify_cache_multirank.py \
+		../../example_output/verification/cache_multirank
+
+# Ground-truth FDTD length sweep (item 5). GT_INDEX selects one of the 40
+# lengths (0..39), mirroring SWEEP_INDEX above; empty runs the whole sweep
+# serially. VERIFY_ARGS=--aggregate-only re-aggregates without simulating,
+# which is safe on a login node; VERIFY_ARGS=--no-cache forces re-simulation.
+GT_INDEX ?=
+verify_item_5_ground_truth:
+	$(runner) $(my_python) verification/python/verify_item_5_ground_truth.py \
+		$(GT_INDEX) $(VERIFY_ARGS)
 
 modal_multiplexer_hybrid:
 	$(runner) $(my_python) modal_multiplexer/python/modal_multiplexer_hybrid.py

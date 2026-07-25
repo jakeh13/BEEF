@@ -9,11 +9,16 @@ directly — the same two functions solve_section() itself calls, just without
 going through the method that imports meep."""
 from __future__ import annotations
 
+import numpy as np
+import pytest
+
 import beef.cache.config as config
 from beef.cache.config import _fingerprint, _solver_config
 from beef.cache.store import _hash_config
 from beef.solvers.eme import EMESolver
-from beef.solvers.fdtd import FDTDSolver, section_fdtd_layout
+from beef.solvers.fdtd import (
+    FDTDSolver, _resolved_spectral_config, section_fdtd_layout,
+)
 
 
 class _Fake:
@@ -86,6 +91,30 @@ class TestRealSolverAllowlists:
         a = EMESolver(num_modes=[2], num_cells=[1], lengths=[1.0])
         b = EMESolver(num_modes=[6], num_cells=[1], lengths=[1.0])
         assert _solver_config(a, "solve") != _solver_config(b, "solve")
+
+    @pytest.mark.parametrize("method", ["solve", "solve_section"])
+    @pytest.mark.parametrize("kwargs", [
+        {"eps_averaging": False},
+        {"subpixel_tol": 1e-6},
+        {"subpixel_maxeval": 50},
+    ])
+    def test_fdtd_is_sensitive_to_subpixel_smoothing(self, method, kwargs):
+        """These reach mp.Simulation and move n_eff at the second decimal
+        (notes.md Solver #9). They were on meep's implicit defaults and
+        invisible to the hash, so two solvers that would simulate differently
+        shared one cache entry."""
+        a = FDTDSolver()
+        b = FDTDSolver(**kwargs)
+        assert _solver_config(a, method) != _solver_config(b, method)
+
+    @pytest.mark.parametrize("method", ["solve", "solve_section"])
+    def test_subpixel_defaults_match_meep(self, method):
+        """Defaults must be meep's own, or adding these knobs would silently
+        change every existing result."""
+        cfg = _solver_config(FDTDSolver(), method)
+        assert cfg["eps_averaging"] is True
+        assert cfg["subpixel_tol"] == 1e-4
+        assert cfg["subpixel_maxeval"] == 100000
 
 
 class _StackWithCacheKey:
@@ -198,3 +227,67 @@ class TestFDTDResolvedLayout:
         assert cfg_a["call_kwargs"]["resolved_layout"]["mea_c"] != \
             cfg_b["call_kwargs"]["resolved_layout"]["mea_c"]
         assert cfg_a != cfg_b
+
+
+class TestResolvedSpectralConfig:
+    """FDTDSolver fingerprints the *resolved* monitor frequency grid and
+    source bandwidth, not just the `wavelengths` they derive from.
+
+    Both are correct today without this — `wavelengths` is already hashed —
+    so the tests below are about the failure mode that actually happened: the
+    monitor grid was derived wrongly for months while every cache entry looked
+    identical to a correct one. A derivation change with unchanged inputs must
+    change the hash.
+    """
+
+    WLS = np.array([1.50, 1.55, 1.60])
+
+    def test_grid_is_the_requested_wavelengths(self):
+        r = _resolved_spectral_config(self.WLS, 2.0)
+        assert np.allclose(sorted(1.0 / np.asarray(r["resolved_monitor_freqs"])),
+                           sorted(self.WLS))
+
+    def test_grid_is_ascending_in_frequency(self):
+        freqs = np.asarray(_resolved_spectral_config(self.WLS, 2.0)["resolved_monitor_freqs"])
+        assert np.all(np.diff(freqs) > 0), "meep requires an ascending frequency list"
+
+    def test_fwidth_tracks_the_bandwidth_factor(self):
+        a = _resolved_spectral_config(self.WLS, 2.0)["resolved_source_fwidth"]
+        b = _resolved_spectral_config(self.WLS, 3.0)["resolved_source_fwidth"]
+        assert b == pytest.approx(1.5 * a)
+
+    def _config(self, extra=None):
+        from beef.geometry.taper import Taper
+
+        geometry = Taper(length=4.0, width_start=0.45, width_end=0.45)
+        solver = FDTDSolver(res=20.0, sim_width=4.0)
+        call_kwargs = dict(x0=-2.0, x1=2.0, wavelengths=list(self.WLS),
+                           n_modes_in=1, n_modes_out=1)
+        call_kwargs.update(_resolved_spectral_config(self.WLS, solver.source_bandwidth_factor))
+        if extra:
+            call_kwargs.update(extra)
+        return config.build_run_config(solver, "solve_section", call_kwargs, geometry)
+
+    def test_resolved_fields_reach_the_cache_config(self):
+        ck = self._config()["call_kwargs"]
+        assert "resolved_monitor_freqs" in ck
+        assert "resolved_source_fwidth" in ck
+
+    def test_a_reversed_grid_changes_the_hash(self):
+        """The item-1 bug in miniature: same wavelengths, grid derived
+        backwards. Pre-fix this was indistinguishable from a correct entry,
+        which is why stale results were reused silently."""
+        good = self._config()
+        bad = self._config({"resolved_monitor_freqs":
+                            list(reversed(good["call_kwargs"]["resolved_monitor_freqs"]))})
+        assert _hash_config(good) != _hash_config(bad)
+
+    def test_a_changed_fwidth_derivation_changes_the_hash(self):
+        good = self._config()
+        bad = self._config({"resolved_source_fwidth":
+                            0.5 * good["call_kwargs"]["resolved_source_fwidth"]})
+        assert _hash_config(good) != _hash_config(bad)
+
+    def test_identical_calls_still_share_a_hash(self):
+        """The point is to catch derivation changes, not to defeat caching."""
+        assert _hash_config(self._config()) == _hash_config(self._config())

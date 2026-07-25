@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import asdict, dataclass
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -73,6 +73,28 @@ def source_fwidth(wavelengths: np.ndarray, factor: float) -> float:
     if span <= 0.0:                        # single wavelength — nothing to span
         return factor * _SINGLE_WL_REL_BANDWIDTH / float(wl.mean())
     return factor * span
+
+
+def _resolved_spectral_config(wavelengths: np.ndarray, factor: float) -> Dict[str, Any]:
+    """The *resolved* spectral quantities, for the cache fingerprint.
+
+    Both are derived from `wavelengths`, which is already hashed, so the
+    fingerprint is correct today without them. They are recorded anyway
+    because a future change to how they are derived would otherwise be
+    invisible to the cache — old entries would keep matching new calls that
+    simulate something different. That is exactly how the monitor-grid bug
+    survived as long as it did, and it is the pattern
+    `build_run_config()`'s docstring prescribes for resolved-vs-ingredient
+    values (Solver recommendation #4), already used for `resolved_layout`.
+
+    Preferred over bumping `_CACHE_SCHEMA_VERSION`, which would also strand
+    the 65 valid EME entries the bug never touched, and which relies on a
+    human remembering to bump it.
+    """
+    return {
+        "resolved_monitor_freqs": monitor_freq_grid(wavelengths)[0],
+        "resolved_source_fwidth": source_fwidth(wavelengths, factor),
+    }
 
 
 def check_source_coverage(fcen: float, fwidth: float, wavelengths: np.ndarray,
@@ -301,6 +323,14 @@ class FDTDSolver:
             (check_source_coverage()) if any requested wavelength drops below
             10%. For a single-wavelength request, where there is no span to
             scale, it multiplies a 10%-of-fcen relative bandwidth instead.
+        eps_averaging, subpixel_tol, subpixel_maxeval: meep's subpixel
+            smoothing controls, passed straight through to mp.Simulation. The
+            defaults are meep's own, so behaviour is unchanged; they are
+            constructor parameters rather than implicit defaults because they
+            move n_eff at the second decimal (notes.md Solver #9) and anything
+            that moves the physical result has to be visible to the cache
+            fingerprint. Turning eps_averaging off is the usual first check
+            when a result looks resolution-sensitive.
 
     Derived attribute:
         waveguide_length = max(source_margin, monitor_margin) + 0.25 (µm)
@@ -325,6 +355,9 @@ class FDTDSolver:
         material_stack: MaterialStack = SOI_160,
         decay_tol: float = 1e-11,
         source_bandwidth_factor: float = 2.0,
+        eps_averaging: bool = True,
+        subpixel_tol: float = 1e-4,
+        subpixel_maxeval: int = 100000,
     ):
         self.res = res
         self.sim_width = sim_width
@@ -341,6 +374,9 @@ class FDTDSolver:
         self.material_stack = material_stack
         self.decay_tol = decay_tol
         self.source_bandwidth_factor = source_bandwidth_factor
+        self.eps_averaging = eps_averaging
+        self.subpixel_tol = subpixel_tol
+        self.subpixel_maxeval = subpixel_maxeval
         # Derived: stub long enough that source + monitors sit in physical waveguide
         self.waveguide_length = max(source_margin, monitor_margin) + 0.25
 
@@ -432,7 +468,8 @@ class FDTDSolver:
             stub_length = self.waveguide_length + self.dpml
             config = build_whole_device_config(
                 self, "solve",
-                dict(port=port, input_mode=input_mode, wavelengths=wavelengths, kwargs=kwargs),
+                dict(port=port, input_mode=input_mode, wavelengths=wavelengths, kwargs=kwargs,
+                     **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor)),
                 geometry, geometry.polygons(stub_length=stub_length),
             )
             hit = lookup(save_dir, config)
@@ -505,6 +542,9 @@ class FDTDSolver:
             geometry=geometry_meep,
             sources=[src],
             default_material=sio2_med,
+            eps_averaging=self.eps_averaging,
+            subpixel_tol=self.subpixel_tol,
+            subpixel_maxeval=self.subpixel_maxeval,
         )
 
         # Input normalization monitor — same aperture as the source
@@ -682,7 +722,8 @@ class FDTDSolver:
                 dict(x0=x0, x1=x1, wavelengths=wavelengths,
                      stub_left=stub_left, stub_right=stub_right,
                      monitor_center=monitor_center, monitor_size=monitor_size,
-                     geometry_kwargs=geometry_kwargs, reverse=layout.reverse),
+                     geometry_kwargs=geometry_kwargs, reverse=layout.reverse,
+                     **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor)),
                 geometry,
             )
 
@@ -694,7 +735,8 @@ class FDTDSolver:
                      stub_left=stub_left, stub_right=stub_right,
                      monitor_center=monitor_center, monitor_size=monitor_size,
                      geometry_kwargs=geometry_kwargs,
-                     resolved_layout=asdict(layout)),
+                     resolved_layout=asdict(layout),
+                     **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor)),
                 geometry,
             )
             hit = lookup(save_dir, config)
@@ -802,6 +844,9 @@ class FDTDSolver:
                 geometry=shifted,
                 sources=[src],
                 default_material=sio2_med,
+                eps_averaging=self.eps_averaging,
+                subpixel_tol=self.subpixel_tol,
+                subpixel_maxeval=self.subpixel_maxeval,
             )
             norm_flux = sim.add_mode_monitor(
                 mon_freqs,
