@@ -4,12 +4,18 @@ Opened 2026-07-25, from investigating why `directional_coupler_hybrid_stub_sweep
 never converges. Root cause found; this is the work to fix it and re-establish trust
 in the directional coupler results.
 
-**Status 2026-07-25:** items 1–5 and 9 done and verified — the wavelength axis is fixed
+**Status 2026-07-26:** items 1–6 and 9 done and verified — the wavelength axis is fixed
 and confirmed against a pre-fix run (job 11477911, 9/9 checks), the cache can no longer
 serve or corrupt stale data, the directional coupler has a trustworthy full-band ground
-truth again (job 11480725, 40 lengths with provenance), and the golden reference is back
-on the fixed axis (job 11486066). What remains is the residual ~11% engine disagreement
-(6), which items 1–2 did not touch, and the stub sweep re-run it gates (7).
+truth again (job 11480725, 40 lengths with provenance), the golden reference is back on
+the fixed axis (job 11486066), and the residual engine gap has been measured directly
+rather than inferred (job 11489846).
+
+Item 6 turned out to be mostly a **measurement artifact of the EME side**: at the
+res=40 every example inherits, Δβ_EME is overstated by 7%, which is ~6 of the 11 points.
+The genuine engine disagreement is ~5% and still open. That finding, and the untested
+assumption underneath it — that both engines return interface modes *in the same order*
+— are now items **11** and **12**, and 11 gates 7.
 
 ## What's wrong
 
@@ -122,26 +128,63 @@ index 10. Using the frequency-mean `0.5(1/λ_min + 1/λ_max)` instead shifts eve
 Numbers are stable IDs — completed items move to Done and keep their number, so
 cross-references stay valid.
 
-**Order: the items-1–2 verification is done and passed** (job 11477911, 2026-07-25 —
-see Verification below), and **item 5 has re-established the ground truth** (job
-11480725, 2026-07-25 — see Done), so items 6 and 7 now rest on a confirmed FDTD *and* a
-reference they can be measured against. Remaining order: **6** → **7**, with **10**
-whenever the ring resonator matters (it blocks nothing here). (**3**, **4** and **9**
-are done — 3 and 4 came first because they are pure code, need no queue, and were what
-would otherwise have wasted wall-clock on the big array jobs in 5 and 7.) Item 6 comes
-before 7 because
-7's interpretation depends on whether the residual ~11% gap is understood. That gap was
-measured at λ=1.55, the one index both engines labelled correctly before the fix, so it
-survives the verification intact and remains the main open physics question.
+**Order: the items-1–2 verification is done and passed** (job 11477911 — see
+Verification below), **item 5 has re-established the ground truth** (job 11480725), and
+**item 6 has localized the engine gap** (job 11489846), so item 7 now rests on a
+confirmed FDTD, a reference to measure against, *and* a quantified body error.
 
-6. **Explain the residual ~11% rate gap at λ=1.55.** Not covered by 1–2. Add a direct
-   engine-agreement test alongside `tests/test_hybrid.py`: take a pure straight
-   coupled-pair region (no bends), call `FDTDSolver.solve_section()` at two lengths,
-   extract Δβ_FDTD from the even/odd phase difference, compare against
-   `EMESolver.compute_modes()`'s neff split on the same cross-section, assert to a
-   stated tolerance. Expect it to fail at ~11% today. This is the engine-consistency
-   check `notes.md` Solver #9 asks for and the cleanest way to isolate the effect —
-   mesh discretization is already ruled out by the resolution sweep.
+Remaining order: **11** → **12** → **7**, then **8**, with **10** whenever the ring
+resonator matters (it blocks nothing here).
+
+**11 before 7** because the stub sweep's L₅₀ drift slope measures 1 − Δβ_FDTD/Δβ_EME,
+which is 0.109 at res 40 but 0.047 with EME converged — running 7 first would spend nine
+array tasks measuring a drift that is more than half discretization error. **12 before
+7** because if the two engines order their six interface modes differently, the chain
+the stub sweep is testing is contracting mismatched modes and no amount of stub tuning
+would ever make it converge; that has to be excluded before the sweep's result means
+anything. **8 after**, since it is worth ~2% of the ratio (measured, see Done item 6) —
+real, but smaller than either open item above.
+
+6. *(done — see Done item 6.)* Two follow-on items came out of it:
+
+11. **EME is not resolution-converged at res=40.** Found while measuring item 6.
+    Δβ_EME at 1.55 µm runs 0.1125 (res 20) → 0.0957 (40) → 0.0926 (60) → 0.0894 (80)
+    → 0.0895 (100), so the res=40 every example inherits **overstates Δn_eff by 7%**.
+    That is ~6 of item 6's 11 points, and it is present in every EME result in the
+    repo, not just the coupler.
+
+    `EMESolver` already takes `res` — the defect is that callers inherit 40 by
+    default. Fix by setting it explicitly per example, **not** by changing the library
+    default: that would re-invalidate all four goldens (including item 9's, just
+    regenerated) and strand the 20 valid EME cache entries, for a change that should
+    be a deliberate per-device choice anyway. Add a convergence test so the chosen
+    value is defended by a test rather than a comment.
+
+    **Do this before item 7.** The stub sweep's L₅₀ drift slope measures
+    1 − Δβ_FDTD/Δβ_EME, which is 0.109 at res 40 but 0.047 with EME converged — so
+    running 7 first spends nine array tasks measuring a drift that is more than half
+    discretization error.
+
+12. **Nothing checks that the two engines agree on *which* mode is which.**
+    `HybridSolver`'s `np.einsum` contracts index *i* of the FDTD interface against
+    index *i* of the EME body, assuming they are the same mode. But the two solve
+    different grids — `FDTDSolver.solve_section()` calls meep's MPB on the FDTD mesh,
+    `EMESolver.compute_modes()` calls meow's on its own `Mesh2D` — so their n_eff
+    differ and near-degenerate higher-order modes can come back in a different order.
+    If they do, the chain silently mixes modes. Same severity as item 1, and untested.
+
+    For the two supermodes item 6 measured this is safe: n_eff 2.351 vs 2.329 is a
+    wide split and descending order held at every resolution 20–100 (asserted in both
+    the harness and `tests/test_engine_agreement.py`). The **six** interface modes the
+    hybrid actually carries are the unchecked case.
+
+    Cheap to check: `sim.get_eigenmode_coefficients()` already returns `kdom`, each
+    mode's dominant wavevector per band per frequency, alongside the `alpha` beef uses
+    (`fdtd.py:869`). beef discards it. Capturing it gives n_eff per FDTD mode directly,
+    so the engines can be compared mode-by-mode from a *single* run — which also
+    subsumes item 6's four-length phase sweep. Pin the `kdom` → n_eff normalization on
+    a single-mode straight waveguide first, where n_eff is unambiguous.
+
 7. **Re-run the stub sweep — the whole thing — and judge it properly.** All nine array
    tasks, not just the two that item 4 lost: the seven `S*.npz` files on disk are dated
    2026-07-24, i.e. pre-fix, so re-running only tasks 4 and 5 (as item 4 originally
@@ -689,3 +732,98 @@ env. Harmless today because the job is `--ntasks=1` and never calls `srun`, but 
 fail immediately with `PMI_Init returned -1` if this target were ever parallelized.
 Commented rather than removed, since removing it changes a working script for no present
 benefit.
+
+
+### 6. Engine agreement measured directly — 2026-07-26
+
+The residual gap is real, it lives in the straight coupled-pair section, and **most of
+it is not engine disagreement**. Job 11489846 (4 array tasks) + job 11490488 (re-run).
+
+**What was measured.** The stub sweep could only *infer* Δβ_FDTD/Δβ_EME = 0.891, from a
+linear fit to L₅₀ through a whole hybrid chain with bend phase and seam mode-matching
+folded in. This measures the same ratio on nothing but a uniform coupled pair — sections
+cut at x ∈ [−L/2, +L/2] inside the reference device's 30 µm coupling region, so every
+cut sits 15 µm clear of the nearest S-bend and both engines are being asked an identical
+question.
+
+FDTD side: `solve_section()` with 2 supermodes returns a transfer matrix whose diagonal
+carries exp(iβ_even L) and exp(iβ_odd L), so Δφ(L) = arg(T₀₀) − arg(T₁₁) = Δβ·L + const.
+The constant is mode-matching and monitor-plane phase — which is exactly why **one length
+cannot answer this**: Δφ/L would carry it as a 1/L error. Four lengths (2, 4, 6, 8 µm),
+fit the slope, discard the intercept, keep the residual as evidence the model held.
+
+EME side: the same `section_gds()` polygons → the same meow cross-section →
+`compute_modes()`, so Δβ_EME comes off the eigenvalues with no propagation involved.
+
+**Result — it reproduces the stub sweep exactly.**
+
+| | ratio at 1.55 µm |
+|---|---|
+| stub sweep, inferred through the hybrid chain | 0.891 |
+| **this measurement, uniform region only** | **0.8912** |
+
+The data is unusually clean: |diagonal| = 1.000 (lossless), max off-diagonal **6.7e-6**
+(a uniform region cannot convert even↔odd, and it doesn't — so the supermode basis is
+right, which is checked rather than assumed), and Δφ linear in L to ≤1e-4 rad, with
+successive differences 0.1705 / 0.1705 / 0.1705. The two-mode model holds essentially
+exactly, so this is not noise-limited.
+
+**But the EME side is not converged.** Sweeping the EME mesh — which the 2026-07-22
+resolution study never did, it varied only FDTD:
+
+| EME res | 20 | 40 | 60 | 80 | 100 |
+|---|---|---|---|---|---|
+| Δβ_EME (rad/µm) | 0.1125 | **0.0957** | 0.0926 | 0.0894 | 0.0895 |
+| FDTD/EME | 0.7576 | 0.8912 | 0.9208 | 0.9535 | 0.9528 |
+
+Converged by res 80. The production res=40 **overstates Δβ_EME by 7%**, which accounts
+for ~6 of the 11 percentage points. The genuine engine disagreement is **~4.7%** — still
+larger than FDTD's own resolution scatter, so still real, but less than half the headline
+number. Raised as item 11; it reaches every EME result in the repo, not just this one.
+
+**FDTD is not the culprit.** Re-reading the archived FDTD resolution sweep at λ=1.55 (its
+one correctly-labelled index) and converting T_cross back to phase, the implied Δβ moves
+only **2.74%** across res 30–90, and non-monotonically — noise, not a trend. So the
+earlier "mesh discretization is ruled out" claim holds for the FDTD half. meep's subpixel
+smoothing is the likely reason it converges so much earlier on the same nominal grid.
+
+**Item 8 now has direct evidence.** The ratio steps 0.8905 (1.56 µm) → 0.8730 (1.57 µm)
+and stays flat after — exactly where meow's Si table switches 3.4784 → 3.4710 while the
+FDTD side stays frozen at the centre-wavelength index for every wavelength. So the
+material half is worth ~2% of the ratio: real, not cosmetic, but not a driver.
+
+**A useful by-product.** `sim.get_eigenmode_coefficients()` already returns `kdom` —
+each mode's dominant wavevector per band per frequency — next to the `alpha` beef uses
+(`fdtd.py:869`), and beef discards it. Capturing it would give n_eff per FDTD mode from a
+**single** run, replacing this four-length sweep entirely and enabling the mode-identity
+check that is now item 12.
+
+**Added** — `tests/test_engine_agreement.py`. Six fast tests with no simulation, guarding
+the extraction method itself: rate recovery, immunity to the constant offset, phase
+unwrapping past π, a residual that reports nonlinearity, a regression against the four
+measured phases, and one that documents why a **single length would have been wrong**
+(the naive Δφ/L is off 160% at L=2 and still 33% at L=8). Plus the real check,
+`@pytest.mark.slow` and `xfail(strict=True)` — it encodes the requirement, not today's
+behaviour, so it fails loudly *as a pass* the moment someone closes the gap.
+
+**Verified** — fast suite **209 passed, 7 skipped**. Slow suite in job 11491895: 6
+passed, 1 xfailed, 21 min. The slow test meshes FDTD at res 20 and EME at 80 on purpose:
+EME must be converged or the check measures discretization, while FDTD is within 0.5% of
+res 40 already, which is what makes it affordable serially at all (the res-40
+measurement needed 48 MPI ranks).
+
+**Two things left deliberately unfixed.**
+
+Array task `11490488_1` hit TIMEOUT at 25 min. `aggregate()` runs the EME half on all 48
+ranks redundantly, and that task drew a slow node. Harmless — the other tasks wrote the
+same aggregate, and the data file it produced is intact. Not "fixed" by gating on master:
+the EME call goes through meep, and a rank-divergent collective is precisely the hang
+item 4 documented. Redundant work on 47 ranks is the cheaper failure.
+
+`np.savez` appends `.npz` to a path that lacks it, so the host-qualified temp names lost
+their `os.replace` and all four tasks died *after* simulating. `verify_item_5_ground_truth.py`
+avoids this by handing `np.savez` an already-open file object; this script copied the
+helper but not the calling convention. The FDTD results were already in the cache, so the
+re-run cost seconds rather than 40 minutes — a direct dividend of item 3 and 4 having
+made caching trustworthy. `_atomic_replace_write()`'s docstring now states the
+requirement.
