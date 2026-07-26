@@ -220,6 +220,17 @@ class EMESolver:
         runs needed), unlike FDTD.
 
         Args:
+            neff_override: optional array ``[len(wavelengths), n_modes]``
+                replacing each mode's n_eff before propagation, leaving field
+                profiles — and so every interface overlap — untouched. Lets a
+                HybridSolver body propagate on the β its FDTD sections
+                actually accumulate rather than on MPB's mode index: the two
+                differ by ~2.3% per mode at res 40, and because Δβ is a
+                difference of two β near 9.4 rad/µm that lands as a ~10% error
+                on the coupling (dc_validation.md item 6). Normally supplied by
+                ``HybridSolver(calibrate_body_neff=True)`` rather than by hand;
+                see ``FDTDSolver.section_mode_beta()``. None (default) uses the
+                mode solver's own n_eff, unchanged.
             save_dir: persistent on-disk cache directory (see beef/cache/).
                 None/"" (default) disables the cache — see
                 FDTDSolver.solve_section()'s save_dir docstring for the full
@@ -353,6 +364,17 @@ class EMESolver:
         how many lengths are swept.
 
         Args:
+            neff_override: optional array ``[len(wavelengths), n_modes]``
+                replacing each mode's n_eff before propagation, leaving field
+                profiles — and so every interface overlap — untouched. Lets a
+                HybridSolver body propagate on the β its FDTD sections
+                actually accumulate rather than on MPB's mode index: the two
+                differ by ~2.3% per mode at res 40, and because Δβ is a
+                difference of two β near 9.4 rad/µm that lands as a ~10% error
+                on the coupling (dc_validation.md item 6). Normally supplied by
+                ``HybridSolver(calibrate_body_neff=True)`` rather than by hand;
+                see ``FDTDSolver.section_mode_beta()``. None (default) uses the
+                mode solver's own n_eff, unchanged.
             save_dir: persistent on-disk cache directory (see beef/cache/).
                 None/"" (default) disables the cache — see
                 FDTDSolver.solve_section()'s save_dir docstring for the full

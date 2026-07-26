@@ -25,11 +25,36 @@ logger = get_logger(__name__)
 # (1.44 < n_eff < 3.48). Roughly the middle of that window.
 _KPOINT_SEED_NEFF = 2.5
 
-# Largest branch-selection margin section_mode_beta() will accept, as a
-# fraction of the half-distance to the neighbouring 2π branch. The coupler at
-# res 40 sits at 0.13 (FDTD 9.633 vs MPB's 9.423 rad/µm seed, lengths 2 µm
-# apart), so 0.5 leaves ~4x headroom over the disagreement actually being
-# measured while still refusing anything close to a coin-flip.
+# --- section_mode_beta() safety thresholds ---------------------------------
+#
+# Two INDEPENDENT failure modes, because neither guard catches the other:
+#
+#   1. Seed lands near a branch boundary -> the per-length wrap counts come out
+#      inconsistent, the points stop lying on a line, and the RESIDUAL blows up
+#      (2.5 rad in testing). Caught by _BETA_FIT_RESIDUAL_MAX.
+#   2. Seed is a WHOLE branch off -> every length agrees on that wrong branch,
+#      so the fit is perfectly clean (residual 1e-14) at a β 33% wrong, and the
+#      margin-to-seed is 0.000. Nothing in the fitted numbers can detect this.
+#      The only defence is a precondition on the LENGTHS: keep the branch
+#      spacing 2π/ΔL large compared with any physically possible FDTD-vs-MPB
+#      disagreement, so a whole-branch error cannot happen in the first place.
+#
+# Minimum branch spacing as a fraction of β, for guard 2. The measured
+# disagreement is ~2%; requiring the branches to be >=25% of β apart leaves an
+# order of magnitude. At the coupler's β = 9.6 rad/µm this caps the length
+# spacing at 2.6 µm, which the item 6 measurement's 2.0 µm satisfies.
+_BETA_MIN_BRANCH_FRACTION = 0.25
+
+# Max phase-fit residual (rad) for guard 1. Clean fits give 1e-14 synthetically
+# and 1.4e-5 on the real res-40 data; a boundary-straddling seed gives 2.5. Also
+# catches a section that is not actually uniform, where the phase is genuinely
+# not linear in L.
+_BETA_FIT_RESIDUAL_MAX = 0.1
+
+# Reported diagnostic only (see beta_from_phases): how far the answer moved from
+# the seed, as a fraction of the half-distance to the next branch. The coupler
+# sits at 0.13. Logged rather than enforced, because guard 2 above is what makes
+# the branch choice sound.
 _BETA_BRANCH_MARGIN_MAX = 0.5
 
 
@@ -870,15 +895,6 @@ class FDTDSolver:
                 passing closer-spaced `lengths`.
         """
         span = float(x1 - x0)
-        if lengths is None:
-            lengths = [span / 2.0, span]
-        lengths = [float(L) for L in lengths]
-        if len(lengths) < 2:
-            raise ValueError(
-                "section_mode_beta needs at least 2 lengths: one length cannot "
-                "separate the propagation phase from the constant mode-matching "
-                "phase at the monitor planes."
-            )
         wavelengths = np.asarray(wavelengths, dtype=float)
         mid = 0.5 * (x0 + x1)
         iface = dict(
@@ -887,8 +903,8 @@ class FDTDSolver:
         )
 
         # MPB's answer, used only to pick which wrap each phase is on. Cheap
-        # (no time-stepping), and the candidate branches are 2π/ΔL apart, so it
-        # cannot bias the result within a branch — see beta_from_phases().
+        # (no time-stepping), and it is also what sets a safe default spacing
+        # below, so it has to come first.
         seed = self.section_mode_neff(
             geometry, wavelengths, x0, x1, n_modes,
             monitor_center=iface["monitor_center"],
@@ -896,6 +912,38 @@ class FDTDSolver:
             **geometry_kwargs,
         )
         seed_beta = 2.0 * np.pi * seed / wavelengths[:, None]
+        beta_max = float(np.max(np.abs(seed_beta)))
+        max_safe_spacing = 2.0 * np.pi / (_BETA_MIN_BRANCH_FRACTION * beta_max)
+
+        if lengths is None:
+            # NOT span/2 and span: for a 30 µm body that spaces the lengths
+            # 15 µm apart, putting the 2π branches 0.42 rad/µm apart on a
+            # β of 9.6 — far closer together than the disagreement being
+            # measured, so the seed could not identify the branch at all.
+            # Spacing is capped by the physics, not by the section's size.
+            spacing = min(span / 2.0, max_safe_spacing / 2.0)
+            lengths = [spacing, 2.0 * spacing]
+        lengths = [float(L) for L in lengths]
+        if len(lengths) < 2:
+            raise ValueError(
+                "section_mode_beta needs at least 2 lengths: one length cannot "
+                "separate the propagation phase from the constant mode-matching "
+                "phase at the monitor planes."
+            )
+
+        # Guard 2 (see the constants): a whole-branch seed error is invisible in
+        # the fitted numbers -- clean residual, zero margin, β 33% wrong -- so it
+        # has to be excluded before simulating rather than detected after.
+        max_gap = float(np.max(np.diff(np.sort(lengths))))
+        if max_gap > max_safe_spacing:
+            raise ValueError(
+                f"section_mode_beta: lengths {lengths} are spaced up to "
+                f"{max_gap:.3f} µm apart, which puts the 2π branches only "
+                f"{2*np.pi/max_gap:.3f} rad/µm apart on a β of ~{beta_max:.3f}. "
+                f"MPB's seed could then be a whole branch out and the fit would "
+                f"look perfect at a badly wrong β. Space them no more than "
+                f"{max_safe_spacing:.3f} µm apart."
+            )
 
         phases = np.zeros((len(lengths), len(wavelengths), n_modes))
         for j, L in enumerate(lengths):
@@ -918,19 +966,23 @@ class FDTDSolver:
                 worst_margin = max(worst_margin, margin)
                 worst_resid = max(worst_resid, resid)
 
-        if worst_margin >= _BETA_BRANCH_MARGIN_MAX:
+        # Guard 1: the phases must actually lie on a line. Fails if the seed
+        # straddled a branch boundary (wrap counts inconsistent between
+        # lengths) or if the section is not uniform after all.
+        if worst_resid > _BETA_FIT_RESIDUAL_MAX:
             raise ValueError(
-                f"section_mode_beta: branch-selection margin {worst_margin:.2f} "
-                f"is not safely below 1 — the FDTD phase moved far enough from "
-                f"MPB's seed that which 2π wrap it sits on is ambiguous at "
-                f"lengths {lengths}. Re-run with a smaller spacing (below "
-                f"{np.pi / (2.0 * np.pi * float(np.max(seed))/float(np.min(wavelengths))):.2f} µm "
-                f"here), or check the section is really uniform."
+                f"section_mode_beta: phase-fit residual {worst_resid:.3f} rad "
+                f"exceeds {_BETA_FIT_RESIDUAL_MAX} at lengths {lengths}. The "
+                f"measured phase is not linear in length, so either the wrap "
+                f"counts are inconsistent between lengths or [{x0}, {x1}] is "
+                f"not a uniform cross-section."
             )
         logger.info(
-            "section_mode_beta: %d lengths %s, worst branch margin %.3f, "
-            "worst phase-fit residual %.2e rad",
-            len(lengths), lengths, worst_margin, worst_resid,
+            "section_mode_beta: %d lengths %s, worst phase-fit residual %.2e rad, "
+            "worst branch margin %.3f%s",
+            len(lengths), lengths, worst_resid, worst_margin,
+            "" if worst_margin < _BETA_BRANCH_MARGIN_MAX
+            else "  <-- moved far from MPB's seed; check this is real",
         )
         return beta
 

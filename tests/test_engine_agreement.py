@@ -46,27 +46,14 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# The measurement method, kept here rather than imported from
-# examples/verification/ -- that folder is temporary and gets deleted when the
-# directional coupler work is signed off, but this check is meant to outlive it.
+# The measurement method now lives in the library, because item 6's fix uses it
+# in production and not just to check itself: FDTDSolver.section_mode_beta()
+# measures the beta a HybridSolver body should propagate on, and
+# dbeta_from_phases() is the cross-check that its per-mode fit is consistent.
+# It was defined here originally so it would outlive examples/verification/,
+# which is temporary; the library is a better home for the same reason.
 # ---------------------------------------------------------------------------
-def dbeta_from_phases(lengths, dphi):
-    """Even/odd phase rate (rad/um) from dphi measured at several lengths.
-
-    dphi(L) = arg(T_00) - arg(T_11) = dbeta*L + const, where the constant is
-    mode-matching and monitor-plane phase, identical at every length. The SLOPE
-    is the physics; the intercept is discarded. One length cannot do this --
-    dphi(L)/L would carry the offset as a 1/L error.
-
-    Returns (dbeta, intercept, rms_residual). The residual is the evidence that
-    dphi really is linear in L, i.e. that this is one clean supermode pair.
-    """
-    lengths = np.asarray(lengths, dtype=float)
-    y = np.unwrap(np.asarray(dphi, dtype=float))
-    A = np.vstack([lengths, np.ones_like(lengths)]).T
-    (slope, intercept), *_ = np.linalg.lstsq(A, y, rcond=None)
-    resid = float(np.sqrt(np.mean((y - (slope * lengths + intercept)) ** 2)))
-    return float(slope), float(intercept), resid
+from beef.solvers.fdtd import dbeta_from_phases  # noqa: E402
 
 
 class TestPhaseSlopeExtraction:

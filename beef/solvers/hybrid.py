@@ -74,6 +74,10 @@ def _supports_cache_only(method) -> bool:
     return "cache_only" in inspect.signature(method).parameters
 
 
+def _supports_neff_override(method) -> bool:
+    return "neff_override" in inspect.signature(method).parameters
+
+
 class HybridSolver:
     """Chains an arbitrary sequence of solvers across contiguous device sections.
 
@@ -102,6 +106,38 @@ class HybridSolver:
             symmetry check — tight enough to catch a wrong input_idx/
             output_idx pairing (a port-pitch-scale mismatch) while
             tolerant of floating-point noise.
+        calibrate_body_neff: propagate each body section on the β its
+            neighbouring FDTD sections actually accumulate, instead of on its
+            own mode solver's n_eff. **Default False** — this changes results
+            and every recorded golden predates it.
+
+            Why it exists (dc_validation.md item 6). The two engines are both
+            MPB and agree on mode *index* to 0.56%, but MPB's index and the
+            phase meep's time-stepper really picks up differ by ~2.3% per mode
+            at res 40 — different discretizations of the same continuum
+            problem. Both modes are biased the same way, so the differential is
+            only 0.129 percentage points; but coupling depends on Δβ, a
+            difference of two β near 9.4 rad/µm, and that ``β/Δβ ≈ 99`` lever
+            turns it into a 10.4% error. Mesh refinement cannot reach it: ~res
+            143, about 164× the 3-D cost.
+
+            This is a correctness fix rather than a fudge. The hybrid's job is
+            to reproduce a full-device FDTD run at lower cost, and that
+            reference *is* meep's discretization — so propagating the body on
+            MPB's β was the mismatch. On the coupler it removes the stub-sweep
+            drift identically (the drift is exactly
+            ``2s·(1 - Δβ_FDTD/Δβ_EME)``) and moves L₅₀ from 14.54 µm to
+            ~15.02 µm against a 15.13 µm full-device reference.
+
+            Costs `len(calibrate_lengths)` extra FDTD section solves per body,
+            cached under `save_dir` like any other. Applies only to sections
+            whose solver has no `section_mode_beta()` of its own — in practice
+            the EME bodies; an all-FDTD chain is unaffected.
+        calibrate_lengths: section lengths (µm) the calibration fits β over.
+            Default `[span/2, span]` of the body being calibrated. Widening
+            the spacing risks the 2π branch ambiguity
+            `FDTDSolver.section_mode_beta()` guards against; it will raise
+            rather than guess.
     """
 
     def __init__(
@@ -113,6 +149,8 @@ class HybridSolver:
         mirror_axis: Optional[float] = None,
         mirror_check_samples: int = 25,
         mirror_check_tol: float = 1e-3,
+        calibrate_body_neff: bool = False,
+        calibrate_lengths: Optional[List[float]] = None,
     ):
         if len(solvers) < 2:
             raise ValueError("HybridSolver needs at least 2 solvers.")
@@ -135,6 +173,10 @@ class HybridSolver:
         )
         self.mirror_check_samples = mirror_check_samples
         self.mirror_check_tol = mirror_check_tol
+        self.calibrate_body_neff = bool(calibrate_body_neff)
+        self.calibrate_lengths = (
+            None if calibrate_lengths is None else [float(L) for L in calibrate_lengths]
+        )
 
         K = len(solvers)
         for k, j in self.mirror_pairs.items():
@@ -472,6 +514,64 @@ class HybridSolver:
                     f"uniform region."
                 )
 
+    def _calibration_source(self, k: int):
+        """The FDTD solver whose β section `k`'s body should be propagated on,
+        or None if section `k` needs no calibration.
+
+        Only sections that cannot measure their own propagation are calibrated
+        — i.e. those lacking `section_mode_beta()`, which in practice means the
+        EME bodies. The β comes from a *neighbouring* FDTD section's solver, so
+        the body inherits the discretization of the sections it is spliced to,
+        which is the entire point: the chain has to agree with itself.
+
+        Prefers the left neighbour purely for determinism; in every chain in
+        this repo the sections flanking a body share solver settings, so the
+        choice does not change the answer. If it ever does, that is a
+        misconfigured chain and worth the difference being visible.
+        """
+        if not self.calibrate_body_neff:
+            return None
+        if hasattr(self.solvers[k], "section_mode_beta"):
+            return None
+        for j in (k - 1, k + 1):
+            if 0 <= j < len(self.solvers) and hasattr(self.solvers[j], "section_mode_beta"):
+                return self.solvers[j]
+        return None
+
+    def _calibrated_neff(
+        self, geometry, wavelengths, k, n_modes, kwargs, save_dir, cache_only,
+    ) -> Optional[np.ndarray]:
+        """n_eff for section `k`'s body, measured from a neighbour's FDTD phase.
+
+        Returns ``[len(wavelengths), n_modes]`` or None when calibration is off
+        or no neighbouring FDTD solver exists.
+
+        The conversion is just ``neff = β·λ/2π`` — meow's propagation applies
+        ``exp(2j·π·neff/wl·L)``, so handing it this n_eff makes the body
+        accumulate exactly the FDTD's own phase per µm.
+        """
+        source = self._calibration_source(k)
+        if source is None:
+            return None
+        x0, x1 = self.boundaries[k], self.boundaries[k + 1]
+        # Only the parameters section_mode_beta() actually reads — passing the
+        # EME section's full kwargs would hand it monitor/aperture settings
+        # meant for a different solver.
+        passthrough = {key: kwargs[key] for key in ("monitor_center", "monitor_size")
+                       if key in kwargs}
+        logger.info(
+            "Section %d/%d: calibrating body n_eff from %s's own propagation "
+            "phase (dc_validation.md item 6)",
+            k + 1, len(self.solvers), type(source).__name__,
+        )
+        beta = source.section_mode_beta(
+            geometry, wavelengths, x0, x1, n_modes,
+            lengths=self.calibrate_lengths,
+            save_dir=save_dir, cache_only=cache_only,
+            **passthrough,
+        )
+        return beta * np.asarray(wavelengths, dtype=float)[:, None] / (2.0 * np.pi)
+
     def _solve_sections(
         self,
         geometry,
@@ -495,7 +595,12 @@ class HybridSolver:
 
             cache_key = None
             if cache is not None:
+                # calibrate_body_neff belongs in the key for the same reason it
+                # belongs in the on-disk config: the same section propagated on
+                # a different n_eff is a different matrix, and this dict is
+                # shared across the port-by-port solves of one device.
                 cache_key = (id(solver), x0, x1, n_in_list[k], n_out_list[k],
+                             self.calibrate_body_neff,
                              tuple(sorted(kwargs.items())))
                 if is_swept:
                     cache_key = cache_key + (("lengths", tuple(float(L) for L in lengths)),)
@@ -519,6 +624,12 @@ class HybridSolver:
                     sweep_kwargs["save_dir"] = save_dir
                 if cache_only and _supports_cache_only(solver.solve_section_length_sweep):
                     sweep_kwargs["cache_only"] = cache_only
+                if _supports_neff_override(solver.solve_section_length_sweep):
+                    neff = self._calibrated_neff(
+                        geometry, wavelengths, k, max(n_in_list[k], n_out_list[k]),
+                        kwargs, save_dir, cache_only)
+                    if neff is not None:
+                        sweep_kwargs["neff_override"] = neff
                 mat = solver.solve_section_length_sweep(
                     geometry, wavelengths, x0, x1, lengths,
                     n_modes_in=n_in_list[k], n_modes_out=n_out_list[k],
@@ -536,6 +647,12 @@ class HybridSolver:
                     section_kwargs["save_dir"] = save_dir
                 if cache_only and _supports_cache_only(solver.solve_section):
                     section_kwargs["cache_only"] = cache_only
+                if _supports_neff_override(solver.solve_section):
+                    neff = self._calibrated_neff(
+                        geometry, wavelengths, k, max(n_in_list[k], n_out_list[k]),
+                        kwargs, save_dir, cache_only)
+                    if neff is not None:
+                        section_kwargs["neff_override"] = neff
                 mat = solver.solve_section(
                     geometry, wavelengths, x0, x1,
                     n_modes_in=n_in_list[k], n_modes_out=n_out_list[k],
