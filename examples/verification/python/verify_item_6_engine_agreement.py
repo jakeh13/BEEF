@@ -197,6 +197,31 @@ def _atomic_replace_write(path, write_fn):
     os.replace(tmp, path)
 
 
+def _set_resolution(res):
+    """Re-point both engines and the output paths at a different mesh.
+
+    For the resolution sweep this measurement never had (dc_validation.md item
+    6 ran at res 40 only). The FDTD half was declared converged on the archived
+    *full-device* T_cross sweep — a different quantity, on a device that
+    includes bends, from pre-fix data. Item 11's own argument says that is the
+    wrong observable to judge Δβ by: Δβ is a difference of two n_eff near 2.3,
+    so β/Δβ ≈ 99 and a 0.1% per-mode error lands as ~10% on Δβ. Nobody has ever
+    swept the quantity that actually matters here.
+
+    Mutating module globals rather than threading a parameter through: this is
+    a temporary verification script (deleted with the rest of
+    examples/verification/), and doing it this way leaves the default res-40
+    path byte-identical, including its output paths and cache keys.
+    """
+    global RESOLUTION, output_dir, data_dir
+    RESOLUTION = float(res)
+    FDTD_KWARGS["res"] = RESOLUTION
+    EME_KWARGS["res"] = RESOLUTION
+    output_dir = os.path.join(_ROOT, "example_output", "verification",
+                              "engine_agreement", f"res{RESOLUTION:g}")
+    data_dir = os.path.join(output_dir, "data")
+
+
 def _tag(L):
     return f"L{L:04.1f}um"
 
@@ -477,8 +502,15 @@ def main():
                     help="no FDTD; re-fit what exists and run the EME half")
     ap.add_argument("--no-cache", action="store_true",
                     help="ignore the on-disk cache and re-simulate")
+    ap.add_argument("--res", type=float, default=None,
+                    help="override BOTH engines' resolution and write to a "
+                         "per-resolution output subdirectory. For the item 6 "
+                         "resolution sweep; omit for the pinned res-40 run, "
+                         "whose output paths are then exactly as before.")
     args = ap.parse_args()
     cached = not args.no_cache
+    if args.res is not None:
+        _set_resolution(args.res)
 
     say(f"[ea] item 6 — direct FDTD/EME engine agreement")
     say(f"[ea]   device    DirectionalCoupler(coupling_length="

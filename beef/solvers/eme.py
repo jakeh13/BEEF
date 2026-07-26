@@ -20,6 +20,23 @@ from .._log import get_logger
 logger = get_logger(__name__)
 
 
+def _neff_fingerprint(neff_override: Optional[np.ndarray]):
+    """JSON-safe cache-key form of a `neff_override` array, or None.
+
+    Must be part of every EME cache config that accepts the override: the same
+    geometry, mesh and wavelengths propagated on a *different* n_eff is a
+    different physical result, and without this a calibrated run and an
+    uncalibrated one would share a cache entry and silently serve each other.
+    Rounded to the same 9 decimals beef.cache.config uses elsewhere so a
+    JSON round-trip cannot turn a hit into a miss.
+    """
+    if neff_override is None:
+        return None
+    arr = np.asarray(neff_override)
+    return [[[round(float(np.real(v)), 9), round(float(np.imag(v)), 9)] for v in row]
+            for row in np.atleast_2d(arr)]
+
+
 class EMESolver:
     """Eigenmode expansion solver wrapping meow.
 
@@ -144,6 +161,28 @@ class EMESolver:
             )
         return variable[0]
 
+    @staticmethod
+    def _override_neff(modes: list, neff_row) -> list:
+        """Return `modes` with each mode's n_eff replaced by `neff_row[i]`.
+
+        The only thing meow's propagation S-matrix reads is `Mode.neff` —
+        `exp(2j·π·neff/wl·L)` in meow/eme/propagation.py — so substituting it
+        here changes how the body propagates and nothing else. Field profiles,
+        and therefore every interface overlap integral, are left exactly as the
+        mode solver produced them. That split is the point: only the
+        *propagation* is being taken from the FDTD (dc_validation.md item 6).
+
+        `Mode` is a frozen pydantic model, so this copies rather than mutates —
+        which also means a caller's `modes` list is never disturbed.
+        """
+        if len(neff_row) != len(modes):
+            raise ValueError(
+                f"neff_override has {len(neff_row)} entries but this "
+                f"cross-section resolved {len(modes)} modes"
+            )
+        return [m.model_copy(update={"neff": complex(n)})
+                for m, n in zip(modes, neff_row)]
+
     def compute_modes(self, cross_section, num_modes: int) -> list:
         """Compute modes for a single cross-section (exposed for caching).
 
@@ -169,6 +208,7 @@ class EMESolver:
         n_modes_out: int = 1,
         stub_left: float = 0.0,
         stub_right: float = 0.0,
+        neff_override: Optional[np.ndarray] = None,
         save_dir: Optional[str] = None,
         cache_only: bool = False,
         **geometry_kwargs,
@@ -216,7 +256,8 @@ class EMESolver:
                 self, "solve_section",
                 dict(x0=x0, x1=x1, wavelengths=wavelengths,
                      stub_left=stub_left, stub_right=stub_right,
-                     geometry_kwargs=geometry_kwargs),
+                     geometry_kwargs=geometry_kwargs,
+                     neff_override=_neff_fingerprint(neff_override)),
                 geometry,
             )
             config = build_run_config(
@@ -224,7 +265,8 @@ class EMESolver:
                 dict(x0=x0, x1=x1, wavelengths=wavelengths,
                      n_modes_in=n_modes_in, n_modes_out=n_modes_out,
                      stub_left=stub_left, stub_right=stub_right,
-                     geometry_kwargs=geometry_kwargs),
+                     geometry_kwargs=geometry_kwargs,
+                     neff_override=_neff_fingerprint(neff_override)),
                 geometry,
             )
             hit = lookup(save_dir, config)
@@ -257,6 +299,8 @@ class EMESolver:
             env = mw.Environment(wl=float(wl), T=self.temperature)
             css = [mw.CrossSection.from_cell(cell=cell, env=env) for cell in cells]
             modes = [self.compute_modes(cs, n_modes) for cs in css]
+            if neff_override is not None:
+                modes = [self._override_neff(m, neff_override[wl_idx]) for m in modes]
             S, port_map = mw.compute_s_matrix(modes, cells=cells)
             # S is a flat dense matrix keyed by string port labels ("left@n",
             # "right@n"), not an NxN block per port pair — look up indices
@@ -287,6 +331,7 @@ class EMESolver:
         n_modes_out: int = 1,
         stub_left: float = 0.0,
         stub_right: float = 0.0,
+        neff_override: Optional[np.ndarray] = None,
         save_dir: Optional[str] = None,
         cache_only: bool = False,
         **geometry_kwargs,
@@ -337,7 +382,8 @@ class EMESolver:
                 self, "solve_section_length_sweep",
                 dict(x0=x0, x1=x1, wavelengths=wavelengths, lengths=lengths,
                      stub_left=stub_left, stub_right=stub_right,
-                     geometry_kwargs=geometry_kwargs),
+                     geometry_kwargs=geometry_kwargs,
+                     neff_override=_neff_fingerprint(neff_override)),
                 geometry,
             )
             config = build_run_config(
@@ -345,7 +391,8 @@ class EMESolver:
                 dict(x0=x0, x1=x1, wavelengths=wavelengths, lengths=lengths,
                      n_modes_in=n_modes_in, n_modes_out=n_modes_out,
                      stub_left=stub_left, stub_right=stub_right,
-                     geometry_kwargs=geometry_kwargs),
+                     geometry_kwargs=geometry_kwargs,
+                     neff_override=_neff_fingerprint(neff_override)),
                 geometry,
             )
             hit = lookup(save_dir, config)
@@ -378,6 +425,8 @@ class EMESolver:
             env = mw.Environment(wl=float(wl), T=self.temperature)
             css = [mw.CrossSection.from_cell(cell=cell, env=env) for cell in cells]
             modes = [self.compute_modes(cs, n_modes) for cs in css]  # one solve, reused below
+            if neff_override is not None:
+                modes = [self._override_neff(m, neff_override[wl_idx]) for m in modes]
 
             if wl_idx == len(wavelengths) // 2:
                 # Diagnostic: confirm this cross-section actually resolves

@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -24,6 +24,13 @@ logger = get_logger(__name__)
 # just has to sit in the guided range for a Si-core/oxide-clad waveguide
 # (1.44 < n_eff < 3.48). Roughly the middle of that window.
 _KPOINT_SEED_NEFF = 2.5
+
+# Largest branch-selection margin section_mode_beta() will accept, as a
+# fraction of the half-distance to the neighbouring 2π branch. The coupler at
+# res 40 sits at 0.13 (FDTD 9.633 vs MPB's 9.423 rad/µm seed, lengths 2 µm
+# apart), so 0.5 leaves ~4x headroom over the disagreement actually being
+# measured while still refusing anything close to a coin-flip.
+_BETA_BRANCH_MARGIN_MAX = 0.5
 
 
 def monitor_freq_grid(wavelengths: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -80,6 +87,80 @@ def source_fwidth(wavelengths: np.ndarray, factor: float) -> float:
     if span <= 0.0:                        # single wavelength — nothing to span
         return factor * _SINGLE_WL_REL_BANDWIDTH / float(wl.mean())
     return factor * span
+
+
+def dbeta_from_phases(lengths, dphi) -> Tuple[float, float, float]:
+    """Differential phase rate (rad/µm) from ``dphi`` measured at several lengths.
+
+    ``dphi(L) = arg(T_ii) - arg(T_jj) = Δβ·L + const``, where the constant is
+    mode-matching and monitor-plane phase, identical at every length. The SLOPE
+    is the physics; the intercept is discarded. One length cannot do this —
+    ``dphi(L)/L`` would carry the offset as a 1/L error.
+
+    Well-conditioned and needs no prior, because Δβ is small: at the coupler's
+    0.095 rad/µm a 2 µm step accrues 0.19 rad, nowhere near a wrap. That is
+    exactly what `beta_from_phases()` below cannot assume, and why the two are
+    separate functions.
+
+    Returns ``(dbeta, intercept, rms_residual)``. The residual is the evidence
+    that dphi really is linear in L, i.e. that this is one clean mode pair.
+    """
+    lengths = np.asarray(lengths, dtype=float)
+    y = np.unwrap(np.asarray(dphi, dtype=float))
+    A = np.vstack([lengths, np.ones_like(lengths)]).T
+    (slope, intercept), *_ = np.linalg.lstsq(A, y, rcond=None)
+    resid = float(np.sqrt(np.mean((y - (slope * lengths + intercept)) ** 2)))
+    return float(slope), float(intercept), resid
+
+
+def beta_from_phases(lengths, phases, seed_beta) -> Tuple[float, float, float]:
+    """Absolute phase rate (rad/µm) for ONE mode, from ``arg(T_ii)`` vs length.
+
+    Unlike `dbeta_from_phases()` this is a *large* rate — β ≈ 9.4 rad/µm for a
+    silicon strip — so the phase wraps many times between lengths and
+    ``np.unwrap`` is useless: at the coupler's 2 µm spacing, ``β·ΔL`` is 2.9993
+    full turns, and all that survives is the 0.002 rad remainder. Getting this
+    wrong is not subtle but it is silent — a naive fit here returned Δβ = −0.331
+    against a true 0.08525 during the item 6 analysis.
+
+    So the branch is chosen against `seed_beta`, normally MPB's answer from
+    `FDTDSolver.section_mode_neff()`. That is safe rather than circular: with
+    equally spaced lengths the candidate slopes are ``2π/ΔL`` apart — 3.14 rad/µm
+    at ΔL = 2 µm, a 33% step — while the FDTD/MPB disagreement being measured is
+    of order 2%. The seed picks which turn; it does not set the answer within
+    that turn, and `margin` below reports how much room was left.
+
+    Args:
+        lengths: section lengths (µm). Need not be equally spaced, but the
+            wrap-safety margin is governed by the largest gap.
+        phases: ``arg(T_ii)`` at each length, each wrapped into (−π, π].
+        seed_beta: prior for branch selection (rad/µm).
+
+    Returns:
+        ``(beta, resid, margin)``. `resid` is the max absolute deviation from
+        the fitted line, in radians — small only if the branch is right AND the
+        section is uniform. `margin` is ``|beta - seed_beta|`` as a fraction of
+        the half-distance to the neighbouring branch: ≪1 is safe, ≥1 means the
+        seed could not distinguish the branches and the result is not
+        trustworthy.
+    """
+    lengths = np.asarray(lengths, dtype=float)
+    phases = np.asarray(phases, dtype=float)
+    seed_beta = float(seed_beta)
+
+    turns = np.round((seed_beta * lengths - phases) / (2.0 * np.pi))
+    unwrapped = phases + 2.0 * np.pi * turns
+    A = np.vstack([lengths, np.ones_like(lengths)]).T
+    (slope, intercept), *_ = np.linalg.lstsq(A, unwrapped, rcond=None)
+    resid = float(np.max(np.abs(unwrapped - (slope * lengths + intercept))))
+
+    # Neighbouring branches differ by 2π/ΔL in slope, so the seed is decisive
+    # only within ±π/ΔL of the truth. Use the largest gap: it is the one that
+    # wraps first.
+    max_gap = float(np.max(np.diff(np.sort(lengths)))) if lengths.size > 1 else np.inf
+    half_branch = np.pi / max_gap if np.isfinite(max_gap) and max_gap > 0 else np.inf
+    margin = float(abs(slope - seed_beta) / half_branch) if np.isfinite(half_branch) else 0.0
+    return float(slope), resid, margin
 
 
 def _resolved_spectral_config(wavelengths: np.ndarray, factor: float) -> Dict[str, Any]:
@@ -722,6 +803,136 @@ class FDTDSolver:
 
         sim.reset_meep()
         return neff
+
+    def section_mode_beta(
+        self,
+        geometry,
+        wavelengths: np.ndarray,
+        x0: float,
+        x1: float,
+        n_modes: int,
+        lengths: Optional[Sequence[float]] = None,
+        monitor_center: Optional[float] = None,
+        monitor_size: Optional[float] = None,
+        save_dir: Optional[str] = None,
+        cache_only: bool = False,
+        **geometry_kwargs,
+    ) -> np.ndarray:
+        """Propagation constants this solver's FDTD *actually accumulates*
+        through the section's cross-section (rad/µm), per mode per wavelength.
+
+        The counterpart to `section_mode_neff()`, and deliberately not the same
+        number. `section_mode_neff()` asks MPB for the mode index of the
+        discretized cross-section; this runs the time-stepper over several
+        lengths and fits the phase it really picks up. On the coupler at res 40
+        they differ by ~2.3% per mode — MPB 9.42255 vs FDTD 9.63292 rad/µm for
+        the even supermode — because MPB's planewave operator and meep's Yee
+        operator are different discretizations of the same continuum problem.
+
+        **Why that 2.3% matters far more than it looks.** A hybrid chain's
+        coupling is set by Δβ, a *difference* of two β near 9.4. Both modes are
+        biased the same way, and the differential between them is only 0.129
+        percentage points — but ``β/Δβ ≈ 99``, so it lands on Δβ as a 10.4%
+        error. That is the whole of dc_validation.md item 6, and it is why the
+        stub sweep never converges: its L₅₀ drift is exactly
+        ``2s·(1 - Δβ_FDTD/Δβ_EME)``. Closing it by mesh refinement would need
+        res ≈ 143, some 164× the 3-D cost.
+
+        Feeding this into the EME body instead makes the cascade
+        self-consistent — see `HybridSolver(calibrate_body_neff=True)`. That is
+        not a fudge: the hybrid's job is to reproduce a full-device FDTD run,
+        and that reference *is* meep's discretization, so propagating the body
+        on MPB's β is the actual mismatch.
+
+        Cost: ``len(lengths)`` real `solve_section()` runs — genuinely
+        expensive, unlike `section_mode_neff()`. Pass `save_dir` so a given
+        cross-section is paid for once.
+
+        Args:
+            x0, x1: device-frame bounds. Their midpoint sets the cross-section,
+                and the *whole* span [x0, x1] must be uniform — a section that
+                clips a taper or bend makes the phase non-linear in L, which
+                shows up in the returned residual rather than silently.
+            lengths: section lengths to fit over (µm). Default
+                ``[span/2, span]``. Two is enough for a slope; more only buys
+                a better residual. Keep them well inside the uniform region.
+            monitor_center / monitor_size: as `solve_section()`. The default
+                here pins the full non-PML width on the ``y=0`` axis, which is
+                what a coupled pair's even/odd basis needs.
+
+        Returns:
+            Real ndarray ``[len(wavelengths), n_modes]`` of β in rad/µm.
+
+        Raises:
+            ValueError: if the branch-selection margin is not comfortably below
+                1 for some mode, i.e. the lengths are spaced too widely for
+                MPB's seed to identify which wrap the FDTD phase is on. Fix by
+                passing closer-spaced `lengths`.
+        """
+        span = float(x1 - x0)
+        if lengths is None:
+            lengths = [span / 2.0, span]
+        lengths = [float(L) for L in lengths]
+        if len(lengths) < 2:
+            raise ValueError(
+                "section_mode_beta needs at least 2 lengths: one length cannot "
+                "separate the propagation phase from the constant mode-matching "
+                "phase at the monitor planes."
+            )
+        wavelengths = np.asarray(wavelengths, dtype=float)
+        mid = 0.5 * (x0 + x1)
+        iface = dict(
+            monitor_center=0.0 if monitor_center is None else monitor_center,
+            monitor_size=self.sim_width if monitor_size is None else monitor_size,
+        )
+
+        # MPB's answer, used only to pick which wrap each phase is on. Cheap
+        # (no time-stepping), and the candidate branches are 2π/ΔL apart, so it
+        # cannot bias the result within a branch — see beta_from_phases().
+        seed = self.section_mode_neff(
+            geometry, wavelengths, x0, x1, n_modes,
+            monitor_center=iface["monitor_center"],
+            monitor_size=iface["monitor_size"],
+            **geometry_kwargs,
+        )
+        seed_beta = 2.0 * np.pi * seed / wavelengths[:, None]
+
+        phases = np.zeros((len(lengths), len(wavelengths), n_modes))
+        for j, L in enumerate(lengths):
+            T = self.solve_section(
+                geometry, wavelengths, mid - L / 2.0, mid + L / 2.0,
+                n_modes_in=n_modes, n_modes_out=n_modes,
+                save_dir=save_dir, cache_only=cache_only,
+                **iface, **geometry_kwargs,
+            )
+            phases[j] = np.angle(np.diagonal(T, axis1=1, axis2=2))
+
+        beta = np.zeros((len(wavelengths), n_modes))
+        worst_margin = 0.0
+        worst_resid = 0.0
+        for i in range(len(wavelengths)):
+            for m in range(n_modes):
+                b, resid, margin = beta_from_phases(
+                    lengths, phases[:, i, m], seed_beta[i, m])
+                beta[i, m] = b
+                worst_margin = max(worst_margin, margin)
+                worst_resid = max(worst_resid, resid)
+
+        if worst_margin >= _BETA_BRANCH_MARGIN_MAX:
+            raise ValueError(
+                f"section_mode_beta: branch-selection margin {worst_margin:.2f} "
+                f"is not safely below 1 — the FDTD phase moved far enough from "
+                f"MPB's seed that which 2π wrap it sits on is ambiguous at "
+                f"lengths {lengths}. Re-run with a smaller spacing (below "
+                f"{np.pi / (2.0 * np.pi * float(np.max(seed))/float(np.min(wavelengths))):.2f} µm "
+                f"here), or check the section is really uniform."
+            )
+        logger.info(
+            "section_mode_beta: %d lengths %s, worst branch margin %.3f, "
+            "worst phase-fit residual %.2e rad",
+            len(lengths), lengths, worst_margin, worst_resid,
+        )
+        return beta
 
     # ------------------------------------------------------------------
     # Generic section solver (used by HybridSolver)
