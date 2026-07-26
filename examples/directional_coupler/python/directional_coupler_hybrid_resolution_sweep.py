@@ -178,6 +178,15 @@ def simulate_resolution(R: float) -> None:
         material_stack=SOI_220,
         decay_tol=1e-11,
     )
+    # Both engines are meshed at the SAME R here, unlike the other hybrid
+    # scripts, which now pin FDTD 40 / EME 80 separately (dc_validation.md item
+    # 11). That is intentional for a resolution sweep — but it means this sweep
+    # measures the two convergences *convolved* and cannot separate them. It is
+    # why a 7% EME error went unnoticed: the joint curve looked converged
+    # because FDTD dominates the observable (T_cross) while EME dominates Δβ.
+    # Read a flat curve here as "the pair is jointly converged", never as "each
+    # engine is converged". For the per-engine answer see
+    # examples/verification/python/verify_item_6_engine_agreement.py.
     body_solver = EMESolver(
         num_modes=[N_MODES], num_cells=[1], lengths=[1.0],  # placeholder length; solve_section_length_sweep() below sets its own
         oxide_width=6.0, oxide_height=1.5, res=R, material_stack=SOI_220,

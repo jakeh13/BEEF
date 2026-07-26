@@ -81,7 +81,20 @@ _HYBRID_SWEEP_NPZ = os.path.abspath(os.path.join(
 # ---------------------------------------------------------------------------
 # Global simulation parameters — identical to directional_coupler_hybrid.py.
 # ---------------------------------------------------------------------------
-RESOLUTION = 40.0   # mesh resolution (pixels/µm)
+# The two engines get SEPARATE resolutions, and this is deliberate — a single
+# shared RESOLUTION was how a 7% error hid for months (dc_validation.md item 11).
+#
+# meep's FDTD is converged at 40: its implied Δβ moves only 2.74% across res
+# 30–90, non-monotonically (noise, not a trend). meow/MPB on its own Mesh2D is
+# NOT — Δβ_EME at 1.55 µm runs 0.1125 (res 20) → 0.0957 (40) → 0.0926 (60) →
+# 0.0894 (80) → 0.0895 (100), so 40 overstates the even/odd splitting by 7% and
+# 80 is the first converged point. meep's subpixel smoothing is the likely
+# reason it converges so much earlier on the same nominal grid.
+#
+# Measured directly in dc_validation.md Done item 6 (job 11489846) and pinned by
+# tests/test_eme_convergence.py. Do not collapse these back into one knob.
+FDTD_RESOLUTION = 40.0   # pixels/µm — converged; see above
+EME_RESOLUTION = 80.0    # pixels/µm — 40 is NOT converged; see above
 WL_MIN = 1.50       # wavelength sweep start (µm)
 WL_MAX = 1.60       # wavelength sweep end (µm)
 N_WL = 11           # number of wavelength points
@@ -130,7 +143,7 @@ dc = DirectionalCoupler(
 )
 
 _fdtd_common = dict(
-    res=RESOLUTION,
+    res=FDTD_RESOLUTION,
     sim_width=6.0,
     sim_height=1.5,
     dpml=0.5,
@@ -187,7 +200,7 @@ def simulate_n_modes(N: int) -> None:
 
     body_solver = EMESolver(
         num_modes=[N], num_cells=[1], lengths=[1.0],  # placeholder length; solve_section_length_sweep() sweeps its own
-        oxide_width=6.0, oxide_height=1.5, res=RESOLUTION, material_stack=SOI_220,
+        oxide_width=6.0, oxide_height=1.5, res=EME_RESOLUTION, material_stack=SOI_220,
         mode_solver="meep",
     )
 
