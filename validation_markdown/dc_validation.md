@@ -4,7 +4,7 @@ Opened 2026-07-25, from investigating why `directional_coupler_hybrid_stub_sweep
 never converges. Root cause found; this is the work to fix it and re-establish trust
 in the directional coupler results.
 
-**Status 2026-07-26:** items 1–6, 9, 11 and 12 done and verified — the wavelength axis is fixed
+**Status 2026-07-26:** items 1–6, 9, 10, 11 and 12 done and verified — the wavelength axis is fixed
 and confirmed against a pre-fix run (job 11477911, 9/9 checks), the cache can no longer
 serve or corrupt stale data, the directional coupler has a trustworthy full-band ground
 truth again (job 11480725, 40 lengths with provenance), the golden reference is back on
@@ -139,8 +139,8 @@ Verification below), **item 5 has re-established the ground truth** (job 1148072
 **item 6 has localized the engine gap** (job 11489846), so item 7 now rests on a
 confirmed FDTD, a reference to measure against, *and* a quantified body error.
 
-Remaining order: **11** → **12** → **7**, then **8**, with **10** whenever the ring
-resonator matters (it blocks nothing here).
+Remaining order: **7**, then **8**. (**10** is done — the ring's *re-run* is tracked in
+`ring_resonator_validation.md`, not here.)
 
 **11 before 7** because the stub sweep's L₅₀ drift slope measures 1 − Δβ_FDTD/Δβ_EME,
 which is 0.109 at res 40 but 0.047 with EME converged — running 7 first would spend nine
@@ -181,24 +181,8 @@ real, but smaller than either open item above.
    every wavelength. Real, but ~0.8% of Δn_eff — worth fixing for correctness, not a
    driver of anything above. (Solver #8, wavelength interpolation, is not involved:
    this script does a full mode solve at all 11 wavelengths.)
-10. **The same bug is in the ring resonator examples.** Found while auditing the cache
-    for item 3, and *not* fixed by items 1–2: `ring_resonator_hybrid.py` (lines 385,
-    469) and `ring_resonator_hybrid_cascaded.py` (lines 392, 463) each compute
-    `fwidth = (1/WL_MIN - 1/WL_MAX) * 0.5` and hand it to
-    `sim.add_mode_monitor(fcen, fwidth, N_WL_FDTD)` — character for character the
-    defect item 1 fixed, in raw meep rather than through `FDTDSolver`, so the solver
-    fix does not reach it. Every ring FDTD result carries the same reversed, half-span
-    wavelength axis.
-
-    Worse, their 6 cache entries are still *reachable*: these scripts build their own
-    flat config dicts via `_sim_params()` (`ring_resonator_hybrid.py:297`), so nothing
-    in items 1–3 changed their hash and a re-run will silently reuse pre-fix data. They
-    were left on disk deliberately rather than deleted — deleting would only force
-    re-simulation of equally wrong results. Fix: port both scripts to
-    `monitor_freq_grid()` / `source_fwidth()`, add the resolved grid to `_sim_params()`
-    so the hash strands the old entries automatically (the mechanism item 2 used), then
-    re-run. Check `notes.md` before assuming these are the last two — this is the second
-    place the same line has appeared.
+10. *(done — see Done item 10.)* The **re-run** it unblocks is tracked in
+    `ring_resonator_validation.md`, not here.
 
 ## Verification
 
@@ -902,3 +886,49 @@ disagreement, and rejects the cross-resolution comparison), plus two slow ones r
 both engines for real.
 
 **Verified** — full fast suite **223 passed, 11 skipped**.
+
+### 10. Ring resonator monitor grid — 2026-07-26
+
+The second place the item 1 defect appeared. `ring_resonator_hybrid.py` and
+`ring_resonator_hybrid_cascaded.py` each hand-built their meep simulations — the ring's
+coupling ports are y-normal and nothing in `beef/solvers/fdtd.py` draws those — so each
+carried its own copy of
+
+```python
+fwidth = (1/WL_MIN - 1/WL_MAX) * 0.5
+sim.add_mode_monitor(fcen, fwidth, N_WL_FDTD, ...)
+```
+
+in raw meep, where the solver-side fix could not reach it. A request for 1.50–1.60 µm
+sampled 1.5254–1.5754 µm: half the span, reversed.
+
+**Changed** — both scripts now take an explicit ascending frequency list from
+`monitor_freq_grid()`, size the pulse with `source_fwidth(wavelengths, 2.0)` (exactly 4×
+the old width), reorder every measured amplitude onto the caller's axis with
+`[wl_order]` — ratio taken in monitor order first, reordered once, as `solve_section()`
+does — and call `check_source_coverage()`. `_sim_params()` now takes `wavelengths` and
+emits `resolved_monitor_freqs` / `resolved_source_fwidth`, mirroring
+`_resolved_spectral_config()`.
+
+**The stranding was verified, not assumed.** All 6 pre-fix FDTD cache entries now miss
+(`lookup()` → `None`); each folder's stored `config.json` was re-hashed first to confirm
+it matched its own folder name, so the check ran against the real recorded config rather
+than a reconstruction of it. The 39 `solve_neff` / `solve_body_supermodes` entries are
+untouched and all still hit — they are MPB solves the monitor grid never affected, and
+stranding them would have forced pointless re-simulation. Per-entry hashes are in
+`ring_resonator_validation.md`.
+
+**Added** — `tests/test_ring_monitor_grid.py`, 14 fast tests, no meep. Source-level,
+because importing either script *runs* it. Docstrings and comments are stripped before
+matching, so the prose describing the old line cannot pass for live code.
+
+**Verified** — full fast suite **237 passed, 11 skipped** (was 223).
+
+**Not done — nothing has been re-simulated.** The fix guarantees a re-run cannot
+silently serve pre-fix data; it does not produce post-fix data. Every ring plot in
+`example_output/` is still pre-fix. The re-run and its centre-wavelength check are
+tracked in `ring_resonator_validation.md`.
+
+**`notes.md` is worth checking before assuming these were the last two** — this was the
+second place the same line appeared, which is the argument for the library-path
+recommendation in `ring_resonator_validation.md` rather than a third hand-port.

@@ -104,6 +104,9 @@ from beef.cache import CacheMissError, load_result, lookup, save_run
 from beef.geometry.base import polygons_to_prisms
 from beef.materials import SOI_220
 from beef.results import SMatrix
+from beef.solvers.fdtd import (
+    check_source_coverage, monitor_freq_grid, source_fwidth,
+)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "ring_resonator", "ring_resonator_hybrid_cascaded"))
@@ -140,6 +143,7 @@ N_WL_DENSE = 501 if TEST_MODE else 2001        # dense interpolated grid, to res
 DPML = 0.5
 SIM_HEIGHT = 1.5            # um, inner z-span when THREE_D
 DECAY_TOL = 1e-11
+SOURCE_BANDWIDTH_FACTOR = 2.0   # see ring_resonator_hybrid.py's identical constant
 SOURCE_MARGIN = 0.0
 MONITOR_MARGIN = 0.25
 S_MON = 0.5                 # um, ring-port reference plane offset above each near bend's arc end
@@ -288,16 +292,20 @@ def make_sim(polys, wl_center, cell_size, geometry_center):
     )
 
 
-def add_x_monitor(sim, fcen, fwidth, x, yc, width=PORT_APERTURE):
+def add_x_monitor(sim, mon_freqs, x, yc, width=PORT_APERTURE):
+    """See ring_resonator_hybrid.py's identical helper for why this takes an
+    explicit frequency list from monitor_freq_grid() rather than meep's
+    (fcen, df, nfreq) triple (dc_validation.md items 1 and 10)."""
     return sim.add_mode_monitor(
-        fcen, fwidth, N_WL_FDTD,
+        mon_freqs,
         mp.FluxRegion(center=mp.Vector3(x, yc), size=mp.Vector3(0, width, _mon_sz)),
     )
 
 
-def add_y_monitor(sim, fcen, fwidth, y, xc, width=PORT_APERTURE):
+def add_y_monitor(sim, mon_freqs, y, xc, width=PORT_APERTURE):
+    """See add_x_monitor() — same contract, y-normal plane."""
     return sim.add_mode_monitor(
-        fcen, fwidth, N_WL_FDTD,
+        mon_freqs,
         mp.FluxRegion(center=mp.Vector3(xc, y), size=mp.Vector3(width, 0, _mon_sz)),
     )
 
@@ -315,13 +323,21 @@ def _json_polys(polys):
     return [[[round(float(x), 9), round(float(y), 9)] for x, y in poly] for poly in polys]
 
 
-def _sim_params():
+def _sim_params(wavelengths):
     """Every module-level constant that affects the physical result of
     run_left_fdtd()/run_bend_fdtd() — changing any of these must change the
     cache key. IFACE_BUFFER isn't listed separately: it's already baked into
     build_left_polys()'s vertex coordinates, which geometry_polygons
-    fingerprints directly."""
+    fingerprints directly.
+
+    The two `resolved_*` entries strand this script's pre-fix cache entries —
+    see ring_resonator_hybrid.py's identical helper for why deriving them from
+    already-hashed `wavelengths` is still the point."""
+    mon_freqs, _ = monitor_freq_grid(wavelengths)
     return {
+        "resolved_monitor_freqs": [round(float(f), 9) for f in mon_freqs],
+        "resolved_source_fwidth": round(
+            float(source_fwidth(wavelengths, SOURCE_BANDWIDTH_FACTOR)), 9),
         "waveguide_width": WAVEGUIDE_WIDTH,
         "gap": GAP,
         "R": R,
@@ -374,7 +390,7 @@ def run_left_fdtd(excite, wavelengths, save_dir=None, cache_only=False):
             "geometry_polygons": {"2,0": _json_polys(build_left_polys())},
             "wavelengths": [round(float(w), 9) for w in wavelengths],
             "n_modes": N_MODES,
-            **_sim_params(),
+            **_sim_params(wavelengths),
         }
         hit = lookup(save_dir, config)
         if hit is not None:
@@ -387,9 +403,11 @@ def run_left_fdtd(excite, wavelengths, save_dir=None, cache_only=False):
             f"cache_only=False to populate the cache."
         )
 
-    wl_center = (WL_MIN + WL_MAX) / 2
+    wl_center = float(np.mean(wavelengths))
     fcen = 1.0 / wl_center
-    fwidth = (1.0 / WL_MIN - 1.0 / WL_MAX) * 0.5
+    fwidth = source_fwidth(wavelengths, SOURCE_BANDWIDTH_FACTOR)
+    mon_freqs, wl_order = monitor_freq_grid(wavelengths)
+    check_source_coverage(fcen, fwidth, wavelengths)
 
     polys = build_left_polys()
     sim = make_sim(polys, wl_center, (LEFT_SX, LEFT_SY), (LEFT_X_CENTER, LEFT_Y_CENTER))
@@ -401,7 +419,7 @@ def run_left_fdtd(excite, wavelengths, save_dir=None, cache_only=False):
             center=mp.Vector3(src_x, 0.0), size=mp.Vector3(0, PORT_APERTURE, _mon_sz),
             eig_band=1, eig_kpoint=mp.Vector3(1, 0, 0), eig_match_freq=True,
         )]
-        norm_mon = add_x_monitor(sim, fcen, fwidth, -INNER_X_HALF + MONITOR_MARGIN, 0.0)
+        norm_mon = add_x_monitor(sim, mon_freqs, -INNER_X_HALF + MONITOR_MARGIN, 0.0)
     elif excite == "ring":
         src_y = LEFT_STUB_TOP - SOURCE_MARGIN
         sim.sources = [mp.EigenModeSource(
@@ -409,11 +427,11 @@ def run_left_fdtd(excite, wavelengths, save_dir=None, cache_only=False):
             center=mp.Vector3(-STUB_X, src_y), size=mp.Vector3(PORT_APERTURE, 0, _mon_sz),
             eig_band=1, eig_kpoint=mp.Vector3(0, -1, 0), eig_match_freq=True,
         )]
-        norm_mon = add_y_monitor(sim, fcen, fwidth, LEFT_RING_Y, -STUB_X)
+        norm_mon = add_y_monitor(sim, mon_freqs, LEFT_RING_Y, -STUB_X)
     else:
         raise ValueError(f"unknown excite={excite!r}")
 
-    iface_mon = add_x_monitor(sim, fcen, fwidth, IFACE_X - MONITOR_MARGIN, IFACE_Y_CENTER, width=IFACE_WIDTH)
+    iface_mon = add_x_monitor(sim, mon_freqs, IFACE_X - MONITOR_MARGIN, IFACE_Y_CENTER, width=IFACE_WIDTH)
 
     sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=DECAY_TOL))
 
@@ -424,7 +442,9 @@ def run_left_fdtd(excite, wavelengths, save_dir=None, cache_only=False):
         a_norm = get_norm_calibrated(sim, norm_mon, forward=False)
 
     coeff = sim.get_eigenmode_coefficients(iface_mon, list(range(1, N_MODES + 1)), eig_parity=mp.NO_PARITY)
-    col = (coeff.alpha[:, :, 0] / a_norm[np.newaxis, :]).T   # [n_wl, N_MODES], forward (+x, into the body)
+    # alpha and a_norm are both in monitor order, so take the ratio there and
+    # reorder once onto `wavelengths` along axis 0 — see ring_resonator_hybrid.py.
+    col = (coeff.alpha[:, :, 0] / a_norm[np.newaxis, :]).T[wl_order]   # [n_wl, N_MODES], forward (+x, into the body)
     sim.reset_meep()
 
     if save_dir:
@@ -445,7 +465,7 @@ def run_bend_fdtd(wavelengths, save_dir=None, cache_only=False):
             "geometry_class": "RingResonatorBend",
             "geometry_polygons": {"2,0": _json_polys(build_bend_polys())},
             "wavelengths": [round(float(w), 9) for w in wavelengths],
-            **_sim_params(),
+            **_sim_params(wavelengths),
         }
         hit = lookup(save_dir, config)
         if hit is not None:
@@ -458,9 +478,11 @@ def run_bend_fdtd(wavelengths, save_dir=None, cache_only=False):
             f"cache_only=False to populate the cache."
         )
 
-    wl_center = (WL_MIN + WL_MAX) / 2
+    wl_center = float(np.mean(wavelengths))
     fcen = 1.0 / wl_center
-    fwidth = (1.0 / WL_MIN - 1.0 / WL_MAX) * 0.5
+    fwidth = source_fwidth(wavelengths, SOURCE_BANDWIDTH_FACTOR)
+    mon_freqs, wl_order = monitor_freq_grid(wavelengths)
+    check_source_coverage(fcen, fwidth, wavelengths)
 
     polys = build_bend_polys()
     sim = make_sim(polys, wl_center, (BEND_SX, BEND_SY), (BEND_X_CENTER, BEND_Y_CENTER))
@@ -471,13 +493,14 @@ def run_bend_fdtd(wavelengths, save_dir=None, cache_only=False):
         center=mp.Vector3(src_x, 0.0), size=mp.Vector3(0, PORT_APERTURE, _mon_sz),
         eig_band=1, eig_kpoint=mp.Vector3(1, 0, 0), eig_match_freq=True,
     )]
-    norm_mon = add_x_monitor(sim, fcen, fwidth, -STUB_LEN + MONITOR_MARGIN, 0.0)
-    out_mon = add_y_monitor(sim, fcen, fwidth, R + STUB_LEN - MONITOR_MARGIN, R)
+    norm_mon = add_x_monitor(sim, mon_freqs, -STUB_LEN + MONITOR_MARGIN, 0.0)
+    out_mon = add_y_monitor(sim, mon_freqs, R + STUB_LEN - MONITOR_MARGIN, R)
 
     sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=DECAY_TOL))
 
+    # Ratio in monitor order, reordered once onto `wavelengths`.
     a_norm = get_coeffs(sim, norm_mon, forward=True)
-    b_raw = get_coeffs(sim, out_mon, forward=True) / a_norm
+    b_raw = (get_coeffs(sim, out_mon, forward=True) / a_norm)[wl_order]
     sim.reset_meep()
 
     if save_dir:

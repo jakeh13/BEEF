@@ -1,7 +1,12 @@
 # Ring resonator validation — to-do
 
-Opened 2026-07-26. **The least validated device in the repo**, and the only one
-with a known-live bug.
+Opened 2026-07-26. **The least validated device in the repo.**
+
+**Status 2026-07-26:** the axis bug is **fixed in code** (`dc_validation.md`
+item 10 — see Done below). Nothing has been re-simulated yet, so every ring
+plot and every stored ring FDTD result on disk is still pre-fix. The fix
+guarantees the old data can no longer be served silently, not that new data
+exists.
 
 `examples/ring_resonator/python/` — `ring_resonator_hybrid.py`,
 `ring_resonator_hybrid_cascaded.py`. Despite the `_hybrid` names, neither uses
@@ -9,35 +14,83 @@ with a known-live bug.
 simulations and their meow cross-section directly. That single fact is the root
 of everything below.
 
-## Known defect — the axis bug is still live here
+## Done — the axis bug (`dc_validation.md` item 10), 2026-07-26
 
-`ring_resonator_hybrid.py` (lines 385, 469) and
-`ring_resonator_hybrid_cascaded.py` (lines 392, 463) each compute
+Both scripts computed `fwidth = (1/WL_MIN - 1/WL_MAX) * 0.5` and handed it to
+`sim.add_mode_monitor(fcen, fwidth, N_WL_FDTD)` — character for character the
+defect item 1 fixed, in raw meep rather than through `FDTDSolver`, which is
+exactly why the solver fix never reached it. A request for 1.50–1.60 µm
+actually sampled **1.5254–1.5754 µm**: half the span, reversed.
 
-```python
-fwidth = (1/WL_MIN - 1/WL_MAX) * 0.5
-```
-
-and hand it to `sim.add_mode_monitor(fcen, fwidth, N_WL_FDTD)` — character for
-character the defect `dc_validation.md` item 1 fixed, in raw meep rather than
-through `FDTDSolver`, so the solver fix does not reach it. **Every ring FDTD
-result carries the same reversed, half-span wavelength axis.**
-
-Worse, their 6 cache entries are still *reachable*: these scripts build their own
-flat config dicts via `_sim_params()` (`ring_resonator_hybrid.py:297`), so
-nothing in `dc_validation.md` items 1–3 changed their hash and a re-run silently
-reuses pre-fix data. Entries were left on disk deliberately — deleting them only
-forces re-simulation of equally wrong results.
-
-This is `dc_validation.md` item 10. Fix: port both scripts to
-`monitor_freq_grid()` / `source_fwidth()`, add the resolved grid to
-`_sim_params()` so the hash strands the old entries automatically (the mechanism
-item 2 used), then re-run.
-
-For a resonator the consequence is worse than for a coupler. A reversed,
-half-span axis does not just mislabel a smooth curve — it puts every **resonance
+For a resonator this is worse than for a coupler. A reversed, half-span axis
+does not merely mislabel a smooth curve — it puts every **resonance
 wavelength** in the wrong place and compresses the free spectral range by 2×.
-Any FSR or Q read off these plots is wrong.
+No FSR or Q read off a pre-fix ring plot is meaningful.
+
+**Changed**, in both `ring_resonator_hybrid.py` and
+`ring_resonator_hybrid_cascaded.py`:
+
+- `add_x_monitor()` / `add_y_monitor()` now take an explicit ascending
+  frequency list from `monitor_freq_grid()` instead of `(fcen, fwidth, nfreq)`.
+- `fwidth` comes from `source_fwidth(wavelengths, SOURCE_BANDWIDTH_FACTOR)`
+  with the factor pinned at `FDTDSolver`'s own default of 2.0 — **exactly 4× the
+  old pulse** (2× for covering the full span rather than half, 2× again for the
+  bandwidth factor). Widening the monitors without widening the source would
+  have starved the new band edges, which is why item 2 was needed alongside
+  item 1.
+- Every measured amplitude is now reordered onto the caller's axis with
+  `[wl_order]`. Each ratio is taken in *monitor* order first — numerator and
+  denominator are both monitor-ordered, so they stay aligned — then reordered
+  once, as `FDTDSolver.solve_section()` does. In the cascaded script the
+  reorder is along axis 0 of the `[n_wl, N_MODES]` interface column.
+- `check_source_coverage()` now runs on every FDTD entry point.
+- `_sim_params()` takes `wavelengths` and emits `resolved_monitor_freqs` /
+  `resolved_source_fwidth`, mirroring
+  `FDTDSolver._resolved_spectral_config()`.
+
+**The cache stranding was verified against the real cache, not assumed.** All
+**6** pre-fix FDTD entries now miss — each folder's stored `config.json` was
+re-hashed to confirm it matched its own folder name first, so the comparison is
+against the real recorded config rather than a reconstruction:
+
+| entry | stored hash | after fix |
+|---|---|---|
+| `ring_resonator_hybrid` `run_coupler_fdtd` bus | `6ec67e004cc0d073` | `50ca0d12f91a1f76` |
+| `ring_resonator_hybrid` `run_coupler_fdtd` ring | `7dc2d9ae7706f4b0` | `3dd5aceabde0d1ee` |
+| `ring_resonator_hybrid` `run_bend_fdtd` | `9f79cce29bef6ee2` | `88188f3c1262fe16` |
+| `..._cascaded` `run_left_fdtd` bus | `f90d6cc8c4f64816` | `ac3912345252c8c4` |
+| `..._cascaded` `run_left_fdtd` ring | `c5566a9725a64929` | `e9402786ee01387b` |
+| `..._cascaded` `run_bend_fdtd` | `6c2f7d6c5669e69c` | `d347ce2dde611894` |
+
+`lookup()` returns `None` for all six. They are not deleted — deleting only
+forces re-simulation of equally wrong results, and the stranded folders are
+still readable if the pre-fix numbers are ever wanted for a relabelling check
+like item 5's.
+
+**Equally important: the 39 mode-solve entries are untouched** — all
+`solve_neff` and `solve_body_supermodes` folders still hit. Those are MPB
+solves that the monitor grid never affected, and neither calls `_sim_params()`,
+so nothing in this change can reach their hash. Confirmed 39/39 reachable.
+
+**Tests** — `tests/test_ring_monitor_grid.py`, 14 fast tests, no meep. They are
+source-level because importing either script *runs* it. Five guard the scripts
+(no `(fcen, df, nfreq)` triple, no half-span `fwidth`, helpers used, `wl_order`
+actually applied, `_sim_params()` fingerprints the resolved grid), with
+docstrings and comments stripped first so the prose above describing the old
+line cannot pass for live code. Four pin the arithmetic — including a
+reconstruction of the pre-fix band from meep's documented rule, so the
+1.5254–1.5754 figure is derived in the test rather than asserted.
+
+**Not done: nothing has been re-simulated.** The fix guarantees a re-run cannot
+silently serve pre-fix data; it does not produce post-fix data. Every ring plot
+in `example_output/` is still pre-fix and should be regarded as wrong until
+regenerated. When that re-run happens, the check to apply is item 9's: **the
+centre wavelength must not move**, since `fcen` is the one point the pre-fix
+code labelled correctly. `fcen` itself is unchanged by this work — `wl_center`
+switched from `(WL_MIN + WL_MAX)/2` to `np.mean(wavelengths)` to match
+`FDTDSolver._build_domain()`'s convention by construction rather than by
+coincidence, and for the uniform `linspace` both scripts pass these agree
+exactly at N=101.
 
 ## Recommendation — put the ring on `HybridSolver`
 
@@ -109,8 +162,18 @@ every solve node — but neither has a test.
 
 ## Order
 
-**Fix item 10 first**, on its own, without waiting for the recommendation: it is
-a known-wrong result on disk, the fix is mechanical, and it is worth doing even
-if the scripts are later replaced. Then **3**, which is cheap and gates every
-resonance number. Then the (a)/(b)/(c) work, after which 1, 2 and 4 become
-possible in the same form as the other devices.
+~~**Fix item 10 first**~~ — done 2026-07-26, see above. The code is fixed; the
+**re-run is not done** and is now the top item.
+
+1. **Re-run both scripts** and check the centre wavelength does not move. This
+   is what turns a code fix into a trustworthy result, and nothing below is
+   worth reading off a plot until it happens.
+2. **Gap 3 (resolution convergence)** — cheap, and it gates every resonance
+   number. Do it before or alongside the re-run rather than after, so the
+   re-run is not immediately invalidated by a resolution change. `dc_validation.md`
+   item 11 found the shared res=40 overstates Δn_eff by 7% on a coupled pair,
+   and the audit's coupler sweep shows absolute `n_eff` still moving 0.0044
+   between res 80 and 100 — the ring's bare-strip n_eff feeds three propagation
+   phases *and* the reference-plane correction, so it needs its own number.
+3. Then the (a)/(b)/(c) work below, after which gaps 1, 2 and 4 become possible
+   in the same form as the other devices.
