@@ -90,8 +90,15 @@ save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
 # The brute-force full-device FDTD length sweep, when it has been run — its own
 # 50:50 length is the single-domain ground truth this sweep's stubs are trying
 # to converge onto, drawn as a reference line on panel 1 when present.
+#
+# This reads the *verification* sweep, not the tutorial one next door: the
+# tutorial's 0:2:60 grid interpolates L_50 across a 2 µm bracket, too coarse to
+# judge a sweep resolving 0.06 µm steps, and its npz carries no provenance. The
+# verification sweep is 0.5 µm through the crossing and records its own solver
+# fingerprint (dc_validation.md item 5). Key names are identical, so the reader
+# below is unchanged.
 _FDTD_SWEEP_NPZ = os.path.abspath(os.path.join(
-    output_dir, "..", "directional_coupler_fdtd_sweep", "length_sweep.npz"))
+    output_dir, "..", "..", "verification", "ground_truth_sweep", "length_sweep.npz"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters — identical to directional_coupler_hybrid.py,
