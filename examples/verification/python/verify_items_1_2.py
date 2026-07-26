@@ -7,7 +7,7 @@ the new helpers behave, but nothing has proved the *physics* came out right,
 because no FDTD run has happened since the fix.
 
 Item 1 (monitor frequency grid) and item 2 (source bandwidth) are described in
-BEEF/dc_validation.md. In short: every DFT monitor used to be built from meep's
+BEEF/validation_markdown/dc_validation.md. In short: every DFT monitor used to be built from meep's
 (fcen, df, nfreq) triple with df = (1/lam_min - 1/lam_max) * 0.5. Meep spreads
 nfreq points evenly over [fcen - df/2, fcen + df/2] ascending *in frequency*, so
 a 1.50-1.60 um 11-point request actually sampled 1.5254-1.5754 um, backwards,
