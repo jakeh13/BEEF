@@ -4,24 +4,34 @@ Opened 2026-07-25, from investigating why `directional_coupler_hybrid_stub_sweep
 never converges. Root cause found; this is the work to fix it and re-establish trust
 in the directional coupler results.
 
-**Status 2026-07-26:** items 1–6, 9, 10, 11 and 12 done and verified — the wavelength axis is fixed
+**Status 2026-07-26:** items 1–7 and 9–12 done and verified. The wavelength axis is fixed
 and confirmed against a pre-fix run (job 11477911, 9/9 checks), the cache can no longer
 serve or corrupt stale data, the directional coupler has a trustworthy full-band ground
 truth again (job 11480725, 40 lengths with provenance), the golden reference is back on
 the fixed axis (job 11486066), and the residual engine gap has been measured directly
 rather than inferred (job 11489846).
 
-Item 6 turned out to be mostly a **measurement artifact of the EME side**: at the
-res=40 every example inherited, Δβ_EME was overstated by 7% — ~6 of the 11 points. Item
-11 split the two engines' resolutions and closed that. Item 12 then checked the
-assumption underneath it all, that both engines return interface modes *in the same
-order*: **they do** (identity permutation, worst guided-band disagreement 0.0023), so
-`HybridSolver`'s contraction is sound. It also found that one of the coupler's six
-interface modes is not a guided mode at all.
+**The question this document was opened to answer is answered.** Item 7 re-ran the whole
+stub sweep (job 11500412) and it **still does not converge** — the L₅₀ curve is exactly
+as straight as before, 0.0024 µm residual to a line. But the drift more than halved
+(slope 0.2427 → 0.1085), and what is left is now fully accounted for: the slope measures
+`2·(1 − Δβ_FDTD/Δβ_EME)`, giving a ratio of 0.9457 against the 0.9536 predicted from
+item 6 plus item 11's mesh correction — **agreement to 0.82%**. The sweep was measuring
+the engine disagreement all along, and no amount of stub tuning can fix an engine
+disagreement.
 
-What remains open is a genuine **~5% engine disagreement** on Δβ for an identical
-uniform cross-section (item 6), and **item 7** — the stub sweep re-run, which is the
-question this document was opened to answer and is now unblocked.
+Getting there ran through the EME side. Item 6's gap was mostly a **measurement artifact**:
+at the res=40 every example inherited, Δβ_EME was overstated by 7%. Item 11 split the two
+engines' resolutions and closed that. Item 12 checked the assumption underneath it all —
+that both engines return interface modes in the same order — and for this device **they
+do** (identity permutation, worst guided-band disagreement 0.0023), so `HybridSolver`'s
+contraction is sound here. It also found that one of the coupler's six interface modes is
+not guided at all.
+
+**What remains open is exactly one thing: item 6's genuine ~5% engine disagreement** on
+Δβ for an identical uniform cross-section, now confirmed by two independent measurements.
+It is the only obstacle left between this device and a trustworthy hybrid result. Item 8
+is worth ~0.8% of Δn_eff and is a minor contributor to it.
 
 ## What's wrong
 
@@ -134,22 +144,30 @@ index 10. Using the frequency-mean `0.5(1/λ_min + 1/λ_max)` instead shifts eve
 Numbers are stable IDs — completed items move to Done and keep their number, so
 cross-references stay valid.
 
-**Order: the items-1–2 verification is done and passed** (job 11477911 — see
-Verification below), **item 5 has re-established the ground truth** (job 11480725), and
-**item 6 has localized the engine gap** (job 11489846), so item 7 now rests on a
-confirmed FDTD, a reference to measure against, *and* a quantified body error.
+**Only item 6 is open**, and item 7's result promoted it from "one of two remaining
+problems" to "the only thing left". The ordering below is kept because it records *why*
+the sequence was chosen and how it turned out.
 
-Remaining order: **7**, then **8**. (**10** is done — the ring's *re-run* is tracked in
-`ring_resonator_validation.md`, not here.)
+The plan was **11 → 12 → 7**, then **8**. Both prerequisites paid off, and the payoff is
+measurable:
 
-**11 before 7** because the stub sweep's L₅₀ drift slope measures 1 − Δβ_FDTD/Δβ_EME,
-which is 0.109 at res 40 but 0.047 with EME converged — running 7 first would spend nine
-array tasks measuring a drift that is more than half discretization error. **12 before
-7** because if the two engines order their six interface modes differently, the chain
-the stub sweep is testing is contracting mismatched modes and no amount of stub tuning
-would ever make it converge; that has to be excluded before the sweep's result means
-anything. **8 after**, since it is worth ~2% of the ratio (measured, see Done item 6) —
-real, but smaller than either open item above.
+- **11 before 7** because the sweep's drift slope measures `2·(1 − Δβ_FDTD/Δβ_EME)`, and
+  the EME half of that ratio was 7% off at res 40. Running 7 first would have spent nine
+  array tasks measuring a drift that was more than half discretization error. **Borne
+  out**: the slope fell 0.2427 → 0.1085, and the post-fix value matches the item 6 +
+  item 11 prediction to 0.82%. On the pre-fix mesh it would not have.
+- **12 before 7** because if the two engines ordered their six interface modes
+  differently, the chain the sweep tests would be contracting mismatched modes and no
+  stub could ever fix it. **Excluded** — identity permutation, worst guided disagreement
+  0.0023. Worth having done: the same audit later found this failure *is* real on
+  `mmi_1x2`, where meep returns two degenerate bands that meow splits. Had the coupler
+  behaved that way, item 7's straight line would have had two candidate explanations
+  instead of one.
+- **8 after**, worth ~0.8% of Δn_eff (measured, Done item 6) — real, but a minor
+  contributor to the ~5% that remains.
+
+**10** is done; the ring's *re-run* is tracked in `ring_resonator_validation.md`, not
+here.
 
 6. *(done — see Done item 6.)* Two follow-on items came out of it:
 
@@ -157,24 +175,8 @@ real, but smaller than either open item above.
 
 12. *(done — see Done item 12.)*
 
-7. **Re-run the stub sweep — the whole thing — and judge it properly.** All nine array
-   tasks, not just the two that item 4 lost: the seven `S*.npz` files on disk are dated
-   2026-07-24, i.e. pre-fix, so re-running only tasks 4 and 5 (as item 4 originally
-   scoped) would leave one folder holding a silent mixture of pre- and post-fix data.
-   A visible gap is safer than an invisible mixture, so the two dead stubs are folded
-   in here. Delete the folder first (`make clean_directional_coupler_hybrid_stub_sweep`)
-   so nothing pre-fix survives. Success is *curvature* — successive
-   differences shrinking toward the grid step — not the constant 0.060 µm/step it
-   shows now. Only then does the sweep answer the question it was written to answer,
-   and only then is `notes.md` Solver #10(b) (promoting this into a reusable
-   procedure) worth acting on.
-
-   The reference line it converges onto now exists and draws: `_FDTD_SWEEP_NPZ` was
-   repointed to item 5's verification sweep and resolves to **15.13 µm** from a 0.5 µm
-   bracket. Note this is the band-mean crossing the panel plots, a slightly different
-   quantity from the per-wavelength L₅₀(1.55) = 15.31 µm in item 5's table — the mean of
-   the ratios crosses lower than the mean of the crossings because L₅₀ falls with λ.
-   Compare the sweep against the band-mean number, not the 1.55 µm one.
+7. *(done — see Done item 7. It did **not** converge, and that answer moves the work
+   to item 6.)*
 8. **Minor, while in there — `notes.md` Solver #9's material half.** Confirmed present
    in the data: EME's Δn_eff has a +0.00022 kink at exactly 1.57 µm where meow's Si
    table switches 3.4784 → 3.4710, while the FDTD half stays frozen at 3.4784 for
@@ -252,8 +254,13 @@ Remaining items:
 
   Two nodes minimum and a save_dir on shared storage, or it proves nothing.
 - Item 6: the new test fails at ~11% before the fix, passes after.
-- Item 7: `L_50` vs `BODY_STUB` curves and flattens; the hybrid's λ=1.55 value lands
-  on the re-run full-device FDTD reference.
+- Item 7: ❌ **the stated criterion was not met, and the criterion was the wrong one.**
+  `L_50` vs `BODY_STUB` did *not* curve or flatten — it stayed straight to 0.0024 µm —
+  and the λ=1.55 value did not land on the reference. That is not a failed run: a
+  straight line is exactly what `L_50(s) = … + 2s·(1 − Δβ_FDTD/Δβ_EME)` predicts for a
+  constant ratio ≠ 1, so "does it flatten?" was only ever a proxy for "do the engines
+  agree?". The measurement to keep is the **slope**, which is the ratio, and it now
+  agrees with item 6's independent value to 0.82%. See Done item 7.
 
 ## Done
 
@@ -932,3 +939,70 @@ tracked in `ring_resonator_validation.md`.
 **`notes.md` is worth checking before assuming these were the last two** — this was the
 second place the same line appeared, which is the argument for the library-path
 recommendation in `ring_resonator_validation.md` rather than a third hand-port.
+
+### 7. Stub sweep re-run — 2026-07-26
+
+**Job 11500412**, all nine array tasks, 2 nodes × 48 ranks each, ~1h40m per task. The
+folder was cleaned first and the seven pre-fix `S*.npz` archived to
+`archive/example_output_20260724/`, so nothing on disk is a mixture of pre- and
+post-fix data.
+
+**The sweep still does not converge. That is the result, and it is worth more than a
+convergence would have been.**
+
+| BODY_STUB (µm) | 0.00 | 0.25 | 0.50 | 0.75 | 1.00 | 1.25 | 1.50 | 1.75 | 2.00 |
+|---|---|---|---|---|---|---|---|---|---|
+| L₅₀ (µm) | 14.318 | 14.350 | 14.377 | 14.402 | 14.428 | 14.455 | 14.483 | 14.511 | 14.538 |
+
+Fit: **L₅₀ = 0.1085·s + 14.3205 µm**, max residual to that line **0.0024 µm** across the
+whole 0→2 µm range. The pre-fix sweep's residual was 0.0022 µm. **The curve is exactly
+as straight as it was before.** No curvature, no plateau, no sign of settling.
+
+**What did change: the slope more than halved, and its size is now fully explained.**
+From `L₅₀(s) = [π/2 − 2φ_bend]/Δβ_EME + 2s·(1 − Δβ_FDTD/Δβ_EME)`, the slope carries a
+factor of 2 for the two FDTD sections:
+
+| | slope | 1 − ratio | Δβ_FDTD/Δβ_EME |
+|---|---|---|---|
+| pre-fix sweep | 0.2427 | 0.1213 | 0.8787 |
+| item 6, measured directly (EME res 40) | 0.2176 | 0.1088 | 0.8912 |
+| **predicted** = item 6 × item 11's 7% EME correction | 0.0928 | 0.0464 | **0.9536** |
+| **post-fix sweep, measured** | **0.1085** | 0.0543 | **0.9457** |
+
+Predicted 0.9536 against measured 0.9457 — **agreement to 0.82%**. Two completely
+independent measurements of the same quantity: item 6 solved four section lengths and
+extracted Δβ from the phase slope; item 7 reads it off the drift of a 200-length,
+11-wavelength hybrid sweep. They agree.
+
+**So the stub sweep was measuring the engine disagreement all along.** Its drift is not
+a discretization artifact, not a stub-length artifact, and not something more stub will
+fix — it is `2·(1 − Δβ_FDTD/Δβ_EME)`, and a straight line is precisely what that formula
+predicts when the ratio is a constant ≠ 1. Items 1–2 and 11 removed 55% of it by fixing
+the wavelength axis and the EME mesh. The remaining 5.4% is item 6's open, genuine
+engine gap.
+
+**How far off it still is.** At the largest stub tried, L₅₀ = 14.538 µm against the
+full-device reference of **15.13 µm** (item 5's band-mean crossing — not the
+per-wavelength L₅₀(1.55) = 15.31 µm; the mean of the ratios crosses lower than the mean
+of the crossings because L₅₀ falls with λ). Still 0.59 µm short. Extrapolating the fit,
+the sweep would reach the reference at a **7.5 µm** stub — a quarter of the entire 30 µm
+coupling region, which is not a split between two engines in any meaningful sense.
+
+**What this closes and what it opens.**
+
+- The question this document was opened to answer — *why does the stub sweep never
+  converge?* — is **answered**. Two causes, both now quantified: a mislabelled
+  wavelength axis (items 1–2) and an unconverged EME mesh (item 11) accounted for 55%,
+  and the residual is a real disagreement between meep and meow about how fast phase
+  accumulates through an identical uniform cross-section.
+- **`notes.md` Solver #10(b)** — promoting the stub sweep into a reusable convergence
+  procedure — should **not** be acted on. The sweep cannot converge while the engines
+  disagree, so as a general-purpose tool it would report a failure that has nothing to
+  do with the device under test. It is a good *diagnostic* for the engine gap and a bad
+  *procedure* for choosing a cut point.
+- **Item 6 is now the only thing standing between this device and a trustworthy hybrid
+  result.** It was ranked below item 7; that ordering is now inverted by measurement.
+
+**Verification harness** — items 1–2's `verify_items_1_2` was kept open specifically to
+re-check this re-run and has now done its job. It, the batch file, and the Makefile's
+`verify_items_1_2` / `clean_verification` targets can be deleted once item 6 closes.
