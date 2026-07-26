@@ -4,7 +4,7 @@ Opened 2026-07-25, from investigating why `directional_coupler_hybrid_stub_sweep
 never converges. Root cause found; this is the work to fix it and re-establish trust
 in the directional coupler results.
 
-**Status 2026-07-26:** items 1–6 and 9 done and verified — the wavelength axis is fixed
+**Status 2026-07-26:** items 1–6, 9, 11 and 12 done and verified — the wavelength axis is fixed
 and confirmed against a pre-fix run (job 11477911, 9/9 checks), the cache can no longer
 serve or corrupt stale data, the directional coupler has a trustworthy full-band ground
 truth again (job 11480725, 40 lengths with provenance), the golden reference is back on
@@ -12,10 +12,16 @@ the fixed axis (job 11486066), and the residual engine gap has been measured dir
 rather than inferred (job 11489846).
 
 Item 6 turned out to be mostly a **measurement artifact of the EME side**: at the
-res=40 every example inherits, Δβ_EME is overstated by 7%, which is ~6 of the 11 points.
-The genuine engine disagreement is ~5% and still open. That finding, and the untested
-assumption underneath it — that both engines return interface modes *in the same order*
-— are now items **11** and **12**, and 11 gates 7.
+res=40 every example inherited, Δβ_EME was overstated by 7% — ~6 of the 11 points. Item
+11 split the two engines' resolutions and closed that. Item 12 then checked the
+assumption underneath it all, that both engines return interface modes *in the same
+order*: **they do** (identity permutation, worst guided-band disagreement 0.0023), so
+`HybridSolver`'s contraction is sound. It also found that one of the coupler's six
+interface modes is not a guided mode at all.
+
+What remains open is a genuine **~5% engine disagreement** on Δβ for an identical
+uniform cross-section (item 6), and **item 7** — the stub sweep re-run, which is the
+question this document was opened to answer and is now unblocked.
 
 ## What's wrong
 
@@ -147,43 +153,9 @@ real, but smaller than either open item above.
 
 6. *(done — see Done item 6.)* Two follow-on items came out of it:
 
-11. **EME is not resolution-converged at res=40.** Found while measuring item 6.
-    Δβ_EME at 1.55 µm runs 0.1125 (res 20) → 0.0957 (40) → 0.0926 (60) → 0.0894 (80)
-    → 0.0895 (100), so the res=40 every example inherits **overstates Δn_eff by 7%**.
-    That is ~6 of item 6's 11 points, and it is present in every EME result in the
-    repo, not just the coupler.
+11. *(done — see Done item 11.)*
 
-    `EMESolver` already takes `res` — the defect is that callers inherit 40 by
-    default. Fix by setting it explicitly per example, **not** by changing the library
-    default: that would re-invalidate all four goldens (including item 9's, just
-    regenerated) and strand the 20 valid EME cache entries, for a change that should
-    be a deliberate per-device choice anyway. Add a convergence test so the chosen
-    value is defended by a test rather than a comment.
-
-    **Do this before item 7.** The stub sweep's L₅₀ drift slope measures
-    1 − Δβ_FDTD/Δβ_EME, which is 0.109 at res 40 but 0.047 with EME converged — so
-    running 7 first spends nine array tasks measuring a drift that is more than half
-    discretization error.
-
-12. **Nothing checks that the two engines agree on *which* mode is which.**
-    `HybridSolver`'s `np.einsum` contracts index *i* of the FDTD interface against
-    index *i* of the EME body, assuming they are the same mode. But the two solve
-    different grids — `FDTDSolver.solve_section()` calls meep's MPB on the FDTD mesh,
-    `EMESolver.compute_modes()` calls meow's on its own `Mesh2D` — so their n_eff
-    differ and near-degenerate higher-order modes can come back in a different order.
-    If they do, the chain silently mixes modes. Same severity as item 1, and untested.
-
-    For the two supermodes item 6 measured this is safe: n_eff 2.351 vs 2.329 is a
-    wide split and descending order held at every resolution 20–100 (asserted in both
-    the harness and `tests/test_engine_agreement.py`). The **six** interface modes the
-    hybrid actually carries are the unchecked case.
-
-    Cheap to check: `sim.get_eigenmode_coefficients()` already returns `kdom`, each
-    mode's dominant wavevector per band per frequency, alongside the `alpha` beef uses
-    (`fdtd.py:869`). beef discards it. Capturing it gives n_eff per FDTD mode directly,
-    so the engines can be compared mode-by-mode from a *single* run — which also
-    subsumes item 6's four-length phase sweep. Pin the `kdom` → n_eff normalization on
-    a single-mode straight waveguide first, where n_eff is unambiguous.
+12. *(done — see Done item 12.)*
 
 7. **Re-run the stub sweep — the whole thing — and judge it properly.** All nine array
    tasks, not just the two that item 4 lost: the seven `S*.npz` files on disk are dated
@@ -827,3 +799,106 @@ helper but not the calling convention. The FDTD results were already in the cach
 re-run cost seconds rather than 40 minutes — a direct dividend of item 3 and 4 having
 made caching trustworthy. `_atomic_replace_write()`'s docstring now states the
 requirement.
+
+
+### 11. EME resolution split from FDTD's — 2026-07-26
+
+Every hybrid example fed a single `RESOLUTION = 40.0` to both sub-solvers. meep is
+converged there; meow/MPB on its own `Mesh2D` is not.
+
+| EME res | 20 | 40 | 60 | 80 | 100 |
+|---|---|---|---|---|---|
+| Δβ_EME at 1.55 µm (rad/µm) | 0.1125 | **0.0957** | 0.0926 | 0.0894 | 0.0895 |
+
+res 40 **overstates the even/odd splitting by 7%**, and 80 is the first converged
+point. That was ~6 of the 11 percentage points of item 6's FDTD/EME gap, and it is
+present in every EME result in the repo.
+
+The three hybrid scripts now declare `FDTD_RESOLUTION = 40` and `EME_RESOLUTION = 80`
+separately. **`EMESolver`'s own default is deliberately unchanged**: raising it would
+re-invalidate all four goldens (including item 9's, regenerated the day before) and
+strand the 20 valid EME cache entries — for something that should be a per-device
+choice made with a convergence check in hand, not a library-wide default.
+
+**Why this hid for months**, both reasons worth keeping because both will recur:
+
+- `directional_coupler_hybrid_resolution_sweep.py` meshes **both** engines at the same
+  `R` (`:170`, `:183`), so it measures the two convergences convolved. Its curve looks
+  flat because FDTD dominates the observable it plots (`T_cross`) while EME dominates
+  Δβ. Now commented in place: a flat *joint* curve is not evidence that either engine
+  converged.
+- Δβ is a **difference** of two n_eff near 2.3, so a 0.1% error in each mode is ~10% in
+  their difference. The quantity the coupler depends on is far more mesh-sensitive than
+  the quantity anyone looks at.
+
+**Added** — `tests/test_eme_convergence.py`: two slow tests asserting res 80 is
+converged (against 100) and that the old default was *not* (so it reports if a
+meow/MPB change ever closes it), plus nine fast tests with no simulation checking the
+scripts still declare separate knobs, keep EME ≥ 80, and never reintroduce a shared
+`res=RESOLUTION`. The physics tests are `--runslow` only, so on a normal run those
+nine are the only guard against an edit silently restoring the 7%.
+
+**Verified** — `11 passed` in 16:19 (9 fast + both slow).
+
+
+### 12. Mode identity across the FDTD/EME join — 2026-07-26
+
+`HybridSolver` contracts index *i* of an FDTD interface against index *i* of an EME
+body, assuming they are the same mode. Nothing tested that. The two engines solve MPB
+on **different grids** — meep's Yee mesh vs meow's `Mesh2D` — so a reorder was possible
+and would have mixed modes silently.
+
+**They agree.** At 1.55 µm on the coupled-pair cross-section, res 40 both sides:
+
+| band | meep | meow | diff |
+|---|---|---|---|
+| 0 | 2.324450 | 2.325116 | −0.0007 |
+| 1 | 2.300984 | 2.301519 | −0.0005 |
+| 2 | 1.744418 | 1.746722 | −0.0023 |
+| 3 | 1.631969 | 1.634080 | −0.0021 |
+| 4 | 1.466926 | 1.467593 | −0.0007 |
+| 5 | 1.436725 | 1.430456 | **+0.0063** |
+
+Ordering preserved, correspondence is the identity permutation, worst guided-band
+disagreement 0.0023. **The contraction is sound for this device.**
+
+**New: the interface basis contains a mode that is not guided.** The cladding index is
+1.444. Band 5 sits at **1.4367 — below it**, and band 4 at 1.4669 is marginal. The
+coupler carries `N_MODES = 6` at every interface, so at least one column is a radiation
+mode, whose n_eff and ordering are not well defined — and note its engine disagreement
+(+0.0063) is an order of magnitude worse than any guided band, which is exactly what an
+unbound mode living on the discretization should look like. The tests are strict only
+about guided bands, and assert the unguided one exists so the finding cannot rot.
+
+This bears on `N_MODES` everywhere, and the coupler is the *easiest* case: `mmi_1x2`
+carries 12, `mmi_2x2` 15, `modal_multiplexer` 16 across four interfaces. None has been
+checked. Recorded in each device's validation doc.
+
+**Added — `FDTDSolver.section_mode_neff()`**, the FDTD-side counterpart of
+`EMESolver.compute_modes()`. Uses `sim.get_eigenmode()`, which runs MPB on the
+initialized grid and returns with **no time-stepping**, so a mode-identity check costs a
+`set_epsilon` plus one eigensolve per mode — not the minutes a `solve_section()` needs.
+That is what makes checking this routinely affordable. n_eff is `k/f`: meep gives the
+Bloch wavevector in 2π/a units and the frequency in c/a, so their ratio is the index
+with no 2π anywhere — pinned on a bare 450×220 nm strip at 2.3124, where the competing
+normalizations give 0.37 and 14.5.
+
+**A trap worth recording — never compare across resolutions.** The first version of this
+check compared meep@40 against meow@**80** and reported a reordering. There was none:
+the res 40→80 shift is ~0.027, *larger* than the 0.022 even/odd splitting, so
+nearest-neighbour matching pairs band 0 with band 1 purely from the offset. Only
+same-resolution comparison is valid. `assert_modes_correspond()` takes both arrays from
+one resolution for that reason, and a test pins the reason so nobody "fixes" the checker
+to accept the cross-resolution case.
+
+The same trap bit the test suite once more: a *uniform* offset larger than the tightest
+mode spacing is indistinguishable from a reorder by nearest-neighbour matching, so the
+tolerance test had to perturb a well-separated band to isolate the magnitude check. Both
+failures are the same fact from different directions, and both are now tests.
+
+**Added** — `tests/test_mode_identity.py`: five fast tests with no simulation guarding
+the checker itself (it detects an adjacent swap, a missing mode, an over-tolerance
+disagreement, and rejects the cross-resolution comparison), plus two slow ones running
+both engines for real.
+
+**Verified** — full fast suite **223 passed, 11 skipped**.
