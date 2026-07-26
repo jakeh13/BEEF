@@ -19,6 +19,12 @@ from .._log import get_logger
 
 logger = get_logger(__name__)
 
+# Starting guess for section_mode_neff()'s eigensolves, as an effective index.
+# Only a seed — meep's match_frequency iterates from here to the true k — so it
+# just has to sit in the guided range for a Si-core/oxide-clad waveguide
+# (1.44 < n_eff < 3.48). Roughly the middle of that window.
+_KPOINT_SEED_NEFF = 2.5
+
 
 def monitor_freq_grid(wavelengths: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """DFT-monitor frequencies for `wavelengths`, plus the index map that puts
@@ -599,6 +605,123 @@ class FDTDSolver:
             logger.info("solve: cache saved at %s", folder)
 
         return smat
+
+    # ------------------------------------------------------------------
+    # Mode inspection (no time-stepping)
+    # ------------------------------------------------------------------
+
+    def section_mode_neff(
+        self,
+        geometry,
+        wavelengths: np.ndarray,
+        x0: float,
+        x1: float,
+        n_modes: int,
+        monitor_center: Optional[float] = None,
+        monitor_size: Optional[float] = None,
+        **geometry_kwargs,
+    ) -> np.ndarray:
+        """Effective indices of the first `n_modes` modes at this section's
+        cross-section, from meep's own eigenmode solver.
+
+        This is the FDTD-side counterpart of ``EMESolver.compute_modes()``, and
+        exists so the two engines' mode bases can be compared directly.
+        ``HybridSolver`` contracts index *i* of an FDTD interface against index
+        *i* of an EME body assuming they are the same mode, but the two solve
+        MPB on *different grids* — meep's own Yee mesh here, meow's ``Mesh2D``
+        there — so their n_eff differ slightly and near-degenerate higher-order
+        modes can come back in a different order. If they do, the chain
+        silently mixes modes and nothing else in the codebase would notice.
+        See dc_validation.md item 12.
+
+        Cheap: ``get_eigenmode()`` runs MPB on the initialized grid and returns
+        without any time-stepping, so this costs a ``set_epsilon`` plus one
+        eigensolve per mode per wavelength — seconds, not the minutes a
+        ``solve_section()`` run needs.
+
+        n_eff is ``k/f``: meep reports the Bloch wavevector in units of 2π/a
+        and the frequency in c/a, so their ratio is the index directly, with no
+        2π anywhere. Pinned against a bare 450×220 nm Si strip, where the
+        answer must fall between the cladding and core indices — the competing
+        normalizations land at 0.37 and 14.5 and are not close calls.
+
+        Args:
+            x0, x1: device-frame bounds of the section (µm). The cross-section
+                is taken at their midpoint, so both must lie in the same
+                uniform stretch of geometry for the result to mean anything.
+            n_modes: number of bands to solve, ordered as meep returns them.
+            monitor_center / monitor_size: y-centre and y-span of the plane the
+                modes are solved on, same meaning as in `solve_section()`.
+                Defaults to the full non-PML width on the ``y=0`` axis, which
+                is the interface convention a coupled pair needs — the
+                geometry-driven default would inherit one arm's centreline and
+                make "even/odd" meaningless.
+
+        Returns:
+            Real ndarray ``[len(wavelengths), n_modes]`` of effective indices,
+            in the caller's wavelength order.
+        """
+        import meep as mp
+
+        wavelengths = np.asarray(wavelengths, dtype=float)
+        wl_center = float(np.mean(wavelengths))
+        si_med = self.material_stack.si_medium(wl_center)
+        sio2_med = self.material_stack.sio2_medium(wl_center)
+
+        prisms = geometry.section_prisms(
+            x0, x1, si_med,
+            stub_left=self.dpml, stub_right=self.dpml,
+            wg_height=self._wg_height,
+            **geometry_kwargs,
+        )
+        span = x1 - x0
+        Sx = span + 2 * self.dpml
+        Sy = self.sim_width + 2 * self.dpml
+        lo, hi = x0 - self.dpml, x1 + self.dpml
+        x_center = (lo + hi) / 2.0
+        # Same vertex-wise shift into meep's origin-centred cell that
+        # solve_section() does — prisms carry vertices, not a centre.
+        shifted = [
+            mp.Prism(
+                vertices=[mp.Vector3(v.x - x_center, v.y, v.z) for v in p.vertices],
+                height=p.height, material=p.material,
+            )
+            for p in prisms
+        ]
+
+        mea_c = 0.0 if monitor_center is None else float(monitor_center)
+        mea_w = self.sim_width if monitor_size is None else float(monitor_size)
+
+        sim = mp.Simulation(
+            resolution=self.res,
+            cell_size=mp.Vector3(Sx, Sy, self._cell_sz),
+            boundary_layers=[mp.PML(self.dpml)],
+            geometry=shifted,
+            default_material=sio2_med,
+            eps_averaging=self.eps_averaging,
+            subpixel_tol=self.subpixel_tol,
+            subpixel_maxeval=self.subpixel_maxeval,
+        )
+        sim.init_sim()
+
+        where = mp.Volume(center=mp.Vector3(0, mea_c),
+                          size=mp.Vector3(0, mea_w, self._mon_sz))
+        neff = np.zeros((len(wavelengths), n_modes))
+        for i, wl in enumerate(wavelengths):
+            f = 1.0 / float(wl)
+            for band in range(1, n_modes + 1):
+                # kpoint only seeds the solve; match_frequency then iterates to
+                # the true k. Any guided mode sits between the cladding and
+                # core indices, so the midpoint of that range is a seed that
+                # cannot be badly wrong for any waveguide this solver handles.
+                em = sim.get_eigenmode(
+                    f, mp.X, where, band, mp.Vector3(f * _KPOINT_SEED_NEFF, 0, 0),
+                    parity=mp.NO_PARITY,
+                )
+                neff[i, band - 1] = float(np.real(em.k.x)) / f
+
+        sim.reset_meep()
+        return neff
 
     # ------------------------------------------------------------------
     # Generic section solver (used by HybridSolver)
