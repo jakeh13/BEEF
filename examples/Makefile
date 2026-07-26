@@ -38,7 +38,7 @@ SWEEP_INDEX ?=
 # EXAMPLES for the same reason the sweeps are (nothing else's cleanup should
 # touch its output). Delete this target, clean_verification, and
 # examples/verification/ once those items are signed off.
-VERIFICATION = verify_items_1_2 verify_cache_multirank verify_item_5_ground_truth
+VERIFICATION = verify_items_1_2 verify_cache_multirank verify_item_5_ground_truth verify_item_6_engine_agreement
 
 .PHONY: all $(DEVICES) $(EXAMPLES) directional_coupler_fdtd_sweep directional_coupler_hybrid_modes_sweep directional_coupler_fdtd_resolution_sweep directional_coupler_hybrid_resolution_sweep directional_coupler_hybrid_stub_sweep $(VERIFICATION) clean clean_directional_coupler_fdtd_sweep clean_directional_coupler_hybrid_modes_sweep clean_directional_coupler_fdtd_resolution_sweep clean_directional_coupler_hybrid_resolution_sweep clean_directional_coupler_hybrid_stub_sweep clean_verification
 
@@ -117,6 +117,16 @@ GT_INDEX ?=
 verify_item_5_ground_truth:
 	$(runner) $(my_python) verification/python/verify_item_5_ground_truth.py \
 		$(GT_INDEX) $(VERIFY_ARGS)
+
+# Direct FDTD/EME engine-agreement measurement (item 6). EA_INDEX selects one of
+# the 4 section lengths (0..3); empty runs all four serially. The EME half runs
+# inside the aggregate step and needs no MPI, so
+# VERIFY_ARGS=--aggregate-only gives the full comparison from whatever FDTD
+# lengths exist -- safe on a login node.
+EA_INDEX ?=
+verify_item_6_engine_agreement:
+	$(runner) $(my_python) verification/python/verify_item_6_engine_agreement.py \
+		$(EA_INDEX) $(VERIFY_ARGS)
 
 modal_multiplexer_hybrid:
 	$(runner) $(my_python) modal_multiplexer/python/modal_multiplexer_hybrid.py
