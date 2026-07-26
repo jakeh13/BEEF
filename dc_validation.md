@@ -4,10 +4,12 @@ Opened 2026-07-25, from investigating why `directional_coupler_hybrid_stub_sweep
 never converges. Root cause found; this is the work to fix it and re-establish trust
 in the directional coupler results.
 
-**Status 2026-07-25:** items 1–4 done and verified — the wavelength axis is fixed and
-confirmed against a pre-fix run (job 11477911, 9/9 checks), and the cache can no longer
-serve or corrupt stale data. What remains is re-establishing the reference data (5, 9)
-and the residual ~11% engine disagreement (6), which items 1–2 did not touch.
+**Status 2026-07-25:** items 1–5 and 9 done and verified — the wavelength axis is fixed
+and confirmed against a pre-fix run (job 11477911, 9/9 checks), the cache can no longer
+serve or corrupt stale data, the directional coupler has a trustworthy full-band ground
+truth again (job 11480725, 40 lengths with provenance), and the golden reference is back
+on the fixed axis (job 11486066). What remains is the residual ~11% engine disagreement
+(6), which items 1–2 did not touch, and the stub sweep re-run it gates (7).
 
 ## What's wrong
 
@@ -101,10 +103,19 @@ The bug is the labelling, not the signal level.
 - Coarse: 2 µm length steps, so 15.29 µm is interpolated across a 2 µm bracket
   (~±0.1 µm), against a stub sweep resolving 0.06 µm steps.
 
-Verdict: use 15.29 µm as a provisional sanity check now; re-run the sweep on a finer
-grid before treating any number as truth (item 5). Items 1–2 are now verified, so that
-re-run is unblocked. Provenance and the 2 µm step, not the axis bug, are what keep this
-file from being ground truth.
+Verdict: **superseded — item 5 is done.** Ground truth is now
+`example_output/verification/ground_truth_sweep/length_sweep.npz`, on a 0.5 µm grid
+across the full band with provenance in the file. This archive is kept only as an
+independent cross-check, and in that role it did well: re-read on its true axis, all 11
+of its points land on the new L₅₀(λ) curve **within 0.027 µm** (a uniform +0.023 µm
+bias, 0.003 µm scatter). Its 15.29 µm at 1.55 against the new 15.31 µm is the sharpest
+single confirmation that provenance and the 2 µm step — not the axis bug — were what
+kept it from being truth.
+
+To re-read it, the axis is `1/(fcen + df·(i/(n−1) − 1/2))` with **`fcen = 1/mean(λ)`**
+and `df = (1/λ_min − 1/λ_max)/2` — giving 1.5754 µm at index 0 down to 1.5254 µm at
+index 10. Using the frequency-mean `0.5(1/λ_min + 1/λ_max)` instead shifts every point
+~1.6 nm and biases L₅₀ by ~0.17 µm; see the correction in Done item 5.
 
 ## To-do
 
@@ -112,58 +123,17 @@ Numbers are stable IDs — completed items move to Done and keep their number, s
 cross-references stay valid.
 
 **Order: the items-1–2 verification is done and passed** (job 11477911, 2026-07-25 —
-see Verification below), so items 5, 6 and 7 now rest on a confirmed FDTD. Remaining
-order: **5** → **9** → **6** → **7**, with **10** whenever the ring resonator matters
-(it blocks nothing here). (**3** and **4** are done — they came first because they are
-pure code, need no queue, and were what would otherwise have wasted wall-clock on the
-big array jobs in 5 and 7.) Item 6 comes before 7 because 7's interpretation depends on
-whether the residual ~11% gap is understood. That gap was measured at λ=1.55, the one
-index both engines labelled correctly before the fix, so it survives the verification
-intact and remains the main open physics question.
+see Verification below), and **item 5 has re-established the ground truth** (job
+11480725, 2026-07-25 — see Done), so items 6 and 7 now rest on a confirmed FDTD *and* a
+reference they can be measured against. Remaining order: **6** → **7**, with **10**
+whenever the ring resonator matters (it blocks nothing here). (**3**, **4** and **9**
+are done — 3 and 4 came first because they are pure code, need no queue, and were what
+would otherwise have wasted wall-clock on the big array jobs in 5 and 7.) Item 6 comes
+before 7 because
+7's interpretation depends on whether the residual ~11% gap is understood. That gap was
+measured at λ=1.55, the one index both engines labelled correctly before the fix, so it
+survives the verification intact and remains the main open physics question.
 
-5. **Re-establish ground truth.** *Harness built 2026-07-25; sweep not yet run.*
-   Re-run the full-device FDTD length sweep on a finer grid than 2 µm near the
-   crossing, with the solver config saved into the npz so provenance is
-   self-describing next time. This is what the stub sweep's reference line reads
-   from —
-   `example_output/directional_coupler/directional_coupler_fdtd_sweep/length_sweep.npz`
-   does not currently exist in the live tree at all.
-
-   Set up as a **verification example** rather than by editing
-   `directional_coupler_fdtd_sweep.py`, which keeps its deliberate 0:2:60 grid and its
-   teaching role:
-
-       BEEF/examples/verification/python/verify_item_5_ground_truth.py
-       batch/verification/run_verify_item_5_ground_truth.batch   (--array=0-39)
-       make verify_item_5_ground_truth GT_INDEX=<0..39>
-
-   **Grid — 40 lengths**, `union(0:4:60, 9:0.5:22)`. The fine window is placed from
-   data, not guessed: the archived sweep re-read on its true axis gives
-   dL₅₀/dλ ≈ −90 µm/µm, so across 1.50–1.60 µm the crossing runs ~19.8 µm down to
-   ~10.8 µm. 0.5 µm there is 4× finer than the archive where it matters; 4 µm elsewhere
-   pays for it and still resolves the oscillation. Device and solver kwargs are pinned
-   to `directional_coupler_fdtd_sweep.py` exactly, so the result is directly comparable
-   to both the archive and job 11477911.
-
-   **Caching is ON**, unlike the items-1–2 harness. That one had to be uncached because
-   a verification must not pass on a stored result; this one *produces* reference data
-   at ~1–3 h per task, so a re-run after a node failure should be free. Only safe
-   because item 3 completed the fingerprint and item 4 made the writes rank-safe —
-   `--no-cache` forces re-simulation.
-
-   Outputs to `example_output/verification/ground_truth_sweep/`: `length_sweep.npz`
-   (grid + `L50` + bracketing lengths + embedded provenance), `provenance.json`,
-   `length_sweep.png`, `l50_vs_wavelength.png`. L₅₀ is the first upward crossing of
-   `T_cross = 0.5`, linearly interpolated; the **bracket is stored alongside it**
-   because 15.30 µm quoted from a 2 µm bracket and from a 0.5 µm bracket are not the
-   same claim, and the archived file gave no way to tell which it was. On synthetic
-   data the 0.5 µm grid recovers L₅₀ to 0.015 µm.
-
-   Status: aggregation, provenance, L₅₀ extraction and both plots validated on
-   synthetic data; `make -n` and `bash -n` clean. **Validation task submitted as job
-   11480098** (`--array=12`, L=13.5 µm — the length job 11477911 already solved
-   uncached, so its `T_cross(1.55) = 0.4230` is an independent cross-check). Submit the
-   remaining 39 only once that returns sane.
 6. **Explain the residual ~11% rate gap at λ=1.55.** Not covered by 1–2. Add a direct
    engine-agreement test alongside `tests/test_hybrid.py`: take a pure straight
    coupled-pair region (no bends), call `FDTDSolver.solve_section()` at two lengths,
@@ -183,20 +153,19 @@ intact and remains the main open physics question.
    shows now. Only then does the sweep answer the question it was written to answer,
    and only then is `notes.md` Solver #10(b) (promoting this into a reusable
    procedure) worth acting on.
+
+   The reference line it converges onto now exists and draws: `_FDTD_SWEEP_NPZ` was
+   repointed to item 5's verification sweep and resolves to **15.13 µm** from a 0.5 µm
+   bracket. Note this is the band-mean crossing the panel plots, a slightly different
+   quantity from the per-wavelength L₅₀(1.55) = 15.31 µm in item 5's table — the mean of
+   the ratios crosses lower than the mean of the crossings because L₅₀ falls with λ.
+   Compare the sweep against the band-mean number, not the 1.55 µm one.
 8. **Minor, while in there — `notes.md` Solver #9's material half.** Confirmed present
    in the data: EME's Δn_eff has a +0.00022 kink at exactly 1.57 µm where meow's Si
    table switches 3.4784 → 3.4710, while the FDTD half stays frozen at 3.4784 for
    every wavelength. Real, but ~0.8% of Δn_eff — worth fixing for correctness, not a
    driver of anything above. (Solver #8, wavelength interpolation, is not involved:
    this script does a full mode solve at all 11 wavelengths.)
-9. **Regenerate the golden references.** `tests/golden/directional_coupler_hybrid.json`
-   was last regenerated by job 11460127 on 2026-07-24 19:35 — with **pre-fix** code,
-   so its stored through/cross values carry the mislabelled wavelength axis and the
-   `--runslow` golden test will now disagree. It is currently uncommitted-modified in
-   the working tree. Re-run `batch/run_golden_directional_coupler_hybrid.batch` after
-   items 1–2 are signed off, and commit the result with a note that the change is the
-   axis fix, not a regression. Do not quietly overwrite it — a golden that moves
-   without explanation is worse than a failing test.
 10. **The same bug is in the ring resonator examples.** Found while auditing the cache
     for item 3, and *not* fixed by items 1–2: `ring_resonator_hybrid.py` (lines 385,
     469) and `ring_resonator_hybrid_cascaded.py` (lines 392, 463) each compute
@@ -530,3 +499,193 @@ items 1–2 landed 2026-07-25 11:56 — so re-running only tasks 4 and 5 would l
 folder holding a silent mixture of pre- and post-fix data. A visible gap beats an
 invisible mixture, so the re-run moved to item 7, which now covers all nine tasks after
 deleting the folder.
+
+
+### 5. Ground truth re-established — 2026-07-25
+
+The directional coupler has a trustworthy, self-describing L₅₀(λ) across the full
+1.50–1.60 µm band again. **Job 11480725, 39/39 tasks COMPLETED, 40/40 lengths on disk**
+(the 40th, L=13.5, came from the validation task 11480098\_12).
+
+**The result.**
+
+| λ (µm) | 1.500 | 1.510 | 1.520 | 1.530 | 1.540 | 1.550 | 1.560 | 1.570 | 1.580 | 1.590 | 1.600 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| L₅₀ (µm) | 20.46 | 19.31 | 18.22 | 17.20 | 16.23 | 15.31 | 14.44 | 13.61 | 12.84 | 12.09 | 11.39 |
+
+Monotone decreasing, dL₅₀/dλ = **−90.3 µm/µm**. Coupling strengthens with wavelength,
+which is the physically right direction and the sign that items 1–2 hold at the *device*
+level, not just at the monitor. Every one of the 11 crossings is bracketed within
+0.5 µm, so the fine window was placed correctly and no value is interpolated across a
+wider gap than claimed.
+
+**How it was built.** `examples/verification/python/verify_item_5_ground_truth.py`, run
+as `--array=0-39` via `batch/verification/run_verify_item_5_ground_truth.batch`. Grid is
+`union(0:4:60, 9:0.5:22)` — 40 lengths, the fine window placed from data rather than
+guessed: the archived sweep re-read on its true axis gives dL₅₀/dλ ≈ −90 µm/µm, putting
+the crossing between ~10.8 and ~19.8 µm across the band. Device and solver kwargs are
+pinned to `directional_coupler_fdtd_sweep.py` exactly, so the result is directly
+comparable to both the archive and job 11477911. Set up as a verification example rather
+than by editing that script, which keeps its deliberate 0:2:60 grid and its teaching
+role.
+
+Three things it does that the tutorial sweep does not, each traceable to something this
+investigation turned up:
+
+- **Every write is rank-0 gated** with a host-qualified temp name — item 4's defect, still
+  live in all five `directional_coupler/python/*.py` sweep scripts, and exactly the setup
+  that killed stub-sweep tasks 4 and 5.
+- **Provenance is written into the file**, both as a `provenance` key inside the npz and a
+  greppable `provenance.json` sidecar: git SHA, meep version, rank count, SLURM ids, and
+  the full device/solver kwargs. This is the specific defect that made the archive
+  unusable as truth even though its numbers were fine.
+- **L₅₀ is stored with its interpolation bracket** (`L50_bracket_lo`/`_hi`). 15.30 µm
+  quoted from a 2 µm bracket and from a 0.5 µm bracket are not the same claim, and the
+  archived file gave no way to tell which it was.
+
+Caching is **on** here, unlike the items-1–2 harness — that one had to be uncached
+because a verification must not pass on a stored result; this one *produces* reference
+data at ~0.4–3 h per task, so a re-run after a node failure should be free. Only safe
+because item 3 completed the fingerprint and item 4 made the writes rank-safe.
+`--no-cache` forces re-derivation.
+
+**Validated before committing 39 tasks — job 11480098\_12**, L=13.5 µm, 56:20 against
+11477911's 56:30 on the same device. That length was chosen because 11477911 solved it
+*uncached*, making it an independent cross-check rather than a cache echo. Result was
+**bit-identical**: max |ΔT_cross| = 0.000e+00 across all 11 wavelengths,
+`solve_seconds = 3362` proving it genuinely simulated.
+
+**Verified — four independent checks.**
+
+- **Power conservation:** max |1 − (T_through + T_cross)| = **1.1e-3** across all 440
+  points, no NaNs, `check_passive()` clean.
+- **Reproduces the verified run:** L=13.5 at 1.55 µm gives T_cross = 0.423022 against
+  11477911's 0.423022, agreeing to **5e-7**.
+- **Continuity with the archive** — the strongest one. Re-reading the archived pre-fix
+  sweep on its true axis and overlaying all 11 of its points on the new curve: **every
+  point agrees to within 0.027 µm**, and the residual is a uniform **+0.023 µm bias with
+  only 0.003 µm of scatter** about it. Two runs with different source bandwidths,
+  different length grids, and one of them relabelled, tracking each other to 3 nm of
+  shape. This confirms the relabelling diagnosis independently of the solver's own
+  convergence, which is what check 8 of the items-1–2 verification had established
+  internally.
+
+  The bias is systematic, not noise, and is not fully explained by check 8's 2.5e-4
+  agreement in T — at dT_cross/dL = 0.042 /µm near the crossing that buys only 0.006 µm.
+  The remaining ~0.017 µm is most likely the archive's own 2 µm interpolation bracket
+  against 0.5 µm here. Not chased further: it is 0.15% of L₅₀ and the new file is the one
+  being trusted going forward.
+
+  **Correction — the figure first recorded here (rms 0.009 µm with a 0.18 µm outlier)
+  was wrong.** It came from reconstructing the archive's axis with
+  `fcen = 0.5*(1/λ_min + 1/λ_max)`, the frequency-mean. The pre-fix code used
+  `fcen = 1/mean(λ)` (`_build_domain()` → `wl_center = np.mean(wavelengths)`), 0.7 mHz
+  lower, which shifts the whole reconstructed axis by ~1.6 nm. The "outlier" was that
+  offset showing up as a uniform bias, misread as scatter. The verification script's own
+  `_archived_l50()` had it right all along — the error was in my ad-hoc check, so the
+  plot and the shipped numbers were never affected. Worth recording because the same
+  mistake would quietly degrade any future re-read of a pre-fix file.
+- **The 1.55 µm anchor**, the one index both engines labelled correctly before the fix:
+  new 15.31 µm against the archive's 15.29 µm.
+
+Outputs in `example_output/verification/ground_truth_sweep/`: `length_sweep.npz`,
+`provenance.json`, `length_sweep.png`, `l50_vs_wavelength.png` (which overlays the
+archived true-axis points, the plot behind the continuity check above).
+
+**Cost:** 2387 core-hours, **$16.23** for the array and **$16.84** including both
+single-task validations, priced with `pace_spending_analysis/plot_usage.py`'s model
+(cpu-small at $0.0068/core-hour × 48 cores). Runtime ran 0:21 at L=0 to 3:10 at L=56
+against a 300 min wall — no timeouts, and no correlation tight enough to be worth
+modelling: L=56 took longer than L=60.
+
+**Also fixed while here — 48× duplicated log lines.** Job 11480098's log was 48 of 107
+lines the *same* message: `logger.info("solve: cache saved at ...")` fires on every rank,
+and there are 15 such cache log sites across `solvers/fdtd.py` and `solvers/eme.py`.
+Those describe one shared cache, not per-rank state, and with 40 task logs to read it
+buries the results. New `beef/_log.py`: off the master rank, keep WARNING and above only,
+rank-tagged. Warnings survive on *every* rank deliberately — they are the records that
+can genuinely be rank-specific, so suppressing them to de-duplicate INFO would trade
+noise for blindness.
+
+It has to be installed **per module**, not once on the parent `beef` logger: a logger's
+filters are consulted only for records logged on that logger, never for records
+propagating up from a child. The first version got this wrong — it would have filtered
+nothing — and a test caught it. Six modules now take their logger from
+`beef._log.get_logger()`; the root logger is untouched.
+
+**Added** — 28 tests in `tests/test_log_rank_filter.py`, including a parametrized check
+that every one of the six module loggers actually carries the filter (the test that
+caught the parent-logger bug). Full fast suite **203 passed, 6 skipped**. Verified at 48
+ranks on 2 nodes: INFO 48 → 1, warnings 48/48 with 47 rank-tagged.
+
+**Found while doing this, not part of the original scope** — finishing item 5 does *not*
+make the stub sweep's reference line resolve, as had been assumed. `_FDTD_SWEEP_NPZ`
+(`directional_coupler_hybrid_stub_sweep.py:93`) points at the tutorial sweep's output
+path, which still does not exist in the live tree; the new truth is under
+`example_output/verification/ground_truth_sweep/`. Repointed — the consumer at `:352`
+already reads `coupling_lengths`/`T_cross`/`T_through`, which are exactly the new file's
+key names, so nothing else changed. Item 7 depends on this line drawing.
+
+
+### 9. Golden reference regenerated — 2026-07-25
+
+`tests/golden/directional_coupler_hybrid.json` is back on the fixed wavelength axis.
+**Job 11486066**, serial, 1:04:31, `check_passive() = True`.
+
+|  | 1.50 | 1.55 | 1.60 |
+|---|---|---|---|
+| through, old | 0.0098 | **0.0601** | 0.4289 |
+| through, new | 0.0247 | **0.0601** | 0.4948 |
+| cross, old | 0.9786 | **0.9220** | 0.5587 |
+| cross, new | 0.9667 | **0.9220** | 0.4957 |
+
+**The centre point is bit-identical in both ports.** With 3 wavelengths, index 1 is
+`fcen` — the one point the pre-fix code labelled correctly — so it is precisely the
+value that must *not* move, and it does not, to four decimals. Anything that had
+perturbed the geometry, the mode count or the physics would have moved it too. That is
+the single strongest piece of evidence that this is the axis fix and nothing else.
+
+**Why the endpoints cannot be checked by relabelling, and what was done instead.** For a
+pure FDTD result the pre-fix values are recoverable on their true axis — that is how the
+archived length sweep was validated to 0.027 µm in item 5. It does not work here,
+because this is a *hybrid* result: `np.einsum` contracts an EME body at the true λ
+against FDTD sections at the shifted λ, so the old endpoints are unphysical products,
+not correct values wearing the wrong label. Attempting the reconstruction anyway gives
+0.39 disagreement, which is the expected outcome, not a failure. This is the same
+mechanism described under "Why the stub sweep can't converge" above; worth stating
+explicitly because the obvious check is the wrong one here.
+
+Checked instead against item 5's **independent** ground truth. Fitting
+`cross = sin²(π/4 · L/L₅₀(λ) + φ_bend)` with L = 30 µm and L₅₀(λ) from job 11480725:
+
+| fit to | φ_bend | rms |
+|---|---|---|
+| new golden, on its own axis | +0.293 rad | **0.012** |
+| old golden, labels at face value | +0.245 rad | 0.022 |
+| old golden, on the FDTD sections' true axis | +2.739 rad | 0.076 |
+
+The new values are the most consistent with the independently measured L₅₀(λ) under any
+axis interpretation. One free parameter over three points, so this is supporting
+evidence rather than proof — the bit-identical centre carries the argument.
+
+**Falling `cross` is correct here** and is *not* the old backwards dispersion returning.
+At L = 30 µm with L₅₀ running 20.5 → 11.4 µm across the band, the device is past its
+first full crossover, so strengthening coupling pushes `sin²` back down. An early draft
+of the check asserted `cross` must rise; that assumed a device below the crossover and
+was wrong.
+
+**Correction to this item's premise.** It said the pre-fix golden was uncommitted in the
+working tree. It was not — it had been committed in `86622d1` (2026-07-25 14:09) as part
+of the item-5 harness commit, i.e. the quiet overwrite this item warns against had
+already happened, one commit earlier than anyone noticed. Nothing was lost (the history
+holds both), but the regeneration was made its own commit so the move is explained where
+someone will look for it.
+
+No stale-cache risk: the generator uses an in-memory `cache: dict`, not `save_dir`.
+
+**Also, while in there** — `batch/run_golden_directional_coupler_hybrid.batch` loads the
+system `openmpi` module, which is incompatible with the MPICH-built meep in the `jmh`
+env. Harmless today because the job is `--ntasks=1` and never calls `srun`, but it would
+fail immediately with `PMI_Init returned -1` if this target were ever parallelized.
+Commented rather than removed, since removing it changes a working script for no present
+benefit.
