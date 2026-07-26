@@ -137,6 +137,25 @@ class TestBetaFromPhases:
         got, _, _ = beta_from_phases([2.0, 4.0], _wrapped(beta, [2.0, 4.0]), beta)
         assert got == pytest.approx(beta, rel=1e-9)
 
+    def test_two_lengths_disable_the_residual_guard(self):
+        """Why the default is three. Two points fit a line exactly, so the
+        residual is identically zero whatever the data — guard 1 has nothing to
+        detect. Deliberately fed a badly non-linear phase set here."""
+        two = np.array([2.0, 4.0])
+        nonsense = np.array([0.3, -2.9])
+        _, resid, _ = beta_from_phases(two, nonsense, BETA_MPB[0])
+        assert resid < 1e-12, "two points can never show a residual"
+
+        three = np.array([2.0, 4.0, 6.0])
+        beta = BETA_FDTD[0]
+        good = _wrapped(beta, three)
+        bent = good.copy()
+        bent[1] += 0.5                                  # break linearity
+        _, resid_ok, _ = beta_from_phases(three, good, BETA_MPB[0])
+        _, resid_bent, _ = beta_from_phases(three, bent, BETA_MPB[0])
+        assert resid_ok < 1e-9
+        assert resid_bent > _BETA_FIT_RESIDUAL_MAX, "three points can"
+
 
 class TestTheSpacingPrecondition:
     """`section_mode_beta()` refuses widely-spaced lengths, because a
@@ -160,12 +179,13 @@ class TestTheSpacingPrecondition:
         assert span / 2.0 > self._max_safe_spacing(BETA_FDTD[0])
 
     def test_the_actual_default_is_span_independent(self):
-        """Spacing is capped by β, not by how big the body happens to be."""
+        """Spacing is capped by β, not by how big the body happens to be, and
+        all three lengths must still fit inside the body."""
         cap = self._max_safe_spacing(BETA_FDTD[0]) / 2.0
         for span in (4.0, 30.0, 300.0):
-            spacing = min(span / 2.0, cap)
+            spacing = min(span / 3.0, cap)
             assert spacing <= self._max_safe_spacing(BETA_FDTD[0])
-            assert 2.0 * spacing <= span, "both lengths must fit inside the body"
+            assert 3.0 * spacing <= span, "all three lengths must fit"
 
     def test_a_safe_spacing_leaves_an_order_of_magnitude(self):
         """25% of β against a ~2% measured disagreement."""

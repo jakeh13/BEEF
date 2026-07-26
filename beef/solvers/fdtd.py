@@ -878,9 +878,12 @@ class FDTDSolver:
                 and the *whole* span [x0, x1] must be uniform — a section that
                 clips a taper or bend makes the phase non-linear in L, which
                 shows up in the returned residual rather than silently.
-            lengths: section lengths to fit over (µm). Default
-                ``[span/2, span]``. Two is enough for a slope; more only buys
-                a better residual. Keep them well inside the uniform region.
+            lengths: section lengths to fit over (µm). Default is three,
+                evenly spaced, with the spacing capped by β rather than by the
+                section's size — see the body for why both of those matter.
+                Two lengths determine a slope but make the residual identically
+                zero, disabling the linearity guard; pass two only if you have
+                another reason to trust the branch.
             monitor_center / monitor_size: as `solve_section()`. The default
                 here pins the full non-PML width on the ``y=0`` axis, which is
                 what a coupled pair's even/odd basis needs.
@@ -905,8 +908,23 @@ class FDTDSolver:
         # MPB's answer, used only to pick which wrap each phase is on. Cheap
         # (no time-stepping), and it is also what sets a safe default spacing
         # below, so it has to come first.
+        #
+        # Solved on a SHORT window at the midpoint rather than on [x0, x1]:
+        # section_mode_neff() extends its cut by dpml on each side to make PML
+        # room, so handing it the full span of a body that runs right up to the
+        # S-bends pushes the cut into them and DirectionalCoupler rejects it.
+        # The cross-section is identical anywhere in a uniform region, so a
+        # narrow window is not an approximation — it is the same modes, cheaper.
+        seed_span = min(2.0, span - 2.0 * self.dpml)
+        if seed_span <= 0.0:
+            raise ValueError(
+                f"section_mode_beta: section [{x0}, {x1}] is only {span:.3f} µm "
+                f"long, leaving no room for the {self.dpml} µm PML clearance the "
+                f"mode solve needs on each side."
+            )
         seed = self.section_mode_neff(
-            geometry, wavelengths, x0, x1, n_modes,
+            geometry, wavelengths, mid - seed_span / 2.0, mid + seed_span / 2.0,
+            n_modes,
             monitor_center=iface["monitor_center"],
             monitor_size=iface["monitor_size"],
             **geometry_kwargs,
@@ -921,8 +939,14 @@ class FDTDSolver:
             # β of 9.6 — far closer together than the disagreement being
             # measured, so the seed could not identify the branch at all.
             # Spacing is capped by the physics, not by the section's size.
-            spacing = min(span / 2.0, max_safe_spacing / 2.0)
-            lengths = [spacing, 2.0 * spacing]
+            #
+            # THREE lengths, not two: with two points the straight-line fit is
+            # exact by construction, so the residual is identically zero and
+            # guard 1 below can never fire. A third point is what gives it
+            # something to disagree with, and these sections are short (~1.3 µm
+            # at the coupler) so the extra solve is cheap.
+            spacing = min(span / 3.0, max_safe_spacing / 2.0)
+            lengths = [spacing, 2.0 * spacing, 3.0 * spacing]
         lengths = [float(L) for L in lengths]
         if len(lengths) < 2:
             raise ValueError(

@@ -220,6 +220,51 @@ half_total = dc.total_length / 2
 # sweep varies is where along x that monitor plane sits.
 _iface_mon = dict(monitor_center=0.0, monitor_size=fdtd_solver.sim_width)
 
+# ---------------------------------------------------------------------------
+# DC_CALIBRATE_BODY=1 — propagate the EME body on the β the FDTD sections
+# actually accumulate, instead of on meow's mode index (dc_validation.md item
+# 6). This is THE experiment this sweep exists to settle.
+#
+# The drift this sweep measures is exactly 2s·(1 - Δβ_FDTD/Δβ_EME), so
+# substituting Δβ_EME := Δβ_FDTD sends it to zero identically. That is a
+# prediction, not a hope: if the measured slope does not collapse from 0.1085
+# to ~0, the mechanism in item 6 is wrong.
+#
+# Off by default so the uncalibrated sweep (job 11500412) stays reproducible;
+# the two write to different folders so neither overwrites the other.
+CALIBRATE_BODY = bool(int(os.environ.get("DC_CALIBRATE_BODY", "0")))
+if CALIBRATE_BODY:
+    # All three, not just output_dir: plot_dir/data_dir were derived from it
+    # near the top of the file, so redirecting only output_dir would leave the
+    # per-stub npz and PNGs overwriting the uncalibrated sweep's own.
+    # _FDTD_SWEEP_NPZ is deliberately NOT redirected — the full-device
+    # reference line is shared, and is what both sweeps are measured against.
+    output_dir = output_dir + "_calibrated"
+    plot_dir = os.path.join(output_dir, "plots")
+    data_dir = os.path.join(output_dir, "data")
+    for _d in (output_dir, plot_dir, data_dir):
+        os.makedirs(_d, exist_ok=True)
+
+# The body cross-section is the same uniform coupled pair for every stub — the
+# cuts move along x but never leave the straight region — so β is stub
+# independent and this is computed once, not once per array task. Cached, so
+# concurrent tasks pay for it at most once between them.
+_body_neff = None
+if CALIBRATE_BODY:
+    _beta = fdtd_solver.section_mode_beta(
+        dc, wavelengths, -half_body, +half_body, N_MODES,
+        save_dir=save_dir, **_iface_mon,
+    )
+    _body_neff = _beta * wavelengths[:, None] / (2 * np.pi)
+    _mpb = fdtd_solver.section_mode_neff(
+        dc, wavelengths, -half_body, +half_body, N_MODES, **_iface_mon)
+    _i = int(np.argmin(np.abs(wavelengths - 1.55)))
+    print(f"[calib] body n_eff from the FDTD's own phase, at 1.55 µm:")
+    print(f"[calib]   MPB   {np.array2string(_mpb[_i, :2], precision=6)}  "
+          f"Δn_eff {_mpb[_i, 0] - _mpb[_i, 1]:.6f}")
+    print(f"[calib]   FDTD  {np.array2string(_body_neff[_i, :2], precision=6)}  "
+          f"Δn_eff {_body_neff[_i, 0] - _body_neff[_i, 1]:.6f}")
+
 # Both cuts have to stay inside the reference device's own coupling region
 # (DirectionalCoupler rejects a cut that lands inside an S-bend), so the two
 # stubs together may not exceed its coupling_length. BODY_STUB = 0 is the
@@ -286,6 +331,7 @@ def simulate_stub(stub: float) -> None:
     M_body = body_solver.solve_section_length_sweep(
         dc, wavelengths, boundaries[1], boundaries[2], body_lengths,
         n_modes_in=N_MODES, n_modes_out=N_MODES, save_dir=save_dir,
+        neff_override=_body_neff,   # None unless DC_CALIBRATE_BODY=1
     )  # [n_L, n_wl, N_MODES, N_MODES] — plotted/saved against coupling_lengths (the physical total)
 
     tmp = np.einsum("Lwij,wjk->Lwik", M_body, M_in0)               # [n_L, n_wl, N_MODES, 1]
