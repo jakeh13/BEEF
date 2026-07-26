@@ -61,8 +61,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from ..results.smatrix import SMatrix
+from .._log import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _supports_save_dir(method) -> bool:

@@ -40,6 +40,14 @@ Core public API:
 
 __version__ = "0.1.0"
 
+# Under `srun -n 48` every rank runs the whole solve, so every INFO beef emits
+# came out 48 times — those messages describe one shared cache, not per-rank
+# state. Each module gets its logger from beef._log.get_logger(), which keeps
+# WARNING and above only off the master rank (rank-tagged). Nothing is done to
+# the root logger. It has to be per-module: a logger's filters are consulted
+# only for records logged on that logger, never for records propagating up from
+# a child. See beef/_log.py.
+
 from ._utils import extrude_polygons
 from .geometry import (
     MMI, MMIPort, BendGeometry, DirectionalCoupler, Taper, SBend,

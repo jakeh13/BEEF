@@ -9,8 +9,9 @@ from typing import Any, Dict, Tuple
 import numpy as np
 
 from ..materials.stack import MaterialStack
+from .._log import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _PRECISION = 9
 

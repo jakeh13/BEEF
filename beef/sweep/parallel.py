@@ -18,8 +18,9 @@ import numpy as np
 from ..geometry.base import DeviceGeometry
 from ..results.smatrix import SMatrix
 from .._utils import make_output_folders
+from .._log import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _worker_fn(args):

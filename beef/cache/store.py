@@ -31,8 +31,9 @@ import sys
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
+from .._log import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _FAMILY_POINTER_DIR = "_mode_family_pointers"
 

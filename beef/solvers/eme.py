@@ -15,8 +15,9 @@ from ..cache import (
 from ..geometry.base import DeviceGeometry
 from ..materials.stack import MaterialStack, SOI_160
 from ..results.smatrix import SMatrix
+from .._log import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class EMESolver:
