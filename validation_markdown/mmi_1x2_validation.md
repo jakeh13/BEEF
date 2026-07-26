@@ -31,6 +31,31 @@ the only device with all three golden fixtures (`mmi_1x2_eme.json`,
    state `directional_coupler_hybrid.json` was in before item 9 regenerated it.
    The `--runslow` golden tests for those two should be failing right now.
 
+   **The stored values prove it without needing to re-run anything.** On the
+   same device, at the same three wavelengths:
+
+   | | 1.26 | 1.31 | 1.36 | direction |
+   |---|---|---|---|---|
+   | `mmi_1x2_eme` (unaffected) | 0.4264 | 0.3863 | 0.3524 | **falling** |
+   | `mmi_1x2_fdtd` (as stored) | 0.3752 | 0.3943 | 0.4295 | **rising** |
+
+   The two engines disagree about the *sign* of the dispersion on one device,
+   which no amount of engine difference explains. Three things confirm the
+   diagnosis rather than merely suggesting it:
+
+   - Reverse the FDTD row and it falls, matching EME: 0.4295 / 0.3943 / 0.3752.
+   - Its true axis is 1.3355 / 1.3100 / 1.2854 — a narrower band than
+     1.26–1.36 — and its swing is correspondingly smaller: 0.054 against EME's
+     0.074 over the wider span.
+   - The **centre point does not move**: 0.3943 sits at 1.31 = `fcen`, the one
+     index the pre-fix code labelled correctly. That is the same signature item
+     9 used to tell the axis fix from a regression.
+
+   `mmi_1x2_hybrid.json` falls with wavelength like EME, because the EME body
+   dominates the trend — but it is contaminated all the same (0.4086 against
+   EME's 0.4264 at 1.26). Direction is not a sufficient test for the hybrid;
+   only the centre-point check is.
+
    Regenerate via `scripts/generate_golden_values.py mmi_1x2_fdtd` /
    `mmi_1x2_hybrid`, and verify the move is the axis fix rather than a
    regression the same way item 9 did: **the centre wavelength must not move**,
