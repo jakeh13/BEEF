@@ -702,6 +702,14 @@ benefit.
 The residual gap is real, it lives in the straight coupled-pair section, and **most of
 it is not engine disagreement**. Job 11489846 (4 array tasks) + job 11490488 (re-run).
 
+> **Later measurement, read alongside this.** The "~4.7% genuine engine disagreement"
+> below was obtained by refining the EME mesh against a *fixed* res-40 FDTD. Refining
+> both together (job 11502074, res 20–50) shows Δβ_MPB still falling at res 50 while
+> Δβ_FDTD is flat, leaving **~7% in the extrapolated limit**. It also shows the split is
+> not MPB-vs-meow at all — both engines' mode solves are MPB and agree to 0.57%; the gap
+> is MPB's mode index versus the phase meep's time-stepper accumulates. Full comparison,
+> including why editing `meow/fde/meep.py` can close at most 4.6% of it, under item 12.
+
 **What was measured.** The stub sweep could only *infer* Δβ_FDTD/Δβ_EME = 0.891, from a
 linear fit to L₅₀ through a whole hybrid chain with bend phase and seam mode-matching
 folded in. This measures the same ratio on nothing but a uniform coupled pair — sections
@@ -893,6 +901,71 @@ disagreement, and rejects the cross-resolution comparison), plus two slow ones r
 both engines for real.
 
 **Verified** — full fast suite **223 passed, 11 skipped**.
+
+#### How the two mode solves actually differ — and why it is *not* item 6's cause
+
+Recorded because it is the obvious first suspect and it has now been checked directly.
+"meep's FDTD modes vs meow's FDE modes" is a false framing: **both are MPB**.
+`meow/fde/meep.py:114` calls `sim.get_eigenmode()` and so does
+`FDTDSolver.section_mode_neff()` (`fdtd.py:823`). They differ only in setup:
+
+| | `compute_modes_meep` | `section_mode_neff` |
+|---|---|---|
+| propagation axis | **z** — `direction=NO_DIRECTION`, `kpoint=(0,0,1)`, n_eff from `k[2]·λ` | **x** — `direction=mp.X`, n_eff from `k.x/f` |
+| cell | `(x_span, y_span, 1)`, **no PML** | `(Sx, Sy, cell_sz)` with `mp.PML(dpml)` |
+| grid | `1/dx` from meow's `Mesh2D` | `self.res`, meep's own Yee mesh |
+| ε model | `meep_material` — nearest table λ, **non-dispersive** | `material_stack.si_medium()`, dispersive |
+| eigensolver tol | explicitly `1e-12` | meep's default (not set) |
+| subpixel | `eps_averaging=True`, library defaults | `eps_averaging` / `subpixel_tol` / `subpixel_maxeval` configurable |
+| fields | sampled on `mesh.x_/y_`, then `np.real()` — imaginary part discarded | not sampled; only `k` is used |
+
+Every one of those is a genuine difference, and together they are worth almost nothing
+here. The table above puts the worst guided-band n_eff disagreement at **0.0023**; on Δβ
+at res 40, meow gives 0.09566 and meep's own MPB 0.09512 — **0.57% apart**.
+
+**So this is the ceiling on editing `meow/fde/meep.py`.** Making meow's solve bit-identical
+to meep's would move the FDTD/MPB Δβ gap from 10.88% to 10.38% — it closes **4.6%** of it
+and leaves 95% standing. The route is not worth taking for item 6's sake. (The defects in
+that file — the `np.real()` truncation on field profiles, the non-dispersive
+nearest-λ material, the missing PML — are still real and still worth fixing. They land on
+*interface overlap integrals* and on item 8's material half, not on Δβ.)
+
+**The difference that does matter is not between the two mode solves.** It is between
+MPB's mode index and the phase meep's time-stepper actually accumulates — an eigenproblem
+in a planewave basis versus a leapfrog on a staggered Yee grid, two discretizations of the
+same continuum operator with different numerical dispersion:
+
+| | β even (rad/µm) | β odd | Δβ |
+|---|---|---|---|
+| MPB — either engine | 9.42255 | 9.32743 | 0.09512 |
+| meep FDTD — fitted from `T(L)` over 4 lengths | 9.63292 | 9.54767 | 0.08525 |
+| excess | **+2.233%** | **+2.361%** | **−10.38%** |
+
+Both supermodes are biased the *same direction* by ~2.3%; the differential between them is
+only **0.129 percentage points**. But `β/Δβ ≈ 99`, and that lever turns it into the whole
+10.4% Δβ error — `Δβ_MPB + β₀e₀ − β₁e₁` reproduces the measured Δβ_FDTD exactly. Matching
+meow to meep's MPB cannot help, because meep's MPB carries the same 2.3% bias.
+
+**Nor does resolution.** Sweeping res 20/30/40/50 on the same cross-section (job 11502074),
+the two sides move in opposite ways:
+
+| res | β₀ excess | β₁ excess | differential | Δβ_MPB | Δβ_FDTD | gap |
+|---|---|---|---|---|---|---|
+| 20 | +5.850% | +6.234% | 0.3848% | 0.11252 | 0.08452 | 24.9% |
+| 30 | +3.195% | +3.381% | 0.1867% | 0.09926 | 0.08519 | 14.2% |
+| 40 | +2.203% | +2.338% | 0.1342% | 0.09566 | 0.08525 | 10.9% |
+| 50 | +1.862% | +1.979% | 0.1171% | 0.09221 | 0.08299 | 10.0% |
+
+**Δβ_FDTD is essentially resolution-independent** — 2.7% across the whole range and
+non-monotone, i.e. scatter. Δβ_MPB moves 18% and is still falling at res 50, with
+decelerating exponents (−1.78 / −1.15 / −0.61), so it is not on a clean Δx² path either.
+Richardson extrapolation gives MPB 0.08894 against FDTD 0.08263 — a **~7% gap surviving in
+the limit**, and a relative-gap fit puts the floor at 6.6%. The gap is not a convergence
+artefact of either engine; refining the mesh does not remove it.
+
+That is what motivates `HybridSolver(calibrate_body_neff=True)`: not matching the two mode
+solvers to each other, but propagating the EME body on the β the FDTD reference actually
+has.
 
 ### 10. Ring resonator monitor grid — 2026-07-26
 

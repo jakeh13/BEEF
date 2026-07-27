@@ -256,8 +256,16 @@ if CALIBRATE_BODY:
         save_dir=save_dir, **_iface_mon,
     )
     _body_neff = _beta * wavelengths[:, None] / (2 * np.pi)
+    # Short window about the body midpoint, NOT the full [-half_body,
+    # +half_body] span: section_mode_neff() pads the cut by dpml on each side,
+    # so the full span asks for x=-15.5, which lands inside an S-bend and
+    # raises. section_mode_beta() seeds itself the same way for the same
+    # reason. The cross-section is uniform across the whole body, so any
+    # interior window gives the same modes — this one is only a log line, and
+    # it is not worth failing the job over.
+    _seed_half = min(1.0, half_body - 2.0 * fdtd_solver.dpml)
     _mpb = fdtd_solver.section_mode_neff(
-        dc, wavelengths, -half_body, +half_body, N_MODES, **_iface_mon)
+        dc, wavelengths, -_seed_half, +_seed_half, N_MODES, **_iface_mon)
     _i = int(np.argmin(np.abs(wavelengths - 1.55)))
     print(f"[calib] body n_eff from the FDTD's own phase, at 1.55 µm:")
     print(f"[calib]   MPB   {np.array2string(_mpb[_i, :2], precision=6)}  "
