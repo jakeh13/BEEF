@@ -3,7 +3,7 @@ Tutorial: directional coupler — single-domain FDTD mesh-resolution convergence
 
 The same 220 nm SOI, C-band device and single-domain method as
 directional_coupler_fdtd.py (one broadband full-device meep simulation, fixed
-coupling_length = 13.5 µm — the ~3 dB length for this cross-section), but
+coupling_length = 15.13 µm — the 3 dB length for this cross-section), but
 instead of running once at a fixed mesh resolution, this sweeps
 
     RESOLUTION = 20, 30, 40, ..., 120 px/µm   (11 values, 20:10:120)
@@ -68,7 +68,15 @@ WL_MIN = 1.50       # wavelength sweep start (µm)
 WL_MAX = 1.60       # wavelength sweep end (µm)
 N_WL = 11           # number of wavelength points
 
-COUPLING_LENGTH = 13.5   # µm, hard-coded — same ~3 dB length as directional_coupler_fdtd.py
+# Same 3 dB length as directional_coupler_fdtd.py — see its comment for the
+# provenance (full-device FDTD ground truth crosses 0.5 at 15.129 µm). Was
+# 13.5 µm until 2026-07-28, a stale pre-axis-fix value that is really a 43:57
+# split; directional_coupler_validation.md item 14.
+#
+# This sweep's *conclusions* were never at risk from that: it compares one
+# device across meshes, and the device's length does not decide whether res 40
+# is converged. What was wrong was the comment calling 13.5 a 3 dB length.
+COUPLING_LENGTH = 15.13   # µm, hard-coded
 
 RESOLUTION_SWEEP = np.arange(20.0, 120.0 + 1e-9, 10.0)   # px/µm — 20:10:120, 11 values
 

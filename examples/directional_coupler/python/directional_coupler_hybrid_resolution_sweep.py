@@ -3,7 +3,7 @@ Tutorial: directional coupler — hybrid FDTD/EME mesh-resolution convergence sw
 
 The same 220 nm SOI, C-band device and method as directional_coupler_hybrid.py
 (2 FDTD S-bend sections + 1 EME body, N_MODES=6), at a single FIXED
-coupling_length = 13.5 µm — the same ~3 dB length used by
+coupling_length = 15.13 µm — the same 3 dB length used by
 directional_coupler_fdtd_resolution_sweep.py (and directional_coupler_fdtd.py)
 — so the two resolution-convergence studies are directly, apples-to-apples
 comparable (same physical device length). Instead of a single fixed mesh
@@ -82,7 +82,14 @@ N_WL = 11           # number of wavelength points
 
 N_MODES = 6   # even + odd supermodes carried at the two body interfaces — hybrid.py's default, pinned here
 
-COUPLING_LENGTH = 13.5   # µm — same ~3 dB length as directional_coupler_fdtd_resolution_sweep.py
+# Same 3 dB length as directional_coupler_fdtd_resolution_sweep.py — see
+# directional_coupler_fdtd.py for the provenance (full-device FDTD ground truth
+# crosses 0.5 at 15.129 µm). Was 13.5 µm until 2026-07-28, a stale pre-axis-fix
+# value that is really a 43:57 split; directional_coupler_validation.md item 14.
+#
+# As with the FDTD sweep, this did not invalidate the convergence conclusions —
+# one device across meshes — only the claim that 13.5 was a 3 dB length.
+COUPLING_LENGTH = 15.13   # µm
 
 # µm of the straight coupling region folded into each FDTD section, past the
 # S-bend/coupling-region discontinuity — same value/reasoning as hybrid.py's

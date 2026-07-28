@@ -77,8 +77,19 @@ WL_MIN = 1.50       # wavelength sweep start (µm)
 WL_MAX = 1.60       # wavelength sweep end (µm)
 N_WL = 11           # number of wavelength points
 
-COUPLING_LENGTH = 13.5   # µm, hard-coded — the ~3 dB length for this
-                         # cross-section (cf. the hybrid example's sweep)
+# The 3 dB length for this cross-section, read off the full-device FDTD ground
+# truth (example_output/verification/ground_truth_sweep/length_sweep.npz, 0.5 µm
+# grid with provenance — directional_coupler_validation.md item 5), whose
+# band-mean cross/(cross+through) crosses 0.5 at 15.129 µm. The β-calibrated
+# hybrid independently lands on 15.15 µm, its nearest sampled length, 0.14%
+# away — see item 14.
+#
+# WAS 13.5 µm until 2026-07-28, and that was wrong: the reference gives
+# cross/(cross+through) = 0.4318 there, i.e. a 43:57 splitter, not 3 dB. It came
+# from the pre-fix hybrid sweep, which reported L₅₀ = 13.65 µm *with the
+# wavelength axis reversed* (item 1), and it survived both that fix and item 5's
+# ground-truth rebuild because nothing rechecked it.
+COUPLING_LENGTH = 15.13   # µm, hard-coded — the 3 dB length; see above
 
 # ---------------------------------------------------------------------------
 # 1. Geometry — identical to directional_coupler_hybrid.py except that
