@@ -3,17 +3,26 @@
 One file per example device, recording what has to hold before that device's
 **hybrid** result can be trusted, and what is currently missing.
 
-    dc_validation.md                 directional coupler   — the worked example
-    mmi_1x2_validation.md            1×2 MMI
-    mmi_2x2_validation.md            2×2 MMI
-    modal_multiplexer_validation.md  modal multiplexer
-    ring_resonator_validation.md     ring resonator
+    directional_coupler_validation.md  directional coupler — the worked example
+    mmi_1x2_validation.md              1×2 MMI
+    mmi_2x2_validation.md              2×2 MMI
+    modal_multiplexer_validation.md    modal multiplexer
+    ring_resonator_validation.md       ring resonator
 
-`dc_validation.md` came first, from investigating why
-`directional_coupler_hybrid_stub_sweep.py` never converged. It is much longer
-than the others because it is the only device where all four checks below have
-actually been run — so it doubles as the template, and the others are written as
-gap lists against it.
+    archive/                           closed items, kept whole
+
+The coupler came first, from investigating why
+`directional_coupler_hybrid_stub_sweep.py` never converged. It is the only
+device where all four checks below have actually been run, so it doubles as the
+template and the others are written as gap lists against it.
+
+**Its closed work — items 1–7 and 9–12, with every measurement, job number and
+piece of reasoning — is in `archive/dc_validation_20260727.md`.** That file was
+named `dc_validation.md` until 2026-07-27, and ~76 citations across the library,
+tests and examples still say *"dc_validation.md item N"*. Item numbers are stable
+IDs and are never reused, so those citations resolve against the archive
+directly; `directional_coupler_validation.md` carries only current status, open
+to-dos and outstanding verification.
 
 ## The four checks
 
@@ -25,7 +34,7 @@ on how fast phase accumulates through the *same* uniform region. If they do not,
 the chain's answer depends on where the cut between them is made, and no amount
 of tuning the cut will make it converge. Measured by
 `examples/verification/python/verify_item_6_engine_agreement.py`; ~5% off for
-the coupler even with EME converged (`dc_validation.md` item 6).
+the coupler even with EME converged (`directional_coupler_validation.md` item 6).
 
 That gap was confirmed by a second, independent route. The stub sweep's L₅₀
 drift slope is `2·(1 − Δβ_FDTD/Δβ_EME)`, and item 7's re-run measures a ratio of
@@ -49,8 +58,8 @@ the full-device reference to **0.11%**.
 
 Read that as **self-consistency, not proven accuracy**: the reference is meep's
 discretization, and which engine's Δβ is closer to Maxwell is open as
-`dc_validation.md` item 13. Adopt the flag per device only after check 2 passes
-there — it is off by default.
+`directional_coupler_validation.md` item 13. Adopt the flag per device only
+after check 2 passes there — it is off by default.
 
 **2. Mode identity and ordering.** The cascade contracts index *i* of the FDTD
 interface against index *i* of the EME body, assuming they are the same mode.
@@ -58,7 +67,7 @@ The two solve MPB on different grids, so near-degenerate higher-order modes can
 come back reordered — and if they do, the chain silently mixes modes with
 nothing else in the codebase noticing. `FDTDSolver.section_mode_neff()` gives
 the FDTD side's n_eff without any time-stepping, so this is cheap to check
-(`dc_validation.md` item 12).
+(`directional_coupler_validation.md` item 12).
 
 **This is not hypothetical — it fails on the 1×2 MMI.** Run across three devices
 by `examples/verification/python/audit_interface_modes.py`, which puts the
@@ -71,14 +80,15 @@ meow/MPB is not, but a sweep that moves both together cannot tell you that — t
 joint curve looks flat because FDTD dominates the plotted observable while EME
 dominates Δβ. Sweep them independently, and sweep a quantity that is sensitive:
 Δβ is a *difference* of two n_eff near 2.3, so a 0.1% error in each mode is ~10%
-in their difference (`dc_validation.md` item 11).
+in their difference (`directional_coupler_validation.md` item 11).
 
 **4. A full-device FDTD reference.** The hybrid has to be checked against a
 single-domain brute-force run of the same device — that is the only check that
 tests the cascade *as a whole* rather than its parts. It must carry provenance
 in the file: the coupler's old reference was numerically fine but had no config,
 no solver fingerprint and no geometry recorded, so its validity had to be argued
-from circumstantial evidence rather than read off (`dc_validation.md` item 5).
+from circumstantial evidence rather than read off
+(`directional_coupler_validation.md` item 5).
 
 Power conservation is assumed throughout and is necessary but weak — every
 pre-fix directional coupler result conserved power to 0.999 while carrying a
@@ -104,7 +114,7 @@ coupler had. The ring's two `not applicable` entries are structural: it never
 constructs `FDTDSolver`/`EMESolver` objects, so checks 1 and 2 have nothing to
 compare — see `ring_resonator_validation.md`.
 
-### Three findings that generalize
+### Five findings that generalize
 
 **1. Every interface basis in the repo contains at least one unguided mode.**
 
@@ -148,8 +158,8 @@ look converged and disagree by ~5%: meow/MPB plateaus at Δβ = 0.0894 by res
 80–100, while the FDTD's Δβ sits flat at ~0.085 across res 20–50. Flat is not
 the same as correct — it only means the error is not dominated by Δx. Settling
 which is right needs an external reference or a third discretization, not a
-finer mesh (`dc_validation.md` item 13). Worth remembering before quoting any
-convergence study in this repo as proof of accuracy.
+finer mesh (`directional_coupler_validation.md` item 13). Worth remembering
+before quoting any convergence study in this repo as proof of accuracy.
 
 **5. Per-task outputs in an array sweep must be written atomically.** Every
 sweep here ends by aggregating *all* tasks' `.npz` files, including ones a peer

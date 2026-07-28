@@ -127,6 +127,36 @@ PLOT_COUPLING_LENGTH = None   # µm, or None for auto (50:50 split point)
 # stubs the FDTD sections already contain.
 BODY_STUB = 0.25   # µm
 
+# Propagate the EME body on the β the FDTD sections actually accumulate, rather
+# than on meow's mode index. This is dc_validation.md item 6, and without it
+# this example is wrong by ~4.5%.
+#
+# The two engines do not agree on how fast phase accumulates through the *same*
+# uniform coupled pair. It is not a mode-solver mismatch — both sides run MPB
+# and agree to 0.57% — it is MPB's mode index versus the phase meep's
+# time-stepper accumulates: ~2.3% per mode, same sign for both supermodes. But
+# coupling is set by Δβ, a *difference* of two β near 9.4, and β/Δβ ≈ 99 turns
+# that common-mode 2.3% into a 10% error on Δβ. Since L₅₀ ∝ 1/Δβ, it lands
+# directly on the number this script prints.
+#
+# MEASURED (job 11517245, the stub sweep with and without this flag):
+#
+#     drift with cut position   +0.1085 → −0.0007 µm/µm   (167x, below scatter)
+#     L₅₀ vs full-device FDTD    −5.37%  → +0.11%
+#
+# The first is the one that matters structurally: with the calibration the
+# answer stops depending on *where* the FDTD/EME cut is made, which is the
+# property that makes a hybrid decomposition meaningful at all.
+#
+# HONEST CAVEAT (dc_validation.md item 13): this makes the hybrid reproduce the
+# full-device FDTD, and that reference is meep's own discretization. MPB's Δβ
+# disagrees with it by ~5% with *both* engines looking converged, and which is
+# closer to Maxwell is unresolved. Read the agreement as self-consistency, not
+# as proven physical accuracy.
+#
+# Cheap: three short FDTD section solves, cached and shared with the stub sweep.
+CALIBRATE_BODY = True
+
 # ---------------------------------------------------------------------------
 # 1. Geometry — all device dimensions as variables (220 nm SOI).
 #
@@ -319,11 +349,42 @@ M_in1 = fdtd_solver.solve_section(
 M_out_through = M_in0.transpose(0, 2, 1)  # [n_wl, 1, N_MODES] — mirror-symmetry reuse, not a new simulation
 M_out_cross = M_in1.transpose(0, 2, 1)    # [n_wl, 1, N_MODES]
 
+# Calibrate the body's β off the FDTD — see CALIBRATE_BODY at the top for why
+# this is not optional. Solved on the body's own span, the same [boundaries[1],
+# boundaries[2]] the length sweep below propagates through, so the two are
+# talking about the same cross-section by construction. β is a property of that
+# cross-section and not of the swept length, so this is one solve for all 200
+# lengths.
+_body_neff = None
+if CALIBRATE_BODY:
+    _beta = fdtd_solver.section_mode_beta(
+        dc, wavelengths, boundaries[1], boundaries[2], N_MODES,
+        save_dir=save_dir, **_iface_mon,
+    )  # [n_wl, N_MODES] — rad/µm, fitted from the FDTD's own phase vs length
+    _body_neff = _beta * wavelengths[:, None] / (2 * np.pi)
+    _i = int(np.argmin(np.abs(wavelengths - 1.55)))
+    # The mode-solver number to compare against, for the log line only. Solved
+    # on a SHORT window at the body midpoint, not on [boundaries[1],
+    # boundaries[2]]: section_mode_neff() pads the cut by dpml on each side, so
+    # the full body span would ask for a cut past the coupling region and land
+    # inside an S-bend, which DirectionalCoupler rejects. The cross-section is
+    # uniform across the whole body, so any interior window gives the same modes.
+    _seed_half = min(1.0, half_body - 2.0 * fdtd_solver.dpml)
+    _mpb = fdtd_solver.section_mode_neff(
+        dc, wavelengths[_i:_i + 1], -_seed_half, +_seed_half, N_MODES, **_iface_mon)[0]
+    print(f"Body β calibration at λ = {wavelengths[_i]:.3f} µm "
+          f"(even/odd supermodes):")
+    print(f"    MPB mode index  n_eff {_mpb[0]:.6f} {_mpb[1]:.6f}   "
+          f"Δn_eff {_mpb[0] - _mpb[1]:.6f}")
+    print(f"    FDTD own phase  n_eff {_body_neff[_i, 0]:.6f} {_body_neff[_i, 1]:.6f}   "
+          f"Δn_eff {_body_neff[_i, 0] - _body_neff[_i, 1]:.6f}   <- body propagates on this")
+
 # body_lengths (= coupling_lengths - 2*BODY_STUB) and its length audit are set
 # up in step 3, next to the boundaries they have to stay consistent with.
 M_body = body_solver.solve_section_length_sweep(
     dc, wavelengths, boundaries[1], boundaries[2], body_lengths,
     n_modes_in=N_MODES, n_modes_out=N_MODES, save_dir=save_dir,
+    neff_override=_body_neff,
 )  # [n_L, n_wl, N_MODES, N_MODES]
 
 tmp = np.einsum("Lwij,wjk->Lwik", M_body, M_in0)                        # [n_L, n_wl, N_MODES, 1]

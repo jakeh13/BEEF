@@ -5,8 +5,10 @@ never converges. Root cause found; this is the work to fix it and re-establish t
 in the directional coupler results.
 
 **Status 2026-07-27: the stub sweep converges.** Items 1–7 and 9–12 done and verified;
-**8 and 13 open**, neither blocking. Item 6 — the last obstacle, and the reason this
-document stayed open — is **closed**.
+**8, 13, 14, 15 open**. Item 6 — the last obstacle, and the reason this document stayed
+open — is **closed**. The one that still bites a user is **item 14**: the fix is proven
+and the flagship tutorial does not use it, so `directional_coupler_hybrid.py` still
+reports a 50:50 length ~4.5% off the full-device reference.
 
 The fix was not to reconcile the two engines but to stop asking the EME body to
 propagate on a β the FDTD reference does not have. `HybridSolver(calibrate_body_neff=True)`
@@ -152,9 +154,11 @@ index 10. Using the frequency-mean `0.5(1/λ_min + 1/λ_max)` instead shifts eve
 Numbers are stable IDs — completed items move to Done and keep their number, so
 cross-references stay valid.
 
-**Items 8 and 13 are open; neither blocks the coupler's results.** Item 6 — for a while
-the only thing left — is closed as of 2026-07-27. The ordering below is kept because it
-records *why* the sequence was chosen and how it turned out.
+**Open: 8, 13, 14, 15.** Item 6 — for a while the only thing left — is closed as of
+2026-07-27. **Item 14 is the one that matters**: the fix is proven but the tutorial does
+not use it, so the repo's headline coupler example still reports a number 4.5% off. 13 is
+the honest unknown behind item 6's closure, 8 and 15 are minor. The ordering below is kept
+because it records *why* the sequence was chosen and how it turned out.
 
 The plan was **11 → 12 → 7**, then **8**. Both prerequisites paid off, and the payoff is
 measurable:
@@ -235,6 +239,39 @@ here.
    every wavelength. Real, but ~0.8% of Δn_eff — worth fixing for correctness, not a
    driver of anything above. (Solver #8, wavelength interpolation, is not involved:
    this script does a full mode solve at all 11 wavelengths.)
+14. **The tutorial does not use the fix.** *(opened 2026-07-27.)*
+    `examples/directional_coupler/python/directional_coupler_hybrid.py` — the repo's
+    flagship coupler example, and the one the other devices were written against — still
+    hand-rolls the uncalibrated chain. It auto-picks and prints a 50:50 split point
+    (`:356`), so it reports **≈14.5 µm** where the full-device FDTD says 15.13 and the
+    calibrated sweep says 15.147: a **~4.5% error in the most-read example in the repo**.
+
+    Item 6 closed on the *method* — proven on the stub sweep — but nothing under
+    `examples/` consumes it. Adoption was deliberately deferred for the **MMIs** (they
+    need `N_MODES` 12 → 8 first, item 12), and the coupler tutorial fell through the same
+    gap despite being the device the fix was validated on. Its check 2 already passes
+    (identity permutation, worst guided disagreement 0.0023), so nothing blocks it.
+
+    Cheap, too: `section_mode_beta` cuts at `mid ± L/2` and section polygons inside the
+    uniform coupling region do not depend on the device's total `coupling_length`, so the
+    three calibration solves hit the cache the stub sweep already filled — despite this
+    script's `half_body` differing (L_mid ≈ 30.25 µm vs the sweep's 30.0).
+
+    Carry item 13's caveat into whatever the tutorial prints: the calibrated number is
+    self-consistent with the full-device FDTD, not independently proven correct.
+
+15. **`L = 4.0 µm` hangs in the EME half of `aggregate()`.** *(opened 2026-07-27.)*
+    Reproducible: res 20/30/50 (job 11502074 tasks 1/5/9, all killed at the 3h12m wall)
+    and previously job `11490488_1`. The FDTD halves of those same tasks completed in
+    1.6/3.4/22.5 min, so the hang is specifically in the EME half that `aggregate()` runs
+    redundantly on all 48 ranks.
+
+    Cost so far: the three res-sweep tasks were cancelled after confirming from their
+    aggregates (`lengths_completed=4`) that they were redundant, saving ~259 core-hours.
+    Not diagnosed. Nothing depends on it — L = 4.0 µm is one point of a convergence
+    sweep whose other points all landed — but it is a real hang in a code path every
+    array sweep executes, and it has now appeared in two separate jobs.
+
 10. *(done — see Done item 10.)* The **re-run** it unblocks is tracked in
     `ring_resonator_validation.md`, not here.
 

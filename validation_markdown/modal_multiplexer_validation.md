@@ -38,7 +38,7 @@ So it has the most ways to be wrong and the fewest ways to find out.
    failing at exactly the thing being demonstrated.
 
 2. **Shared resolution knob.** `:86` passes one `RESOLUTION = 40.0` to both
-   sub-solvers (`:167` FDTD, `:186` EME) — `dc_validation.md` item 11's defect.
+   sub-solvers (`:167` FDTD, `:186` EME) — `directional_coupler_validation.md` item 11's defect.
    Must be measured fresh on SOI_160: a 160 nm core confines more weakly than
    220 nm, so its modes extend further into the cladding and may well need a
    *different* mesh than the coupler's res 80 to converge. Do not copy the number

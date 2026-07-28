@@ -2,7 +2,7 @@
 
 Opened 2026-07-26. **The least validated device in the repo.**
 
-**Status 2026-07-26:** the axis bug is **fixed in code** (`dc_validation.md`
+**Status 2026-07-26:** the axis bug is **fixed in code** (`directional_coupler_validation.md`
 item 10 — see Done below). Nothing has been re-simulated yet, so every ring
 plot and every stored ring FDTD result on disk is still pre-fix. The fix
 guarantees the old data can no longer be served silently, not that new data
@@ -14,7 +14,7 @@ exists.
 simulations and their meow cross-section directly. That single fact is the root
 of everything below.
 
-## Done — the axis bug (`dc_validation.md` item 10), 2026-07-26
+## Done — the axis bug (`directional_coupler_validation.md` item 10), 2026-07-26
 
 Both scripts computed `fwidth = (1/WL_MIN - 1/WL_MAX) * 0.5` and handed it to
 `sim.add_mode_monitor(fcen, fwidth, N_WL_FDTD)` — character for character the
@@ -146,7 +146,7 @@ device never constructs.
 3. **Resolution convergence** — never measured, for either engine. The mode solve
    feeds `neff(λ)` into three straight-propagation phases *and* the reference-plane
    correction on `b(λ)`, so an n_eff error propagates into resonance position
-   directly. Given `dc_validation.md` item 11 found the shared res=40 overstates
+   directly. Given `directional_coupler_validation.md` item 11 found the shared res=40 overstates
    Δn_eff by 7% on a coupled pair, the bare-strip n_eff here needs its own
    convergence check before any resonance wavelength is trusted.
 4. **Full-device FDTD reference** — **none exists**, and there is no
@@ -170,7 +170,7 @@ every solve node — but neither has a test.
    worth reading off a plot until it happens.
 2. **Gap 3 (resolution convergence)** — cheap, and it gates every resonance
    number. Do it before or alongside the re-run rather than after, so the
-   re-run is not immediately invalidated by a resolution change. `dc_validation.md`
+   re-run is not immediately invalidated by a resolution change. `directional_coupler_validation.md`
    item 11 found the shared res=40 overstates Δn_eff by 7% on a coupled pair,
    and the audit's coupler sweep shows absolute `n_eff` still moving 0.0044
    between res 80 and 100 — the ring's bare-strip n_eff feeds three propagation

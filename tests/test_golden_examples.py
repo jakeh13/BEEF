@@ -145,6 +145,14 @@ def run_directional_coupler_hybrid() -> SMatrix:
     # still cover exactly coupling_length of straight between them.
     body_stub = 0.25
     boundaries = [-half_total, -half_body + body_stub, half_body - body_stub, half_total]
+    # NOTE — this replica deliberately does NOT calibrate the body's β, while
+    # examples/.../directional_coupler_hybrid.py now does (its CALIBRATE_BODY,
+    # and dc_validation.md items 6/14). That is not drift. What this golden
+    # exists to pin is `HybridSolver.solve()` on its *defaults*, and
+    # calibrate_body_neff defaults off; the two therefore give different
+    # absolute numbers on purpose — this is the regression pin, the example is
+    # the physically-calibrated answer. If that default ever flips, this replica
+    # and directional_coupler_hybrid.json must be regenerated together.
     hybrid = HybridSolver(
         solvers=[fdtd_solver, body_solver, fdtd_solver],
         boundaries=boundaries, interface_modes=[n_modes, n_modes],

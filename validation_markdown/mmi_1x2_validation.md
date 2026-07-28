@@ -32,7 +32,7 @@ the only device with all three golden fixtures (`mmi_1x2_eme.json`,
    | `mmi_1x2_fdtd.json` | 2026-07-16 (`2220ee1`) | **yes** — `FDTDSolver` |
    | `mmi_1x2_hybrid.json` | 2026-07-16 (`ed70802`) | **yes** — FDTD sections |
 
-   `dc_validation.md` items 1–2 landed 2026-07-25, so both FDTD-path goldens
+   `directional_coupler_validation.md` items 1–2 landed 2026-07-25, so both FDTD-path goldens
    were recorded with the reversed, half-span wavelength axis — exactly the
    state `directional_coupler_hybrid.json` was in before item 9 regenerated it.
    The `--runslow` golden tests for those two should be failing right now.
@@ -98,7 +98,7 @@ the only device with all three golden fixtures (`mmi_1x2_eme.json`,
 
 2. **Shared resolution knob — and this is the worst-converging device audited.**
    `mmi_1x2_hybrid.py:41` passes one `RESOLUTION = 40.0` to both sub-solvers,
-   the defect `dc_validation.md` item 11 fixed for the coupler.
+   the defect `directional_coupler_validation.md` item 11 fixed for the coupler.
 
    The audit's mesh sweep (same job) gives `n_eff[0]`:
 

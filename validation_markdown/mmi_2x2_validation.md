@@ -34,7 +34,7 @@ the 1×2's problem is *stale* references, which at least fail loudly under
 
 2. **Shared resolution knob — and the EME side is not converged at any
    resolution tried.** `mmi_2x2_hybrid.py:69` passes one `RESOLUTION = 40.0` to
-   both sub-solvers, the defect `dc_validation.md` item 11 fixed for the
+   both sub-solvers, the defect `directional_coupler_validation.md` item 11 fixed for the
    coupler.
 
    The audit's mesh sweep (same job) gives `n_eff[0]` on this cross-section:
