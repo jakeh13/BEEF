@@ -49,7 +49,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from beef import DirectionalCoupler, FDTDSolver, SOI_220
+from beef import DirectionalCoupler, FDTDSolver, SOI_220, atomic_replace_write
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(
@@ -81,15 +81,6 @@ wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
 def _tag(L: float) -> str:
     """Stable per-length file tag, e.g. L04.0um / L60.0um."""
     return f"L{L:04.1f}um"
-
-
-def _atomic_replace_write(path: str, write_fn) -> None:
-    """write_fn(tmp_path) then atomically rename onto path — concurrent array
-    tasks all regenerate the aggregate files, and a plain overwrite could be
-    read (or collide) half-written; os.replace is atomic on POSIX."""
-    tmp = f"{path}.tmp.{os.getpid()}"
-    write_fn(tmp)
-    os.replace(tmp, path)
 
 
 def make_coupler(L: float) -> DirectionalCoupler:
@@ -141,11 +132,22 @@ def simulate_length(L: float) -> None:
     T_cross = smat.transmission(port="out_1", in_mode=1, out_mode=1)
     T_total = T_through + T_cross
 
-    np.savez(
-        os.path.join(data_dir, f"{_tag(L)}.npz"),
-        coupling_length=L, wavelengths=wavelengths,
-        T_through=T_through, T_cross=T_cross,
-    )
+    # Atomic — aggregate() reads every task's file, including one a concurrent
+    # array task is mid-write. See directional_coupler_hybrid_stub_sweep.py,
+    # where a plain np.savez here killed 7 of 9 tasks (dc_validation.md item 6).
+    def _write_task_npz(tmp: str) -> None:
+        # `with`, not a bare open(): zipfile does NOT close a file object
+        # it was handed, so relying on refcounting to flush would let
+        # os.replace move a truncated file — the very bug being fixed.
+        with open(tmp, "wb") as fh:
+            np.savez(
+                fh,
+                coupling_length=L, wavelengths=wavelengths,
+                T_through=T_through, T_cross=T_cross,
+            )
+
+    atomic_replace_write(
+        os.path.join(data_dir, f"{_tag(L)}.npz"), _write_task_npz)
 
     idx = len(wavelengths) // 2
     print(f"[sweep] L={L:.1f} µm @ λ={wavelengths[idx]:.3f} µm: "
@@ -222,7 +224,7 @@ def aggregate() -> None:
             np.savez(f, coupling_lengths=done, wavelengths=wavelengths,
                      T_through=T_through_grid, T_cross=T_cross_grid)
 
-    _atomic_replace_write(os.path.join(output_dir, "length_sweep.npz"), _write_npz)
+    atomic_replace_write(os.path.join(output_dir, "length_sweep.npz"), _write_npz)
     print(f"[sweep] Length-sweep grid saved ({n_done}/{n_all} lengths) → {output_dir}/length_sweep.npz")
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
@@ -257,7 +259,7 @@ def aggregate() -> None:
     ax.grid(True)
     ax.set_ylim(0, 1.05)
     plt.tight_layout()
-    _atomic_replace_write(
+    atomic_replace_write(
         os.path.join(output_dir, "coupling_length_sweep.png"),
         lambda tmp: fig.savefig(tmp, dpi=300, format="png"),
     )

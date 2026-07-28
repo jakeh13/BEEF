@@ -26,12 +26,12 @@ import logging
 import os
 import pickle
 import re
-import socket
 import sys
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 from .._log import get_logger
+from .._utils import atomic_replace_write
 
 logger = get_logger(__name__)
 
@@ -276,24 +276,24 @@ def save_run(save_dir: str, config: Dict[str, Any], result: np.ndarray) -> str:
 
 
 def _atomic_write_json(path: str, data: Dict[str, Any]) -> None:
-    """write-to-tmp-then-os.replace so a reader never sees a half-written
-    file — same pattern the example sweep scripts already use for their own
-    aggregate outputs, needed here because update_family_pointer() can be
-    called by concurrent SLURM array tasks writing the same family's pointer
-    file (see that function's docstring).
+    """JSON wrapper over `beef._utils.atomic_replace_write` — needed here
+    because update_family_pointer() can be called by concurrent SLURM array
+    tasks writing the same family's pointer file (see that function's
+    docstring).
 
-    The temp name carries host as well as PID because PIDs are allocated per
-    host, so a PID-only name is not unique on a shared filesystem spanning
-    nodes. That collision is one way stub-sweep tasks 4 and 5 could have found
-    `path` empty; concurrent os.replace/read against the shared filesystem from
-    48 ranks is an equally good explanation, and a 48-rank 2-node probe on
+    The host-qualified temp name lives in the shared helper now. That
+    collision is one way stub-sweep tasks 4 and 5 could have found `path`
+    empty; concurrent os.replace/read against the shared filesystem from 48
+    ranks is an equally good explanation, and a 48-rank 2-node probe on
     2026-07-25 saw no PID reuse, so the specific mechanism is unproven. The
     rank gate on the callers removes every version of it; this is belt-and-
     braces for any future concurrent writer."""
-    tmp = f"{path}.tmp.{socket.gethostname()}.{os.getpid()}"
-    with open(tmp, "w") as f:
-        json.dump(data, f)
-    os.replace(tmp, path)
+
+    def _write(tmp: str) -> None:
+        with open(tmp, "w") as f:
+            json.dump(data, f)
+
+    atomic_replace_write(path, _write)
 
 
 def _family_pointer_path(save_dir: str, family_config: Dict[str, Any]) -> str:

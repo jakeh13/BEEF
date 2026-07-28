@@ -25,6 +25,8 @@ Core public API:
 
     Utilities:
         extrude_polygons           — {layer: [polygons]} dict -> meow Structure3D list
+        atomic_replace_write       — write-to-tmp-then-os.replace, for files a
+                                     concurrent SLURM array task may be reading
 
     Sweep:
         ParallelSweep              — parallel parameter grid sweep
@@ -48,7 +50,7 @@ __version__ = "0.1.0"
 # only for records logged on that logger, never for records propagating up from
 # a child. See beef/_log.py.
 
-from ._utils import extrude_polygons
+from ._utils import atomic_replace_write, extrude_polygons
 from .geometry import (
     MMI, MMIPort, BendGeometry, DirectionalCoupler, Taper, SBend,
     CompoundGeometry, WaveguideRun, GdsGeometry, load_gds_polygons,
@@ -77,7 +79,7 @@ __all__ = [
     # solvers
     "EMESolver", "FDTDSolver", "HybridSolver",
     # utilities
-    "extrude_polygons",
+    "extrude_polygons", "atomic_replace_write",
     # sweep
     "ParallelSweep",
     # plot

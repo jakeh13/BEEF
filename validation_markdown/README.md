@@ -24,11 +24,10 @@ way that cascade can be wrong while every individual piece looks fine.
 on how fast phase accumulates through the *same* uniform region. If they do not,
 the chain's answer depends on where the cut between them is made, and no amount
 of tuning the cut will make it converge. Measured by
-`examples/verification/python/verify_item_6_engine_agreement.py`; currently
-~5% off for the coupler even with EME converged, and unexplained
-(`dc_validation.md` item 6).
+`examples/verification/python/verify_item_6_engine_agreement.py`; ~5% off for
+the coupler even with EME converged (`dc_validation.md` item 6).
 
-That gap is now confirmed by a second, independent route. The stub sweep's L₅₀
+That gap was confirmed by a second, independent route. The stub sweep's L₅₀
 drift slope is `2·(1 − Δβ_FDTD/Δβ_EME)`, and item 7's re-run measures a ratio of
 0.9457 against the 0.9536 predicted from item 6 — agreement to 0.82%, from a
 200-length hybrid sweep versus a four-length phase fit. It also settles what
@@ -36,6 +35,22 @@ that sweep was for: **it never converges while the engines disagree**, because a
 straight line is exactly what the formula predicts for a constant ratio ≠ 1. A
 non-converging cut-point sweep is a symptom of check 1 failing, not a tuning
 problem.
+
+**Closed for the coupler, 2026-07-27 — and the fix is not what it looks like.**
+The instinct is to make the two engines' mode solvers agree. That cannot work:
+*both* are MPB (`meow/fde/meep.py` and `FDTDSolver.section_mode_neff()` each
+call `sim.get_eigenmode()`), and they already agree to 0.57%. The gap is between
+MPB's mode index and the phase meep's *time-stepper* accumulates — a planewave
+eigenproblem versus a leapfrog on a staggered Yee grid, ~2.3% apart per mode. So
+`HybridSolver(calibrate_body_neff=True)` measures β from the FDTD's own phase and
+propagates the EME body on that instead. The stub drift collapses from +0.1085 to
+−0.0007 µm/µm (167×, below the run's own scatter) and L₅₀ moves from 5.37% off
+the full-device reference to **0.11%**.
+
+Read that as **self-consistency, not proven accuracy**: the reference is meep's
+discretization, and which engine's Δβ is closer to Maxwell is open as
+`dc_validation.md` item 13. Adopt the flag per device only after check 2 passes
+there — it is off by default.
 
 **2. Mode identity and ordering.** The cascade contracts index *i* of the FDTD
 interface against index *i* of the EME body, assuming they are the same mode.
@@ -71,12 +86,13 @@ reversed wavelength axis. It rules out gross errors, not wrong physics.
 
 ## Status
 
-Updated 2026-07-26 after jobs 11500412 (stub sweep), 11500524/11500663
-(`mmi_1x2` goldens) and 11500536 (interface-mode audit).
+Updated 2026-07-27 after job 11517245 (calibrated stub sweep), and 2026-07-26
+after jobs 11500412 (stub sweep), 11500524/11500663 (`mmi_1x2` goldens) and
+11500536 (interface-mode audit).
 
 | device | 1 engine agreement | 2 mode identity | 3 convergence | 4 FDTD reference |
 |---|---|---|---|---|
-| directional coupler | **measured, ~5% open** — the only obstacle left | ✅ identity, worst 0.0023 | done, engines split | done, with provenance |
+| directional coupler | ✅ **closed** — β-calibrated, L₅₀ 0.11% off reference | ✅ identity, worst 0.0023 | done, engines split | done, with provenance |
 | 1×2 MMI | not run | ❌ **FAILS** — bands 8/9 | measured, worst of the three | script exists, unverified |
 | 2×2 MMI | not run | ✅ identity, worst 0.0007 | measured, not converged | script exists, unverified |
 | modal multiplexer | not run | not run | shared knob | **no FDTD script** |
@@ -125,3 +141,22 @@ resolution** and must not be copied to other devices — it was justified on Δ�
 the even/odd *difference*, which converges far faster than absolute n_eff. Per
 check 3, sweep the quantity the device's result actually depends on; sweeping an
 insensitive one is what hid the coupler's 7% error for months.
+
+**4. A converged-looking number can still be wrong, and a resolution sweep will
+not tell you.** Chasing check 1 on the coupler produced two answers that each
+look converged and disagree by ~5%: meow/MPB plateaus at Δβ = 0.0894 by res
+80–100, while the FDTD's Δβ sits flat at ~0.085 across res 20–50. Flat is not
+the same as correct — it only means the error is not dominated by Δx. Settling
+which is right needs an external reference or a third discretization, not a
+finer mesh (`dc_validation.md` item 13). Worth remembering before quoting any
+convergence study in this repo as proof of accuracy.
+
+**5. Per-task outputs in an array sweep must be written atomically.** Every
+sweep here ends by aggregating *all* tasks' `.npz` files, including ones a peer
+is writing that instant. A plain `np.savez` is not atomic, and job 11517245 lost
+**7 of 9 tasks** to `BadZipFile` because of it — the same code had passed
+earlier only because those tasks finished 12 minutes apart instead of 6. Use
+`beef.atomic_replace_write`, and pass `np.savez` an open **file object**: given a
+suffix-less path it appends `.npz`, which defeats the rename after the
+simulation work is already done. Both traps are pinned by
+`tests/test_atomic_write.py`.

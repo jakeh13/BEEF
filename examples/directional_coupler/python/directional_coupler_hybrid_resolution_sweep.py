@@ -58,7 +58,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from beef import DirectionalCoupler, EMESolver, FDTDSolver, SOI_220
+from beef import DirectionalCoupler, EMESolver, FDTDSolver, SOI_220, atomic_replace_write
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(
@@ -98,15 +98,6 @@ wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
 def _tag(R: float) -> str:
     """Stable per-resolution file tag, e.g. R020 / R120."""
     return f"R{int(R):03d}"
-
-
-def _atomic_replace_write(path: str, write_fn) -> None:
-    """write_fn(tmp_path) then atomically rename onto path — concurrent array
-    tasks all regenerate the aggregate files, and a plain overwrite could be
-    read (or collide) half-written; os.replace is atomic on POSIX."""
-    tmp = f"{path}.tmp.{os.getpid()}"
-    write_fn(tmp)
-    os.replace(tmp, path)
 
 
 # ---------------------------------------------------------------------------
@@ -222,11 +213,22 @@ def simulate_resolution(R: float) -> None:
     T_cross = np.abs(full_cross[:, 0, 0]) ** 2        # [n_wl]
     T_total = T_through + T_cross
 
-    np.savez(
-        os.path.join(data_dir, f"{_tag(R)}.npz"),
-        resolution=R, wavelengths=wavelengths,
-        T_through=T_through, T_cross=T_cross,
-    )
+    # Atomic — aggregate() reads every task's file, including one a concurrent
+    # array task is mid-write. See directional_coupler_hybrid_stub_sweep.py,
+    # where a plain np.savez here killed 7 of 9 tasks (dc_validation.md item 6).
+    def _write_task_npz(tmp: str) -> None:
+        # `with`, not a bare open(): zipfile does NOT close a file object
+        # it was handed, so relying on refcounting to flush would let
+        # os.replace move a truncated file — the very bug being fixed.
+        with open(tmp, "wb") as fh:
+            np.savez(
+                fh,
+                resolution=R, wavelengths=wavelengths,
+                T_through=T_through, T_cross=T_cross,
+            )
+
+    atomic_replace_write(
+        os.path.join(data_dir, f"{_tag(R)}.npz"), _write_task_npz)
 
     idx = len(wavelengths) // 2
     print(f"[sweep] res={R:.0f} px/µm @ λ={wavelengths[idx]:.3f} µm: "
@@ -302,7 +304,7 @@ def aggregate() -> None:
             np.savez(f, resolutions=done, wavelengths=wavelengths,
                      T_through=T_through_grid, T_cross=T_cross_grid)
 
-    _atomic_replace_write(os.path.join(output_dir, "resolution_sweep.npz"), _write_npz)
+    atomic_replace_write(os.path.join(output_dir, "resolution_sweep.npz"), _write_npz)
     print(f"[sweep] Resolution-sweep grid saved ({n_done}/{n_all} resolutions) → {output_dir}/resolution_sweep.npz")
 
     # constrained_layout (not tight_layout) is what correctly reserves space
@@ -351,7 +353,7 @@ def aggregate() -> None:
                   bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.7, edgecolor="none"))
 
     fig.suptitle("Directional Coupler — Hybrid FDTD/EME Resolution Convergence Study", fontsize=11)
-    _atomic_replace_write(
+    atomic_replace_write(
         os.path.join(output_dir, "resolution_convergence.png"),
         lambda tmp: fig.savefig(tmp, dpi=300, format="png"),
     )

@@ -4,34 +4,41 @@ Opened 2026-07-25, from investigating why `directional_coupler_hybrid_stub_sweep
 never converges. Root cause found; this is the work to fix it and re-establish trust
 in the directional coupler results.
 
-**Status 2026-07-26:** items 1–7 and 9–12 done and verified. The wavelength axis is fixed
-and confirmed against a pre-fix run (job 11477911, 9/9 checks), the cache can no longer
-serve or corrupt stale data, the directional coupler has a trustworthy full-band ground
-truth again (job 11480725, 40 lengths with provenance), the golden reference is back on
-the fixed axis (job 11486066), and the residual engine gap has been measured directly
-rather than inferred (job 11489846).
+**Status 2026-07-27: the stub sweep converges.** Items 1–7 and 9–12 done and verified;
+**8 and 13 open**, neither blocking. Item 6 — the last obstacle, and the reason this
+document stayed open — is **closed**.
 
-**The question this document was opened to answer is answered.** Item 7 re-ran the whole
-stub sweep (job 11500412) and it **still does not converge** — the L₅₀ curve is exactly
-as straight as before, 0.0024 µm residual to a line. But the drift more than halved
-(slope 0.2427 → 0.1085), and what is left is now fully accounted for: the slope measures
-`2·(1 − Δβ_FDTD/Δβ_EME)`, giving a ratio of 0.9457 against the 0.9536 predicted from
-item 6 plus item 11's mesh correction — **agreement to 0.82%**. The sweep was measuring
-the engine disagreement all along, and no amount of stub tuning can fix an engine
-disagreement.
+The fix was not to reconcile the two engines but to stop asking the EME body to
+propagate on a β the FDTD reference does not have. `HybridSolver(calibrate_body_neff=True)`
+measures β from the FDTD's own accumulated phase and propagates the body on that. Job
+11517245:
 
-Getting there ran through the EME side. Item 6's gap was mostly a **measurement artifact**:
-at the res=40 every example inherited, Δβ_EME was overstated by 7%. Item 11 split the two
-engines' resolutions and closed that. Item 12 checked the assumption underneath it all —
-that both engines return interface modes in the same order — and for this device **they
-do** (identity permutation, worst guided-band disagreement 0.0023), so `HybridSolver`'s
-contraction is sound here. It also found that one of the coupler's six interface modes is
-not guided at all.
+| | drift slope (µm/µm) | L₅₀ spread over 9 stubs | mean L₅₀ | vs 15.13 µm reference |
+|---|---|---|---|---|
+| uncalibrated (job 11500412) | +0.108543 | 0.220 µm | 14.429 | **−5.37%** (at stub 0) |
+| **calibrated** | **−0.000651** | **0.005 µm** | **15.1468** | **+0.111%** |
 
-**What remains open is exactly one thing: item 6's genuine ~5% engine disagreement** on
-Δβ for an identical uniform cross-section, now confirmed by two independent measurements.
-It is the only obstacle left between this device and a trustworthy hybrid result. Item 8
-is worth ~0.8% of Δn_eff and is a minor contributor to it.
+Both predictions the test was registered against held. The drift is **167× smaller** and
+below the run's own 0.0015 µm rms scatter, so the cut point no longer measurably matters
+— which was the entire design goal of a hybrid decomposition. And L₅₀ landed at 15.147
+against a *prediction* of 15.02, i.e. closer to the independent full-device FDTD than the
+algebra forecast.
+
+**Read this as self-consistency, not proven physical accuracy.** The hybrid now reproduces
+the full-device FDTD to 0.11%, but that reference is meep's own discretization, and MPB
+disagrees with it by ~5% on Δβ with *both* engines looking converged. Which one is closer
+to Maxwell is genuinely unsettled and is now **item 13**.
+
+Getting there ran through the EME side first. Item 6's headline gap was mostly a
+**measurement artifact**: at the res=40 every example inherited, Δβ_EME was overstated by
+7%. Item 11 split the two engines' resolutions and closed that. Item 12 checked the
+assumption underneath it all — that both engines return interface modes in the same order
+— and for this device **they do** (identity permutation, worst guided-band disagreement
+0.0023), so `HybridSolver`'s contraction is sound here. It also found that one of the
+coupler's six interface modes is not guided at all.
+
+**Open: item 8** (the material half, worth ~0.8% of Δn_eff) and **item 13** (which
+engine's Δβ is physically right). Neither blocks using the coupler's hybrid results.
 
 ## What's wrong
 
@@ -94,7 +101,8 @@ Restricting the stub sweep to λ=1.55 alone still gives a dead-straight
 `L_50(s) = [π/2 − 2φ_bend]/Δβ_EME + 2s(1 − Δβ_FDTD/Δβ_EME)`, so that slope measures
 `Δβ_FDTD/Δβ_EME = 0.891` — the FDTD sections accumulate ~11% less even/odd phase per
 µm of the *same* straight coupled region than the EME body does. That is a second,
-independent problem (item 6).
+independent problem (item 6) — **since closed, 2026-07-27**, by propagating the EME
+body on the FDTD's own β rather than by reconciling the two engines.
 
 Correction to an earlier read of this: the narrow `fwidth` does **not** starve the
 source. Source and monitor share the same variable, so the pulse is well matched to
@@ -144,9 +152,9 @@ index 10. Using the frequency-mean `0.5(1/λ_min + 1/λ_max)` instead shifts eve
 Numbers are stable IDs — completed items move to Done and keep their number, so
 cross-references stay valid.
 
-**Only item 6 is open**, and item 7's result promoted it from "one of two remaining
-problems" to "the only thing left". The ordering below is kept because it records *why*
-the sequence was chosen and how it turned out.
+**Items 8 and 13 are open; neither blocks the coupler's results.** Item 6 — for a while
+the only thing left — is closed as of 2026-07-27. The ordering below is kept because it
+records *why* the sequence was chosen and how it turned out.
 
 The plan was **11 → 12 → 7**, then **8**. Both prerequisites paid off, and the payoff is
 measurable:
@@ -164,19 +172,63 @@ measurable:
   behaved that way, item 7's straight line would have had two candidate explanations
   instead of one.
 - **8 after**, worth ~0.8% of Δn_eff (measured, Done item 6) — real, but a minor
-  contributor to the ~5% that remains.
+  contributor to the ~5% that remained.
+
+One thing the sequence got wrong, recorded because the mistake is instructive: **11 and
+12 were both scoped as ways to make the two engines agree**, and neither could have.
+Item 12's own measurement is what eventually showed why — both engines run MPB, so
+aligning them was never worth more than 0.57% against a 10% gap. The fix that worked
+came from the opposite direction: stop trying to make EME match FDTD's *mode solve* and
+make it match FDTD's *propagation*. See the comparison under Done item 12.
 
 **10** is done; the ring's *re-run* is tracked in `ring_resonator_validation.md`, not
 here.
 
-6. *(done — see Done item 6.)* Two follow-on items came out of it:
+6. *(done — see Done item 6. **Closed 2026-07-27** by β calibration; the stub sweep
+   converges.)* Two follow-on items came out of the original measurement — 11 and 12
+   below — and a third, **item 13**, out of the fix.
 
 11. *(done — see Done item 11.)*
 
 12. *(done — see Done item 12.)*
 
-7. *(done — see Done item 7. It did **not** converge, and that answer moves the work
-   to item 6.)*
+7. *(done — see Done item 7. It did **not** converge, and that answer moved the work to
+   item 6 — where it was fixed. Re-running the same sweep with
+   `calibrate_body_neff=True` flattens it: slope +0.1085 → −0.0007. The original
+   sentence is left standing above because it records what was true, and correctly,
+   when the sequence was chosen.)*
+13. **Which engine's Δβ is physically right?** *(opened 2026-07-27 by item 6's fix.)*
+    Item 6 achieved self-consistency: the hybrid now reproduces the full-device FDTD to
+    0.11%. But that reference is meep's own discretization. MPB plateaus at Δβ = 0.0894
+    by res 80–100; Δβ_FDTD sits flat at ~0.085 across res 20–50. **Two independently
+    converged answers ~5% apart** means at least one carries a systematic that a
+    resolution sweep cannot see, and nothing measured so far says which.
+
+    This matters because **L₅₀ ∝ 1/Δβ almost exactly here**, and the numbers say so
+    rather than the theory:
+
+    | ratio | value |
+    |---|---|
+    | L₅₀: full-device FDTD 15.13 ÷ uncalibrated hybrid 14.429 | 1.04858 (+4.86%) |
+    | Δβ: converged MPB 0.0894 ÷ FDTD 0.085212 | 1.04915 (+4.91%) |
+
+    They agree to **0.057 percentage points**. The entire L₅₀ disagreement between the
+    two methods is the Δβ disagreement and nothing else — no bend phase, no seam
+    mismatch, no basis truncation left over. So "which L₅₀ is right" is not a separate
+    question; it reduces completely to this one. If MPB is right, the *uncalibrated*
+    hybrid was closer to physical truth all along and the calibration is faithfully
+    reproducing meep's error.
+
+    **The test that would settle it.** A bare 450×220 nm Si strip: one guided mode, no
+    even/odd splitting, so none of the `β/Δβ ≈ 99` amplification that makes the coupler
+    hypersensitive — compare `section_mode_beta` against `section_mode_neff` on a
+    geometry with a published n_eff. Half the harness exists: `section_mode_neff` is
+    already pinned there at 2.3124 (Done item 12). Add a third discretization via
+    `EMESolver(mode_solver="tidy3d")`, a one-line diagnostic on an already-supported
+    path — if it lands with MPB, that is two operators against one.
+
+    Not scheduled. Nothing downstream is blocked on it as long as the framing above is
+    stated wherever the 0.11% agreement is quoted.
 8. **Minor, while in there — `notes.md` Solver #9's material half.** Confirmed present
    in the data: EME's Δn_eff has a +0.00022 kink at exactly 1.57 µm where meow's Si
    table switches 3.4784 → 3.4710, while the FDTD half stays frozen at 3.4784 for
@@ -702,13 +754,25 @@ benefit.
 The residual gap is real, it lives in the straight coupled-pair section, and **most of
 it is not engine disagreement**. Job 11489846 (4 array tasks) + job 11490488 (re-run).
 
-> **Later measurement, read alongside this.** The "~4.7% genuine engine disagreement"
-> below was obtained by refining the EME mesh against a *fixed* res-40 FDTD. Refining
-> both together (job 11502074, res 20–50) shows Δβ_MPB still falling at res 50 while
-> Δβ_FDTD is flat, leaving **~7% in the extrapolated limit**. It also shows the split is
-> not MPB-vs-meow at all — both engines' mode solves are MPB and agree to 0.57%; the gap
-> is MPB's mode index versus the phase meep's time-stepper accumulates. Full comparison,
-> including why editing `meow/fde/meep.py` can close at most 4.6% of it, under item 12.
+> **Two later results, read alongside this.**
+>
+> **(a) The residual gap is ~5%, and it is not MPB-vs-meow.** The "~4.7% genuine engine
+> disagreement" below was obtained by refining the EME mesh against a *fixed* res-40
+> FDTD. Refining both together (job 11502074, res 20–50) shows Δβ_MPB still falling at
+> res 50 while Δβ_FDTD is flat. Taking the res-80/100 plateau (Δβ_MPB = 0.0894) against
+> Δβ_FDTD = 0.0852 gives **4.7–4.9%** depending on the denominator — so the number below
+> happens to survive, by a different route than it was derived. *A Richardson
+> extrapolation of the res 20–50 sequence gave ~7%; that is superseded and should not be
+> quoted, because the sequence's convergence exponent was degrading (−1.78 → −1.15 →
+> −0.61) and the extrapolation was therefore unsound.* The split is also not
+> MPB-vs-meow: both engines' mode solves are MPB and agree to 0.57%; the gap is MPB's
+> mode index versus the phase meep's time-stepper accumulates. Full comparison, including
+> why editing `meow/fde/meep.py` can close at most 4.6% of it, under item 12.
+>
+> **(b) This item is closed.** Not by reconciling the engines — which (a) shows is worth
+> at most 0.57% — but by propagating the EME body on the FDTD's own β. See
+> **item 6 (closure), 2026-07-27**, at the end of this file. The ~5% gap itself is not
+> explained and is now **item 13**.
 
 **What was measured.** The stub sweep could only *infer* Δβ_FDTD/Δβ_EME = 0.891, from a
 linear fit to L₅₀ through a whole hybrid chain with bend phase and seam mode-matching
@@ -959,9 +1023,17 @@ the two sides move in opposite ways:
 **Δβ_FDTD is essentially resolution-independent** — 2.7% across the whole range and
 non-monotone, i.e. scatter. Δβ_MPB moves 18% and is still falling at res 50, with
 decelerating exponents (−1.78 / −1.15 / −0.61), so it is not on a clean Δx² path either.
-Richardson extrapolation gives MPB 0.08894 against FDTD 0.08263 — a **~7% gap surviving in
-the limit**, and a relative-gap fit puts the floor at 6.6%. The gap is not a convergence
-artefact of either engine; refining the mesh does not remove it.
+**A gap survives in the limit, and the honest number is ~5%.** Item 6's own EME sweep runs
+to res 100 and plateaus — 0.1125 / 0.0957 / 0.0926 / 0.0894 / 0.0895 at res 20/40/60/80/100
+— so Δβ_MPB converges to **0.0894** against Δβ_FDTD's **0.0852**: a **4.7–4.9%**
+disagreement depending on which you divide by. Refining the mesh does not remove it.
+
+*(Richardson extrapolation of the res 20–50 sequence alone suggested ~7%, with a
+relative-gap fit at 6.6%. Both are superseded by the plateau above and should not be
+quoted: that sequence's exponents were **decelerating** — −1.78 → −1.15 → −0.61 — so it
+was not on a power law and the extrapolation had no basis. Recorded because the mistake is
+easy to repeat: a monotone sequence is not a converging one, and Richardson on a
+sequence whose exponent is drifting will confidently return a wrong limit.)*
 
 That is what motivates `HybridSolver(calibrate_body_neff=True)`: not matching the two mode
 solvers to each other, but propagating the EME body on the β the FDTD reference actually
@@ -1014,6 +1086,13 @@ second place the same line appeared, which is the argument for the library-path
 recommendation in `ring_resonator_validation.md` rather than a third hand-port.
 
 ### 7. Stub sweep re-run — 2026-07-26
+
+> **Superseded 2026-07-27 — the sweep does converge.** Read this section as the record of
+> the **uncalibrated** method; its measurements and its reasoning both stand. Re-running
+> the identical sweep with `calibrate_body_neff=True` flattens the drift from +0.1085 to
+> −0.0007 µm/µm. The conclusion below — that no amount of stub tuning can fix an engine
+> disagreement — was right; what changed is that the engine disagreement itself was
+> removed. See item 6 (closure) at the end of this file.
 
 **Job 11500412**, all nine array tasks, 2 nodes × 48 ranks each, ~1h40m per task. The
 folder was cleaned first and the seven pre-fix `S*.npz` archived to
@@ -1078,4 +1157,130 @@ coupling region, which is not a split between two engines in any meaningful sens
 
 **Verification harness** — items 1–2's `verify_items_1_2` was kept open specifically to
 re-check this re-run and has now done its job. It, the batch file, and the Makefile's
-`verify_items_1_2` / `clean_verification` targets can be deleted once item 6 closes.
+`verify_items_1_2` / `clean_verification` targets were to be deleted once item 6 closed.
+**Item 6 closed 2026-07-27, so that deletion is now unblocked** — not done here, and it
+should be a deliberate commit of its own rather than a side effect of the calibration
+work.
+
+
+### 6. Engine agreement — closed by β calibration — 2026-07-27
+
+Job 11517245. The decisive test, registered in advance with two falsifiable predictions,
+and both held.
+
+**What was changed.** One thing, and only one: the EME body propagates on the β the FDTD
+sections actually accumulate rather than on meow's mode index. Device, resolutions, mode
+count, stub values and interface monitors are all identical to job 11500412, so the two
+sweeps differ in exactly the quantity under test.
+
+| | drift slope (µm/µm) | L₅₀ spread | rms residual | mean L₅₀ | vs 15.13 µm reference |
+|---|---|---|---|---|---|
+| uncalibrated | +0.108543 | 0.220 µm | 0.0014 | 14.429 | **−5.37%** (at stub 0) |
+| **calibrated** | **−0.000651** | **0.005 µm** | 0.0015 | **15.1468** | **+0.111%** |
+
+**The drift is gone.** 167× smaller, and −0.00065 µm/µm over the 2 µm stub range is
+0.0013 µm — below the run's own 0.0015 µm rms scatter, so it is not distinguishable from
+zero. The prediction was that the slope collapses *identically*, because it equals
+`2s·(1 − Δβ_FDTD/Δβ_EME)` and the change sets that ratio to 1. It did.
+
+**And it moved toward the independent reference, not away.** L₅₀ = 15.147 against the
+full-device FDTD's 15.13 — a **0.11%** disagreement where the uncalibrated sweep sat at
+5.37%. The forecast was 15.02 (0.74%); the result beat it.
+
+**The calibration cross-validates, which is the part that was not guaranteed.** At
+1.55 µm the run logged:
+
+| | n_eff even | n_eff odd | Δn_eff | Δβ (rad/µm) |
+|---|---|---|---|---|
+| MPB | 2.324450 | 2.300984 | 0.023465 | 0.095119 |
+| FDTD, from its own phase | 2.375691 | 2.354670 | 0.021021 | 0.085212 |
+| excess | +2.204% | +2.333% | | ratio **0.8958** |
+
+Done item 6 above measured 0.08525 and a ratio of 0.8962 by a completely different route:
+lengths 2/4/6/8 µm instead of 1.26/2.52/3.78, two modes instead of six, and an ad-hoc
+refit instead of `section_mode_beta`'s seeded branch selection. They agree to **0.05% on
+Δβ and 0.026% on the individual β**.
+
+That is the first real check on the branch selection, and it was the one loose end in the
+implementation. A wrong-branch pick is invisible to every guard the code has — it produces
+a clean straight fit with a residual around 1e-14 and a β that is 33% wrong. No residual
+test can catch it. Reproducing a known answer from *different* length spacings is the only
+evidence available that the seeding lands on the right branch, and it does.
+
+**The 0.128-percentage-point differential reproduces too** (0.129 previously), which is
+the quantity `β/Δβ ≈ 99` levers into the whole 10% Δβ error.
+
+**What this does and does not establish.** It establishes that the hybrid decomposition is
+now *self-consistent*: the answer no longer depends on where the chain is cut, which is
+the property that makes a hybrid method meaningful at all. It does **not** establish that
+15.147 µm is physically correct — that rests on the full-device FDTD being right, and the
+MPB/FDTD disagreement behind item 6 is still unresolved. Opened as **item 13**. Quote the
+0.11% with that caveat attached.
+
+**A concurrency bug, found the hard way.** 7 of the 9 array tasks died with
+`zipfile.BadZipFile` from `np.load` inside `aggregate()`. Each task writes its own
+per-stub `.npz` and then reads *every* task's file; the per-stub write used a plain
+`np.savez`, which is not atomic, so a task could read a peer's half-written file. The
+script already had `_atomic_replace_write` and already used it for the aggregate
+outputs — the one file that other tasks read was the one left out, and the helper's own
+docstring stated the hazard.
+
+The result survived only by luck: two tasks happened to aggregate after every write had
+finished, and `stub_sweep.npz` is intact. The identical code passed in job 11500412 purely
+because those tasks finished 12 minutes apart instead of 6. A latent race, not a new one.
+
+**Fixed by consolidation rather than a local patch.** `beef._utils.atomic_replace_write`
+is now the single implementation, exported from `beef`, and `beef/cache/store.py`'s
+`_atomic_write_json` delegates to it. Seven example scripts had their own copies, all
+using a **PID-only** temp name — weaker than the cache's, which carries the hostname
+because PIDs are per-host and these jobs span 2 nodes (item 4). The same unguarded
+per-task write existed in four more array sweeps (`hybrid_modes_sweep`,
+`hybrid_resolution_sweep`, `fdtd_sweep`, `fdtd_resolution_sweep`); it had simply never
+fired. All five now write atomically.
+
+The helper also **raises on the `np.savez` suffix trap** rather than failing obscurely:
+given a path with no `.npz`, `np.savez` appends one, so handing it the temp name writes
+`<tmp>.npz`, leaves `<tmp>` missing, and the rename fails *after* the simulation work is
+done. That is how four tasks of an earlier job died (Done item 6 above). Callers must pass
+an open file object; if they don't, the error now names the cause.
+
+**A second trap, one layer down, caught in review of this very fix.** The obvious way to
+satisfy the above is `lambda tmp: np.savez(open(tmp, "wb"), ...)`. That is wrong in a way
+that would have quietly reintroduced the original bug: **`zipfile` does not close a file
+object it was handed** (`ZipFile.close()` skips `self.fp` when `_filePassed` is set), so
+nothing flushes the handle before `atomic_replace_write` calls `os.replace`. It works on
+CPython only because refcounting finalizes the orphaned file object the instant `np.savez`
+returns. Anything that delays that — a lingering traceback holding the frame, a
+non-refcounted runtime — and `os.replace` moves a **truncated** file into place, which is
+precisely the failure being fixed, now with the atomicity machinery lending it false
+credibility. All five sweeps use a named writer with `with open(tmp, "wb") as fh:`
+instead, and the helper's docstring shows that form rather than the lambda.
+
+**Added** — `tests/test_atomic_write.py`, nine fast tests with no simulation: completeness
+and no temp residue, atomic overwrite of an existing target, the `.npz` trap rejected with
+a diagnosis and the target left untouched, the hostname requirement pinned so nobody
+reverts it, and a threaded reader polling `np.load` while a writer runs. That last one
+carries its own control — the same probe against a plain `np.savez`, which *does* catch
+`BadZipFile`, so the guard test cannot silently become vacuous.
+
+**Verified** — fast suite **271 passed, 1 skipped** (up from 262). One pre-existing test,
+`test_cache_multirank.py::test_temp_name_is_host_qualified`, monkeypatched `store.socket`
+and was repointed at `_utils`; it still guards the cache's own call site, and the new file
+guards the helper directly. The four goldens are untouched — `calibrate_body_neff`
+defaults off and no solver default changed.
+
+**And verified where it actually matters — job 11522231, a real array re-run: 9/9
+COMPLETED**, against 2/9 for the same sweep before the fix, with zero `BadZipFile` in any
+of the nine logs. Unit tests cannot prove a concurrency fix; a job that previously failed
+7 times out of 9 and now doesn't is the evidence. `L_50` is unchanged to 5e-6 (the
+precision the pre-fix values were recorded at) and the drift slope reads −0.000648 against
+−0.000651 — the change is to the write path only, and the physics did not move.
+
+**One cost worth recording: cached is not the same as cheap.** The re-run wrote **zero**
+new cache entries — every FDTD section and every EME body solve hit — and still took 34
+minutes per task, against 1h51m uncached. The remaining time is not simulation: all 48
+ranks redundantly unpickle the same ~55 MB of cache and redo the `[200 × 11 × 6 × 6]`
+einsum chain and the plotting. Anyone estimating the cost of a re-run from "it's cached"
+will be wrong by about 30 minutes. Gating the aggregate and the deserialization on the
+master rank would remove most of it, and is the same rank-gating pattern item 4 applied to
+cache writes — not done here, and not urgent.

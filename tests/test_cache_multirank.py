@@ -21,6 +21,7 @@ import os
 import numpy as np
 import pytest
 
+from beef import _utils
 from beef.cache import store
 from beef.cache.store import (
     _LAUNCHER_RANK_VARS, _atomic_write_json, _family_pointer_path, _is_master,
@@ -143,7 +144,14 @@ class TestOnlyMasterWrites:
 class TestTempFileNaming:
     def test_temp_name_is_host_qualified(self, tmp_path, monkeypatch):
         """PIDs are allocated per host, so a PID-only temp name is not unique
-        on a filesystem shared between nodes."""
+        on a filesystem shared between nodes.
+
+        The naming now lives in `beef._utils.atomic_replace_write`, which
+        `_atomic_write_json` delegates to — the example sweeps needed the same
+        guarantee for their per-task outputs (dc_validation.md item 6), and one
+        hardened implementation beats eight copies. This test still covers the
+        cache's own call site; `tests/test_atomic_write.py` covers the helper
+        directly."""
         tmps = []
         real_replace = os.replace
 
@@ -151,11 +159,11 @@ class TestTempFileNaming:
             tmps.append(str(src))
             return real_replace(src, dst)
 
-        monkeypatch.setattr(store.os, "replace", spy_replace)
+        monkeypatch.setattr(_utils.os, "replace", spy_replace)
         target = str(tmp_path / "pointer.json")
         for host in ("node-a", "node-b"):
             monkeypatch.setattr(
-                store, "socket",
+                _utils, "socket",
                 type("S", (), {"gethostname": staticmethod(lambda h=host: h)}),
             )
             _atomic_write_json(target, {"dims": [1], "result_hash": "h"})

@@ -61,7 +61,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from beef import DirectionalCoupler, EMESolver, FDTDSolver, SOI_220
+from beef import DirectionalCoupler, EMESolver, FDTDSolver, SOI_220, atomic_replace_write
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(
@@ -115,15 +115,6 @@ NUM_MODES_SWEEP = np.arange(2, 13)   # 2..12 inclusive, 11 values — the swept 
 def _tag(N: int) -> str:
     """Stable per-N_MODES file tag, e.g. N02 / N12."""
     return f"N{int(N):02d}"
-
-
-def _atomic_replace_write(path: str, write_fn) -> None:
-    """write_fn(tmp_path) then atomically rename onto path — concurrent array
-    tasks all regenerate the aggregate files, and a plain overwrite could be
-    read (or collide) half-written; os.replace is atomic on POSIX."""
-    tmp = f"{path}.tmp.{os.getpid()}"
-    write_fn(tmp)
-    os.replace(tmp, path)
 
 
 # ---------------------------------------------------------------------------
@@ -233,11 +224,22 @@ def simulate_n_modes(N: int) -> None:
     T_cross_grid = np.abs(full_cross[:, :, 0, 0]) ** 2        # [n_L, n_wl]
     T_total_grid = T_through_grid + T_cross_grid
 
-    np.savez(
-        os.path.join(data_dir, f"{_tag(N)}.npz"),
-        N_modes=N, coupling_lengths=coupling_lengths, wavelengths=wavelengths,
-        T_through=T_through_grid, T_cross=T_cross_grid,
-    )
+    # Atomic — aggregate() reads every task's file, including one a concurrent
+    # array task is mid-write. See directional_coupler_hybrid_stub_sweep.py,
+    # where a plain np.savez here killed 7 of 9 tasks (dc_validation.md item 6).
+    def _write_task_npz(tmp: str) -> None:
+        # `with`, not a bare open(): zipfile does NOT close a file object
+        # it was handed, so relying on refcounting to flush would let
+        # os.replace move a truncated file — the very bug being fixed.
+        with open(tmp, "wb") as fh:
+            np.savez(
+                fh,
+                N_modes=N, coupling_lengths=coupling_lengths, wavelengths=wavelengths,
+                T_through=T_through_grid, T_cross=T_cross_grid,
+            )
+
+    atomic_replace_write(
+        os.path.join(data_dir, f"{_tag(N)}.npz"), _write_task_npz)
 
     ratio_mean = T_cross_grid.mean(axis=1) / np.clip(T_total_grid.mean(axis=1), 1e-20, None)
     idx_ref = int(np.argmin(np.abs(ratio_mean - 0.5)))
@@ -299,7 +301,7 @@ def aggregate() -> None:
             np.savez(f, N_modes=done, coupling_lengths=coupling_lengths, wavelengths=wavelengths,
                      T_through=T_through_stack, T_cross=T_cross_stack)
 
-    _atomic_replace_write(os.path.join(output_dir, "modes_sweep.npz"), _write_npz)
+    atomic_replace_write(os.path.join(output_dir, "modes_sweep.npz"), _write_npz)
     print(f"[sweep] Modes-sweep grid saved ({n_done}/{n_all} N_MODES) → {output_dir}/modes_sweep.npz")
 
     # Reference coupling length for the convergence panel: the 50:50 cross/
@@ -373,7 +375,7 @@ def aggregate() -> None:
                   bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.7, edgecolor="none"))
 
     fig.suptitle("Directional Coupler — Hybrid N_MODES Convergence Study", fontsize=11)
-    _atomic_replace_write(
+    atomic_replace_write(
         os.path.join(output_dir, "modes_convergence_sweep.png"),
         lambda tmp: fig.savefig(tmp, dpi=300, format="png"),
     )

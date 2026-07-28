@@ -76,7 +76,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from beef import DirectionalCoupler, EMESolver, FDTDSolver, SOI_220
+from beef import DirectionalCoupler, EMESolver, FDTDSolver, SOI_220, atomic_replace_write
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(
@@ -144,15 +144,6 @@ wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
 def _tag(stub: float) -> str:
     """Stable per-stub file tag in centi-µm, e.g. S000 / S025 / S200."""
     return f"S{int(round(stub * 100)):03d}"
-
-
-def _atomic_replace_write(path: str, write_fn) -> None:
-    """write_fn(tmp_path) then atomically rename onto path — concurrent array
-    tasks all regenerate the aggregate files, and a plain overwrite could be
-    read (or collide) half-written; os.replace is atomic on POSIX."""
-    tmp = f"{path}.tmp.{os.getpid()}"
-    write_fn(tmp)
-    os.replace(tmp, path)
 
 
 def split_point(T_cross_grid: np.ndarray, T_total_grid: np.ndarray) -> float:
@@ -352,11 +343,25 @@ def simulate_stub(stub: float) -> None:
 
     L_50 = split_point(T_cross_grid, T_total_grid)
 
-    np.savez(
-        os.path.join(data_dir, f"{_tag(stub)}.npz"),
-        body_stub=stub, coupling_lengths=coupling_lengths, wavelengths=wavelengths,
-        T_through=T_through_grid, T_cross=T_cross_grid, L_50=L_50,
-    )
+    # Atomic, because aggregate() below reads *every* stub's file — including
+    # ones a concurrent array task is writing this instant. A plain np.savez
+    # here is what made 7 of 9 tasks in job 11517245 die on BadZipFile; the
+    # uncalibrated run survived only because its tasks finished 12 minutes
+    # apart instead of 6. Open-file-object form: np.savez appends '.npz' to a
+    # suffix-less path, which would defeat the rename (dc_validation.md item 6).
+    def _write_task_npz(tmp: str) -> None:
+        # `with`, not a bare open(): zipfile does NOT close a file object
+        # it was handed, so relying on refcounting to flush would let
+        # os.replace move a truncated file — the very bug being fixed.
+        with open(tmp, "wb") as fh:
+            np.savez(
+                fh,
+                body_stub=stub, coupling_lengths=coupling_lengths, wavelengths=wavelengths,
+                T_through=T_through_grid, T_cross=T_cross_grid, L_50=L_50,
+            )
+
+    atomic_replace_write(
+        os.path.join(data_dir, f"{_tag(stub)}.npz"), _write_task_npz)
     print(f"[sweep] BODY_STUB={stub:.2f} µm: 50:50 split at L = {L_50:.3f} µm")
 
     # -- Per-stub sweep plot (same layout as hybrid.py's coupling_length_sweep.png) --
@@ -417,7 +422,7 @@ def aggregate() -> None:
             np.savez(f, body_stubs=done, L_50=L50s, coupling_lengths=coupling_lengths,
                      wavelengths=wavelengths, T_through=T_through_stack, T_cross=T_cross_stack)
 
-    _atomic_replace_write(os.path.join(output_dir, "stub_sweep.npz"), _write_npz)
+    atomic_replace_write(os.path.join(output_dir, "stub_sweep.npz"), _write_npz)
     print(f"[sweep] Stub-sweep grid saved ({n_done}/{n_all} stubs) → {output_dir}/stub_sweep.npz")
 
     # Single-domain ground truth, when the full-device FDTD length sweep has
@@ -484,7 +489,7 @@ def aggregate() -> None:
                  bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.7, edgecolor="none"))
 
     fig.suptitle("Directional Coupler — Hybrid Body-Stub (Interface Placement) Study", fontsize=11)
-    _atomic_replace_write(
+    atomic_replace_write(
         os.path.join(output_dir, "stub_sweep_split_point.png"),
         lambda tmp: fig.savefig(tmp, dpi=300, format="png"),
     )
