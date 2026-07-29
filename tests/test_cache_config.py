@@ -291,3 +291,197 @@ class TestResolvedSpectralConfig:
     def test_identical_calls_still_share_a_hash(self):
         """The point is to catch derivation changes, not to defeat caching."""
         assert _hash_config(self._config()) == _hash_config(self._config())
+
+
+class TestMaterialIndicesAreFingerprinted:
+    """Until 2026-07-28 a MaterialStack reached the cache as {wg_height, sz}
+    and nothing else, so the *optical* half of a material stack was invisible.
+    Change the index table, or change how an index is looked up from it, and
+    every cached entry kept matching and served the old physics.
+
+    That is why directional_coupler_validation.md item 8 (the nearest-neighbour
+    material lookup) could not be fixed first: the fix would have been silently
+    ignored on every cached run and shown up only on a cold cache.
+    """
+
+    def test_resolved_indices_are_recorded(self):
+        import numpy as np
+        from beef.materials.stack import resolved_material_config
+        from beef.materials import SOI_220
+
+        cfg = resolved_material_config(SOI_220, np.linspace(1.5, 1.6, 11))
+        assert set(cfg) == {"resolved_probe_wl", "resolved_si_index",
+                            "resolved_sio2_index"}
+        # Band edges and centre, so the fingerprint sees dispersion (both media
+        # are dispersive since item 8 step 2), not just one midband number.
+        assert cfg["resolved_probe_wl"] == [1.5, 1.55, 1.6]
+        assert all(3.0 < n < 4.0 for n in cfg["resolved_si_index"])
+        assert all(1.3 < n < 1.6 for n in cfg["resolved_sio2_index"])
+
+    def test_a_lookup_change_moves_the_fingerprint(self):
+        """Snap -> interpolate is the change item 8 will actually make. It is
+        invisible to a hash of the raw table (the data is untouched), which is
+        why this records what the stack *returns*, not what it stores."""
+        import numpy as np
+        import meow as mw
+        from beef.materials.stack import resolved_material_config
+        from beef.materials import SOI_220
+
+        class _Interpolating(type(SOI_220)):
+            def si_index(self, wl):
+                return float(np.interp(wl, np.asarray(mw.silicon.params["wl"]),
+                                       np.asarray(mw.silicon.n).real))
+
+        wls = np.linspace(1.5, 1.6, 11)
+        a = resolved_material_config(SOI_220, wls)
+        b = resolved_material_config(_Interpolating(wg_height=0.22, sz=2.0), wls)
+        assert a["resolved_si_index"] != b["resolved_si_index"], (
+            "a snap-vs-interpolate change must move the cache fingerprint"
+        )
+
+    def test_geometry_alone_no_longer_determines_the_key(self):
+        """The exact regression: two stacks agreeing on wg_height/sz but
+        disagreeing on n must not produce the same fingerprint."""
+        import numpy as np
+        from beef.materials.stack import resolved_material_config
+        from beef.materials import SOI_220
+
+        class _Shifted(type(SOI_220)):
+            def si_index(self, wl):
+                return super().si_index(wl) + 1e-3
+
+        a, b = SOI_220, _Shifted(wg_height=0.22, sz=2.0)
+        assert (a.wg_height, a.sz) == (b.wg_height, b.sz)
+        wls = np.linspace(1.5, 1.6, 11)
+        assert resolved_material_config(a, wls) != resolved_material_config(b, wls)
+
+    def test_fingerprinting_does_not_import_meep(self):
+        """beef/cache/store.py::_is_master() dispatches on whether meep is in
+        sys.modules and promises to import nothing itself. A MaterialStack
+        cache_key() would have imported meow -> meep while a config was being
+        built, flipping rank detection off its launcher-env fallback and
+        electing every rank of an EME-only job as master -- the item 4 bug.
+        Keeping the lookup out of the cache-config path is what avoids that,
+        so no import of beef.cache may pull meep in."""
+        import subprocess, sys
+        out = subprocess.run(
+            [sys.executable, "-c",
+             "import sys; import beef.cache.config as c; "
+             "print('meep' in sys.modules)"],
+            capture_output=True, text=True,
+        )
+        assert out.stdout.strip().endswith("False"), out.stdout + out.stderr
+
+
+class TestOneDispersionModelForBothEngines:
+    """directional_coupler_validation.md item 8, steps 1 and 2.
+
+    Two independent defects shared one root cause. The EME snapped n to the
+    nearest sample of meow's table -- which has only *two* entries between 1.45
+    and 1.65 um -- putting a 0.0063 step in the middle of the C-band. The FDTD
+    froze one index at the band centre for a 100 nm broadband run, so it had no
+    dispersion at all. Both engines now evaluate the same Sellmeier model.
+    """
+
+    WLS = (1.26, 1.31, 1.50, 1.55, 1.60, 1.70)
+
+    def test_both_engines_agree_to_machine_precision(self):
+        """The point of the exercise. EME goes through meow's material call,
+        FDTD through a dispersive meep Medium; both must be the same function."""
+        import numpy as np
+        from meow.environment import Environment
+        from meow.fde.meep import meep_material
+        from beef.materials.stack import sellmeier_index, meow_material, meep_medium
+
+        for kind in ("si", "sio2"):
+            for wl in self.WLS:
+                want = float(sellmeier_index(kind, wl))
+                eme, _ = meep_material(meow_material(kind), Environment(wl=wl))
+                fdtd = float(np.sqrt(meep_medium(kind).epsilon(1.0 / wl)[0, 0].real))
+                assert abs(eme - want) < 1e-12, (kind, wl, eme, want)
+                assert abs(fdtd - want) < 1e-12, (kind, wl, fdtd, want)
+
+    def test_the_c_band_kink_is_gone(self):
+        """The specific symptom: n stepped 3.4784 -> 3.4710 between 1.56 and
+        1.57 um. n(wl) must now be smooth and monotonically decreasing."""
+        import numpy as np
+        from beef.materials.stack import sellmeier_index
+
+        wl = np.linspace(1.50, 1.60, 101)
+        n = sellmeier_index("si", wl)
+        d = np.diff(n)
+        assert (d < 0).all(), "n(wl) must decrease across the C-band"
+        # No step: the largest single increment is within 2x the mean one.
+        assert abs(d).max() < 2 * abs(d).mean(), f"discontinuity in n(wl): {abs(d).max():.2e}"
+
+    def test_the_fdtd_medium_stays_non_dispersive_on_purpose(self):
+        """Item 8 step 2 made both media dispersive and it was reverted after
+        measurement: meep subpixel-averages only the instantaneous eps, and the
+        Sellmeier form (like meep's own library materials) puts eps_inf = 1 with
+        the whole index in susceptibilities. The structure then has no
+        dielectric contrast to smooth -- meep logs `epsilon diagonal = (1,1,1)`
+        -- and on a 450x220 nm strip at res 40 that moved n_eff 2.313398 ->
+        2.363038, +0.0496, against the ~0.002 the dispersion was worth.
+
+        So `si_medium()` returns a plain index Medium, and this pins that. If
+        someone re-enables dispersion, they must re-parameterise so eps_inf
+        carries the bulk of the permittivity, and re-run the resolution sweeps
+        -- notes.md recommendation #9."""
+        from beef.materials import SOI_220
+
+        med = SOI_220.si_medium(1.55)
+        assert not med.E_susceptibilities, (
+            "si_medium() is dispersive again -- subpixel smoothing is now "
+            "disabled at every material interface; see the docstring"
+        )
+        assert abs(med.epsilon_diag.x - SOI_220.si_index(1.55) ** 2) < 1e-9
+
+    def test_the_dispersive_model_is_still_available_and_correct(self):
+        """`meep_medium()` is unused by the solvers but kept as the starting
+        point for the eps_inf re-parameterisation, so it must stay right."""
+        import numpy as np
+        from beef.materials.stack import meep_medium, sellmeier_index
+
+        for wl in (1.26, 1.55, 1.60):
+            got = float(np.sqrt(meep_medium("si").epsilon(1.0 / wl)[0, 0].real))
+            assert abs(got - float(sellmeier_index("si", wl))) < 1e-12
+
+    def test_oxide_still_matches_meows_table_in_band(self):
+        """Malitson either way, so step 2 must not have moved the cladding.
+        (meep's `SiO2` is crystalline quartz and would have shifted it 0.0138.)"""
+        import numpy as np
+        import meow as mw
+        from beef.materials.stack import sellmeier_index
+
+        w = np.asarray(mw.silicon_oxide.params["wl"])
+        n = np.asarray(mw.silicon_oxide.n).real
+        for wl in (1.50, 1.55, 1.60):
+            assert abs(float(sellmeier_index("sio2", wl)) - float(np.interp(wl, w, n))) < 1e-4
+
+    def test_model_covers_every_example_band(self):
+        """Salzberg is declared valid from 1.36 um but examples run the O-band
+        to 1.26 um, so the media are built from raw susceptibilities with no
+        valid_freq_range. Evaluating below 1.36 um must not raise."""
+        import numpy as np
+        from beef.materials.stack import meep_medium
+
+        for kind in ("si", "sio2"):
+            for wl in (1.26, 1.36, 1.60):
+                assert np.isfinite(meep_medium(kind).epsilon(1.0 / wl)[0, 0].real)
+
+    def test_fingerprint_tracks_the_dispersion_not_just_one_point(self):
+        """Both media are dispersive now, so a single centre index no longer
+        describes the run. Two models agreeing at midband must still differ."""
+        import numpy as np
+        from beef.materials.stack import resolved_material_config
+        from beef.materials import SOI_220
+
+        class _FlatAtMidband(type(SOI_220)):
+            def si_index(self, wl):
+                return SOI_220.si_index(1.55)      # same centre, no slope
+
+        wls = np.linspace(1.5, 1.6, 11)
+        a = resolved_material_config(SOI_220, wls)
+        b = resolved_material_config(_FlatAtMidband(wg_height=0.22, sz=2.0), wls)
+        assert a["resolved_si_index"][1] == b["resolved_si_index"][1]   # agree at centre
+        assert a != b, "fingerprint must see the dispersion, not just midband"

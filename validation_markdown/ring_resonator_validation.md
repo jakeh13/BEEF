@@ -1,5 +1,15 @@
 # Ring resonator validation — to-do
 
+> **2026-07-28 — the material model changed under every device here.** Both engines
+> now evaluate one analytic Sellmeier model (Salzberg Si, Malitson SiO2) instead of
+> each doing its own nearest-tabulated lookup, which shifts n_Si by ~0.002 and
+> removes a 0.0063 step that sat in the middle of the C-band. Any golden or stored
+> result for this device predates that and needs regenerating; see
+> `directional_coupler_validation.md` item 8 and, for the still-open dispersive-FDTD
+> half, `material_model_validation.md`.
+
+
+
 Opened 2026-07-26. **The least validated device in the repo.**
 
 **Status 2026-07-26:** the axis bug is **fixed in code** (`directional_coupler_validation.md`

@@ -1,5 +1,15 @@
 # 1×2 MMI validation — to-do
 
+> **2026-07-28 — the material model changed under every device here.** Both engines
+> now evaluate one analytic Sellmeier model (Salzberg Si, Malitson SiO2) instead of
+> each doing its own nearest-tabulated lookup, which shifts n_Si by ~0.002 and
+> removes a 0.0063 step that sat in the middle of the C-band. Any golden or stored
+> result for this device predates that and needs regenerating; see
+> `directional_coupler_validation.md` item 8 and, for the still-open dispersive-FDTD
+> half, `material_model_validation.md`.
+
+
+
 Opened 2026-07-26. Gap list against the four checks in [README.md](README.md).
 
 **Status 2026-07-26:** gap 1 (stale goldens) is **closed** — both were
@@ -193,6 +203,17 @@ the only device with all three golden fixtures (`mmi_1x2_eme.json`,
 what gap 3 found**: the goldens are correct for the device as currently
 configured, but the configuration itself is wrong.
 
+0. **Wait on the coupler's cold regeneration pass before touching this device's
+   goldens.** *(added 2026-07-28.)* The material-model change at the top of this
+   file (`directional_coupler_validation.md` item 8) already invalidates
+   `mmi_1x2_hybrid.json`/`mmi_1x2_fdtd.json` a third time, on top of gaps 3 and
+   2 below — and that pass is not yet run. Folding it in here is exactly the
+   same reasoning step 1 below already states for gaps 3+2 (don't regenerate
+   against a configuration you're about to change again), just extended to a
+   repo-wide change instead of a device-local one. Once that pass lands,
+   `N_MODES` 12→8 and the resolution fix are config changes on top of an
+   already-current material model, not underneath a stale one — one cold run
+   covers all three instead of staggering three.
 1. **Gap 3's `N_MODES` 12 → 8.** Nothing else is worth doing first — every
    hybrid number this device produces is currently contracting mismatched modes
    at indices 8 and 9. Cheap: a one-line change plus a re-run of the audit to

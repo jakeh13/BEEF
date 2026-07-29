@@ -239,7 +239,48 @@ here.
    every wavelength. Real, but ~0.8% of Δn_eff — worth fixing for correctness, not a
    driver of anything above. (Solver #8, wavelength interpolation, is not involved:
    this script does a full mode solve at all 11 wavelengths.)
-14. **The tutorial does not use the fix.** *(opened 2026-07-27.)*
+14. **The flagship tutorial does not use the fix.** *(opened 2026-07-27 — **DONE
+    2026-07-28**, job 11526547, 2h04m, exit 0. Closed and archived here 2026-07-28; this
+    entry was updated in place rather than appended, since the completion supersedes the
+    open one below.)*
+
+    **Confirmed, and the prediction was exact.** The tutorial's auto-picked 50:50 length
+    moved **14.5 → 15.15 µm** (ratio 0.500), against a registered prediction of ≈15.15.
+
+    | | L₅₀ | vs full-device FDTD (15.129 µm) |
+    |---|---|---|
+    | stale constant 13.5 | 13.500 | −10.77% |
+    | uncalibrated tutorial | 14.429 | −4.63% |
+    | **calibrated tutorial** | **15.151** | **+0.14%** |
+
+    That +0.14% is 0.022 µm — **0.07 of the tutorial's own 0.299 µm sweep-grid step**, so
+    the agreement is at the resolution floor of the measurement and cannot be improved
+    without a finer length grid. The calibration numbers it logged (n_eff 2.375691 /
+    2.354670, Δn_eff 0.021021) match the stub sweep's to every printed digit, confirming
+    the cache hit and that both scripts calibrate the same cross-section.
+
+    `COUPLING_LENGTH` **has been set to 15.13 µm** in
+    `directional_coupler_fdtd.py:80`, `directional_coupler_fdtd_resolution_sweep.py:71`,
+    `directional_coupler_hybrid_resolution_sweep.py:85` and
+    `notebooks/directional_coupler_fdtd.ipynb`, plus the two module docstrings that quoted
+    13.5. The value comes from item 5's ground truth (crossing at 15.129 µm) rather than
+    the hybrid's grid-snapped 15.151, since three of the four users are full-device FDTD
+    runs and that reference is the finer measurement.
+
+    Deliberately **not** changed: `examples/verification/python/verify_items_1_2.py:131`,
+    which also pins 13.5. That harness is a historical artifact — its recorded 9/9 pass
+    (job 11477911) *was* run at 13.5 µm, and rewriting the constant would misrepresent
+    what it executed. It is due for deletion now that item 6 has closed.
+
+    **Closure is on the code fix and its verification job, not on regenerated outputs.**
+    The example outputs for the three scripts above and both notebooks' stored outputs
+    were still from 13.5 µm / pre-calibration runs at archival time and need a fresh
+    full-device 3-D FDTD pass to update — no cache hits. That regeneration is tracked as a
+    standalone chore in `directional_coupler_validation.md`'s To-do (shared with item 8,
+    since the emptied cache makes it one cold pass rather than two), not as part of this
+    item.
+
+    *(Original entry, kept as the record of why this was opened:)*
     `examples/directional_coupler/python/directional_coupler_hybrid.py` — the repo's
     flagship coupler example, and the one the other devices were written against — still
     hand-rolls the uncalibrated chain. It auto-picks and prints a 50:50 split point
@@ -259,6 +300,31 @@ here.
 
     Carry item 13's caveat into whatever the tutorial prints: the calibrated number is
     self-consistent with the full-device FDTD, not independently proven correct.
+
+    **The notebook had drifted on two items, not one.**
+    `examples/directional_coupler/notebooks/directional_coupler_hybrid.ipynb` is a
+    hand-maintained mirror of the script — `notes.md` Solver #6 flags exactly this risk,
+    and notes it already cost a double-application on 2026-07-24. It had missed **item
+    11** as well: its `body_solver` still used a single shared `RESOLUTION = 40`, so its
+    EME half carried the same 7% Δβ overstatement item 11 fixed in the script on
+    2026-07-26. Both are now applied, and every numeric knob in the two files agrees
+    (`FDTD_RESOLUTION`, `EME_RESOLUTION`, `WL_MIN/MAX`, `N_WL`, `BODY_STUB`, `N_MODES`,
+    `CALIBRATE_BODY`, `PLOT_COUPLING_LENGTH`). The notebook deliberately omits the
+    script's MPB-comparison print, because `section_mode_neff()` runs a fresh MPB solve
+    and does not read the cache, which would break its `CACHE_ONLY` contract.
+
+    **Why 13.5 µm was wrong**, recorded because the constant sat unchallenged through two
+    fixes that should each have caught it: at that length the full-device FDTD gives
+    cross/(cross+through) = **0.4318**, a 43:57 splitter, against a reference crossing of
+    **15.129 µm** — 10.8% short. It came from the pre-item-1 sweep, which reported
+    L₅₀ = 13.65 µm *with the wavelength axis reversed*, and it survived both the item 1
+    axis fix and item 5's ground-truth rebuild because nothing rechecked a hard-coded
+    number that no test asserted on.
+
+    The two resolution sweeps stayed valid *as convergence studies* throughout — they
+    compare one device across meshes, and its length does not decide whether res 40 is
+    converged. What was wrong was the claim in their comments, and
+    `directional_coupler_fdtd.py` presenting a 43:57 device as a 3 dB coupler.
 
 15. **`L = 4.0 µm` hangs in the EME half of `aggregate()`.** *(opened 2026-07-27.)*
     Reproducible: res 20/30/50 (job 11502074 tasks 1/5/9, all killed at the 3h12m wall)

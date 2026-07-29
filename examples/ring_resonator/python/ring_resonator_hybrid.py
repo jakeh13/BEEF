@@ -97,14 +97,14 @@ output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "exampl
 os.makedirs(output_dir, exist_ok=True)
 
 # Persistent on-disk simulation cache (see beef/cache/) — same shared
-# examples/example_sim_cache/ directory every other example's FDTDSolver/
+# example_sim_cache/ directory every other example's FDTDSolver/
 # EMESolver save_dir points at. This script hand-rolls raw meep/meow sims
 # instead of going through those solver classes (see module docstring), so
 # it fingerprints+stores/loads each run itself via beef.cache's lookup()/
 # save_run()/load_result() directly rather than the solver-specific
 # build_run_config()/build_whole_device_config() helpers (those expect a
 # DeviceGeometry + solver instance this script doesn't have).
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # 0. Test-mode knob — TEST_MODE=True runs in minutes (2-D, low res, few

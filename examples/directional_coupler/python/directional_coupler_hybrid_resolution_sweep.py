@@ -67,7 +67,7 @@ spectrum_dir = os.path.join(output_dir, "spectrums")
 data_dir = os.path.join(output_dir, "data")
 for _d in (output_dir, spectrum_dir, data_dir):
     os.makedirs(_d, exist_ok=True)
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters — identical to directional_coupler_hybrid.py,

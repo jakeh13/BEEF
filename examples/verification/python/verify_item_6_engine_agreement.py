@@ -113,7 +113,7 @@ data_dir = os.path.join(output_dir, "data")
 # Caching ON, same reasoning as verify_item_5_ground_truth.py: item 3 completed
 # the FDTD fingerprint so a stale entry can no longer be hit, and item 4 made the
 # writes rank-safe. --no-cache forces a from-scratch re-derivation.
-_CACHE_DIR = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
+_CACHE_DIR = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Pinned to directional_coupler_hybrid_stub_sweep.py -- do not "improve" these.

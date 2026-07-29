@@ -56,7 +56,9 @@ from beef import (
   `CompoundGeometry`/`WaveguideRun` (concatenate several geometries into one cascade), legacy `BendGeometry`
   (90° bend for non-collinear FDTD I/O).
 - **Materials** (`beef/materials/`) — `MaterialStack` (Si/SiO2 layer stack), plus pre-built `SOI_160` /
-  `SOI_220` stacks.
+  `SOI_220` stacks. One analytic Sellmeier model (Salzberg Si, Malitson SiO2) backs both
+  engines, so an EME mode solve and an FDTD run agree on n(λ) to machine precision. The
+  FDTD still freezes one index per broadband run — see `notes.md` recommendations #5/#9.
 - **Solvers** (`beef/solvers/`) — `EMESolver` (meow-based EME), `FDTDSolver` (meep-based FDTD, 2D or 3D),
   `HybridSolver` (chains FDTD and EME sections together — the core BEEF method; optionally skips
   re-solving a section declared as the x-mirror of an already-solved one via `mirror_pairs`, and can
@@ -100,9 +102,10 @@ plot_performance(smat, output_dir="out", title="1x2 MMI Splitter (EME)")
 
 Every solve-family method accepts an optional `save_dir: str` (default `None`,
 i.e. disabled — no behavior change if you don't pass it). When set, a call is
-fingerprinted from the solver's own parameters, the call's arguments, and the
-exact geometry it draws; a matching prior run is loaded from disk instead of
-re-simulated, and a new run is written there for next time:
+fingerprinted from the solver's own parameters, the call's arguments, the exact
+geometry it draws, and the refractive indices it resolved; a matching prior run
+is loaded from disk instead of re-simulated, and a new run is written there for
+next time:
 
 ```python
 smat = solver.solve(mmi, wavelengths, port="top", input_mode=1, save_dir="sim_cache")
@@ -111,7 +114,9 @@ smat = solver.solve(mmi, wavelengths, port="top", input_mode=1, save_dir="sim_ca
 Each cache entry gets its own subfolder (named by a hash of the fingerprint)
 holding `config.json` (human-readable), `result.pkl`, and a `geometry.png`
 preview. `examples/` wires every applicable example up to a shared
-`examples/example_sim_cache/` directory this way — re-running an example, or
+`example_sim_cache/` directory this way — a sibling of `BEEF/` and
+`example_output/`, i.e. outside the repo, so multi-GB simulation results are
+never committed — re-running an example, or
 another example that happens to solve an identical section, reuses cached
 results automatically; every example's `.py` script and its paired `.ipynb`
 notebook fingerprint identically too, so running either one hits a cache

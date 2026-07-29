@@ -34,9 +34,9 @@ Contrast with the hybrid tutorial, which decomposes the same device into
     the hybrid example sweeps 201 lengths for the cost of one (see its
     module docstring). Use FDTD to spot-check; use the hybrid to explore.
 
-The coupling length is hard-coded to 14.7 µm — the ~50:50 (3 dB) splitting
-length for this cross-section, the kind of value you'd read off the hybrid
-example's coupling_length_sweep.png and then verify here.
+The coupling length is hard-coded to 15.15 µm — the measured 50:50 (3 dB)
+splitting length for this cross-section, read off the hybrid example's
+coupling_length_sweep.png (its own PLOT_COUPLING_LENGTH) and verified here.
 
 Two details make the single-domain launch clean (both handled by the
 library, shown here for the tutorial value):
@@ -67,7 +67,7 @@ from beef import DirectionalCoupler, FDTDSolver, SOI_220, plot_fdtd_geometry
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "directional_coupler", "directional_coupler_fdtd"))
 os.makedirs(output_dir, exist_ok=True)
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters
@@ -77,19 +77,23 @@ WL_MIN = 1.50       # wavelength sweep start (µm)
 WL_MAX = 1.60       # wavelength sweep end (µm)
 N_WL = 11           # number of wavelength points
 
-# The 3 dB length for this cross-section, read off the full-device FDTD ground
-# truth (example_output/verification/ground_truth_sweep/length_sweep.npz, 0.5 µm
-# grid with provenance — directional_coupler_validation.md item 5), whose
-# band-mean cross/(cross+through) crosses 0.5 at 15.129 µm. The β-calibrated
-# hybrid independently lands on 15.15 µm, its nearest sampled length, 0.14%
-# away — see item 14.
+# The 3 dB length for this cross-section — the β-calibrated hybrid's own
+# auto-picked 50:50 split point (directional_coupler_hybrid.py,
+# PLOT_COUPLING_LENGTH, job 11544656): 15.150754 µm, its nearest sampled
+# length on a 200-point sweep grid. Hard-coded here to the same value so this
+# script's plot title and the hybrid's agree to the decimal instead of two
+# independent numbers that happen to be close. (The full-device FDTD ground
+# truth — example_output/verification/ground_truth_sweep/length_sweep.npz,
+# directional_coupler_validation.md item 5 — crosses 0.5 at 15.129 µm
+# independently, 0.14% away; that was this constant's source from
+# 2026-07-28 until this change moved it to the hybrid's own number instead.)
 #
 # WAS 13.5 µm until 2026-07-28, and that was wrong: the reference gives
 # cross/(cross+through) = 0.4318 there, i.e. a 43:57 splitter, not 3 dB. It came
 # from the pre-fix hybrid sweep, which reported L₅₀ = 13.65 µm *with the
 # wavelength axis reversed* (item 1), and it survived both that fix and item 5's
 # ground-truth rebuild because nothing rechecked it.
-COUPLING_LENGTH = 15.13   # µm, hard-coded — the 3 dB length; see above
+COUPLING_LENGTH = 15.15   # µm, hard-coded — the 3 dB length; see above
 
 # ---------------------------------------------------------------------------
 # 1. Geometry — identical to directional_coupler_hybrid.py except that
@@ -144,7 +148,7 @@ solver = FDTDSolver(
 plot_fdtd_geometry(
     dc, solver=solver,
     port="bot",   # bottom input arm = "in" (see DirectionalCoupler.input_ys)
-    title=f"Directional Coupler — Full-Device FDTD (coupling_length={COUPLING_LENGTH:.1f} µm)",
+    title=f"Directional Coupler — Full-Device FDTD (coupling_length={COUPLING_LENGTH:.2f} µm)",
     output_path=os.path.join(output_dir, "geometry_fdtd.png"),
 )
 print(f"Geometry plot saved → {output_dir}/geometry_fdtd.png")
@@ -194,7 +198,7 @@ ax.plot(wavelengths, T_total,   label="Total",   color="k", lw=1.5)
 ax.axhline(1.0, color="gray", linestyle=":", lw=0.8, label="Lossless")
 ax.set_xlabel("Wavelength (µm)")
 ax.set_ylabel("Transmission")
-ax.set_title(f"Transmission vs Wavelength (coupling_length={COUPLING_LENGTH:.1f} µm)")
+ax.set_title(f"Transmission vs Wavelength (coupling_length={COUPLING_LENGTH:.2f} µm)")
 ax.legend(fontsize=8)
 ax.grid(True)
 ax.set_ylim(0, 1.05)
@@ -209,7 +213,7 @@ ax.plot(wavelengths, IL_total,   label="Total",   color="k", lw=1.5)
 ax.axhline(0.0, color="gray", linestyle=":", lw=0.8, label="Lossless")
 ax.set_xlabel("Wavelength (µm)")
 ax.set_ylabel("Insertion Loss (dB)")
-ax.set_title(f"Insertion Loss vs Wavelength (coupling_length={COUPLING_LENGTH:.1f} µm)")
+ax.set_title(f"Insertion Loss vs Wavelength (coupling_length={COUPLING_LENGTH:.2f} µm)")
 ax.legend(fontsize=8)
 ax.grid(True)
 

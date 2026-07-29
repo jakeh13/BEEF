@@ -13,7 +13,7 @@ from ..cache import (
     lookup_superset, save_run, update_family_pointer,
 )
 from ..geometry.base import DeviceGeometry
-from ..materials.stack import MaterialStack, SOI_160
+from ..materials.stack import MaterialStack, resolved_material_config, SOI_160
 from ..results.smatrix import SMatrix
 from .._log import get_logger
 
@@ -208,6 +208,7 @@ def _resolved_spectral_config(wavelengths: np.ndarray, factor: float) -> Dict[st
         "resolved_monitor_freqs": monitor_freq_grid(wavelengths)[0],
         "resolved_source_fwidth": source_fwidth(wavelengths, factor),
     }
+
 
 
 def check_source_coverage(fcen: float, fwidth: float, wavelengths: np.ndarray,
@@ -582,7 +583,8 @@ class FDTDSolver:
             config = build_whole_device_config(
                 self, "solve",
                 dict(port=port, input_mode=input_mode, wavelengths=wavelengths, kwargs=kwargs,
-                     **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor)),
+                     **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor),
+                     **resolved_material_config(self.material_stack, wavelengths)),
                 geometry, geometry.polygons(stub_length=stub_length),
             )
             hit = lookup(save_dir, config)
@@ -1134,7 +1136,8 @@ class FDTDSolver:
                      stub_left=stub_left, stub_right=stub_right,
                      monitor_center=monitor_center, monitor_size=monitor_size,
                      geometry_kwargs=geometry_kwargs, reverse=layout.reverse,
-                     **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor)),
+                     **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor),
+                     **resolved_material_config(self.material_stack, wavelengths)),
                 geometry,
             )
 
@@ -1147,7 +1150,8 @@ class FDTDSolver:
                      monitor_center=monitor_center, monitor_size=monitor_size,
                      geometry_kwargs=geometry_kwargs,
                      resolved_layout=asdict(layout),
-                     **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor)),
+                     **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor),
+                     **resolved_material_config(self.material_stack, wavelengths)),
                 geometry,
             )
             hit = lookup(save_dir, config)

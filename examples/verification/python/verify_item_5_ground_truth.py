@@ -100,7 +100,7 @@ data_dir = os.path.join(output_dir, "data")
 # monitor grid, source bandwidth and subpixel settings are all hashed) and item 4
 # made the writes rank-safe. Provenance records which mode was used. --no-cache
 # forces a from-scratch re-derivation.
-_CACHE_DIR = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
+_CACHE_DIR = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
 # The archived pre-fix sweep, overlaid on l50_vs_wavelength.png after being put
 # back on the wavelengths meep really sampled. Continuity, not validation.

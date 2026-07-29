@@ -30,7 +30,7 @@ from beef import MMI, EMESolver, SOI_220, plot_eme_geometry, plot_performance
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_2x2", "mmi_2x2_eme"))
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters

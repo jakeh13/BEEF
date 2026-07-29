@@ -9,7 +9,13 @@ One file per example device, recording what has to hold before that device's
     modal_multiplexer_validation.md    modal multiplexer
     ring_resonator_validation.md       ring resonator
 
+    material_model_validation.md       cross-device — shared Si/SiO2 model, both engines
     archive/                           closed items, kept whole
+
+`material_model_validation.md` is the one file here that is not per-device: the material
+model in `beef/materials/stack.py` is shared by every example and by both engines, so a gap
+in it (or a fix to it) reaches all five at once. It is the validation record for
+`directional_coupler_validation.md` item 8 and `notes.md` #5/#9.
 
 The coupler came first, from investigating why
 `directional_coupler_hybrid_stub_sweep.py` never converged. It is the only
@@ -96,7 +102,8 @@ reversed wavelength axis. It rules out gross errors, not wrong physics.
 
 ## Status
 
-Updated 2026-07-27 after job 11517245 (calibrated stub sweep), and 2026-07-26
+Updated 2026-07-28 after job 11526547 (tutorial calibration) and the item 8
+material-model change; 2026-07-27 after job 11517245 (calibrated stub sweep); 2026-07-26
 after jobs 11500412 (stub sweep), 11500524/11500663 (`mmi_1x2` goldens) and
 11500536 (interface-mode audit).
 
@@ -114,7 +121,7 @@ coupler had. The ring's two `not applicable` entries are structural: it never
 constructs `FDTDSolver`/`EMESolver` objects, so checks 1 and 2 have nothing to
 compare — see `ring_resonator_validation.md`.
 
-### Five findings that generalize
+### Six findings that generalize
 
 **1. Every interface basis in the repo contains at least one unguided mode.**
 
@@ -170,3 +177,21 @@ earlier only because those tasks finished 12 minutes apart instead of 6. Use
 suffix-less path it appends `.npz`, which defeats the rename after the
 simulation work is already done. Both traps are pinned by
 `tests/test_atomic_write.py`.
+
+**6. One material model now backs both engines — and every golden is stale until
+re-run.** Until 2026-07-28 the EME and the FDTD each did their own
+nearest-tabulated `argmin` over meow's index tables, so at the same wavelength
+they could sit on different silicon: meow's Si table has only two samples
+between 1.45 and 1.65 µm, putting a 0.0063 step in the middle of the C-band.
+Both now evaluate one analytic Sellmeier model (Salzberg Si, Malitson SiO2) and
+agree to 4e-16. Two consequences that reach every device here:
+
+- n_Si shifts by ~0.002, because meow's silicon table was a different, noisier
+  source. **All four goldens must be regenerated**; they are `@pytest.mark.slow`,
+  so the fast suite has not been checking them.
+- Making the FDTD genuinely *dispersive* is still open, and for a measured
+  reason: meep subpixel-averages only the instantaneous ε, and the Sellmeier
+  form puts ε∞ = 1 with the whole index in susceptibilities, so the structure
+  has no contrast to smooth. On a 450x220 nm strip at res 40 that moved n_eff
+  by **+0.0496** — 25x the ~0.002 the dispersion was worth. See `notes.md` #5
+  and, for the checked re-parameterisation fix, `material_model_validation.md`.

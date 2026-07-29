@@ -91,7 +91,7 @@ from beef import (
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "directional_coupler", "directional_coupler_hybrid"))
 os.makedirs(output_dir, exist_ok=True)
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters
@@ -118,7 +118,10 @@ N_WL = 11           # number of wavelength points
 # and the SMatrix that gets saved. Set to a specific value (µm) to pin it;
 # leave as None to auto-pick the length in coupling_lengths (defined below)
 # whose coupling ratio is closest to a 50:50 (3 dB) split.
-PLOT_COUPLING_LENGTH = None   # µm, or None for auto (50:50 split point)
+PLOT_COUPLING_LENGTH = 15.15   # µm — measured 50:50 split point (job 11544656),
+# hardcoded rather than left on auto so this script and directional_coupler_fdtd.py's
+# COUPLING_LENGTH stay pinned to the identical number instead of two independent
+# auto-picks that could drift apart.
 
 # µm of the straight coupling region folded into each FDTD section, past the
 # S-bend/coupling-region discontinuity — same convention (and same value) as
@@ -463,7 +466,7 @@ ax.plot(wavelengths, T_total,   label="Total",   color="k", lw=1.5)
 ax.axhline(1.0, color="gray", linestyle=":", lw=0.8, label="Lossless")
 ax.set_xlabel("Wavelength (µm)")
 ax.set_ylabel("Transmission")
-ax.set_title(f"Transmission vs Wavelength (coupling_length={L_plot:.1f} µm)")
+ax.set_title(f"Transmission vs Wavelength (coupling_length={L_plot:.2f} µm)")
 ax.legend(fontsize=8)
 ax.grid(True)
 ax.set_ylim(0, 1.05)
@@ -478,7 +481,7 @@ ax.plot(wavelengths, IL_total,   label="Total",   color="k", lw=1.5)
 ax.axhline(0.0, color="gray", linestyle=":", lw=0.8, label="Lossless")
 ax.set_xlabel("Wavelength (µm)")
 ax.set_ylabel("Insertion Loss (dB)")
-ax.set_title(f"Insertion Loss vs Wavelength (coupling_length={L_plot:.1f} µm)")
+ax.set_title(f"Insertion Loss vs Wavelength (coupling_length={L_plot:.2f} µm)")
 ax.legend(fontsize=8)
 ax.grid(True)
 
@@ -502,9 +505,8 @@ for grid, label, color in [
             linestyle="--" if label == "Cross" else "-")
     ax.fill_between(coupling_lengths, lo, hi, color=color, alpha=0.15, lw=0)
 
-_plot_len_note = "50:50 auto" if PLOT_COUPLING_LENGTH is None else "user-set"
 ax.axvline(L_plot, color="gray", linestyle=":", lw=0.8,
-           label=f"Plotted length ({L_plot:.1f} µm, {_plot_len_note})")
+           label=f"Plotted length ({L_plot:.2f} µm, 50:50 split)")
 ax.set_xlabel("Coupling length (µm)")
 ax.set_ylabel("Transmission (mean over wavelength, shaded = min–max)")
 ax.set_title("Directional Coupler — Power Transfer vs Coupling Length")

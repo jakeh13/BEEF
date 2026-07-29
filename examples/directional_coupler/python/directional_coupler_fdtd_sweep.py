@@ -58,7 +58,7 @@ spectrum_dir = os.path.join(output_dir, "spectrums")
 data_dir = os.path.join(output_dir, "data")
 for _d in (output_dir, spectrum_dir, data_dir):
     os.makedirs(_d, exist_ok=True)
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
 # Hybrid example's saved length sweep — overlaid on the aggregate plot when present.
 _HYBRID_SWEEP_NPZ = os.path.abspath(os.path.join(

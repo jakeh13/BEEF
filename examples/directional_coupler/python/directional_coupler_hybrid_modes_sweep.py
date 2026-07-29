@@ -70,7 +70,7 @@ plot_dir = os.path.join(output_dir, "plots")
 data_dir = os.path.join(output_dir, "data")
 for _d in (output_dir, plot_dir, data_dir):
     os.makedirs(_d, exist_ok=True)
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
 # hybrid.py's own fixed-N_MODES=6 length sweep — overlaid on panel 1 of the
 # aggregate plot when present, as a reference against the repo's existing

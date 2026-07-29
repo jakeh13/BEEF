@@ -5,7 +5,117 @@ calls scattered across every master and sweep script.
 """
 from __future__ import annotations
 
+from typing import Any, Dict
+
 import numpy as np
+
+# ---------------------------------------------------------------------------
+# One dispersion model per material, shared by BOTH engines.
+#
+# Sellmeier coefficients as (eps_inf, ((resonance_wl_um, strength), ...)), so
+#
+#     eps(l) = eps_inf + SUM_i  sigma_i * l^2 / (l^2 - lambda_i^2)
+#
+# These are lifted verbatim from meep's own materials library, converting its
+# Lorentzian form (frequency = 1/lambda_i, gamma = 0) into wavelength terms —
+# verified to reproduce `meep.materials.Si` / `fused_quartz` to 4e-16 over
+# 1.4-1.7 um. Holding the numbers here rather than importing them means meow
+# and meep are driven from one source instead of two, which is the whole point:
+# before 2026-07-28 the EME interpolated meow's sampled tables while the FDTD
+# froze a single snapped index, and nothing kept the two consistent.
+#
+#   Si   - Salzberg & Villa, JOSA 47, 244 (1957)
+#   SiO2 - Malitson, JOSA 55, 1205 (1965), fused silica
+#
+# meow's own `silicon_oxide` table *is* Malitson: they agree to 0.00000 across
+# 1.50-1.60 um. Its `silicon` table is a different, noisier source sitting
+# ~0.002 above Salzberg, so adopting this model shifts n_Si by that much —
+# a deliberate change, not a refactor. It buys a smooth analytic n(lambda)
+# where the table had only two samples between 1.45 and 1.65 um.
+_SELLMEIER: Dict[str, Any] = {
+    "si": (1.0, ((0.301516485, 10.6684293),
+                 (1.13475115, 0.003043475),
+                 (1104.0, 1.54133408))),
+    "sio2": (1.0, ((0.0684043, 0.6961663),
+                   (0.1162414, 0.4079426),
+                   (9.896161, 0.8974794))),
+}
+
+# Range the meow-side sampled copies span, and the range these models are used
+# over. Deliberately wider than meep's declared validity for Si (1.36-11 um):
+# examples here run the O-band down to 1.26 um, and Salzberg's stated floor is
+# the *measurement* range of the 1957 paper, not a pole — the nearest resonance
+# in the fit sits at 0.3015 um, so evaluating at 1.26 um is a mild
+# extrapolation of a smooth function, 0.001 from meow's own table there
+# (against a 0.0028 disagreement in the C-band where both are "valid").
+# `meep_medium()` therefore builds the susceptibilities directly rather than
+# importing `meep.materials.Si`, whose `valid_freq_range` would raise at
+# 1.26 um. NOTE it is currently unused by the solvers -- see `si_medium()` for
+# the measurement that sent the FDTD back to a non-dispersive Medium, and what
+# has to change before dispersion can be turned on.
+_MODEL_RANGE_UM = (1.10, 2.10)
+_MEOW_SAMPLES = 2001          # 0.5 nm spacing; interpolation error ~1e-12
+
+_material_cache: Dict[str, Any] = {}
+
+
+def sellmeier_index(kind: str, wl) -> np.ndarray:
+    """n(wl) for "si" or "sio2" from the shared model above. wl in µm."""
+    eps_inf, terms = _SELLMEIER[kind]
+    wl = np.asarray(wl, dtype=float)
+    eps = eps_inf + sum(s * wl**2 / (wl**2 - li**2) for li, s in terms)
+    return np.sqrt(eps)
+
+
+def meow_material(kind: str):
+    """meow material for `kind`, sampled densely from the shared model.
+
+    A `SampledMaterial` rather than a new analytic `MaterialBase` subclass
+    because meow types `Structure3D.material` as a closed union
+    (`IndexMaterial | SampledMaterial | TidyMaterial`) — a custom class would
+    be rejected or silently coerced. At 0.5 nm spacing the linear
+    interpolation meow applies on top is accurate to ~1e-12, far below every
+    effect being modelled, so nothing is lost by going through samples.
+    """
+    key = f"meow:{kind}"
+    if key not in _material_cache:
+        import meow as mw
+
+        wls = np.linspace(*_MODEL_RANGE_UM, _MEOW_SAMPLES)
+        _material_cache[key] = mw.SampledMaterial(
+            name=f"beef_{kind}",
+            n=sellmeier_index(kind, wls).astype(complex),
+            params={"wl": wls},
+        )
+    return _material_cache[key]
+
+
+def meep_medium(kind: str):
+    """Dispersive meep Medium for `kind`, from the same coefficients.
+
+    **Not currently used by `MaterialStack.si_medium()`/`sio2_medium()`** —
+    turning it on cost 0.0496 in n_eff by disabling subpixel smoothing; see
+    `MaterialStack.si_medium()`. Kept because it is correct as a model and is
+    the starting point for the ε∞ re-parameterisation that would make
+    dispersion usable.
+
+    Built from raw susceptibilities rather than `meep.materials.Si` /
+    `fused_quartz` so no `valid_freq_range` is attached — see
+    `_MODEL_RANGE_UM` for why the O-band examples need that.
+    """
+    key = f"meep:{kind}"
+    if key not in _material_cache:
+        import meep as mp
+
+        eps_inf, terms = _SELLMEIER[kind]
+        _material_cache[key] = mp.Medium(
+            epsilon=eps_inf,
+            E_susceptibilities=[
+                mp.LorentzianSusceptibility(frequency=1.0 / li, gamma=0, sigma=s)
+                for li, s in terms
+            ],
+        )
+    return _material_cache[key]
 
 
 class MaterialStack:
@@ -27,36 +137,120 @@ class MaterialStack:
 
         h = self.wg_height
         sz = self.sz
+        si, ox = meow_material("si"), meow_material("sio2")
         return {
             (2, 0): [
-                mw.GdsExtrusionRule(material=mw.silicon_oxide, h_min=-sz/2, h_max=-h/2, mesh_order=2),
-                mw.GdsExtrusionRule(material=mw.silicon,       h_min=-h/2,  h_max=h/2,  mesh_order=1),
-                mw.GdsExtrusionRule(material=mw.silicon_oxide, h_min=h/2,   h_max=sz/2, mesh_order=2),
+                mw.GdsExtrusionRule(material=ox, h_min=-sz/2, h_max=-h/2, mesh_order=2),
+                mw.GdsExtrusionRule(material=si, h_min=-h/2,  h_max=h/2,  mesh_order=1),
+                mw.GdsExtrusionRule(material=ox, h_min=h/2,   h_max=sz/2, mesh_order=2),
             ],
             (1, 0): [
-                mw.GdsExtrusionRule(material=mw.silicon_oxide, h_min=-sz/2, h_max=sz/2, mesh_order=2),
+                mw.GdsExtrusionRule(material=ox, h_min=-sz/2, h_max=sz/2, mesh_order=2),
             ],
         }
 
+    def si_index(self, wl: float) -> float:
+        """Refractive index of silicon at wavelength wl (µm), from the shared
+        Sellmeier model both engines now use.
+
+        Until 2026-07-28 this snapped to the nearest sample of meow's table
+        (`argmin(|wls - wl|)`), which has only *two* entries between 1.45 and
+        1.65 µm — so the whole band below their midpoint got n = 3.4784 and
+        everything above got 3.4710, a 0.0063 step mid-C-band plus a +0.00196
+        bias at 1.55 µm. That snap, duplicated in
+        `meow/fde/meep.py::meep_material()`, is the Δn_eff kink recorded as
+        directional_coupler_validation.md item 8. Both copies are gone.
+        """
+        return float(sellmeier_index("si", wl))
+
+    def sio2_index(self, wl: float) -> float:
+        """Refractive index of SiO2 at wavelength wl (µm). See `si_index()`."""
+        return float(sellmeier_index("sio2", wl))
+
     def si_medium(self, wl: float):
-        """Return a meep Medium for silicon at wavelength wl (µm)."""
-        import meow as mw
+        """meep Medium for silicon at wavelength wl (µm).
+
+        **Non-dispersive, and that is now a measured choice rather than an
+        oversight.** A broadband FDTD run gets one Medium for its whole band,
+        so this frozen index is wrong away from `wl` — silicon really moves
+        0.28% across 1.50–1.60 µm. Item 8 step 2 made both media dispersive to
+        fix that, and it was **reverted after measurement**:
+
+            450x220 nm Si strip in oxide, res 40, 1.55 µm
+              non-dispersive  mp.Medium(index=n)        n_eff = 2.313398
+              dispersive      eps_inf=1 + Lorentzians   n_eff = 2.363038
+                                                        diff  = +0.049640
+
+        meep subpixel-averages only the *instantaneous* ε and assigns
+        susceptibility terms per pixel unsmoothed. meep's own library materials
+        (and therefore the Sellmeier form lifted from them) put ε∞ = 1 and carry
+        the entire index in susceptibilities — so the structure meep builds has
+        `epsilon diagonal = (1,1,1)`, no dielectric contrast at the Si/SiO2
+        interface, and subpixel smoothing does nothing. Losing it costs 0.0496
+        in n_eff at res 40, against the ~0.002 the dispersion was worth: a 25x
+        adverse trade on the same quantity. `notes.md` recommendation #9
+        predicted exactly this before the attempt.
+
+        The fix is not to abandon dispersion but to re-parameterise it so ε∞
+        carries the bulk of the permittivity and the susceptibilities carry only
+        its wavelength dependence — then smoothing acts on the contrast and the
+        residual dispersive terms are small enough that leaving them unsmoothed
+        does not matter. That needs its own fit and its own resolution sweep,
+        which is why it is not bundled here.
+
+        What *is* fixed: `si_index()` now comes from the shared analytic model,
+        so the EME and FDTD agree on n(wl) to machine precision at any given
+        wavelength — the frozen-band limitation remains, the silent
+        engine-to-engine disagreement does not.
+        """
         import meep as mp
 
-        ns = np.asarray(mw.silicon.n).real
-        wls = np.asarray(mw.silicon.params['wl'])  # µm
-        idx = int(np.argmin(np.abs(wls - wl)))
-        return mp.Medium(index=float(ns[idx]))
+        return mp.Medium(index=self.si_index(wl))
 
     def sio2_medium(self, wl: float):
-        """Return a meep Medium for SiO2 at wavelength wl (µm)."""
-        import meow as mw
+        """meep Medium for SiO2 at wavelength wl (µm). See `si_medium()` for
+        why this is non-dispersive."""
         import meep as mp
 
-        ns = np.asarray(mw.silicon_oxide.n).real
-        wls = np.asarray(mw.silicon_oxide.params['wl'])  # µm
-        idx = int(np.argmin(np.abs(wls - wl)))
-        return mp.Medium(index=float(ns[idx]))
+        return mp.Medium(index=self.sio2_index(wl))
+
+
+def resolved_material_config(material_stack, wavelengths: np.ndarray) -> Dict[str, Any]:
+    """The *resolved* refractive indices this run will actually simulate with.
+
+    Same reasoning as `beef/solvers/fdtd.py::_resolved_spectral_config()`,
+    applied to the material half — and here the gap it closes is real rather
+    than precautionary. The cache records a `MaterialStack` as
+    `{wg_height, sz}` (see `beef/cache/config.py::_solver_config()`), i.e. its
+    *geometry* only, so nothing about the optical data reaches the fingerprint.
+    Change the dispersion model, or how an index is derived from it, and every
+    existing entry keeps matching and is served with the old physics.
+
+    That is why `directional_coupler_validation.md` item 8 could not be fixed
+    before this existed: the fix would have been silently ignored on every
+    cached run and surfaced only on a cold cache.
+
+    Sampled at the band edges *and* centre, not just the centre: both media are
+    dispersive now, so one number no longer describes what the run uses. Three
+    points pin the slope as well as the offset, so swapping in a different
+    model with a coincidentally equal midpoint still moves the key.
+
+    Deliberately **not** a `MaterialStack.cache_key()`: resolving an index used
+    to import meow, meow imports meep (measured — `import meow` alone puts meep
+    in `sys.modules`), and `beef/cache/store.py::_is_master()` dispatches on
+    whether meep is loaded while promising to import nothing itself. A
+    `cache_key()` would therefore flip rank detection off its launcher-env
+    fallback as a side effect of building a config, electing every rank of an
+    EME-only job as master — the item 4 bug. Called from a solver instead, both
+    are already loaded and the promise holds.
+    """
+    wl = np.asarray(wavelengths, dtype=float)
+    probes = (float(wl.min()), float(np.mean(wl)), float(wl.max()))
+    return {
+        "resolved_probe_wl": [round(w, 9) for w in probes],
+        "resolved_si_index": [round(material_stack.si_index(w), 9) for w in probes],
+        "resolved_sio2_index": [round(material_stack.sio2_index(w), 9) for w in probes],
+    }
 
 
 # Pre-built stacks for common SOI platforms.

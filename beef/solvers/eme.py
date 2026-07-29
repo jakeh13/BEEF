@@ -13,7 +13,7 @@ from ..cache import (
     lookup_superset, save_run, update_family_pointer,
 )
 from ..geometry.base import DeviceGeometry
-from ..materials.stack import MaterialStack, SOI_160
+from ..materials.stack import MaterialStack, resolved_material_config, SOI_160
 from ..results.smatrix import SMatrix
 from .._log import get_logger
 
@@ -268,7 +268,8 @@ class EMESolver:
                 dict(x0=x0, x1=x1, wavelengths=wavelengths,
                      stub_left=stub_left, stub_right=stub_right,
                      geometry_kwargs=geometry_kwargs,
-                     neff_override=_neff_fingerprint(neff_override)),
+                     neff_override=_neff_fingerprint(neff_override),
+                     **resolved_material_config(self.material_stack, wavelengths)),
                 geometry,
             )
             config = build_run_config(
@@ -277,7 +278,8 @@ class EMESolver:
                      n_modes_in=n_modes_in, n_modes_out=n_modes_out,
                      stub_left=stub_left, stub_right=stub_right,
                      geometry_kwargs=geometry_kwargs,
-                     neff_override=_neff_fingerprint(neff_override)),
+                     neff_override=_neff_fingerprint(neff_override),
+                     **resolved_material_config(self.material_stack, wavelengths)),
                 geometry,
             )
             hit = lookup(save_dir, config)
@@ -405,7 +407,8 @@ class EMESolver:
                 dict(x0=x0, x1=x1, wavelengths=wavelengths, lengths=lengths,
                      stub_left=stub_left, stub_right=stub_right,
                      geometry_kwargs=geometry_kwargs,
-                     neff_override=_neff_fingerprint(neff_override)),
+                     neff_override=_neff_fingerprint(neff_override),
+                     **resolved_material_config(self.material_stack, wavelengths)),
                 geometry,
             )
             config = build_run_config(
@@ -414,7 +417,8 @@ class EMESolver:
                      n_modes_in=n_modes_in, n_modes_out=n_modes_out,
                      stub_left=stub_left, stub_right=stub_right,
                      geometry_kwargs=geometry_kwargs,
-                     neff_override=_neff_fingerprint(neff_override)),
+                     neff_override=_neff_fingerprint(neff_override),
+                     **resolved_material_config(self.material_stack, wavelengths)),
                 geometry,
             )
             hit = lookup(save_dir, config)

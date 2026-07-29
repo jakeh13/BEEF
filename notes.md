@@ -28,7 +28,7 @@ into that cascade.
 | Time-domain FDTD | 2D or 3D via `FDTDSolver(three_d=...)`, single fixed uniform `res` | Native, mature, adaptive subpixel smoothing | — | Cloud GPU FDTD, auto mesh refinement | openEMS (general 3D FDTD, antenna-focused); **FDTDX** (JAX-based, GPU-accelerated, native autodiff via time-reversibility, published in JOSS 2026 — 10-415x faster than traditional FDTD per its own benchmarks); Ceviche/EMopt (earlier autograd-based FDTD); GSvit (GPU-accelerated) |
 | Eigenmode expansion (EME) | `EMESolver` wraps meow's cross-section mode-match + `compute_s_matrix` | — | Native (this *is* meow's job) | Has an EME plugin (steady-state frequency-domain alternative to its FDTD solver) | EMEpy (pure-Python, neural-net-accelerated mode profiles); CAMFR (older EME framework) |
 | Hybrid FDTD+EME chaining | **Yes — `HybridSolver`, BEEF's actual differentiator** | No | No | No (closest: manually stitching, no generic N-section cascade) | Not found in a fresh landscape pass (`awesome_photonics`, direct searches) — closest is `simphox` (Stanford Solgaard Lab, bundles FDTD/beam-propagation/circuit solvers), but it isn't documented as a generic reciprocity-based N-section cascade the way `HybridSolver` is |
-| Dispersive materials | Nearest-tabulated-wavelength real-index lookup (`np.argmin` on meow's built-in Si/SiO2 tables) — no interpolation, no loss | Full Lorentzian/Drude/Debye susceptibility fits | Has real material models (used via meow calls) | Automatic dispersion-fitting plugin | — |
+| Dispersive materials | One shared analytic Sellmeier model (Salzberg Si / Malitson SiO2) evaluated per wavelength by both engines; still real-valued, and the FDTD still freezes one index per broadband run — see recommendation #5 | Full Lorentzian/Drude/Debye susceptibility fits | Has real material models (used via meow calls) | Automatic dispersion-fitting plugin | — |
 | Nonlinear materials (χ2/χ3) | None | Yes (Kerr, χ2) | No | Yes | — |
 | Lossy/absorptive materials | None (imaginary index discarded) | Yes | Partial | Yes | — |
 | Anisotropic / magneto-optic | None | Yes | No | Yes | — |
@@ -153,7 +153,9 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   `HybridSolver`'s in-memory `cache={}` dict (dedupes within/across `solve()` calls
   in one process; `save_dir` persists to disk across process runs) — the two
   compose freely. All 12 example `.py`/`.ipynb` pairs across every device folder
-  point at one shared `examples/example_sim_cache/` directory; a 2026-07 audit
+  point at one shared `example_sim_cache/` directory (a sibling of `BEEF/`,
+  outside the repo since 2026-07-28 — it had been `examples/example_sim_cache/`
+  and 56 MB of it was tracked in git); a 2026-07 audit
   diffed every cache-fingerprinting call site key-for-key between each pair's `.py`
   and `.ipynb` form and found zero drift, so running either form hits the other's
   cached results. Two examples (`directional_coupler_mode.py`,
@@ -514,15 +516,26 @@ lives in "Current library reference" above, not here.
    whole-device `solver.solve()`; it doesn't know about `HybridSolver.solve()`'s
    `cache=` mechanism, so a parallel sweep over a hybrid device would redundantly
    re-simulate cached sections across worker processes.
-5. **Lossy/dispersive material support.** `MaterialStack.si_medium(wl)`/
-   `sio2_medium(wl)` (`materials/stack.py`) build an `mp.Medium(index=...)` from
-   whichever *tabulated* wavelength in meow's built-in Si/SiO2 data is nearest to
-   the requested one (`np.argmin`) — a nearest-neighbor lookup, not interpolation,
-   and always real-valued, so there's no true dispersion curve across a wavelength
-   sweep and no absorption/loss. Wiring meep's actual Lorentzian-susceptibility
-   fitting (or reusing `meep.materials` directly) into `MaterialStack` would enable
-   real loss/broadband dispersion and open the door to SiN, III-V, or lossy/doped
-   silicon.
+5. **Lossy/dispersive material support.** *(Partly done 2026-07-28.)* The
+   nearest-tabulated `np.argmin` lookup is gone: `materials/stack.py` now holds one
+   analytic Sellmeier model (Salzberg Si, Malitson SiO2, lifted from `meep.materials`
+   and verified against it to 4e-16) that **both** engines evaluate, so the EME and
+   the FDTD agree on n(λ) to machine precision — closing the second half of
+   recommendation #9 below.
+
+   Still open, and now for a *measured* reason: the FDTD is still handed one
+   `mp.Medium(index=...)` per broadband run, so it has no dispersion across the
+   sweep, and nothing is lossy. Turning on the dispersive medium was tried and
+   reverted — meep subpixel-averages only the instantaneous ε and leaves
+   susceptibility terms unsmoothed, and the Sellmeier form (like meep's own library
+   materials) puts ε∞ = 1 with the whole index in susceptibilities. meep then builds
+   a structure with `epsilon diagonal = (1,1,1)`, i.e. no contrast to smooth, and on
+   a 450x220 nm strip at res 40 n_eff moved 2.313398 → 2.363038, **+0.0496** —
+   exactly the cost of losing smoothing that this file's own #9 predicted, against
+   the ~0.002 the dispersion was worth. Doing it properly means re-parameterising so
+   ε∞ carries the bulk of the permittivity and the susceptibilities only its
+   wavelength dependence, then re-running the resolution sweeps. `meep_medium()` is
+   kept in `materials/stack.py` as the correct model to start that from.
 6. **Symmetry exploitation in `FDTDSolver`.** `MMI`/`DirectionalCoupler` are
    frequently mirror-symmetric about y=0; `solve_section()` currently always draws
    and simulates the full cross-section. An opt-in `mp.Mirror` symmetry when the
@@ -553,43 +566,45 @@ lives in "Current library reference" above, not here.
    fit, evaluate the returned transfer matrix at every wavelength in a
    separate dense array), or a standalone reusable `NeffTable`/mode-fit
    utility both `EMESolver` and examples could share. Related to, but
-   distinct from, Solver recommendation #5 (`MaterialStack`'s nearest-
-   tabulated-wavelength index lookup) — that's a materials-dispersion gap;
+   distinct from, Solver recommendation #5 (`MaterialStack`'s material model)
+   — that's a materials-dispersion gap;
    this is a mode-solve-cost gap, and the two would compound in a real
    dispersive-material implementation (interpolating dispersive neff at
    already-sparse solve points).
 9. **Make the two section types agree on the material at a given wavelength.**
-   Within one `HybridSolver` chain the FDTD and EME sections currently look up
-   silicon/oxide differently: `FDTDSolver` builds both media **once**, at the
-   mean of the requested wavelength array (`_build_domain`, `solvers/fdtd.py`
-   lines 274-278, and `solve_section()`'s own copy at lines 615-617), so every
-   wavelength in a sweep is simulated in the *same* frozen structure, while
-   `EMESolver` rebuilds the cross-section per wavelength (`mw.Environment(wl=...)`
-   + `CrossSection.from_cell()`, `solvers/eme.py:256-257` and its four sibling
-   loops), letting meow's own nearest-tabulated lookup pick a different index at
-   each one. Two consequences, both invisible today:
-   - The FDTD half of a hybrid chain has no dispersion across the sweep at all,
-     by construction — not a nearest-neighbor approximation of it, none.
-   - At the same wavelength the two halves can be using *different* silicon.
-     With meow's built-in Si table the C-band examples straddle a tabulated
-     point (1.532 and 1.600 µm are the only entries in 1.49-1.61 µm), so an
-     11-point 1.50-1.60 µm sweep has its EME sections on n=3.4784 below
-     ~1.566 µm and n=3.4710 above it, while its FDTD sections sit on n=3.4784
-     (the 1.55 µm center) throughout. ~0.0074 in index — small, but it is a
-     silent inconsistency *inside a single device solve*, not a modeling
-     choice anyone made.
-   Cheapest honest fix, independent of recommendation #5: give `FDTDSolver` a
-   per-wavelength material path (or, where one broadband pulse must cover the
-   whole sweep, have it evaluate at the same nearest-tabulated grid meow uses
-   and say so in the log), and have `HybridSolver` assert the two section types
-   resolve the same index at the same wavelength. Recommendation #5 (real
-   Lorentzian dispersion) subsumes the first half of this but not the second —
-   the agreement check is worth having either way.
+   *(Half done 2026-07-28 — the disagreement is closed, the frozen band is not.)*
 
-   **Subpixel-smoothing coupling, worth knowing before #5 is attempted.**
-   Everything above is what currently keeps every material non-dispersive
-   (`mp.Medium(index=...)`, `materials/stack.py:41-59`), and meep only
-   subpixel-averages the *instantaneous* epsilon. So today smoothing applies in
+   Within one `HybridSolver` chain the FDTD and EME sections used to look silicon
+   and oxide up *differently*: `FDTDSolver` builds both media **once**, at the mean
+   of the requested wavelength array (`_build_domain`, `solvers/fdtd.py`), so every
+   wavelength in a sweep is simulated in the *same* frozen structure, while
+   `EMESolver` rebuilds the cross-section per wavelength. On top of that each side
+   ran its own nearest-tabulated `argmin`, so at the same wavelength the two halves
+   could sit on *different* silicon: meow's table has only 1.532 and 1.600 µm in
+   1.49-1.61 µm, so an 11-point 1.50-1.60 µm sweep put the EME on n=3.4784 below
+   ~1.566 µm and 3.4710 above it while the FDTD stayed on 3.4784 throughout —
+   ~0.0074 in index, a silent inconsistency inside a single device solve.
+
+   **Closed:** both engines now evaluate one shared analytic Sellmeier model
+   (recommendation #5), agreeing to 4e-16 at any wavelength, and the step in the
+   EME's n(λ) — the Δn_eff kink of `directional_coupler_validation.md` item 8 — is
+   gone. The `argmin` in `meow/fde/meep.py::meep_material()` was the direct cause
+   and was *bypassing* meow's own correctly-interpolating `SampledMaterial.__call__`;
+   both copies were removed.
+
+   **Still open:** the FDTD half still has no dispersion across a sweep, by
+   construction — one Medium per broadband run. See #5 for why the obvious fix
+   (a dispersive Medium) measured 0.0496 worse and was reverted. A `HybridSolver`
+   assertion that the two section types resolve the same index at the same
+   wavelength is still worth adding; it is now cheap, since both call the same
+   function. The checked re-parameterisation that would unblock both — fit
+   band, λ₀ degeneracy, strip-test gate — is in
+   `validation_markdown/material_model_validation.md`.
+
+   **Subpixel-smoothing coupling — this prediction was tested, and it held.**
+   Written before the attempt, and it is exactly what happened on 2026-07-28: see
+   #5. Keeping it as the standing reason the media are still
+   `mp.Medium(index=...)`. meep only subpixel-averages the *instantaneous* epsilon. So today smoothing applies in
    full on both paths — meow sets `eps_averaging=True` explicitly for its mode
    solve (`meow/fde/meep.py:97`) and `FDTDSolver` inherits meep's `True`
    default (it never passes the flag, nor `subpixel_tol`/`subpixel_maxeval`) —
@@ -606,10 +621,12 @@ lives in "Current library reference" above, not here.
    #5, not as a follow-up. While in there: `FDTDSolver` neither exposes nor
    logs `eps_averaging`/`subpixel_tol`/`subpixel_maxeval`, so a knob that
    demonstrably moves `neff` at the second decimal is set entirely by meep's
-   default — and, since `_solver_config()` fingerprints only the solver's own
-   attributes (`vars(solver)` filtered by `_METHOD_ATTRS`), a meep version
-   that changed that default would not invalidate a single cached run. Making
-   them real `FDTDSolver` params on the allowlist fixes both.
+   default. *(The `FDTDSolver` half is now done — `eps_averaging`,
+   `subpixel_tol` and `subpixel_maxeval` are real params on the `_METHOD_ATTRS`
+   allowlist. The material indices themselves reached the fingerprint on
+   2026-07-28 via `resolved_material_config()`; before that a `MaterialStack`
+   was recorded as `{wg_height, sz}` only, so any change to the index model kept
+   matching every cached entry.)*
 10. **Give hybrid interface placement a library-level story.** Every hybrid
     example folds a stub of the adjacent uniform region into its FDTD sections
     so the interface mode decomposition lands past a cross-section

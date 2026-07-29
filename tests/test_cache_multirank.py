@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 import numpy as np
 import pytest
@@ -34,9 +35,22 @@ _LAUNCHER_VARS = _LAUNCHER_RANK_VARS
 @pytest.fixture
 def serial_env(monkeypatch):
     """Strip launcher variables so a test that doesn't set one looks serial —
-    otherwise running the suite itself under srun would leak a rank in."""
+    otherwise running the suite itself under srun would leak a rank in.
+
+    Also hide meep and mpi4py from `sys.modules`. `_is_master()` consults
+    three sources in order of authority and these tests exercise the third
+    (the launcher environment), so the first two have to be absent for the
+    assertion to mean anything. Without this the tests pass or fail on
+    *import order*: any earlier test that pulls in meow silently loads meep
+    too — `import meow` alone puts it in `sys.modules` — and then
+    `am_really_master()` answers instead, returning True in a serial pytest
+    process and demoting these to vacuous. Pinning it here keeps the fallback
+    genuinely covered no matter what else the suite has imported.
+    """
     for var in _LAUNCHER_VARS:
         monkeypatch.delenv(var, raising=False)
+    for mod in ("meep", "mpi4py.MPI"):
+        monkeypatch.delitem(sys.modules, mod, raising=False)
 
 
 def _config(**kwargs):

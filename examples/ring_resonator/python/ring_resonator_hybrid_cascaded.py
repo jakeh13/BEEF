@@ -113,9 +113,9 @@ output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "exampl
 os.makedirs(output_dir, exist_ok=True)
 
 # Persistent on-disk simulation cache (see beef/cache/) — same shared
-# examples/example_sim_cache/ directory every other example (including
+# example_sim_cache/ directory every other example (including
 # ring_resonator_hybrid.py) points at.
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # 0. Test-mode knob — see ring_resonator_hybrid.py's identical knob.
