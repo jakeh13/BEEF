@@ -40,9 +40,9 @@ into that cascade.
 | Mesh auto-refinement / convergence checking | None — manual `res`, user must sweep by hand | Manual (subpixel smoothing helps, not auto-refine) | n/a | Automatic adaptive meshing | — |
 | Device geometry library | `MMI` (N×M, per-port `MMIPort` taper size/placement), `DirectionalCoupler`, standalone `Taper`/`SBend` building blocks, `CompoundGeometry`/`WaveguideRun` (compose several devices into one cascade), `BendGeometry` (legacy, poorly integrated) | n/a (raw geometry primitives only) | n/a | Has some parametric primitives + PDK support | **gdsfactory** — the dominant OSS parametric photonic component library (3M+ downloads; gdsfactory+ lists 43+ foundry PDKs as of 2026); **picwriter**, **phidl** (lighter-weight alternatives) |
 | GDS import/export, PDK interop | **None** — gdsfactory dependency was actively removed (commit `ffcbf5a`); geometries are BEEF-internal polygon dicts only, can't simulate a real fab layout or export one for tape-out | n/a | Uses gdsfactory `Component`s | Has gdsfactory integration | gdsfactory itself |
-| Ring/racetrack resonator | Proof-of-physics only (`examples/ring_resonator/`, raw meep/meow, see Geometry recommendation #1) — no `DeviceGeometry` yet | n/a | n/a | n/a | gdsfactory has one |
+| Ring/racetrack resonator | *(2026-07-29)* `RingResonatorCouplerSection`/`RingResonatorBendSection` (`beef/geometry/`) plus `FDTDSolver`'s new y-normal `PortSpec` support and `beef.network.close_loop()` exist as standalone, tested primitives — see Geometry recommendation #1 — but nothing wires them together yet; `examples/ring_resonator/` is unchanged, still raw meep/meow | n/a | n/a | n/a | gdsfactory has one |
 | Grating coupler / edge coupler geometry | Missing | n/a | n/a | n/a | gdsfactory |
-| Circuit-level composition (cascade many devices' S-matrices into one chip netlist) | **None** — `SMatrix` has no `+`/`@`/composition operators | n/a | n/a | n/a | **SAX** (JAX/netlist-driven, differentiable) and **Simphony** (component-library/plugin-based, itself built on SAX) are the two standard choices; **opics**, **lekkersim**, **photontorch** (adds time-domain circuit analysis) round out the space |
+| Circuit-level composition (cascade many devices' S-matrices into one chip netlist) | *(2026-07-29)* `beef.network` — general Redheffer-star-product `connect()`/`close_loop()`/`Circuit`, verified against the ring resonator's proven closed-form formula and against `mmi_2x2_hybrid.py`'s hand-rolled cascade; not yet wired into `HybridSolver` or any example (see Network below) | n/a | n/a | n/a | **SAX** (JAX/netlist-driven, differentiable) and **Simphony** (component-library/plugin-based, itself built on SAX) are the two standard choices; **opics**, **lekkersim**, **photontorch** (adds time-domain circuit analysis) round out the space |
 | Result serialization | Pickle only, no schema/versioning | n/a | n/a | Its own `.hdf5`/JSON | Touchstone `.sNp` is the RF/photonics interop standard, not supported |
 | Passivity/unitarity sanity check | `SMatrix.check_passive()` — implemented, called after every `solve()`/`hybrid.solve()` in every example and golden test as standard practice | n/a | n/a | n/a | — |
 | Parallel parameter sweeps | `ParallelSweep` — local `multiprocessing.Pool` grid sweep, but only calls whole-device `solver.solve()`, **not** `HybridSolver`-aware, no cloud/cluster backend beyond an external SLURM Makefile | n/a (user-driven) | n/a | Cloud batch is tidy3d's core value prop | — |
@@ -350,8 +350,71 @@ just what each solver/geometry/plotting entry point does and how they fit togeth
   `smat.check_passive()` right after `solve()`/`hybrid.solve()` as standard
   practice. `save()`/`load()` round-trip via pickle (unversioned, no interop
   format — see Misc recommendation #2). No composition operators (`+`/`@`) to
-  cascade several already-solved `SMatrix` results into a larger circuit (see
-  Solver recommendation #3).
+  cascade several already-solved `SMatrix` results into a larger circuit —
+  **partly closed 2026-07-29, see Network below.**
+
+### Network (`beef/network/`)
+
+*(Added 2026-07-29, closing the composition half of Solver recommendation #3
+and the `ring_resonator_validation.md` "general form" recommendation — the
+same underlying gap named independently in two places, see that file's
+Recommendation section.)*
+
+- **`SMatrixBlock`** (`block.py`) — dense `[M, N, N]` S-parameter block over
+  named, multi-mode ports (`data[m] @ a[m] = b[m]`), distinct from `SMatrix`'s
+  flat sparse `(port, in_mode, out_mode)` dict: every port here is
+  bidirectional (carries its own reflection/self-term), which is what
+  `connect()`/`close_loop()` need to do real linear algebra on.
+  `submatrix(port_out, port_in)` is the multi-mode generalization of what
+  `solve_section()` already returns for one directional pair.
+- **`connect(block_a, port_a, block_b, port_b)`** — the general Redheffer
+  star product joining one named port of two (possibly different) blocks;
+  every other port of both survives. When both blocks come from
+  `from_transfer_matrix()` (zero self-terms, matching what
+  `solve_section()` actually models), this reduces *exactly* to ordinary
+  transfer-matrix multiplication — verified against `mmi_2x2_hybrid.py`'s
+  own hand-rolled `einsum` cascade to `1e-12` (`tests/test_network.py`).
+- **`close_loop(block, port_out, port_in, loop=None)`** — eliminates a
+  block's own port against itself (node elimination); only the
+  `port_out == port_in` case is implemented — the `!=` case (closing two
+  *different* ports of an already-merged block, needed for some
+  `Circuit`-discovered cycles) is a materially different formula and raises
+  `NotImplementedError`, deferred. Verified to reproduce the ring
+  resonator's proven closed-form all-pass formula
+  (`ring_resonator_hybrid.py:762-774`, `E_thru = t + k1·k2·P/(1-t_ring·P)`)
+  term for term when applied to a 2-port `[bus, ring]` block with
+  `loop=P` — this is the concrete evidence the general primitive is
+  physically correct, not just internally consistent
+  (`tests/test_network_ring_crosscheck.py`).
+- Both raise on a near/exactly-singular star-product or loop-closure
+  system, via the reciprocal smallest singular value rather than
+  `np.linalg.cond()` — the latter is identically `1.0` for any 1×1 matrix
+  regardless of magnitude (confirmed: `cond([[1e-9]]) == 1.0`), which would
+  silently defeat the check for exactly the real use case, a single-mode
+  ring's loop port. A near-critical-coupling ring genuinely produces this
+  condition; the warning/error is not a numerical artifact to raise the
+  threshold past.
+- **`Circuit`** (`circuit.py`) — stateful multi-block builder
+  (`add_block`/`connect`/`close_loop`/`reduce`), namespacing each
+  registered block's ports as `f"{name}.{port}"` so two instances of the
+  same device never collide. A queued `connect()` between two names already
+  merged into one component is automatically dispatched to `close_loop()`
+  instead — the one caller `close_loop`'s `port_out != port_in` branch
+  would need, deferred along with it. Once wired up, extracting a device's
+  full multi-excitation response from one `Circuit.reduce()` + `to_smatrix()`
+  call is a byproduct that subsumes Solver recommendation #2's
+  multi-excitation `solve()` ask — noted, not built as a dedicated
+  `HybridSolver` API.
+- **Deliberately not wired up yet**: nothing in `beef/solvers/` or any
+  example imports `beef.network` — it depends only on `SMatrix`/`numpy`.
+  `HybridSolver`'s own cascade is untouched; the ring resonator examples
+  still hand-roll their closed-form assembly directly. *(2026-07-29 —
+  `ring_resonator_validation.md`'s other two prerequisites, y-normal
+  `FDTDSolver` ports and a `RingResonator` `DeviceGeometry`, are now also
+  done — see Solvers/Geometry above and Geometry recommendation #1 below —
+  so nothing structural blocks the wiring anymore; it's just not done.)*
+  32 new fast tests, no meep/meow import, full suite unaffected:
+  282 → 314 passed.
 
 ### Sweep (`beef/sweep/`)
 
@@ -500,18 +563,24 @@ lives in "Current library reference" above, not here.
    wrong — the hand-rolled path can, so each example now asserts its own
    length budget (FDTD stubs + EME body == the nominal body length) in
    script-level code that a `solve()`-based version wouldn't need at all.
-3. **Circuit-level S-matrix composition.** `SMatrix` has no way to combine several
-   devices' results into a larger circuit (e.g. cascading an MMI's `SMatrix` with a
-   directional coupler's). `HybridSolver` already does exactly this kind of
-   matrix-chain cascading *within* one device across sections — generalizing that
-   same machinery to cascade *across* independently-solved devices (or documenting a
-   recipe for handing `SMatrix` results to SAX or Simphony, both established OSS
-   tools for exactly this layer) would stop device-level sims from being a dead
-   end. (Note: `CompoundGeometry` — see Geometry section — solves a related but
-   distinct problem at the geometry layer: it lets `HybridSolver` simulate a device
-   built from several `DeviceGeometry` parts as one cascade *before* solving, but
-   doesn't let two already-*solved* `SMatrix` results be combined after the fact,
-   which is what this item is about.)
+
+   *(2026-07-29 — the primitive that would replace this now exists, not yet
+   used here.)* `beef.network.Circuit` can register both excitations'
+   transfer matrices and extract every port-combination coefficient from one
+   `reduce()` + `to_smatrix()` call — see Network below. Neither example has
+   been migrated to it; this item is about a dedicated `HybridSolver.solve()`
+   API, which is still not built.
+3. **Circuit-level S-matrix composition.** *(Composition primitive done
+   2026-07-29 — see Network below; not yet wired into `HybridSolver` or any
+   example.)* `SMatrix` itself still has no `+`/`@` operators, and nothing in
+   `beef/solvers/` calls the new `beef.network` module — this item's
+   *library-integration* half (making composition a first-class part of
+   `HybridSolver`'s own API, the way `SMatrix` is today) is still open.
+   `CompoundGeometry` — see Geometry section — remains a related but distinct
+   problem at the geometry layer: it lets `HybridSolver` simulate a device
+   built from several `DeviceGeometry` parts as one cascade *before* solving;
+   `beef.network` combines already-*solved* results *after* the fact, which
+   is what this item was originally about.
 4. **`ParallelSweep` + `HybridSolver` integration.** The sweep utility only calls
    whole-device `solver.solve()`; it doesn't know about `HybridSolver.solve()`'s
    `cache=` mechanism, so a parallel sweep over a hybrid device would redundantly
@@ -671,22 +740,34 @@ lives in "Current library reference" above, not here.
 
 ### Geometry
 
-1. **Ring/racetrack resonator.** The single most common photonics building block
-   that isn't in the device library at all. Natural fit for the existing
+1. **Ring/racetrack resonator.** *(2026-07-29 — (a), (b) and (c) below now all
+   exist as standalone, tested library capabilities; none are wired together or
+   to this device yet — see Solvers/Geometry/Network above and
+   `validation_markdown/ring_resonator_validation.md`'s recommendation section
+   for the full record.)* The single most common photonics building block that
+   isn't in the device library at all. Natural fit for the existing
    `DeviceGeometry` interface (bus waveguide + coupled ring, `section_prisms`/
    `width_at`/`center_at` following the `DirectionalCoupler` pattern), and directly
    exercises `HybridSolver`'s generic cascading (bus straights as FDTD/EME + coupling
    region). `examples/ring_resonator/python/ring_resonator_hybrid.py` proves out the
    physics (closed-form all-pass feedback assembly, not a `HybridSolver` chain — a
    ring is a loop, not a cascade) entirely in raw meep/meow, bypassing the geometry
-   layer and every solver class. What's still missing for a first-class version:
-   (a) an actual `RingResonator`/racetrack `DeviceGeometry`; (b) y-normal (x-z
-   plane) source/monitor support in `FDTDSolver` — it only ever builds x-normal
-   (y-z plane) sources/monitors today (see Current library reference above), and
-   the two bus-to-ring coupling ports in a racetrack coupler section are
-   perpendicular to that; (c) a feedback-loop assembly mode in `HybridSolver`
-   (or a sibling), since its `solve()` is fundamentally a one-pass matrix chain,
-   not a resonator sum.
+   layer and every solver class — that script is still unchanged and still doesn't
+   use any of what follows. What was missing for a first-class version:
+   (a) an actual `RingResonator`/racetrack `DeviceGeometry` — **done**,
+   `RingResonatorCouplerSection`/`RingResonatorBendSection`
+   (`beef/geometry/ring_coupler.py`/`ring_bend.py`); (b) y-normal (x-z
+   plane) source/monitor support in `FDTDSolver` — it only ever built x-normal
+   (y-z plane) sources/monitors before, and the two bus-to-ring coupling ports in
+   a racetrack coupler section are perpendicular to that — **done**,
+   `solve_section()`'s new `y0`/`y1`/`excite_port`/`measure_port`
+   (`PortSpec`) parameters, additive and default-`None`; (c) a feedback-loop
+   assembly mode in `HybridSolver` (or a sibling), since its `solve()` is
+   fundamentally a one-pass matrix chain, not a resonator sum — **done**,
+   `beef.network.close_loop()`, verified to reproduce this device's own proven
+   closed-form formula term for term. What remains is wiring (a)+(b)+(c) together
+   into an actual device and a new example script — not designed here, see the
+   validation doc.
 2. **GDS import (read a real/foundry/gdsfactory layout) and export (tape-out-ready
    output).** The gdsfactory dependency was deliberately removed from the internal
    pipeline (raw polygon dicts are faster/simpler for BEEF's own parametric shapes),
@@ -780,7 +861,10 @@ lives in "Current library reference" above, not here.
    sweep) and can't use `plot_fdtd_geometry`/`plot_hybrid_geometry` at all (both
    require a `DeviceGeometry`) — it hand-draws its own geometry preview plots
    instead. The geometry-class-backed version (proper `plot_*_geometry`
-   integration, resolution-sweep convergence check) remains open.
+   integration, resolution-sweep convergence check) remains open. *(2026-07-29
+   — the `DeviceGeometry` to pair it with now exists, see Geometry
+   recommendation #1; this item is specifically about updating the example
+   itself, still unstarted.)*
 
 ### Misc
 

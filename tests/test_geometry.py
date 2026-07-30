@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import pytest
 
+from beef.geometry._arc import arc_polygon
 from beef.geometry.compound import CompoundGeometry, WaveguideRun
 from beef.geometry.coupler import DirectionalCoupler
 from beef.geometry.mmi import MMI, MMIPort
+from beef.geometry.ring_bend import RingResonatorBendSection
+from beef.geometry.ring_coupler import RingResonatorCouplerSection
 from beef.geometry.sbend import SBend
 from beef.geometry.taper import Taper
 
@@ -216,3 +219,118 @@ class TestCompoundGeometry:
         g = self._compound()
         with pytest.raises(ValueError, match="outside CompoundGeometry"):
             g.width_at(100.0)
+
+
+# ---------------------------------------------------------------------------
+# arc_polygon
+# ---------------------------------------------------------------------------
+
+class TestArcPolygon:
+    def test_endpoints_and_vertex_count(self):
+        poly = arc_polygon(0.0, 0.0, 1.0, 2.0, 0.0, 90.0, n_pts=5)
+        assert len(poly) == 2 * 5
+        outer_start, outer_end = poly[0], poly[4]
+        inner_end, inner_start = poly[5], poly[9]
+        assert outer_start == pytest.approx((2.0, 0.0))
+        assert outer_end == pytest.approx((0.0, 2.0), abs=1e-9)
+        assert inner_start == pytest.approx((1.0, 0.0))
+        assert inner_end == pytest.approx((0.0, 1.0), abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# RingResonatorCouplerSection
+# ---------------------------------------------------------------------------
+
+class TestRingResonatorCouplerSection:
+    def _left(self):
+        return RingResonatorCouplerSection(
+            waveguide_width=0.45, gap=0.25, bend_radius=5.0, near_length=4.0,
+            ring_stub_margin=0.5, iface_buffer=1.0, bus_clearance=2.0, side="left",
+        )
+
+    def _right(self):
+        return RingResonatorCouplerSection(
+            waveguide_width=0.45, gap=0.25, bend_radius=5.0, near_length=4.0,
+            ring_stub_margin=0.5, iface_buffer=1.0, bus_clearance=2.0, side="right",
+        )
+
+    def test_breakpoints_match_reference_constants(self):
+        c = self._left()
+        assert c.stub_x == pytest.approx(-7.0)
+        assert c.hc == pytest.approx(-2.0)
+        assert c.iface_x == pytest.approx(-1.0)
+        assert c.outer_x == pytest.approx(-9.0)
+        assert c.total_length == pytest.approx(8.0)
+
+    def test_ring_port_y_boundary_matches_left_ring_y(self):
+        c = self._left()
+        assert c.ring_port().y_boundary == pytest.approx(6.20)  # Y_RING+R+S_MON = 0.70+5.0+0.5
+
+    def test_left_and_right_are_x_mirrors(self):
+        left, right = self._left(), self._right()
+        assert right.stub_x == pytest.approx(-left.stub_x)
+        assert right.hc == pytest.approx(-left.hc)
+        assert right.iface_x == pytest.approx(-left.iface_x)
+        assert right.outer_x == pytest.approx(-left.outer_x)
+
+    def test_width_at_and_center_at_bus_alone_vs_coupled_region(self):
+        c = self._left()
+        assert c.width_at(-8.0) == pytest.approx(0.45)
+        assert c.center_at(-8.0) == pytest.approx(0.0)
+        assert c.width_at(-1.5) == pytest.approx(2 * 0.45 + 0.25)
+        assert c.center_at(-1.5) == pytest.approx((0.45 + 0.25) / 2)
+
+    def test_cut_inside_bend_raises(self):
+        c = self._left()
+        with pytest.raises(ValueError, match="falls strictly inside the near-bend arc"):
+            c.width_at(-4.0)
+
+    def test_invalid_side_raises(self):
+        with pytest.raises(ValueError, match="side must be"):
+            RingResonatorCouplerSection(side="up")
+
+    def test_invalid_iface_buffer_raises(self):
+        with pytest.raises(ValueError, match="iface_buffer"):
+            RingResonatorCouplerSection(near_length=4.0, iface_buffer=3.0)
+
+    def test_section_polygons_full_span(self):
+        c = self._left()
+        polys = c._section_polygons(c.outer_x, c.iface_x, y_pml=0.5)
+        assert len(polys) == 4  # bus, near-bend arc, stub column, sliver
+
+    def test_to_gds_eme_raises(self):
+        c = self._left()
+        with pytest.raises(NotImplementedError):
+            c.to_gds_eme(straight_length=1.0, oxide_width=3.0)
+
+
+# ---------------------------------------------------------------------------
+# RingResonatorBendSection
+# ---------------------------------------------------------------------------
+
+class TestRingResonatorBendSection:
+    def test_total_length_is_bend_radius(self):
+        b = RingResonatorBendSection(bend_radius=5.0)
+        assert b.total_length == pytest.approx(5.0)
+
+    def test_out_port(self):
+        b = RingResonatorBendSection(bend_radius=5.0, output_margin=0.5)
+        port = b.out_port()
+        assert port.x == pytest.approx(5.0)
+        assert port.y_boundary == pytest.approx(5.5)
+        assert port.sign == 1
+
+    def test_cut_inside_bend_raises(self):
+        b = RingResonatorBendSection(bend_radius=5.0)
+        with pytest.raises(ValueError, match="falls strictly inside the bend arc"):
+            b.width_at(2.5)
+
+    def test_section_polygons(self):
+        b = RingResonatorBendSection(bend_radius=5.0)
+        polys = b._section_polygons(0.0, 5.0, stub_left=1.5, y_pml=0.25)
+        assert len(polys) == 3  # input straight, arc, output stub
+
+    def test_to_gds_eme_raises(self):
+        b = RingResonatorBendSection()
+        with pytest.raises(NotImplementedError):
+            b.to_gds_eme(straight_length=1.0, oxide_width=3.0)

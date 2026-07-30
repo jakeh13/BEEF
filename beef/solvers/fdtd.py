@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -268,6 +268,76 @@ class SectionFDTDLayout:
     mea_w: float
     kpoint: Tuple[float, float, float]
     alpha_idx: int  # 0 forward / 1 backward
+
+
+@dataclass(frozen=True)
+class PortSpec:
+    """Explicit orientation + aperture for one solve_section() port,
+    overriding section_fdtd_layout()'s geometry-derived default for EITHER
+    the excited (`excite_port`) or measured (`measure_port`) side
+    independently — see solve_section()'s own docstring for how the two
+    compose. Unlike section_fdtd_layout()'s geometry-driven aperture
+    (center_at/width_at/source_aperture_at/half_domain_aperture), a
+    PortSpec always fully and explicitly specifies its own aperture: no
+    DeviceGeometry today has an accessor for a y-normal port's local
+    geometry (an x-in/y-out width_at() can't describe a fixed-y slice's
+    x-extent) — see e.g. beef.geometry.ring_coupler.RingResonatorCouplerSection
+    .ring_port(), which hands the caller exactly the plain floats a PortSpec
+    needs rather than trying to satisfy width_at()'s existing contract.
+
+    Attributes:
+        axis: "x" (default — today's only orientation, a source/monitor
+            plane at fixed x spanning y) or "y" (a plane at fixed y
+            spanning x).
+        sign: +1 (default) selects get_eigenmode_coefficients() band index 0
+            (forward, +axis); -1 selects index 1 (backward, -axis). Which
+            EDGE of `axis`'s local domain this port sits at depends on
+            whether it's used as solve_section()'s excite_port or
+            measure_port — see that method's docstring: an excite_port's
+            edge is physically forced by its launch direction (LOW edge
+            for +1, HIGH for -1), a measure_port's is the opposite
+            convention (HIGH edge for +1, LOW for -1), since a monitor has
+            no such constraint.
+        center: device-frame coordinate TRANSVERSE to axis (y if axis="x",
+            x if axis="y") of the source/monitor plane's own center.
+        width: aperture span transverse to axis (µm). Must be > 0.
+    """
+    axis: Literal["x", "y"] = "x"
+    sign: int = 1
+    center: float = 0.0
+    width: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.axis not in ("x", "y"):
+            raise ValueError(f"PortSpec.axis must be 'x' or 'y', got {self.axis!r}.")
+        if self.sign not in (1, -1):
+            raise ValueError(f"PortSpec.sign must be +1 or -1, got {self.sign!r}.")
+        if self.width <= 0.0:
+            raise ValueError(f"PortSpec.width must be > 0, got {self.width!r}.")
+
+    @property
+    def alpha_idx(self) -> int:
+        """get_eigenmode_coefficients() band index this port reads: 0
+        (forward) for sign=+1, 1 (backward) for sign=-1 — verified against
+        ring_resonator_hybrid_cascaded.py's get_coeffs()/get_norm_calibrated()
+        (forward=True/False maps to alpha[...,0]/alpha[...,1] there too)."""
+        return 0 if self.sign == 1 else 1
+
+
+def _port_point(axis: str, along: float, transverse: float) -> Tuple[float, float]:
+    """(x, y) for a source/monitor plane at position `along` its own axis,
+    centered at `transverse` on the perpendicular axis. axis="x": along is
+    x, transverse is y (today's only case). axis="y": along is y,
+    transverse is x — verified against the reference scripts' own
+    add_y_monitor()/y-normal EigenModeSource construction, mp.Vector3(xc, y)."""
+    return (along, transverse) if axis == "x" else (transverse, along)
+
+
+def _port_size(axis: str, width: float, mon_sz: float) -> Tuple[float, float, float]:
+    """meep Vector3 size for a source/monitor plane: zero-thickness along
+    its own normal, `width` transverse, `mon_sz` vertical (3-D core height
+    or 0 for a 2-D sim)."""
+    return (0.0, width, mon_sz) if axis == "x" else (width, 0.0, mon_sz)
 
 
 def section_fdtd_layout(
@@ -1028,6 +1098,10 @@ class FDTDSolver:
         stub_right: float = 0.0,
         monitor_center: Optional[float] = None,
         monitor_size: Optional[float] = None,
+        y0: Optional[float] = None,
+        y1: Optional[float] = None,
+        excite_port: Optional[PortSpec] = None,
+        measure_port: Optional[PortSpec] = None,
         save_dir: Optional[str] = None,
         cache_only: bool = False,
         **geometry_kwargs,
@@ -1072,6 +1146,44 @@ class FDTDSolver:
                 PML inner edge. None (default) keeps the rule. Neither
                 override touches the source/norm monitor on the excited side
                 (see source_aperture_at / half_domain_aperture for those).
+            y0, y1: device-frame y-bounds for this section's domain, mirroring
+                x0/x1 but for the transverse axis. Both None (default): the
+                domain is sim_width wide, centred on y=0 — today's only
+                behavior, unchanged for every caller that doesn't pass these.
+                Both given: the domain spans exactly [y0, y1] (+ 2*dpml).
+                Giving only one raises ValueError. Required whenever
+                excite_port or measure_port has axis="y" (there is no
+                y-extent to place a y-normal plane in otherwise).
+            excite_port, measure_port: explicit PortSpec overrides for the
+                excited/measured side, for a section with a non-x-normal
+                port (e.g. one of a ring resonator's two coupling ports —
+                see beef.geometry.ring_coupler/ring_bend). None (default,
+                both): identical to today's behavior, section_fdtd_layout()
+                picks the excited side by reciprocity (excite from whichever
+                boundary has fewer modes) and both sides are x-normal. If
+                EITHER is given, that tie-break is bypassed entirely: the
+                excited side is always n_modes_in, the measured side always
+                n_modes_out, regardless of counts — section_fdtd_layout()'s
+                own `n_out <= n_in` tie-break silently picks the wrong
+                physical side whenever n_in == n_out, which is exactly the
+                case a single bend/coupling section with one mode per port
+                hits. A None side (with the other given) keeps using
+                section_fdtd_layout()'s geometry-derived value for that side
+                only. A y-normal excite_port additionally triggers
+                flux-calibrated normalization (see the method body) — an
+                empirically necessary correction for a backward, off-axis-
+                launched source, first found in
+                examples/ring_resonator/python/ring_resonator_hybrid.py.
+                excite_port.sign and measure_port.sign use OPPOSITE edge
+                conventions for the same value: sign=+1 puts an
+                excite_port at axis's LOW edge (a source launching +axis
+                must sit upstream, physically forced) but a measure_port
+                at the HIGH edge (a monitor reading +axis-forward light
+                naturally sits downstream, where forward-propagating light
+                is captured after crossing the section) — sign=-1 is the
+                mirror of both. Only the alpha_idx/kpoint meaning (+1=
+                forward/index 0, -1=backward/index 1) is shared between the
+                two roles.
             save_dir: persistent on-disk cache directory (see beef/cache/).
                 None/"" (default) disables the cache entirely — every call
                 re-runs the simulation, same as before this parameter
@@ -1093,6 +1205,15 @@ class FDTDSolver:
         Returns:
             Complex ndarray [len(wavelengths), n_modes_out, n_modes_in].
         """
+        if (y0 is None) != (y1 is None):
+            raise ValueError("solve_section: y0 and y1 must both be given or both omitted.")
+        for _label, _port in (("excite_port", excite_port), ("measure_port", measure_port)):
+            if _port is not None and _port.axis == "y" and y0 is None:
+                raise ValueError(
+                    f"solve_section: {_label}.axis='y' requires y0 and y1 to be given "
+                    "(there is no y-extent to place a y-normal plane in otherwise)."
+                )
+
         import meep as mp
 
         wavelengths = np.asarray(wavelengths)
@@ -1110,7 +1231,21 @@ class FDTDSolver:
         # them — a future change to that derivation logic then shows up as
         # a config diff instead of a silent stale-cache hit (Solver
         # recommendation #4).
-        layout = section_fdtd_layout(
+        # Skip section_fdtd_layout() entirely when BOTH sides are PortSpec-
+        # overridden: nothing downstream would use its geometry-derived
+        # defaults anyway, and calling it regardless would be actively wrong
+        # for a geometry whose entire section IS a curved/mixed-orientation
+        # feature with no "uniform region eps inside the boundary" the way
+        # every straight-flanked geometry (DirectionalCoupler, MMI, SBend,
+        # Taper) has — section_fdtd_layout() unconditionally samples
+        # geometry.width_at()/center_at() near x0/x1 to compute values that
+        # would be discarded once both PortSpecs are given. E.g.
+        # RingResonatorBendSection's entire [0, bend_radius] span is its own
+        # bend, so that eps-sampling always lands inside its own _check_cut()
+        # guard — found by tests/test_ring_orientation.py's real-meep check,
+        # which failed here before this fix.
+        both_overridden = excite_port is not None and measure_port is not None
+        layout = None if both_overridden else section_fdtd_layout(
             geometry, x0, x1, stub_left, stub_right,
             n_modes_in, n_modes_out, self.sim_width,
             self.source_margin, self.monitor_margin, self.half_domain_aperture,
@@ -1128,6 +1263,20 @@ class FDTDSolver:
         # is exactly build_run_config()'s usual fingerprint with the mode
         # counts themselves removed and layout.reverse added in their place
         # (Solver recommendation #2).
+        # override/reverse: whenever either PortSpec is given, the excited/
+        # measured side is taken literally from n_modes_in/n_modes_out
+        # rather than section_fdtd_layout()'s own `n_out <= n_in` tie-break
+        # — that tie-break silently picks the wrong physical side whenever
+        # n_in == n_out (verified: the standalone-bend case, n_in=n_out=1,
+        # excites from the wrong end under the default rule). `reverse`
+        # here is the value actually used below, not layout.reverse's raw
+        # (possibly bypassed) value — fingerprinted as such.
+        override = excite_port is not None or measure_port is not None
+        reverse = False if override else layout.reverse
+
+        def _port_key(p: Optional[PortSpec]) -> Optional[dict]:
+            return asdict(p) if p is not None else None
+
         family_config = None
         if save_dir and monitor_size is not None:
             family_config = build_run_config(
@@ -1135,7 +1284,9 @@ class FDTDSolver:
                 dict(x0=x0, x1=x1, wavelengths=wavelengths,
                      stub_left=stub_left, stub_right=stub_right,
                      monitor_center=monitor_center, monitor_size=monitor_size,
-                     geometry_kwargs=geometry_kwargs, reverse=layout.reverse,
+                     y0=y0, y1=y1, excite_port=_port_key(excite_port),
+                     measure_port=_port_key(measure_port),
+                     geometry_kwargs=geometry_kwargs, reverse=reverse,
                      **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor),
                      **resolved_material_config(self.material_stack, wavelengths)),
                 geometry,
@@ -1148,8 +1299,10 @@ class FDTDSolver:
                      n_modes_in=n_modes_in, n_modes_out=n_modes_out,
                      stub_left=stub_left, stub_right=stub_right,
                      monitor_center=monitor_center, monitor_size=monitor_size,
+                     y0=y0, y1=y1, excite_port=_port_key(excite_port),
+                     measure_port=_port_key(measure_port),
                      geometry_kwargs=geometry_kwargs,
-                     resolved_layout=asdict(layout),
+                     resolved_layout=(asdict(layout) if layout is not None else None),
                      **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor),
                      **resolved_material_config(self.material_stack, wavelengths)),
                 geometry,
@@ -1195,7 +1348,12 @@ class FDTDSolver:
 
         span = x1 - x0
         Sx = span + stub_left + stub_right + 2 * self.dpml
-        Sy = self.sim_width + 2 * self.dpml
+        if y0 is not None:
+            Sy = (y1 - y0) + 2 * self.dpml
+            y_center = (y0 + y1) / 2.0
+        else:
+            Sy = self.sim_width + 2 * self.dpml
+            y_center = 0.0
 
         # Centre the meep cell on the *padded* domain [x0-stub_left, x1+stub_right],
         # not the bare section [x0, x1] — meep always centres its cell_size box at
@@ -1217,10 +1375,12 @@ class FDTDSolver:
         # shift prisms from device frame into the meep-centered frame,
         # preserving each prism's own z placement/extrusion (vertex z and
         # height carry the 2-D-infinite vs 3-D-core convention, see
-        # polygons_to_prisms in beef/geometry/base.py)
+        # polygons_to_prisms in beef/geometry/base.py). y_center is 0 (a
+        # no-op subtraction) whenever y0/y1 are not given, i.e. for every
+        # caller before PortSpec existed.
         shifted = [
             mp.Prism(
-                vertices=[mp.Vector3(v.x - x_center, v.y, v.z) for v in p.vertices],
+                vertices=[mp.Vector3(v.x - x_center, v.y - y_center, v.z) for v in p.vertices],
                 height=p.height, material=p.material,
             )
             for p in prisms
@@ -1234,22 +1394,80 @@ class FDTDSolver:
         # 0 (a pure interior cut). layout's positions are in the local frame
         # (0 at lo, L at hi) and shift into this method's meep-centered frame
         # by -L/2 == lo - x_center.
-        n_excite, n_measure = layout.n_excite, layout.n_measure
-        src_x = layout.src_x + lo - x_center
-        norm_x = layout.norm_x + lo - x_center
-        mea_x = layout.mea_x + lo - x_center
-        src_c_ap, src_width = layout.src_c, layout.src_width
-        mea_c, w_meas = layout.mea_c, layout.mea_w
-        kpoint = mp.Vector3(*layout.kpoint)
-        alpha_idx = layout.alpha_idx
+        #
+        # excite_port/measure_port bypass layout's x-normal-only fields
+        # entirely for the side they cover: each resolves its own axis,
+        # along-axis position (source and norm-monitor separately, offset
+        # by source_margin/monitor_margin from whichever edge `sign` picks),
+        # transverse center, aperture width, launch kpoint, and
+        # get_eigenmode_coefficients() band index — independently per side,
+        # since (verified against ring_resonator_hybrid_cascaded.py's
+        # run_left_fdtd()) the excite/norm side's index and the measure
+        # side's index are genuinely different quantities, not one shared
+        # value. A None side keeps using layout's geometry-derived value,
+        # still shifted by -y_center (a no-op unless the OTHER side forced
+        # y0/y1 to be non-default).
+        n_excite = n_modes_in if override else layout.n_excite
+        n_measure = n_modes_out if override else layout.n_measure
+
+        if excite_port is not None:
+            p = excite_port
+            ex_axis = p.axis
+            ex_width = p.width
+            lo_ax, hi_ax = (lo, hi) if ex_axis == "x" else (y0, y1)
+            along_shift, transverse_shift = (x_center, y_center) if ex_axis == "x" else (y_center, x_center)
+            ex_along_src = (lo_ax if p.sign == 1 else hi_ax) + p.sign * self.source_margin - along_shift
+            ex_along_norm = (lo_ax if p.sign == 1 else hi_ax) + p.sign * self.monitor_margin - along_shift
+            ex_transverse = p.center - transverse_shift
+            ex_kpoint = (float(p.sign), 0.0, 0.0) if ex_axis == "x" else (0.0, float(p.sign), 0.0)
+            ex_alpha_idx = p.alpha_idx
+        else:
+            ex_axis = "x"
+            ex_width = layout.src_width
+            ex_transverse = layout.src_c - y_center
+            ex_along_src = layout.src_x + lo - x_center
+            ex_along_norm = layout.norm_x + lo - x_center
+            ex_kpoint = layout.kpoint
+            ex_alpha_idx = layout.alpha_idx
+
+        if measure_port is not None:
+            p = measure_port
+            mea_axis = p.axis
+            mea_width = p.width
+            lo_ax, hi_ax = (lo, hi) if mea_axis == "x" else (y0, y1)
+            along_shift, transverse_shift = (x_center, y_center) if mea_axis == "x" else (y_center, x_center)
+            # Measure ports use the OPPOSITE edge convention from excite
+            # ports for the same sign, unlike excite_port's edge choice
+            # (which is physically forced: a source launching +axis must
+            # sit at the LOW edge or it can't illuminate the domain at
+            # all). A monitor has no such constraint — it passively reads
+            # whichever direction is present. sign=+1 (reading +axis-
+            # forward light, alpha_idx=0) naturally sits at the HIGH edge
+            # (downstream, where forward-propagating light is captured
+            # after crossing the section, e.g. an interface plane at the
+            # far end of a bent section whose input was x-normal); sign=-1
+            # at the LOW edge. This is a physically-motivated choice, not
+            # verified against the reference scripts — they never override
+            # the measure side's position via an explicit PortSpec, only
+            # excite_port's LOW/HIGH convention is directly verified
+            # (ring_resonator_hybrid_cascaded.py's run_left_fdtd()).
+            mea_along = (hi_ax if p.sign == 1 else lo_ax) - p.sign * self.monitor_margin - along_shift
+            mea_transverse = p.center - transverse_shift
+            mea_alpha_idx = p.alpha_idx
+        else:
+            mea_axis = "x"
+            mea_width = layout.mea_w
+            mea_transverse = layout.mea_c - y_center
+            mea_along = layout.mea_x + lo - x_center
+            mea_alpha_idx = layout.alpha_idx
 
         for k in range(1, n_excite + 1):
             src = mp.EigenModeSource(
                 mp.GaussianSource(fcen, fwidth=fwidth),
-                center=mp.Vector3(src_x, src_c_ap),
-                size=mp.Vector3(0, src_width, self._mon_sz),
+                center=mp.Vector3(*_port_point(ex_axis, ex_along_src, ex_transverse)),
+                size=mp.Vector3(*_port_size(ex_axis, ex_width, self._mon_sz)),
                 eig_band=k,
-                eig_kpoint=kpoint,
+                eig_kpoint=mp.Vector3(*ex_kpoint),
                 eig_match_freq=True,
             )
             sim = mp.Simulation(
@@ -1265,26 +1483,37 @@ class FDTDSolver:
             )
             norm_flux = sim.add_mode_monitor(
                 mon_freqs,
-                mp.FluxRegion(center=mp.Vector3(norm_x, src_c_ap),
-                              size=mp.Vector3(0, src_width, self._mon_sz)),
+                mp.FluxRegion(center=mp.Vector3(*_port_point(ex_axis, ex_along_norm, ex_transverse)),
+                              size=mp.Vector3(*_port_size(ex_axis, ex_width, self._mon_sz))),
             )
             mea_flux = sim.add_mode_monitor(
                 mon_freqs,
-                mp.FluxRegion(center=mp.Vector3(mea_x, mea_c),
-                              size=mp.Vector3(0, w_meas, self._mon_sz)),
+                mp.FluxRegion(center=mp.Vector3(*_port_point(mea_axis, mea_along, mea_transverse)),
+                              size=mp.Vector3(*_port_size(mea_axis, mea_width, self._mon_sz))),
             )
 
             sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol))
 
             norm_coeff = sim.get_eigenmode_coefficients(norm_flux, [k], eig_parity=mp.NO_PARITY)
-            src_alpha = norm_coeff.alpha[0, :, alpha_idx]
+            if ex_axis == "y":
+                # Flux-calibrated normalization: get_eigenmode_coefficients()
+                # alone undercounts power for an off-axis, backward-launched
+                # source — an empirically-found correction, first needed in
+                # examples/ring_resonator/python/ring_resonator_hybrid.py's
+                # get_norm_calibrated() (magnitude from mp.get_fluxes(),
+                # phase from the coefficient). Applied for both signs
+                # conservatively; only sign=-1 was ever tested there.
+                flux = np.abs(np.asarray(mp.get_fluxes(norm_flux)))
+                src_alpha = np.sqrt(flux) * np.exp(1j * np.angle(norm_coeff.alpha[0, :, ex_alpha_idx]))
+            else:
+                src_alpha = norm_coeff.alpha[0, :, ex_alpha_idx]
 
             for m in range(1, n_measure + 1):
                 c = sim.get_eigenmode_coefficients(mea_flux, [m], eig_parity=mp.NO_PARITY)
                 # [wl_order] lifts the ratio out of meep's ascending-frequency
                 # monitor order back onto `wavelengths` as the caller gave it.
-                coeff = (c.alpha[0, :, alpha_idx] / src_alpha)[wl_order]
-                if layout.reverse:
+                coeff = (c.alpha[0, :, mea_alpha_idx] / src_alpha)[wl_order]
+                if reverse:
                     T[:, k - 1, m - 1] = coeff  # excited=out(k), measured=in(m)
                 else:
                     T[:, m - 1, k - 1] = coeff  # excited=in(k), measured=out(m)

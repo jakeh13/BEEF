@@ -110,21 +110,69 @@ needed each ported by hand, and the axis fix was not. That will keep happening.
 The durable fix is to make the ring a first-class device, which needs three
 things — the first two mechanical, the third a real design change.
 
-**(a) Arbitrary-orientation ports in `FDTDSolver`.** Every source and monitor in
-`beef/solvers/fdtd.py` is x-normal — `mp.Vector3(0, w, h)`, 8 occurrences. The
-ring's two coupling ports sit on top of the near bends and are **y-normal**
-(x–z planes). Nothing in BEEF draws or measures those, and
-`beef/geometry/_compose.py` has translation only, no rotation. Needs a port
-orientation carried through `section_fdtd_layout()` and the monitor builders.
+**(a) Arbitrary-orientation ports in `FDTDSolver` — done, 2026-07-29.** Every
+source and monitor in `beef/solvers/fdtd.py` was x-normal — `mp.Vector3(0, w,
+h)`, 8 occurrences — and the ring's two coupling ports, sitting on top of the
+near bends, are **y-normal** (x–z planes). `solve_section()` now takes
+`y0`/`y1` (a y-axis domain bound, mirroring `x0`/`x1`) and `excite_port`/
+`measure_port` (`PortSpec(axis="x"|"y", sign=±1, center, width)`), additive
+and default-`None` — every existing caller is unaffected, verified by the
+full fast suite staying at 338 passed after the change.
+`section_fdtd_layout()`/`SectionFDTDLayout` are untouched; `PortSpec`
+bypasses them per-side rather than extending their scalar contract.
 
-**(b) A `RingResonator` DeviceGeometry**, so `section_gds()` / `section_prisms()`
-work and the device stops hand-building meep objects.
+Two real bugs found while building this, not just anticipated: (1)
+`section_fdtd_layout()`'s `reverse = n_out <= n_in` tie-break silently
+excites from the wrong physical side whenever `n_in == n_out` — exactly the
+standalone-bend case (`n_modes_in=n_modes_out=1`) — now bypassed via a forced
+`reverse=False` whenever either `PortSpec` is given, with the excited/
+measured role taken literally from `n_modes_in`/`n_modes_out`. (2) a
+measure port's edge convention is the *opposite* of an excite port's for the
+same `sign` value — a source's launch direction physically forces it to a
+specific edge, but a passive monitor has no such constraint, so `sign=+1`
+means "low edge, launch +axis" for `excite_port` but "high edge, read
++axis-forward light" for `measure_port`. Caught mid-implementation, before
+either shipped silently wrong.
 
-**(c) `HybridSolver` must express feedback.** This is the substantive one. The
-solver today contracts a straight cascade — `np.einsum("mij,mjk->mik", ...)` at
-`hybrid.py:318` and `:416` — threading light through the sections once. A ring
+**Verified against real physics, not just unit tests.** A
+`@pytest.mark.slow` check (`tests/test_ring_orientation.py`, run with
+`--runslow`) builds the new `RingResonatorBendSection` (below), excites
+x-normal, measures y-normal through the 90° bend at reduced resolution
+(res 15, 2-D — a login-node smoke run, not production), and passes: meep's
+own log shows the y-normal monitor resolving a mode whose dominant
+planewave is genuinely y-directed (`(0, 2.01, 0)`) against the x-normal
+source's x-directed one (`(2.04, 0, 0)`) — physical confirmation, not a
+numeric coincidence. **Not yet run at production resolution/3-D**, and the
+y-normal *excite* + flux-calibration path (needed for the coupler section's
+actual ring input, not exercised by the bend alone) is still unverified by
+any real meep run.
+
+**(b) A `RingResonator` DeviceGeometry — done, 2026-07-29.**
+`RingResonatorCouplerSection` (bus + one near-bend + ring stub, `side="left"`
+or `"right"`) and `RingResonatorBendSection` (the standalone 90° bend,
+x-normal in / y-normal out) both implement `section_prisms`/`section_gds`/
+`width_at`/`center_at`, in `beef/geometry/ring_coupler.py` and `ring_bend.py`.
+Breakpoints verified to match the reference scripts' own constants exactly
+(`stub_x=-7.0`, `hc=-2.0`, `iface_x=-1.0`, `ring_port().y_boundary=6.20` for
+`side="left"`; left/right confirmed exact x-mirrors). Since `width_at`/
+`center_at`'s x-in/y-out contract can't honestly describe a fixed-x slice
+through the curved ring stub (not a function of x there, the same reason
+`SBend`/`DirectionalCoupler` forbid an interior bend cut at all),
+`ring_port()`/`out_port()` are the documented escape hatch, returning the
+perpendicular port's own geometry as plain floats for a caller to build a
+`PortSpec` + `y0`/`y1` from. 46 new fast, meep-free geometry tests, following
+`tests/test_geometry.py`'s existing style.
+
+The body (straight bus+ring pair) gets no new geometry code — it stays a
+raw-polygon `meow` call, matching how `solve_body_supermodes()` already
+works in the reference scripts.
+
+**(c) `HybridSolver` must express feedback.** This was the substantive one. The
+solver still contracts a straight cascade — `np.einsum("mij,mjk->mik", ...)` at
+`hybrid.py:360` and `:458` (line numbers drifted from this doc's original
+318/:416, code unchanged) — threading light through the sections once. A ring
 is a **closed loop**: light re-enters the coupling region every round trip, which
-is a closed-form all-pass sum, not a matrix product. Two ways out:
+is a closed-form all-pass sum, not a matrix product. Two ways out were scoped:
 
 - *Narrow:* keep the cascade for the open path (coupler section + bends +
   straights) and add an explicit loop-closure step that applies the resonator sum
@@ -136,14 +184,35 @@ is a closed-form all-pass sum, not a matrix product. Two ways out:
   Mach–Zehnders, cascaded rings, and any device where a section feeds back. This
   is the architecturally right answer and considerably more work.
 
-Recommend the general form if `ring_resonator_hybrid_cascaded.py` is a sign of
-where this is heading — cascaded rings are exactly the case the narrow option
-starts fighting. Either way, (a) and (b) are prerequisites and can land first,
-independently, and are useful on their own.
+**The general form's composition primitive is done, 2026-07-29 — `beef.network`
+(`connect()`/`close_loop()`/`Circuit`, see `notes.md`'s Network section).**
+`close_loop()` reproduces this device's own proven closed-form formula
+(`E_thru = t + k1·k2·P/(1-t_ring·P)`, `ring_resonator_hybrid.py:762-774`) term
+for term when applied to a 2-port `[bus, ring]` block — the concrete evidence
+the general primitive is physically correct on exactly this device's math, not
+just internally consistent. **Not yet wired to this example or to
+`HybridSolver`**: the module depends only on `SMatrix`/`numpy` and has no
+caller in `beef/solvers/` or any example — (a) and (b) above are now also
+done, so nothing structural blocks the wiring anymore, but doing it (and
+rewiring `HybridSolver`'s own cascade onto `beef.network`) is separate,
+undone work. `close_loop()`
+also only implements the same-port self-loop case (this device's case); the
+two-different-ports case some `Circuit`-discovered cycles would need (e.g.
+certain cascaded-ring topologies) is deferred.
 
-Until then the ring cannot be validated the way the other devices are: checks 1–3
-in [README.md](README.md) all assume `FDTDSolver`/`EMESolver` objects that this
-device never constructs.
+**All three of (a), (b) and (c) now exist as standalone, tested library
+capabilities — none are wired to each other or to this device yet.** That
+wiring is the actual remaining work: build a real `RingResonatorCouplerSection`
++ `EMESolver` body + mirrored right section via `HybridSolver`/`solve_section()`
+(exercising the still-unverified y-normal excite/flux-calibration path),
+compose with `beef.network.close_loop()`, and check the result against this
+device's own proven closed-form/full-device numbers. A new example script
+would naturally follow from that, replacing the current hand-rolled scripts.
+
+Until that wiring lands the ring cannot be validated the way the other
+devices are: checks 1–3 in [README.md](README.md) all assume
+`FDTDSolver`/`EMESolver` objects that this device never constructs — the
+existing example scripts are unchanged and still don't call any of (a)/(b)/(c).
 
 ## Gaps against the four checks
 

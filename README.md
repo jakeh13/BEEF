@@ -34,10 +34,14 @@ from beef import (
     # geometry
     MMI, MMIPort, BendGeometry, DirectionalCoupler, Taper, SBend,
     CompoundGeometry, WaveguideRun,
+    arc_polygon, RingResonatorCouplerSection, RingResonatorBendSection,
     # materials
     MaterialStack, SOI_160, SOI_220,
     # solvers
-    EMESolver, FDTDSolver, HybridSolver,
+    EMESolver, FDTDSolver, PortSpec, HybridSolver,
+    # network
+    SMatrixBlock, connect, close_loop, Circuit,
+    from_transfer_matrix, from_smatrix, to_smatrix,
     # results
     SMatrix,
     # sweep
@@ -54,7 +58,9 @@ from beef import (
   `input_idx`/`output_idx` to isolate a single port on multi-port devices like a 2×2),
   `DirectionalCoupler` (2-waveguide coupler w/ S-bend I/O), standalone `Taper`/`SBend` building blocks,
   `CompoundGeometry`/`WaveguideRun` (concatenate several geometries into one cascade), legacy `BendGeometry`
-  (90° bend for non-collinear FDTD I/O).
+  (90° bend for non-collinear FDTD I/O), `arc_polygon` (quarter-annulus wedge, for constant-radius bends),
+  `RingResonatorCouplerSection`/`RingResonatorBendSection` (ring resonator geometry primitives — not yet
+  wired into `HybridSolver` or an example, see `validation_markdown/ring_resonator_validation.md`).
 - **Materials** (`beef/materials/`) — `MaterialStack` (Si/SiO2 layer stack), plus pre-built `SOI_160` /
   `SOI_220` stacks. One analytic Sellmeier model (Salzberg Si, Malitson SiO2) backs both
   engines, so an EME mode solve and an FDTD run agree on n(λ) to machine precision. The
@@ -65,9 +71,17 @@ from beef import (
   sweep one uniform section's length analytically via `solve_length_sweep()` at no extra simulation cost).
   Every solve-family method (`FDTDSolver.solve()`/`solve_section()`, `EMESolver.solve()`/
   `solve_section()`/`solve_section_length_sweep()`, `HybridSolver.solve()`/`solve_length_sweep()`)
-  accepts an optional `save_dir` — see Simulation cache below.
+  accepts an optional `save_dir` — see Simulation cache below. `FDTDSolver.solve_section()` also
+  accepts `y0`/`y1` and `excite_port`/`measure_port` (`PortSpec`) to place a source/monitor on a
+  y-normal (not just x-normal) plane — additive, every existing call is unaffected — for sections
+  with a non-x-normal port (e.g. a ring resonator's coupling port).
 - **Results** (`beef/results/`) — `SMatrix`, a unified S-parameter result type with transmission/insertion-loss
   helpers and a `check_passive()` sanity check.
+- **Network** (`beef/network/`) — general S-matrix composition via Redheffer star products: `connect()` joins
+  two blocks' ports, `close_loop()` eliminates a block's own port against itself (node elimination — verified
+  against the ring resonator's proven closed-form all-pass formula), `Circuit` builds a multi-block network.
+  Depends only on `SMatrix`/`numpy`; not yet wired into `HybridSolver` or any example — see `notes.md`'s
+  Network section and `validation_markdown/ring_resonator_validation.md`'s recommendation.
 - **Sweep** (`beef/sweep/`) — `ParallelSweep`, a local `multiprocessing`-based parameter grid sweep.
 - **Plot** (`beef/plot/`) — geometry, field, and performance (transmission/insertion-loss/splitting-ratio) plots.
 

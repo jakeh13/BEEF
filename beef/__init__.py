@@ -10,6 +10,10 @@ Core public API:
         Taper, SBend               — standalone taper / S-bend building-block geometries
         CompoundGeometry, WaveguideRun — concatenate several geometries end-to-end
         GdsGeometry, load_gds_polygons — import polygons from an on-disk .gds file
+        arc_polygon                — quarter-annulus wedge, for constant-radius bends
+        RingResonatorCouplerSection, RingResonatorBendSection — ring resonator geometry
+                                      primitives (not yet wired to HybridSolver — see
+                                      validation_markdown/ring_resonator_validation.md)
 
     Materials:
         MaterialStack              — Si/SiO2 layer definitions
@@ -18,10 +22,18 @@ Core public API:
     Solvers:
         EMESolver                  — meow-based eigenmode expansion
         FDTDSolver                 — meep-based FDTD
+        PortSpec                   — explicit source/monitor orientation override for
+                                      FDTDSolver.solve_section() (x- or y-normal ports)
         HybridSolver               — FDTD/EME cascaded (the core BEEF method)
 
     Results:
         SMatrix                    — unified S-parameter result type
+
+    Network:
+        SMatrixBlock                — dense multi-port S-parameter block
+        connect, close_loop        — Redheffer star product / self-loop elimination
+        Circuit                    — stateful multi-block network builder
+        from_transfer_matrix, from_smatrix, to_smatrix — SMatrixBlock <-> SMatrix/HybridSolver conversions
 
     Utilities:
         extrude_polygons           — {layer: [polygons]} dict -> meow Structure3D list
@@ -54,10 +66,15 @@ from ._utils import atomic_replace_write, extrude_polygons
 from .geometry import (
     MMI, MMIPort, BendGeometry, DirectionalCoupler, Taper, SBend,
     CompoundGeometry, WaveguideRun, GdsGeometry, load_gds_polygons,
+    arc_polygon, RingResonatorCouplerSection, RingResonatorBendSection,
 )
 from .materials import MaterialStack, SOI_160, SOI_220
+from .network import (
+    SMatrixBlock, connect, close_loop, Circuit,
+    from_transfer_matrix, from_smatrix, to_smatrix,
+)
 from .results import SMatrix
-from .solvers import EMESolver, FDTDSolver, HybridSolver
+from .solvers import EMESolver, FDTDSolver, PortSpec, HybridSolver
 from .sweep import ParallelSweep
 from .plot import (
     plot_eme_fields, plot_eme_geometry, plot_fdtd_geometry, plot_hybrid_geometry,
@@ -72,12 +89,16 @@ __all__ = [
     "Taper", "SBend",
     "CompoundGeometry", "WaveguideRun",
     "GdsGeometry", "load_gds_polygons",
+    "arc_polygon", "RingResonatorCouplerSection", "RingResonatorBendSection",
     # materials
     "MaterialStack", "SOI_160", "SOI_220",
+    # network
+    "SMatrixBlock", "connect", "close_loop", "Circuit",
+    "from_transfer_matrix", "from_smatrix", "to_smatrix",
     # results
     "SMatrix",
     # solvers
-    "EMESolver", "FDTDSolver", "HybridSolver",
+    "EMESolver", "FDTDSolver", "PortSpec", "HybridSolver",
     # utilities
     "extrude_polygons", "atomic_replace_write",
     # sweep
