@@ -25,6 +25,25 @@ logger = get_logger(__name__)
 # (1.44 < n_eff < 3.48). Roughly the middle of that window.
 _KPOINT_SEED_NEFF = 2.5
 
+# --- _iter_distinct_bands()'s duplicate-eigenmode guard ---------------------
+#
+# See validation_markdown/modal_multiplexer_validation.md gap 6: sim.get_eigenmode()
+# can return the SAME eigenvector for two different requested band_num values.
+# Measured directly on the reproduction case: true duplicates overlap at
+# 0.9999999999+; every genuinely distinct band pair on the same cross-section
+# overlapped <= 0.1257. 0.9 sits with wide margin on both sides of that gap.
+_DUP_BAND_OVERLAP_THRESHOLD = 0.9
+# Diagnostic-only grid for the duplicate check -- deliberately small and fixed,
+# independent of self.res or any caller-requested field grid, since it only
+# needs to distinguish "same eigenvector" from "different eigenvector".
+_DUP_BAND_DIAG_NY = 16
+_DUP_BAND_DIAG_NZ = 8
+# Extra get_eigenmode() calls tolerated beyond n_modes before giving up.
+# get_eigenmode() is a "seconds" operation (see section_mode_neff()'s
+# docstring) and every duplicate seen in practice needed only one retry, so
+# this stays cheap even at its ceiling.
+_DUP_BAND_MAX_EXTRA = 8
+
 # --- section_mode_beta() safety thresholds ---------------------------------
 #
 # Two INDEPENDENT failure modes, because neither guard catches the other:
@@ -839,10 +858,46 @@ class FDTDSolver:
             Real ndarray ``[len(wavelengths), n_modes]`` of effective indices,
             in the caller's wavelength order.
         """
-        import meep as mp
-
         wavelengths = np.asarray(wavelengths, dtype=float)
         wl_center = float(np.mean(wavelengths))
+        sim, where, mea_c, mea_w = self._build_section_mode_sim(
+            geometry, wl_center, x0, x1, monitor_center, monitor_size, **geometry_kwargs)
+
+        neff = np.zeros((len(wavelengths), n_modes))
+        for i, wl in enumerate(wavelengths):
+            f = 1.0 / float(wl)
+            # kpoint only seeds the solve; match_frequency then iterates to the
+            # true k. Any guided mode sits between the cladding and core
+            # indices, so the midpoint of that range is a seed that cannot be
+            # badly wrong for any waveguide this solver handles.
+            # _iter_distinct_bands() guards against get_eigenmode() returning
+            # the same eigenvector for two different band numbers (see its
+            # docstring / gap 6) -- band as yielded may skip some meep
+            # band_nums, but always fills n_modes distinct logical positions.
+            for band, em in enumerate(
+                self._iter_distinct_bands(sim, where, f, mea_c, mea_w, n_modes), start=1
+            ):
+                neff[i, band - 1] = float(np.real(em.k.x)) / f
+
+        sim.reset_meep()
+        return neff
+
+    def _build_section_mode_sim(
+        self, geometry, wl_center: float, x0: float, x1: float,
+        monitor_center: Optional[float], monitor_size: Optional[float],
+        **geometry_kwargs,
+    ):
+        """Shared preamble for section_mode_neff()/section_mode_fields(): the
+        minimal self-contained meep Simulation for this section's
+        cross-section, initialized and ready for get_eigenmode() calls, plus
+        the eigenmode monitor Volume. Caller owns sim.reset_meep().
+
+        Split out of section_mode_neff() verbatim (no behavior change) so
+        section_mode_fields() can reuse the identical sim setup rather than
+        duplicating it.
+        """
+        import meep as mp
+
         si_med = self.material_stack.si_medium(wl_center)
         sio2_med = self.material_stack.sio2_medium(wl_center)
 
@@ -884,22 +939,171 @@ class FDTDSolver:
 
         where = mp.Volume(center=mp.Vector3(0, mea_c),
                           size=mp.Vector3(0, mea_w, self._mon_sz))
-        neff = np.zeros((len(wavelengths), n_modes))
-        for i, wl in enumerate(wavelengths):
-            f = 1.0 / float(wl)
-            for band in range(1, n_modes + 1):
-                # kpoint only seeds the solve; match_frequency then iterates to
-                # the true k. Any guided mode sits between the cladding and
-                # core indices, so the midpoint of that range is a seed that
-                # cannot be badly wrong for any waveguide this solver handles.
-                em = sim.get_eigenmode(
-                    f, mp.X, where, band, mp.Vector3(f * _KPOINT_SEED_NEFF, 0, 0),
-                    parity=mp.NO_PARITY,
+        return sim, where, mea_c, mea_w
+
+    def _iter_distinct_bands(self, sim, where, f, mea_c, mea_w, n_modes):
+        """Yields `n_modes` distinct-eigenvector ``EigenmodeData`` objects
+        for consecutive logical band positions, silently skipping any meep
+        `band_num` whose field is (numerically) IDENTICAL to an
+        already-yielded one.
+
+        Guards a real meep/MPB failure mode, found auditing the modal
+        multiplexer's 16-mode interface basis (see
+        validation_markdown/modal_multiplexer_validation.md gap 6):
+        ``sim.get_eigenmode()`` can return the SAME eigenvector for two
+        different requested `band_num` values when they sit close together
+        in frequency — confirmed directly (self-overlap 0.9999999999 between
+        two "different" bands, on a cross-section where every other band
+        pair overlapped ≤ 0.126, and the other engine's own spectrum there
+        has no ties at all — the signature of a duplicate solve, not a
+        genuine physical degeneracy). Silently accepting both as distinct
+        makes an `n_modes`-mode basis rank-deficient by one per duplicate —
+        `HybridSolver`'s index-*i*-to-index-*i* contraction loses that
+        channel entirely, not just mis-indexes it.
+
+        The duplicate check uses its own small, fixed diagnostic grid
+        (`_DUP_BAND_DIAG_NY` x `_DUP_BAND_DIAG_NZ`), independent of
+        `self.res` or any caller-requested grid — it only needs to tell
+        "same eigenvector" from "different eigenvector" (0.9999... vs
+        ≤ 0.13 in the case this was found on), not resolve mode shape
+        precisely, so it stays cheap regardless of how finely a caller like
+        `section_mode_fields()` wants its own returned fields sampled.
+        `field_overlap_matrix()`'s `dy`/`dz` cancel exactly in its
+        normalized ratio, so passing 1.0 for both here (rather than this
+        grid's real spacing) gives the identical answer.
+        """
+        import meep as mp
+
+        from ..mode_identity import field_overlap_matrix
+
+        diag_y_edges = np.linspace(mea_c - mea_w / 2, mea_c + mea_w / 2, _DUP_BAND_DIAG_NY + 1)
+        diag_y = 0.5 * (diag_y_edges[:-1] + diag_y_edges[1:])
+        diag_z_edges = np.linspace(-self._mon_sz / 2, self._mon_sz / 2, _DUP_BAND_DIAG_NZ + 1)
+        diag_z = 0.5 * (diag_z_edges[:-1] + diag_z_edges[1:])
+
+        accepted_ey: List[np.ndarray] = []
+        accepted_ez: List[np.ndarray] = []
+        band_num = 0
+        n_accepted = 0
+        max_band_num = n_modes + _DUP_BAND_MAX_EXTRA
+        while n_accepted < n_modes:
+            band_num += 1
+            if band_num > max_band_num:
+                raise RuntimeError(
+                    f"FDTDSolver: could not find {n_modes} distinct eigenmodes "
+                    f"within {max_band_num} band_num attempts at this cross-"
+                    f"section -- meep/MPB returned a duplicate more times than "
+                    f"this guard tolerates. See validation_markdown/"
+                    f"modal_multiplexer_validation.md gap 6."
                 )
-                neff[i, band - 1] = float(np.real(em.k.x)) / f
+            em = sim.get_eigenmode(
+                f, mp.X, where, band_num, mp.Vector3(f * _KPOINT_SEED_NEFF, 0, 0),
+                parity=mp.NO_PARITY,
+            )
+            ey = np.array([[em.amplitude(mp.Vector3(0, float(y), float(z)), mp.Ey)
+                            for z in diag_z] for y in diag_y])
+            ez = np.array([[em.amplitude(mp.Vector3(0, float(y), float(z)), mp.Ez)
+                            for z in diag_z] for y in diag_y])
+            if n_accepted > 0:
+                existing = dict(Ey=np.stack(accepted_ey), Ez=np.stack(accepted_ez))
+                candidate = dict(Ey=ey[None], Ez=ez[None])
+                eta = field_overlap_matrix(existing, candidate, dy=1.0, dz=1.0)
+                worst = float(np.max(eta))
+                if worst > _DUP_BAND_OVERLAP_THRESHOLD:
+                    logger.warning(
+                        "FDTDSolver: meep band_num=%d duplicates an already-"
+                        "accepted eigenmode (overlap %.6f > %.2f threshold) -- "
+                        "skipping and trying the next band_num. See "
+                        "validation_markdown/modal_multiplexer_validation.md gap 6.",
+                        band_num, worst, _DUP_BAND_OVERLAP_THRESHOLD,
+                    )
+                    continue
+            accepted_ey.append(ey)
+            accepted_ez.append(ez)
+            n_accepted += 1
+            yield em
+
+    def section_mode_fields(
+        self,
+        geometry,
+        wavelength: float,
+        x0: float,
+        x1: float,
+        n_modes: int,
+        y_grid: np.ndarray,
+        z_grid: np.ndarray,
+        monitor_center: Optional[float] = None,
+        monitor_size: Optional[float] = None,
+        **geometry_kwargs,
+    ) -> Dict[str, np.ndarray]:
+        """Effective indices AND transverse field profiles of the first
+        `n_modes` modes at this section's cross-section, sampled at the
+        caller's own ``(y_grid, z_grid)`` points.
+
+        The field-based counterpart of ``section_mode_neff()``. n_eff is a
+        single scalar per mode, and on a wide multimode cross-section several
+        modes can sit close enough together that nearest-n_eff matching
+        against meow picks the wrong pairing outright — observed directly on
+        the modal multiplexer's 16-mode basis, where bands 8, 9 and 10 all
+        nearest-matched to the same meow band (see
+        validation_markdown/modal_multiplexer_validation.md gap 1). Comparing
+        field *shape* instead of the propagation constant resolves that
+        ambiguity and, unlike n_eff matching, does not require the two
+        engines/resolutions to already agree numerically to work — see
+        ``beef.mode_identity.field_overlap_matrix()``/``best_correspondence()``,
+        the counterparts that consume this method's output.
+
+        No meep object leaks past this method — fields are meep's own
+        eigenmode amplitude at each requested point, in ``beef``'s device
+        frame. Sample on whatever grid the *other* engine's mode sits on
+        (meow's ``Mode`` fields sit at its ``Mesh2D``'s cell centers, not its
+        node coordinates — see ``beef.mode_identity.mesh_cell_centers()``) so
+        the two are directly comparable point-for-point.
+
+        Args:
+            wavelength: single wavelength (µm) — unlike ``section_mode_neff()``,
+                this does not sweep: field grids are large, and a field
+                comparison only needs one representative wavelength.
+            y_grid, z_grid: 1-D device-frame sample points (µm), spanning the
+                monitor plane's y (in-plane transverse) and z (vertical) axes.
+            x0, x1, n_modes, monitor_center, monitor_size, geometry_kwargs: same
+                meaning as ``section_mode_neff()``.
+
+        Returns:
+            dict with ``'neff'`` (real, shape ``[n_modes]``) and
+            ``'Ex','Ey','Ez','Hx','Hy','Hz'`` (complex, each shape
+            ``[n_modes, len(y_grid), len(z_grid)]``), band order as meep
+            returns it.
+        """
+        import meep as mp
+
+        wl_center = float(wavelength)
+        sim, where, mea_c, mea_w = self._build_section_mode_sim(
+            geometry, wl_center, x0, x1, monitor_center, monitor_size, **geometry_kwargs)
+
+        y_grid = np.asarray(y_grid, dtype=float)
+        z_grid = np.asarray(z_grid, dtype=float)
+        components = dict(Ex=mp.Ex, Ey=mp.Ey, Ez=mp.Ez, Hx=mp.Hx, Hy=mp.Hy, Hz=mp.Hz)
+        fields = {name: np.zeros((n_modes, len(y_grid), len(z_grid)), dtype=complex)
+                  for name in components}
+        neff = np.zeros(n_modes)
+
+        f = 1.0 / wl_center
+        # _iter_distinct_bands() guards against get_eigenmode() returning the
+        # same eigenvector for two different band numbers (see its docstring
+        # / validation_markdown/modal_multiplexer_validation.md gap 6).
+        for band, em in enumerate(
+            self._iter_distinct_bands(sim, where, f, mea_c, mea_w, n_modes), start=1
+        ):
+            neff[band - 1] = float(np.real(em.k.x)) / f
+            for iy, y in enumerate(y_grid):
+                for iz, z in enumerate(z_grid):
+                    point = mp.Vector3(0, float(y), float(z))
+                    for name, comp in components.items():
+                        fields[name][band - 1, iy, iz] = em.amplitude(point, comp)
 
         sim.reset_meep()
-        return neff
+        return dict(neff=neff, **fields)
 
     def section_mode_beta(
         self,

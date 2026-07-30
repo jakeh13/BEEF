@@ -198,6 +198,54 @@ class EMESolver:
         from meow import compute_modes_tidy3d
         return compute_modes_tidy3d(cross_section, num_modes=num_modes)
 
+    def section_modes(
+        self,
+        geometry,
+        wavelength: float,
+        x0: float,
+        x1: float,
+        n_modes: int,
+        mesh=None,
+        stub_left: float = 0.0,
+        stub_right: float = 0.0,
+        **geometry_kwargs,
+    ):
+        """Raw meow ``Mode`` objects at this section's cross-section, no
+        propagation — the field-sampling counterpart of the intermediate
+        ``modes`` list ``solve_section()`` already computes internally but
+        never surfaces (it goes straight into ``mw.compute_s_matrix()``).
+
+        Reuses ``solve_section()``'s exact cell-building calls
+        (``geometry.section_gds()``, ``extrude_polygons()``,
+        ``mw.create_cells()``, ``mw.CrossSection.from_cell()``,
+        ``self.compute_modes()``); `solve_section()` itself is untouched.
+
+        Args:
+            mesh: optional caller-supplied ``mw.Mesh2D`` (e.g. a shared
+                diagnostic mesh independent of ``self.res``/``self.oxide_*``,
+                for comparing against another solver's field grid). Defaults
+                to ``self._build_mesh()``, matching ``solve_section()``.
+
+        Returns:
+            ``(modes, mesh)`` — pass ``mesh`` to
+            ``beef.mode_identity.mesh_cell_centers()`` for the ``(y, z)``
+            points these modes' field arrays sit at, and the mode list to
+            ``beef.mode_identity.stack_meow_mode_fields()``.
+        """
+        import meow as mw
+
+        length = (x1 - x0) + stub_left + stub_right
+        gds_polys = geometry.section_gds(
+            x0, x1, self.oxide_width,
+            stub_left=stub_left, stub_right=stub_right, **geometry_kwargs
+        )
+        structs = extrude_polygons(gds_polys, self.material_stack.extrusion_rules)
+        mesh = self._build_mesh() if mesh is None else mesh
+        cells = mw.create_cells(structures=structs, mesh=mesh, Ls=[length])
+        env = mw.Environment(wl=float(wavelength), T=self.temperature)
+        cs = mw.CrossSection.from_cell(cell=cells[0], env=env)
+        return self.compute_modes(cs, n_modes), mesh
+
     def solve_section(
         self,
         geometry,

@@ -92,7 +92,13 @@ _fdtd_common = dict(
     decay_tol=1e-11,
 )
 
-N_MODES = 12   # modes carried at the two input/output <-> body interfaces
+N_MODES = 8   # modes carried at the two input/output <-> body interfaces.
+              # Was 12: validation_markdown/mmi_1x2_validation.md gap 3 found
+              # meep and meow return bands 8/9 in non-identity correspondence
+              # (meep resolves them degenerate to 2.5e-13, meow 6.19e-3
+              # apart) because the top of the 12-mode basis piles up near the
+              # SOI_160 cutoff -- bands 0-7 agree to <=1.8e-4 and are all
+              # comfortably guided, 8-11 are the entire problem region.
 
 # The output section's single-mode port (the physical taper tip) sits only
 # waveguide_offset=1.0 µm from the *other* output branch, which is drawn in

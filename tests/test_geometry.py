@@ -221,6 +221,85 @@ class TestCompoundGeometry:
             g.width_at(100.0)
 
 
+class TestCompoundGeometryStubIsAppliedExactlyOnce:
+    """Regression guards for a real stub double-application bug (notes.md
+    Geometry item 6).
+
+    `_overlaps()` expands the query window by the stubs itself
+    (`lo, hi = x0-stub_left, x1+stub_right`) before clipping each segment's
+    overlap to it, so `ov_lo`/`ov_hi` are already stub-inclusive. It ALSO
+    used to hand the raw stub values down to the first/last overlapping
+    segment, which applied them a SECOND time -- drawing geometry 2x the
+    stub too long whenever the padded window landed fully inside one
+    segment (nothing clipped it back). Confirmed twice in the wild before
+    being fixed: `audit_interface_modes.py` had to bypass
+    CompoundGeometry entirely, and HybridSolver's mode-correspondence check
+    tripped a spurious "cut falls strictly inside a taper" from the
+    double-subtracted coordinate.
+
+    The invariant these tests pin: the total drawn x-extent must equal
+    `(x1 + stub_right) - (x0 - stub_left)` exactly, whether the padded
+    window lands inside one segment or spans several.
+    """
+
+    def _compound(self):
+        # seg2, the WaveguideRun, spans [-1.5, 1.5] in device frame.
+        return CompoundGeometry([
+            Taper(length=4.0, width_start=0.35, width_end=0.8),
+            WaveguideRun(length=3.0, ports=[(0.0, 0.8)]),
+            Taper(length=4.0, width_start=0.8, width_end=0.35),
+        ])
+
+    @staticmethod
+    def _x_extent(polys):
+        xs = [v[0] for poly in polys for v in poly]
+        return min(xs), max(xs)
+
+    def test_section_gds_stub_not_doubled_when_window_is_inside_one_segment(self):
+        g = self._compound()
+        # [-0.5, 0.5] padded by 0.5 both sides -> [-1.0, 1.0], entirely
+        # within seg2, so nothing clips the stub expansion back.
+        d = g.section_gds(-0.5, 0.5, oxide_width=3.0, stub_left=0.5, stub_right=0.5)
+        lo_x, hi_x = self._x_extent(d[(2, 0)])
+        assert hi_x - lo_x == pytest.approx(2.0)  # was 3.0 with the stub doubled
+        # section_gds returns a 0-based section frame, so it must start at 0
+        # and line up with the oxide box (which was always correct).
+        assert lo_x == pytest.approx(0.0)
+        ox_lo, ox_hi = self._x_extent(d[(1, 0)])
+        assert (lo_x, hi_x) == pytest.approx((ox_lo, ox_hi))
+
+    def test_section_prisms_stub_not_doubled_when_window_is_inside_one_segment(self):
+        g = self._compound()
+        prisms = g.section_prisms(-0.5, 0.5, si_medium=None, stub_left=0.5, stub_right=0.5,
+                                  wg_height=0.22)
+        xs = [v.x for p in prisms for v in p.vertices]
+        # Device frame here (not 0-based): must be exactly [-1.0, 1.0].
+        assert min(xs) == pytest.approx(-1.0)
+        assert max(xs) == pytest.approx(1.0)
+
+    def test_zero_stub_is_unchanged(self):
+        """The stub=0 path is what every production HybridSolver interior
+        boundary uses (hybrid.py's _stubs()), so it must be untouched."""
+        g = self._compound()
+        d = g.section_gds(-0.5, 0.5, oxide_width=3.0)
+        lo_x, hi_x = self._x_extent(d[(2, 0)])
+        assert hi_x - lo_x == pytest.approx(1.0)
+        assert lo_x == pytest.approx(0.0)
+
+    def test_stub_reaching_outside_a_segment_is_still_drawn(self):
+        """The stub must NOT simply be dropped: when the padded window
+        genuinely reaches past a segment's edge, that part is a real
+        access-waveguide extension the delegate segment still has to draw.
+        Here the window spans seg1/seg2/seg3, so the outer stubs fall
+        outside the compound device entirely."""
+        g = self._compound()
+        half = g.total_length / 2  # 5.5
+        d = g.section_gds(-half, half, oxide_width=3.0, stub_left=0.5, stub_right=0.5)
+        lo_x, hi_x = self._x_extent(d[(2, 0)])
+        assert hi_x - lo_x == pytest.approx(g.total_length + 1.0)  # 11.0 + both stubs
+        assert lo_x == pytest.approx(0.0)
+
+
 # ---------------------------------------------------------------------------
 # arc_polygon
 # ---------------------------------------------------------------------------

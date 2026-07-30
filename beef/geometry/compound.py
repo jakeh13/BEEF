@@ -74,7 +74,25 @@ class CompoundGeometry(DeviceGeometry):
     def _overlaps(self, x0: float, x1: float, stub_left: float, stub_right: float):
         """(segment, seg_lo, seg_hi, overlap_lo, overlap_hi, stub_left, stub_right)
         for every segment overlapping [x0-stub_left, x1+stub_right], with the
-        outer stub folded into only the first/last overlapping segment."""
+        outer stub folded into only the first/last overlapping segment.
+
+        The returned per-segment stubs are only the part of each stub that
+        falls OUTSIDE that segment. This window is already stub-expanded
+        (`lo`/`hi` below), and `ov_lo`/`ov_hi` are clipped against it — so
+        wherever a stub does not actually reach past the segment's own edge,
+        `ov_lo`/`ov_hi` already cover it and handing the raw stub down to
+        the segment on top of that would apply it a second time. That was a
+        real bug (drawn geometry 2x the stub too long, or a spurious
+        "cut falls strictly inside a taper" from the doubled coordinate)
+        whenever the padded window landed fully inside one segment with
+        nothing to clip it back; see
+        tests/test_geometry.py::TestCompoundGeometryStubIsAppliedExactlyOnce.
+
+        The resulting invariant, which both callers' offset arithmetic
+        relies on: ``ov_lo - stub_left == lo`` for the first overlapping
+        segment and ``ov_hi + stub_right == hi`` for the last, in every
+        case — clipped or not.
+        """
         lo, hi = x0 - stub_left, x1 + stub_right
         raw = [
             (seg, seg_lo, seg_hi, max(lo, seg_lo), min(hi, seg_hi))
@@ -83,8 +101,8 @@ class CompoundGeometry(DeviceGeometry):
         raw = [o for o in raw if o[4] - o[3] > 1e-9]
         result = []
         for i, (seg, seg_lo, seg_hi, ov_lo, ov_hi) in enumerate(raw):
-            sl = stub_left if i == 0 else 0.0
-            sr = stub_right if i == len(raw) - 1 else 0.0
+            sl = max(0.0, seg_lo - lo) if i == 0 else 0.0
+            sr = max(0.0, hi - seg_hi) if i == len(raw) - 1 else 0.0
             result.append((seg, seg_lo, seg_hi, ov_lo, ov_hi, sl, sr))
         return result, lo, hi
 

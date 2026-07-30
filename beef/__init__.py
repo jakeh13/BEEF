@@ -35,6 +35,15 @@ Core public API:
         Circuit                    — stateful multi-block network builder
         from_transfer_matrix, from_smatrix, to_smatrix — SMatrixBlock <-> SMatrix/HybridSolver conversions
 
+    Mode identity (device- and resolution-agnostic — see beef.mode_identity):
+        field_overlap_matrix, best_correspondence — mode-shape overlap + optimal
+                                      assignment, replacing nearest-neighbor n_eff
+                                      matching for checking whether HybridSolver's
+                                      index-i-to-index-i contraction is valid
+        mesh_cell_centers, stack_meow_mode_fields — grid/field-array helpers tying
+                                      FDTDSolver.section_mode_fields() (meep) and
+                                      EMESolver.compute_modes() (meow) together
+
     Utilities:
         extrude_polygons           — {layer: [polygons]} dict -> meow Structure3D list
         atomic_replace_write       — write-to-tmp-then-os.replace, for files a
@@ -69,6 +78,9 @@ from .geometry import (
     arc_polygon, RingResonatorCouplerSection, RingResonatorBendSection,
 )
 from .materials import MaterialStack, SOI_160, SOI_220
+from .mode_identity import (
+    field_overlap_matrix, best_correspondence, mesh_cell_centers, stack_meow_mode_fields,
+)
 from .network import (
     SMatrixBlock, connect, close_loop, Circuit,
     from_transfer_matrix, from_smatrix, to_smatrix,
@@ -95,6 +107,8 @@ __all__ = [
     # network
     "SMatrixBlock", "connect", "close_loop", "Circuit",
     "from_transfer_matrix", "from_smatrix", "to_smatrix",
+    # mode identity
+    "field_overlap_matrix", "best_correspondence", "mesh_cell_centers", "stack_meow_mode_fields",
     # results
     "SMatrix",
     # solvers

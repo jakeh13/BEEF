@@ -14,11 +14,17 @@ Opened 2026-07-26. Gap list against the four checks in [README.md](README.md).
 
 **Status 2026-07-26:** gap 1 (stale goldens) is **closed** — both were
 regenerated and independently confirmed (jobs 11500524, 11500663). Gap 3 (mode
-identity) is **run and FAILED**: the two engines do not agree on modes 8 and 9,
-so `HybridSolver`'s index-*i*-to-index-*i* contraction is not valid on this
-device as configured. **This is the only device in the repo where check 2
-fails**, and it blocks trusting any 1×2 hybrid result until `N_MODES` is
-reduced. Details in gap 3.
+identity) is **run and FAILED at N_MODES=12**: the two engines do not agree on
+modes 8 and 9, so `HybridSolver`'s index-*i*-to-index-*i* contraction was not
+valid on this device as configured. **This was the only device in the repo
+where check 2 failed.**
+
+**Update 2026-07-30:** gap 3 is **fixed and reconfirmed** — `N_MODES` dropped
+12→8 in `mmi_1x2_hybrid.py`, re-audited, identity permutation holds
+(`[0..7]`, worst guided |Δn_eff| 0.0003). Mode identity no longer blocks this
+device; gap 1's goldens are stale again as a result (this is the third
+invalidation, see `## Order` step 0) and gap 2 (resolution) is the next open
+item. Details in gap 3.
 
 `examples/mmi_1x2/python/` — `mmi_1x2_eme.py`, `mmi_1x2_fdtd.py`,
 `mmi_1x2_hybrid.py`. Best-covered example after the directional coupler: it is
@@ -133,7 +139,7 @@ the only device with all three golden fixtures (`mmi_1x2_eme.json`,
    bands removes the modes that are hardest to converge, so the answer will
    change.
 
-3. **Mode identity — RUN, AND IT FAILS. This is the blocking gap.**
+3. **Mode identity — RUN, FAILED at N_MODES=12, and the fix is DONE (2026-07-30).**
 
    Measured on the uniform body cross-section (`x ∈ [−1, +1]`, 1.25 µm clear of
    each taper seam) at 1.31 µm, both engines meshed at res 40, job 11500536.
@@ -183,6 +189,33 @@ the only device with all three golden fixtures (`mmi_1x2_eme.json`,
    that is the right order, not a reason to leave a broken basis in place.
    Re-run this audit afterwards to confirm the identity permutation holds.
 
+   **DONE 2026-07-30.** `N_MODES` dropped to 8 in `mmi_1x2_hybrid.py:95`, and
+   the audit (`examples/verification/python/audit_interface_modes.py mmi_1x2`,
+   updated to match) re-run at the new count on the same cross-section (res
+   40, 1.31 µm, `x ∈ [−1, +1]`):
+
+   | band | meep | meow | Δ | guided |
+   |---|---|---|---|---|
+   | 0 | 2.696912 | 2.696915 | −0.00000 | yes |
+   | 1 | 2.637697 | 2.637710 | −0.00000 | yes |
+   | 2 | 2.536250 | 2.536282 | −0.00003 | yes |
+   | 3 | 2.387898 | 2.387965 | −0.00007 | yes |
+   | 4 | 2.184959 | 2.185091 | −0.00013 | yes |
+   | 5 | 1.916513 | 1.916790 | −0.00028 | yes |
+   | 6 | 1.775455 | 1.775436 | +0.00004 | yes |
+   | 7 | 1.705834 | 1.706013 | −0.00018 | yes |
+
+   All 8 requested modes are guided (no unbound column at this count, unlike
+   the coupler and the 2×2), correspondence is the identity `[0,1,2,3,4,5,6,
+   7]`, and worst guided |Δn_eff| is **0.0003** — the same numbers as bands
+   0–7 measured at N_MODES=12 above, as expected since dropping unused high
+   bands from the request doesn't change how the low ones are solved. The
+   mismatched-basis problem this gap opened with is closed.
+
+   **This invalidates the goldens confirmed in gap 1 a second time** — see
+   `## Order` below; they must not be regenerated again until gap 2's
+   resolution question is also settled, per the existing sequencing.
+
 4. **Engine agreement has not been measured.** The coupler's test uses even/odd
    supermode phase, which has no direct analogue in a 1×2 MMI. The transferable
    form is: solve a uniform stretch of the MMI body at two lengths, and check
@@ -214,11 +247,12 @@ configured, but the configuration itself is wrong.
    `N_MODES` 12→8 and the resolution fix are config changes on top of an
    already-current material model, not underneath a stale one — one cold run
    covers all three instead of staggering three.
-1. **Gap 3's `N_MODES` 12 → 8.** Nothing else is worth doing first — every
-   hybrid number this device produces is currently contracting mismatched modes
-   at indices 8 and 9. Cheap: a one-line change plus a re-run of the audit to
-   confirm the identity permutation holds.
-2. **Gap 2**, the resolution question, on the reduced basis.
+~~**1** `N_MODES` 12 → 8~~ — **done 2026-07-30**, confirmed: identity
+permutation `[0..7]`, worst guided |Δn_eff| 0.0003, all 8 requested modes
+guided. See gap 3.
+2. **Gap 2**, the resolution question, on the reduced basis. This is now the
+   next open step — nothing else in this file is blocked on anything but this
+   and step 0 above.
 3. **Regenerate the goldens again.** Gaps 3 and 2 both change the configuration,
    so the values confirmed above will no longer apply. Recording a golden
    against a configuration you intend to change is how

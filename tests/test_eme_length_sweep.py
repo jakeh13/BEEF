@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from beef import EMESolver, SOI_160, Taper
+from beef import EMESolver, SOI_160, Taper, mesh_cell_centers
 
 
 def _solver(num_cells, lengths, **kw):
@@ -88,3 +88,44 @@ class TestLengthSweepEquivalence:
                 rtol=1e-6, atol=1e-9,
                 err_msg=f"length-sweep result at L={L} disagrees with a direct solve()",
             )
+
+
+@pytest.mark.slow
+class TestSectionModes:
+    """EMESolver.section_modes() -- the field-sampling counterpart
+    solve_section() computes internally but never surfaces (see
+    HybridSolver's check_mode_correspondence, beef/solvers/hybrid.py)."""
+
+    def test_returns_sane_modes_on_its_own_mesh(self):
+        geometry = Taper(length=2.0, width_start=0.45, width_end=0.45)  # straight
+        solver = EMESolver(
+            num_modes=[2], num_cells=[1], lengths=[2.0],
+            oxide_width=3.0, oxide_height=1.5, res=20.0,
+            material_stack=SOI_160, mode_solver="tidy3d",
+        )
+        modes, mesh = solver.section_modes(geometry, wavelength=1.55, x0=-1.0, x1=1.0, n_modes=2)
+
+        assert len(modes) == 2
+        neff = sorted((float(np.real(m.neff)) for m in modes), reverse=True)
+        assert neff[0] > 1.0  # a 450nm SOI strip guides at 1.55 um
+        assert neff[0] > neff[1]
+
+        y, z = mesh_cell_centers(mesh)
+        assert np.asarray(modes[0].Ex).shape == (len(y), len(z))
+
+    def test_accepts_a_caller_supplied_shared_mesh(self):
+        """The mesh param exists so a caller (HybridSolver's correspondence
+        check) can hand in ITS OWN diagnostic mesh instead of this solver's
+        production self._build_mesh() -- confirm the returned mesh really is
+        the one passed in, not silently rebuilt."""
+        geometry = Taper(length=2.0, width_start=0.45, width_end=0.45)
+        solver = EMESolver(
+            num_modes=[2], num_cells=[1], lengths=[2.0],
+            oxide_width=3.0, oxide_height=1.5, res=20.0,
+            material_stack=SOI_160, mode_solver="tidy3d",
+        )
+        own_mesh = solver._build_mesh()
+        modes, returned_mesh = solver.section_modes(
+            geometry, wavelength=1.55, x0=-1.0, x1=1.0, n_modes=1, mesh=own_mesh)
+        assert returned_mesh is own_mesh
+        assert len(modes) == 1

@@ -3,7 +3,6 @@
 One file per example device, recording what has to hold before that device's
 **hybrid** result can be trusted, and what is currently missing.
 
-    directional_coupler_validation.md  directional coupler — the worked example
     mmi_1x2_validation.md              1×2 MMI
     mmi_2x2_validation.md              2×2 MMI
     modal_multiplexer_validation.md    modal multiplexer
@@ -11,6 +10,8 @@ One file per example device, recording what has to hold before that device's
 
     material_model_validation.md       cross-device — shared Si/SiO2 model, both engines
     archive/                           closed items, kept whole
+    resolved/                          whole docs sufficiently addressed (open to-dos may remain)
+    resolved/directional_coupler_validation.md  directional coupler — the worked example
 
 `material_model_validation.md` is the one file here that is not per-device: the material
 model in `beef/materials/stack.py` is shared by every example and by both engines, so a gap
@@ -79,6 +80,26 @@ the FDTD side's n_eff without any time-stepping, so this is cheap to check
 by `examples/verification/python/audit_interface_modes.py`, which puts the
 coupler first as a self-check since item 12 already fixed its answer. Results,
 and the two things they overturn, are in Status below.
+
+**2026-07-30 — the same check is now available at runtime, not just via the
+audit script.** `HybridSolver(check_mode_correspondence=True)` wires
+`beef.mode_identity`'s field-overlap machinery directly into `solve()`/
+`solve_length_sweep()`, opt-in, so this check can run as part of an actual
+device solve instead of a separate manual pass. It is best-effort and
+duck-typed (see `notes.md` Solvers #14) — confirmed against real devices to
+skip gracefully with a warning, not crash, whenever either adjoining
+solver's own automatic padding (`FDTDSolver`'s `dpml`) reaches past a
+section's straight run-out.
+
+Running it turned up a real, previously-unrecorded bug of its own:
+`CompoundGeometry` was double-applying `stub_left`/`stub_right`, which is
+why the original audit script had to route around `CompoundGeometry`
+entirely. **Fixed 2026-07-30** (`notes.md` Geometry item 6), so the modal
+multiplexer's interfaces can now be checked through the composed geometry.
+Still outstanding: the coupler and both MMI examples use a 0.25 µm
+`body_stub`, thinner than `FDTDSolver`'s automatic `dpml=0.5` query padding,
+so the check cannot run at those interfaces at all — widening those example
+constants is what would make this a routine gate across every device here.
 
 **3. Resolution convergence, per engine separately.** A single shared
 `RESOLUTION` is how a 7% error survived for months: meep is converged at 40 and

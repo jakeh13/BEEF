@@ -22,6 +22,13 @@ decomposes light onto:
      guided-band |dn_eff| 0.0023). Mode crowding grows with count, so the
      devices above are more exposed, and none has been checked.
 
+modal_multiplexer is handled separately (see MULTI_DEVICES below): it is a
+CompoundGeometry with FOUR section interfaces, not one cut, so "the interface
+cross-section" is not a single (n_modes, section) pair — each of the four
+carries its own N_MODES=16 basis and must be checked independently. A swap at
+any one of the four corrupts that section's contraction silently, so all four
+are audited, not just one.
+
 Plus, because it is nearly free once the modes are solved: EME mesh convergence
 per device. Do NOT assume the coupler's converged res=80 transfers -- mmi_1x2
 and modal_multiplexer are SOI_160, and a 160 nm core confines much more weakly
@@ -36,9 +43,10 @@ section solve needs. That is the whole reason this audit is affordable across
 four devices.
 
 Run:
-    python .../audit_interface_modes.py                 # every device
-    python .../audit_interface_modes.py mmi_1x2         # one device
-    python .../audit_interface_modes.py --convergence   # add the EME mesh sweep
+    python .../audit_interface_modes.py                    # every device
+    python .../audit_interface_modes.py mmi_1x2            # one device
+    python .../audit_interface_modes.py modal_multiplexer  # all 4 interfaces
+    python .../audit_interface_modes.py --convergence      # add the EME mesh sweep
 
 Output: example_output/verification/interface_mode_audit/<device>.json plus a
 printed table per device.
@@ -55,8 +63,10 @@ import numpy as np
 
 import meow as mw
 from beef import (
-    MMI, DirectionalCoupler, EMESolver, FDTDSolver,
+    MMI, MMIPort, CompoundGeometry, WaveguideRun,
+    DirectionalCoupler, EMESolver, FDTDSolver,
     SOI_160, SOI_220, extrude_polygons,
+    best_correspondence, field_overlap_matrix, mesh_cell_centers, stack_meow_mode_fields,
 )
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -100,7 +110,12 @@ def _mmi_1x2():
     # mm_length 4.5 um -> body spans +/-2.25, so [-1, +1] is 1.25 um clear of
     # each taper seam.
     return dict(
-        geometry=mmi, n_modes=12, wl=1.31, stack=SOI_160,
+        # N_MODES 12->8: mmi_1x2_validation.md gap 3, mmi_1x2_hybrid.py:95 --
+        # bands 8/9 came back non-identity between engines at 12, the entire
+        # problem region was 8-11 (near the SOI_160 cutoff), bands 0-7 agree
+        # to <=1.8e-4. This audit must track what the example actually
+        # carries, not the pre-fix count.
+        geometry=mmi, n_modes=8, wl=1.31, stack=SOI_160,
         section=(-1.0, 1.0), sim_width=5.0, sim_height=1.5, dpml=0.5, res=40.0,
         note="2.0 x 0.16 um slab body, mm_length 4.5 um, O-band",
     )
@@ -123,15 +138,111 @@ def _mmi_2x2():
     )
 
 
-# modal_multiplexer is deliberately absent: it builds a CompoundGeometry of two
-# MMIs plus a WaveguideRun connector (modal_multiplexer_hybrid.py:137), with four
-# section interfaces rather than two, so "the interface cross-section" is not a
-# single cut. It needs its own treatment -- see
-# validation_markdown/modal_multiplexer_validation.md.
 DEVICES = {
     "directional_coupler": _dc,
     "mmi_1x2": _mmi_1x2,
     "mmi_2x2": _mmi_2x2,
+}
+
+
+def _modal_multiplexer():
+    # Pinned to examples/modal_multiplexer/python/modal_multiplexer_hybrid.py
+    # (geometry constants, BODY_STUB, N_MODES=16, boundaries formula) exactly
+    # -- this must audit the same four cross-sections HybridSolver actually
+    # cuts at, not a stand-in.
+    TAPER_L = 2.0
+    WO = 1.0375
+    BETWEEN_WG_LENGTH = 3.0
+    MM_WIDTH = 2.8
+    BRANCH_SPECS = [
+        (+WO, 0.33, 0.725),   # top
+        (0.0, 0.35, 1.15),    # mid
+        (-WO, 0.35, 0.725),   # bot
+    ]
+
+    def _branch_ports():
+        return [MMIPort(y=y, waveguide_width=ww, taper_length=TAPER_L, taper_width=tw)
+                for y, ww, tw in BRANCH_SPECS]
+
+    mmi1 = MMI(
+        n_inputs=1, n_outputs=3,
+        mm_length=16.92, mm_width=MM_WIDTH,
+        inputs=[MMIPort(y=0.0, waveguide_width=0.7, taper_length=TAPER_L, taper_width=1.4)],
+        outputs=_branch_ports(),
+        waveguide_height=0.16,
+    )
+    mmi2 = MMI(
+        n_inputs=3, n_outputs=3,
+        mm_length=34.24, mm_width=MM_WIDTH,
+        inputs=_branch_ports(),
+        outputs=_branch_ports(),
+        waveguide_height=0.16,
+        use_neighbor_aperture=True,
+    )
+    connector = WaveguideRun(
+        length=BETWEEN_WG_LENGTH, ports=[(y, ww) for y, ww, _ in BRANCH_SPECS])
+    mux = CompoundGeometry([mmi1, connector, mmi2])
+
+    N_MODES = 16
+    BODY_STUB = 0.75
+    half_total = mux.total_length / 2
+    body1_start = -half_total + TAPER_L
+    body1_end = body1_start + mmi1.mm_length
+    body2_start = body1_end + TAPER_L + BETWEEN_WG_LENGTH + TAPER_L
+    body2_end = body2_start + mmi2.mm_length
+
+    # section_mode_neff() unconditionally draws its own self-contained
+    # stub_left=stub_right=dpml on BOTH sides of the query box (it has no
+    # notion of "this side is an interior mode-matching interface, not real
+    # PML" -- that distinction only exists in HybridSolver._stubs(), which
+    # zeroes the interior side; see beef/solvers/hybrid.py's _stubs(),
+    # verified directly).
+    #
+    # This audit queries each interface directly on the MMI it actually
+    # belongs to, in that MMI's OWN local frame (x=0 at its longitudinal
+    # centre), exactly like the mmi_1x2 / mmi_2x2 audits above already do,
+    # rather than through the composed `mux`. Verified these four local
+    # positions sit precisely BODY_STUB=0.75 inside their MMI's own taper
+    # seams.
+    #
+    # Historical note (2026-07-30): this local-frame routing originally
+    # existed to work around a stub double-application bug in
+    # CompoundGeometry._overlaps(), which made a padded query box that sat
+    # fully inside one sub-segment need 2*dpml=1.0 um of clearance instead
+    # of dpml's 0.5 -- more than BODY_STUB's 0.75. **That bug is now fixed**
+    # (see notes.md Geometry item 6 and
+    # tests/test_geometry.py::TestCompoundGeometryStubIsAppliedExactlyOnce),
+    # so going through `mux` directly would work today. Kept as-is anyway:
+    # querying each MMI in its own frame is what the other two MMI audits
+    # do, it keeps the four configs' geometry unambiguous, and there is no
+    # reason to re-route working, already-run audit code.
+    interface_local_xs = [
+        ("FDTD input <-> EME MMI1", mmi1, -(mmi1.mm_length / 2 - BODY_STUB)),
+        ("EME MMI1 <-> FDTD transition", mmi1, +(mmi1.mm_length / 2 - BODY_STUB)),
+        ("FDTD transition <-> EME MMI2", mmi2, -(mmi2.mm_length / 2 - BODY_STUB)),
+        ("EME MMI2 <-> FDTD output", mmi2, +(mmi2.mm_length / 2 - BODY_STUB)),
+    ]
+    # Half-span + dpml(0.5) must stay under BODY_STUB's 0.75 um clearance
+    # from the taper seam; 0.1 leaves a 0.15 um margin.
+    half_span = 0.1
+
+    return [
+        dict(
+            geometry=geom, n_modes=N_MODES, wl=1.31, stack=SOI_160,
+            section=(x_local - half_span, x_local + half_span),
+            sim_width=5.0, sim_height=1.5, dpml=0.5, res=40.0,
+            note=f"interface {i} ({label}) @ local x={x_local:.3f} of its own MMI",
+        )
+        for i, (label, geom, x_local) in enumerate(interface_local_xs)
+    ]
+
+
+# CompoundGeometry devices with more than one section interface: each entry
+# is a list of per-interface configs (same shape as one DEVICES[...]() entry)
+# rather than a single dict, because "the interface cross-section" is not one
+# cut for these devices -- see the module docstring.
+MULTI_DEVICES = {
+    "modal_multiplexer": _modal_multiplexer,
 }
 
 
@@ -197,12 +308,85 @@ def correspondence(a, b):
     return [int(np.argmin(np.abs(b - v))) for v in a]
 
 
-def audit(name, convergence=False):
-    cfg = DEVICES[name]()
+def overlap_correspondence(cfg, n_modes, n_cladding, cmp_res=20.0):
+    """The beef.mode_identity field-overlap check, run on ONE cfg (see
+    module docstring / README "Mode identity" section for why this
+    generalizes past nearest-neighbour n_eff matching).
+
+    Deliberately uses cmp_res, independent of cfg['res'] (the resolution
+    the n_eff audit solved at) -- both engines are re-solved at this
+    resolution just for the comparison grid, demonstrating the whole point
+    of a shape-based check: it does not require the two engines to already
+    agree numerically at a shared resolution the way nearest-neighbour
+    n_eff matching does. Coarser than production (20 vs 40) is deliberate
+    too: EigenmodeData.amplitude() is called once per (band, y, z,
+    component) -- n_modes * len(y_grid) * len(z_grid) * 6 -- so halving the
+    grid resolution cuts that 4x; a 0.05 um cell size still resolves a
+    2.8 um-wide body's mode lobes (worst case here, mode 15 of 16, is ~6
+    lobes across 2.8 um) at a handful of points per lobe, plenty for an
+    aggregate overlap integral even though it would be marginal for
+    resolving the field shape precisely.
+    """
+    x0, x1 = cfg["section"]
+    wl = float(cfg["wl"])
+
+    mesh = mw.Mesh2D(
+        x=np.linspace(-cfg["sim_width"] / 2, cfg["sim_width"] / 2,
+                      int(cmp_res * cfg["sim_width"]) + 1),
+        y=np.linspace(-cfg["sim_height"] / 2, cfg["sim_height"] / 2,
+                      int(cmp_res * cfg["sim_height"]) + 1),
+    )
+    y_grid, z_grid = mesh_cell_centers(mesh)
+
+    gds = cfg["geometry"].section_gds(x0, x1, cfg["sim_width"])
+    cells = mw.create_cells(
+        structures=extrude_polygons(gds, cfg["stack"].extrusion_rules),
+        mesh=mesh, Ls=[x1 - x0],
+    )
+    cs = mw.CrossSection.from_cell(cell=cells[0], env=mw.Environment(wl=wl, T=25.0))
+    meow_modes = mw.compute_modes(cs, n_modes)
+    meow_neff_arr = np.array([float(np.real(m.neff)) for m in meow_modes])
+    meow_fields = stack_meow_mode_fields(meow_modes)
+
+    solver = FDTDSolver(
+        res=cmp_res, sim_width=cfg["sim_width"], sim_height=cfg["sim_height"],
+        dpml=cfg["dpml"], source_margin=0.0, monitor_margin=0.25, three_d=True,
+        material_stack=cfg["stack"], decay_tol=1e-11,
+    )
+    result = solver.section_mode_fields(
+        cfg["geometry"], wl, x0, x1, n_modes, y_grid, z_grid,
+        monitor_center=0.0, monitor_size=cfg["sim_width"],
+    )
+    meep_neff_arr = result["neff"]
+    meep_fields = {k: result[k] for k in ("Ex", "Ey", "Ez", "Hx", "Hy", "Hz")}
+
+    guided_a = meep_neff_arr > n_cladding
+    guided_b = meow_neff_arr > n_cladding
+    fields_a = {k: v[guided_a] for k, v in meep_fields.items()}
+    fields_b = {k: v[guided_b] for k, v in meow_fields.items()}
+
+    dy = float(y_grid[1] - y_grid[0])
+    dz = float(z_grid[1] - z_grid[0])
+    eta = field_overlap_matrix(fields_a, fields_b, dy=dy, dz=dz)
+    corr, margin = best_correspondence(eta)
+
+    return dict(
+        cmp_res=cmp_res, n_guided_meep=int(guided_a.sum()), n_guided_meow=int(guided_b.sum()),
+        neff_meep_guided=meep_neff_arr[guided_a].tolist(), neff_meow_guided=meow_neff_arr[guided_b].tolist(),
+        correspondence=corr, margin=margin.tolist(),
+        order_preserved=bool(corr == list(range(len(corr)))),
+        worst_overlap_on_diagonal=float(np.min([eta[i, corr[i]] for i in range(len(corr)) if corr[i] >= 0])) if corr else float("nan"),
+    )
+
+
+def _audit_one(label, cfg, convergence=False):
+    """Runs both engines on one (geometry, section, n_modes) config and
+    returns the result dict. Shared by single-cut devices (DEVICES) and each
+    interface of a multi-cut device (MULTI_DEVICES)."""
     n_modes, res, wl = cfg["n_modes"], cfg["res"], cfg["wl"]
     n_clad = n_cladding(cfg["stack"], wl)
 
-    say(f"\n{'='*72}\n[audit] {name} — {cfg['note']}")
+    say(f"\n{'='*72}\n[audit] {label} — {cfg['note']}")
     say(f"[audit] N_MODES={n_modes}, res={res:.0f}, lambda={wl} um, "
         f"n_cladding={n_clad:.4f}, section={cfg['section']}")
 
@@ -229,7 +413,7 @@ def audit(name, convergence=False):
     say(f"[audit] worst guided |dn_eff|: {worst:.4f}")
 
     result = dict(
-        device=name, n_modes_requested=n_modes, n_modes_guided=n_guided,
+        label=label, n_modes_requested=n_modes, n_modes_guided=n_guided,
         resolution=res, wavelength=wl, n_cladding=n_clad,
         section=list(cfg["section"]), note=cfg["note"],
         neff_meep=mp_neff.tolist(), neff_meow=mw_neff.tolist(),
@@ -249,6 +433,45 @@ def audit(name, convergence=False):
             prev = nf
         result["eme_convergence"] = conv
 
+    return result
+
+
+def audit(name, convergence=False):
+    cfg = DEVICES[name]()
+    result = dict(device=name, **_audit_one(name, cfg, convergence=convergence))
+    if MASTER:
+        os.makedirs(output_dir, exist_ok=True)
+        _atomic_write(os.path.join(output_dir, f"{name}.json"),
+                      json.dumps(result, indent=2) + "\n")
+    return result
+
+
+def audit_multi(name, convergence=False):
+    """Multi-interface devices (see MULTI_DEVICES): audits every interface
+    independently and writes one JSON with a per-interface list plus a
+    device-wide summary, since HybridSolver needs ALL of them sound, not
+    just one."""
+    cfgs = MULTI_DEVICES[name]()
+    interfaces = [
+        _audit_one(f"{name}[{i}]", cfg, convergence=convergence)
+        for i, cfg in enumerate(cfgs)
+    ]
+
+    all_order_preserved = all(r["order_preserved"] for r in interfaces)
+    worst_overall = max(r["worst_guided_dneff"] for r in interfaces)
+    say(f"\n{'='*72}\n[audit] {name} — SUMMARY across {len(interfaces)} interfaces")
+    for i, r in enumerate(interfaces):
+        flag = "OK" if r["order_preserved"] else "MISMATCH"
+        say(f"[audit]   [{i}] {r['note']}: order_preserved={r['order_preserved']} "
+            f"({flag}), worst |dn_eff|={r['worst_guided_dneff']:.4f}, "
+            f"guided={r['n_modes_guided']}/{r['n_modes_requested']}")
+    say(f"[audit] ALL INTERFACES ORDER-PRESERVED: {all_order_preserved}")
+    say(f"[audit] worst |dn_eff| over all interfaces: {worst_overall:.4f}")
+
+    result = dict(
+        device=name, all_order_preserved=bool(all_order_preserved),
+        worst_guided_dneff_overall=worst_overall, interfaces=interfaces,
+    )
     if MASTER:
         os.makedirs(output_dir, exist_ok=True)
         _atomic_write(os.path.join(output_dir, f"{name}.json"),
@@ -257,15 +480,19 @@ def audit(name, convergence=False):
 
 
 def main():
+    all_names = sorted(list(DEVICES) + list(MULTI_DEVICES))
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("device", nargs="?", choices=sorted(DEVICES), default=None)
+    ap.add_argument("device", nargs="?", choices=all_names, default=None)
     ap.add_argument("--convergence", action="store_true",
                     help="also sweep the EME mesh (adds ~4x the mode solves)")
     args = ap.parse_args()
 
-    names = [args.device] if args.device else list(DEVICES)
+    names = [args.device] if args.device else all_names
     for n in names:
-        audit(n, convergence=args.convergence)
+        if n in MULTI_DEVICES:
+            audit_multi(n, convergence=args.convergence)
+        else:
+            audit(n, convergence=args.convergence)
     say(f"\n[audit] written -> {output_dir}/")
     return 0
 

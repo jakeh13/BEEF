@@ -42,6 +42,8 @@ from beef import (
     # network
     SMatrixBlock, connect, close_loop, Circuit,
     from_transfer_matrix, from_smatrix, to_smatrix,
+    # mode identity
+    field_overlap_matrix, best_correspondence, mesh_cell_centers, stack_meow_mode_fields,
     # results
     SMatrix,
     # sweep
@@ -74,7 +76,18 @@ from beef import (
   accepts an optional `save_dir` — see Simulation cache below. `FDTDSolver.solve_section()` also
   accepts `y0`/`y1` and `excite_port`/`measure_port` (`PortSpec`) to place a source/monitor on a
   y-normal (not just x-normal) plane — additive, every existing call is unaffected — for sections
-  with a non-x-normal port (e.g. a ring resonator's coupling port).
+  with a non-x-normal port (e.g. a ring resonator's coupling port). `FDTDSolver.section_mode_fields()`
+  is the field-profile counterpart of `section_mode_neff()` — same cheap `get_eigenmode()`-only
+  solve, but returns sampled `Ex..Hz` per mode instead of just n_eff, for `beef.mode_identity`
+  below; `EMESolver.section_modes()` is its EME-side counterpart, surfacing the raw `meow.Mode`
+  list `solve_section()` already computes internally but never returns. `HybridSolver(
+  check_mode_correspondence=True)` wires `beef.mode_identity` into `solve()`/`solve_length_sweep()`
+  itself — an opt-in runtime check that each interior interface's adjoining bases actually
+  correspond, rather than trusting the index-*i*-to-index-*i* contraction blindly. Both sides'
+  modes are compared on one shared mesh whose resolution defaults to the coarser of the two
+  adjoining solvers' own `res` (override with `mode_correspondence_res`; raise it if a reported
+  mismatch looks like under-resolution rather than a real disagreement). See `notes.md` Solvers
+  #14 for what it does and does not currently catch on this repo's own examples.
 - **Results** (`beef/results/`) — `SMatrix`, a unified S-parameter result type with transmission/insertion-loss
   helpers and a `check_passive()` sanity check.
 - **Network** (`beef/network/`) — general S-matrix composition via Redheffer star products: `connect()` joins
@@ -82,6 +95,21 @@ from beef import (
   against the ring resonator's proven closed-form all-pass formula), `Circuit` builds a multi-block network.
   Depends only on `SMatrix`/`numpy`; not yet wired into `HybridSolver` or any example — see `notes.md`'s
   Network section and `validation_markdown/ring_resonator_validation.md`'s recommendation.
+- **Mode identity** (`beef/mode_identity.py`) — device- and resolution-agnostic check for whether
+  `HybridSolver`'s index-*i*-to-index-*i* contraction between an FDTD interface basis and an EME
+  body basis is actually valid. `field_overlap_matrix()` computes the normalized transverse
+  E-field overlap between every pair of modes from the two engines (matching field *shape*, not
+  the scalar n_eff, so it does not fool the way nearest-neighbor n_eff matching does when several
+  modes crowd close together — found directly on the modal multiplexer's 16-mode basis, see
+  `validation_markdown/modal_multiplexer_validation.md` gap 1); `best_correspondence()` then picks
+  the overlap-maximizing one-to-one assignment (Hungarian algorithm), not nearest-neighbor.
+  Deliberately E-only, not the full E-x-H reciprocity overlap: meep and meow were found to report
+  E and H in mutually inconsistent absolute units (~375x apart on a real solved mode, each engine
+  internally self-consistent) — comparing E against E only sidesteps that entirely.
+  `mesh_cell_centers()`/`stack_meow_mode_fields()` bridge an `EMESolver` mesh/modes to the grid and
+  array shape `FDTDSolver.section_mode_fields()` expects (remapping meow's own local field-axis
+  convention into beef's device frame along the way), so the two engines' output is directly
+  comparable regardless of device symmetry or which resolution each side used.
 - **Sweep** (`beef/sweep/`) — `ParallelSweep`, a local `multiprocessing`-based parameter grid sweep.
 - **Plot** (`beef/plot/`) — geometry, field, and performance (transmission/insertion-loss/splitting-ratio) plots.
 
