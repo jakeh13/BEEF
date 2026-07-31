@@ -423,6 +423,13 @@ those are now the prerequisites.
       has this measured. Do it after item 5, since the sweep needs the check to
       be runnable per device.
 
+      **Naming collision, not a status update:** `verify_item_6_engine_agreement.py`
+      and `batch/verification/run_item_6_res_sweep.batch` serve `resolved/
+      directional_coupler_validation.md`'s item 6 (engine agreement, closed),
+      not this one — that doc's own numbering, unrelated question, unrelated
+      device. This item has no tooling yet. Reaching for "the item 6 script"
+      by name alone gets the wrong item.
+
       **Still open, and job 11575516 did NOT close it** — recorded because both
       `mode_spectrum_convergence.py`'s docstring and `running_jobs.md`'s
       snapshot filed that job partly under this item, which overstates it. That
@@ -739,6 +746,27 @@ the three properties they need has been checked.
       low bands move, every guarded EME number carries an over-request
       artifact; if they don't, `_DUP_MODE_MAX_EXTRA` can be cut on cost
       grounds.
+
+      **In flight 2026-07-31 — job 11586098**,
+      `examples/verification/python/diagnose_guard_over_request.py`. Measured
+      with **three** arms rather than the two this item asked for, because
+      "guard on vs off" is exactly the unclean comparison described above —
+      the flag moves the eigenproblem *and* the filtering together:
+
+      | arm | guard | requests | what it is |
+      |---|---|---|---|
+      | A | off | 16 | unguarded baseline |
+      | B | on | 16 | production default (solves 24, filters to 16) |
+      | C | off | 24 | B's eigenproblem, unfiltered |
+
+      **C vs A** isolates the question this item actually turns on — whether
+      the over-request *by itself* perturbs the low bands, with no filtering
+      involved. **B vs C** then reads off what the guard rejected and what it
+      reached further up the spectrum to replace it with. Wall time is taken
+      per arm, so an inert C-vs-A result immediately licenses cutting
+      `_DUP_MODE_MAX_EXTRA` on the `C/A` cost ratio alone. Run at res 60 for
+      the reason item 1 point 5 gives: res 40 is not converged on this device,
+      so a difference measured there would not be attributable.
 
 ## Open questions
 

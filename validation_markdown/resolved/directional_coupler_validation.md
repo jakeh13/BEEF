@@ -15,7 +15,10 @@ Status, open work, and outstanding verification. **Everything already closed —
 
 **The hybrid chain converges, and the coupler's hybrid results are trustworthy.**
 
-Item 6, the last obstacle and the reason the original document existed, is closed. The
+Item 6, the last obstacle and the reason the original document existed, is closed.
+(Naming collision: `fdtd_vs_EME_mode_validation.md` has its own, unrelated, still-open
+item 6 — `interface_modes` convergence. `verify_item_6_engine_agreement.py` and
+`run_item_6_res_sweep.batch` are THIS item 6, closed, not that one.) The
 two engines disagreed by ~10% on Δβ through an identical uniform cross-section, which made
 the chain's answer depend on where the FDTD/EME cut was made — the one thing a hybrid
 decomposition must not do.

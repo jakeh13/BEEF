@@ -47,6 +47,68 @@ alternative — `sacctmgr show assoc ... format=GrpTRESMins` returns empty for
 all three accounts here, so remaining balance isn't reliably queryable before
 submitting.
 
+### Added — one batch job for items 11 and 12 (job 11586046)
+
+`batch/verification/run_diagnose_items_11_12.batch` runs the two follow-ups the
+07-30 login-node smoke runs left open, in one job because both solve the same
+cross-section (modal multiplexer interface 0, res 40) and share setup cost.
+Serial, eigensolve-only, 240 min budget.
+
+Item 12 first, deliberately — it is the root-cause item and the more expensive
+of the two, so a wall-clock overrun costs the cheaper result rather than the
+more valuable one. It runs `diagnose_kpoint_ladder_v2.py`, written 07-30 but
+never executed: a **real** guarded accept/skip/retry search (v1 was a flat
+20-solve sweep with no retry) under four seeding policies — fixed, naive
+ladder, step ladder, accepted-band ladder. The last two are exactly what item
+12 lists as "not yet tried".
+
+Item 11 second, at **res 40** — the one data point it names as missing, its
+clear result so far being res-20 only. `diagnose_dup_band_grid.py`'s `RES` is
+now read from `BEEF_DIAG_RES` (default `20.0`), so the res-20 result on record
+stays the script's default and the re-check is a launch-time override rather
+than an edit that would strand the earlier number.
+
+### Added — item 13's first measurement, three arms not two (job 11586098)
+
+`examples/verification/python/diagnose_guard_over_request.py` +
+`batch/verification/run_diagnose_guard_over_request.batch`. Item 13 asks for
+"16 modes at res 60, guard on vs off, compare the low bands and the wall time"
+— but that comparison is precisely the one the item itself calls unclean:
+`EMESolver.compute_modes()` over-requests `num_modes + _DUP_MODE_MAX_EXTRA`
+(16 → 24) in a single `compute_modes_meep()` call when the guard is on, so the
+flag moves both the eigenproblem and the filtering at once.
+
+Three arms separate them — **A** guard off/16, **B** guard on/16, **C** guard
+off/24 (B's eigenproblem, unfiltered):
+
+- **C vs A** isolates the artifact question: does over-requesting *alone* move
+  the low bands? Non-zero means every guarded EME number carries an
+  over-request artifact independent of any filtering; inert means the guard is
+  a pure filter.
+- **B vs C** shows what the filter drops — which of C's 24 were rejected as
+  duplicates and what the guard reached further up the spectrum to replace
+  them with.
+
+Wall time is recorded per arm, because if C vs A is inert the `C/A` ratio is
+the entire argument for cutting `_DUP_MODE_MAX_EXTRA` on cost grounds — item 13
+notes job 11575516's 3h36m was dominated by this over-request. Run at res 60:
+above the shipped 40, and where 11575516 measured meow as converged, so a
+difference cannot be blamed on an unconverged mesh.
+
+### Docs — item 6 naming collision, v1 ladder script marked superseded
+
+Two docs both number an item 6, unrelated to each other:
+`fdtd_vs_EME_mode_validation.md` item 6 (`interface_modes` convergence, open,
+no tooling) and `resolved/directional_coupler_validation.md` item 6 (engine
+agreement, closed). `verify_item_6_engine_agreement.py` and
+`run_item_6_res_sweep.batch` are the latter only. Added a cross-reference note
+at each doc's item 6 so "the item 6 script" can't resolve to the wrong one.
+
+`diagnose_kpoint_ladder.py`'s docstring now states up front that it is
+superseded by `diagnose_kpoint_ladder_v2.py` — kept, not deleted, because its
+numbers (3 ties/17 distinct fixed, 1 tie/19 distinct naive ladder) are quoted
+verbatim elsewhere in this file and in notes.md.
+
 ### Docs — job IDs refreshed after the re-queue
 
 `validation_markdown/running_jobs.md` re-snapshotted (07-31 08:22) with the

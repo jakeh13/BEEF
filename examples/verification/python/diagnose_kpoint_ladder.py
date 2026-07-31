@@ -1,4 +1,15 @@
-"""Does laddering the k seed remove `_iter_distinct_bands()`'s duplicate
+"""SUPERSEDED by `diagnose_kpoint_ladder_v2.py` -- kept as-is because its
+result (3 exact ties / 17 distinct, fixed seed; 1 tie / 19 distinct, naive
+ladder) is quoted verbatim in notes.md Solver #18 and CHANGELOG.md
+2026-07-30. This script is a flat 20-solve sweep with no accept/skip/retry
+and only two policies (fixed, naive ladder); v2 runs a real guarded search
+under four policies, including the two follow-ups this script's own findings
+called for. Run v2 for anything beyond reproducing the historical numbers
+above.
+
+Original docstring, unchanged below --
+
+Does laddering the k seed remove `_iter_distinct_bands()`'s duplicate
 eigenmodes? (validation_markdown/fdtd_vs_EME_mode_validation.md item 12.)
 
 The hypothesis
