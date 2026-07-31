@@ -67,10 +67,42 @@ class CompoundGeometry(DeviceGeometry):
             yield seg, x, x + L
             x += L
 
-    def _locate(self, x: float, tol: float = 1e-6):
-        for seg, lo, hi in self._placements():
+    def _locate(self, x: float, tol: float = 1e-6, clamp: bool = False):
+        """(segment, seg_lo, seg_hi) owning `x`.
+
+        `clamp=False` (default, every existing caller): raises outside
+        `[-total_length/2, total_length/2]`. Correct for width_at/center_at/
+        section_prisms/section_gds/polygons — an out-of-bounds x there is a
+        genuine caller error building physical geometry, and must keep
+        raising.
+
+        `clamp=True` (source_aperture_at() only, added 2026-07-31): past
+        either end, delegate to that end segment instead of raising. Every
+        LEAF geometry already tolerates this by construction — MMI.width_at()
+        clamps to the terminal waveguide_width for any x past its taper start,
+        however far past, and source_aperture_at() built on top of it (e.g.
+        MMI's own) inherits that. FDTDSolver.solve() (the full single-domain
+        path, unlike solve_section()'s per-section calls, which stay well
+        inside a section's own bounds) queries source_aperture_at() at the
+        solver's external stub position — `waveguide_length` past the
+        device's own physical extent, same as PML clearance needs a bit of
+        straight run-in/out — which is exactly the region a single leaf
+        geometry's clamp-to-terminal-value already covers. CompoundGeometry
+        had no segment "out there" to delegate to, so this was the one case
+        that crashed instead: found when modal_multiplexer_fdtd.py became the
+        first script to call solve() (rather than solve_section(), which
+        HybridSolver always uses) with a CompoundGeometry as the top-level
+        device.
+        """
+        placements = list(self._placements())
+        for seg, lo, hi in placements:
             if lo - tol <= x <= hi + tol:
                 return seg, lo, hi
+        if clamp:
+            if x < placements[0][1]:
+                return placements[0]
+            if x > placements[-1][2]:
+                return placements[-1]
         raise ValueError(f"x={x:.4f} outside CompoundGeometry (total_length={self.total_length:.4f})")
 
     def _overlaps(self, x0: float, x1: float, stub_left: float, stub_right: float):
@@ -255,7 +287,7 @@ class CompoundGeometry(DeviceGeometry):
         return seg.center_at(x - center, **kwargs)
 
     def source_aperture_at(self, x: float, **kwargs) -> Optional[float]:
-        seg, lo, hi = self._locate(x)
+        seg, lo, hi = self._locate(x, clamp=True)
         if isinstance(seg, WaveguideRun):
             return None
         center = (lo + hi) / 2 + seg.frame_offset

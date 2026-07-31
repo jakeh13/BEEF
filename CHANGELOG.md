@@ -14,8 +14,218 @@ material-model session: dispersion is now implemented, gated on real solves
 across every stack/band the examples use, and wired to per-solver flags. Sections
 below are in the order they were written, so later ones supersede earlier ones
 where they overlap — notably λ₀, which moved twice (10.0 → 2.0 → derived per
-band) as each measurement replaced the previous reasoning. Fast suite ends the
-day at **468 passed, 14 skipped**.
+band) as each measurement replaced the previous reasoning. Fast suite reaches
+**477 passed, 1 skipped** by the `section_mode_neff` dispersion fix below (468
+before its 9 new tests), then **489 passed, 1 skipped** by day's end (the
+`interface_modes_convergence()` and `CompoundGeometry` clamp work adds 12
+more).
+
+The re-queued jobs then started landing, and the last sections are mostly their
+results rather than planned code changes: the 1×2 MMI's first hybrid-vs-FDTD
+number (9.11% low, systematic), **item 13 closed** (the EME duplicate guard's
+over-request is exactly inert and costs 3.2×), and the meow guard caught firing
+on the *production* path for the first time.
+
+Then a job **hung** and a job **measured nothing**, and between them they
+produced the day's largest findings — none of which were what those jobs were
+sent to measure:
+
+- the production duplicate guard can hang a run indefinitely on an eigensolve
+  that has no solution (new **item 14**), and short of that it pads a basis with
+  unguided modes;
+- `FDTDSolver.section_mode_neff()` ignored `dispersive=` outright, so a material
+  model work item had been recorded as *started* when it had never run;
+- **items 11 and 12 both resolved** once the hung job was reshaped — the guard's
+  diagnostic grid is clear at res 40 too, and k-seed laddering recovers a guided
+  channel today's fixed seed loses silently, at no extra cost;
+- **2×2 MMI gap 6 closed** — "the cleanest device audited" holds up under both
+  duplicate guards, neither of which fired.
+
+Two jobs were cancelled mid-flight and resubmitted after fixes, both called from
+reading job output rather than waiting on exit status. In both cases an earlier
+diagnosis recorded in these docs had to be corrected: a wall-clock budget miss
+that was really a non-terminating eigensolve, and a stale λ₀ that was really a
+flag never reaching the physics. A third correction followed from the first — the
+mux's reachable guided-mode count is 14, not the 13 inferred from the hung job's
+own fixed-seed trace.
+
+The 2×2 MMI's own gap-5 chain then finished: 0.82% worst |ΔT| against the 1×2's
+9.11%, but with a sign that flips across the band instead of the 1×2's uniform
+under-prediction — different mechanism, calibration not obviously indicated the
+same way. A calibration run for the 1×2 (where the signature *does* match the
+coupler's) went out. And writing the mux's first full-device FDTD reference hit
+a real, unfinished library gap — `CompoundGeometry` cannot back
+`FDTDSolver.solve()`'s single-domain path — with one genuine sub-bug found and
+fixed along the way and the larger design question correctly left alone.
+
+Last, item 6 (layer 2, completeness) got its reusable tool, the same way item 7
+(layer 3) got one on 2026-07-30: generic function built and tested, an actual
+device-level exercise run explicitly deferred rather than rushed.
+
+### Added — `interface_modes_convergence()`, the reusable layer-2 completeness check (item 6)
+
+`beef/interface_modes_convergence.py`, direct sibling of
+`beef/cut_position_invariance.py` (item 7): takes one already-solved `SMatrix`
+per `interface_modes` count plus the counts, reports per-`(port, in_mode,
+out_mode)` wavelength-mean transmission and the **step** between consecutive
+counts. Deliberately not a fitted slope like layer 3's tool — cut-position
+invariance's correct answer is a horizontal line (an unmoving S-matrix, so a
+near-zero slope is the criterion); a mode-count sweep is expected to move
+while the basis is incomplete and plateau once it is not, with no reason to
+be linear in between, so a step-based read (matching the convention already
+used by `mode_spectrum_convergence.py` and `verify_item_8_dispersive_
+convergence.py`) is the honest fit. `last_step` — has it stopped moving at
+the *highest* count tried — is the headline metric; `max_step` is
+informational. Raises on mismatched key sets, identical reasoning to layer
+3's tool: SMatrices claiming to be the same device at different mode counts
+must carry the same ports. 7 new tests
+(`tests/test_interface_modes_convergence.py`), meep/meow-free. Exported from
+`beef/__init__.py` alongside `cut_position_invariance`. Fast suite 489
+passed, 1 skipped.
+
+**Not yet exercised on a real device, and now explicitly deferred rather than
+merely unstarted** — see the archive entry immediately below. Same split item
+7 landed in: generic comparison done, wiring an actual sweep onto it needs a
+real meep/meow campaign. `directional_coupler_hybrid_modes_sweep.py` already
+swept `N_MODES = 2..12` on the coupler and would have been the closest
+existing candidate (the same relationship its `_stub_sweep.py` sibling had to
+item 7 before migration), but it saves raw `.npz` arrays rather than
+`SMatrix` objects and grids over two axes (mode count and coupling length)
+where this tool wants only mode count varied at one fixed configuration — not
+a drop-in fit regardless. Whichever device is picked when this is taken up
+must already be resolution-converged (item 6's own precondition): the coupler
+(converged at res 80) is the safer first target than the mux, whose own gap 2
+is still open and whose res-40 basis is already known incomplete (item 12).
+
+### Archived — all five directional-coupler sweep drivers, pending new sweeping functionality
+
+User call, not a code-quality finding: `examples/directional_coupler/python/
+directional_coupler_{fdtd_sweep,fdtd_resolution_sweep,hybrid_modes_sweep,
+hybrid_resolution_sweep,hybrid_stub_sweep}.py` moved to
+`examples/directional_coupler/archive/`, and their six batch launchers
+(`batch/sweep/*.batch`, including `run_dc_stub_sweep_calibrated.batch`) moved
+to `batch/archive/` — `batch/sweep/` is now empty and removed. New, more
+general sweeping functionality is planned once every device is verified;
+these five hand-rolled, per-device drivers (each duplicating the same
+harness — `_tag()`, `atomic_replace_write()`, an array-index CLI, per-value
+`data/*.npz` + `plots/*.png`, re-aggregation — see `notes.md` Misc #5, which
+named exactly this duplication before today) are retired rather than carried
+forward into that redesign.
+
+**Not a silent removal.** `tests/test_eme_convergence.py`'s
+`TestExampleScriptsPinTheConvergedResolution` reads
+`directional_coupler_hybrid_stub_sweep.py` and `..._hybrid_modes_sweep.py`
+directly by path to guard the item-11 shared-resolution-knob regression (a
+7% error that went unnoticed for months the first time). Updated to check
+`examples/directional_coupler/archive/` as a fallback location rather than
+dropping the two archived scripts from the parametrized list — an archived
+script can still bit-rot on exactly this bug, and it might be revived, so the
+guard stays. All 9 tests still pass. `directional_coupler_hybrid.py` itself
+did not move and needed no change.
+
+`examples/Makefile` lost the five sweep targets, their `clean_*` counterparts,
+`SWEEP_INDEX`, and their names from `.PHONY` — dead references to files that
+no longer live at those paths. `make directional_coupler_hybrid` and every
+other live target still resolve correctly (checked with `make -n`); requesting
+an archived target now fails with Make's own "No rule to make target" rather
+than a Python `FileNotFoundError` three layers down.
+
+Fast suite unaffected by the move itself (still 489 passed, 1 skipped) —
+the `test_eme_convergence.py` fix is what keeps it that way, not luck.
+
+### Measured — 2×2 MMI gap 5: 0.82% worst |ΔT|, a different signature from the 1×2 (job 11585849)
+
+Coupler body reasoning aside, the two MMIs now both have a hybrid-vs-full-device
+number, and they disagree in *kind*, not just magnitude:
+
+| device | worst \|ΔT\| | sign |
+|---|---|---|
+| 1×2 (11585850) | 0.0359 (9.11%) | uniformly negative |
+| 2×2 (11585849) | 0.0043 (0.82%) | positive at blue edge, crosses zero ~1.544 µm, negative at red edge |
+
+The 1×2's number is `resolved/directional_coupler_validation.md` items 6/14's
+Δβ-discretization signature — a single roughly-constant bias, which
+`calibrate_body_neff=True` corrects and took the coupler from ~5% to 0.11%. The
+2×2's sign flip is not that shape: a slope that changes sign across the band
+looks like a resolution- or dispersion-sensitive phase term rather than one
+constant offset, so the same fix is not obviously indicated here — worth trying
+regardless, but expect a smaller or qualitatively different effect. Also
+unresolved: this measurement is at the shipped unconverged `RESOLUTION = 40`
+(gap 2), so part of the sign flip could be a mesh artifact rather than physics,
+and the two cannot be separated until gap 2 is measured on this device.
+
+### Added — testing `calibrate_body_neff` on the 1×2 MMI for the first time (jobs 11589770/11589779, in flight)
+
+`mmi_1x2_hybrid.py` gained a `MMI1X2_CALIBRATE_BODY` env flag
+(`HybridSolver(calibrate_body_neff=CALIBRATE_BODY)`, output redirected to
+`mmi_1x2_hybrid_calibrated/` so the uncalibrated gap-5 baseline survives — same
+pattern as `directional_coupler_hybrid_stub_sweep.py`'s `DC_CALIBRATE_BODY`).
+`verify_mmi_1x2_hybrid_vs_fdtd.py` gained the matching
+`MMI1X2_HYBRID_CALIBRATED` override, pointed at the calibrated pickle and a
+separate output dir; the shared `mmi_1x2_fdtd.py` reference is **not**
+redirected, same reasoning as the coupler's stub sweep not redirecting its own
+shared reference. `calibrate_body_neff` has never been exercised on this device
+before, despite fixing the exact discrepancy shape (`~5% → 0.11%` on the
+coupler) that gap 5 just measured here (`9.11%`, uniformly negative).
+
+### Found — `CompoundGeometry` cannot back `FDTDSolver.solve()`'s single-domain path (writing modal_multiplexer_fdtd.py, gap 3)
+
+Wrote `modal_multiplexer_fdtd.py` — the mux's first attempted full-device FDTD
+reference, same `CompoundGeometry` the hybrid script already runs successfully,
+one single-domain `solve()` call per input mode (TE0, TE1) instead of five
+cascaded sections. It is the first script in this repo to call `.solve()`
+rather than `.solve_section()` (the only thing `HybridSolver` ever calls) with
+a `CompoundGeometry` as the top-level device — every existing full-device
+script passes a plain `MMI`. That untested combination broke twice, on two
+independent bugs.
+
+**Bug 1, FIXED.** `solve()` queries `geometry.source_aperture_at(x)` at the
+solver's external PML-clearance stub, past the device's own physical extent.
+Every leaf geometry already tolerates this by construction —
+`MMI.width_at()`/`source_aperture_at()` clamp to the terminal value for
+arbitrary overshoot, which is exactly why the plain-`MMI` full-device scripts
+never hit it. `CompoundGeometry._locate()` had no segment "out there" to
+delegate to and raised instead — confirmed as load-bearing, not cosmetic:
+`solve()`'s own source-position query lands in precisely that region, so the
+*real simulation* would have crashed here too, not only the geometry-preview
+plot that caught it first (attempt 1, 22 s).
+
+`beef/geometry/compound.py`'s `_locate(x, tol, clamp=False)` gained an opt-in
+`clamp=True` that delegates out-of-bounds x to the nearest end segment instead
+of raising, wired into `source_aperture_at()` only. `width_at()`/`center_at()`/
+`section_prisms()`/etc. are unaffected — still raise by default, since an
+out-of-bounds cut there is a genuine caller error building physical geometry,
+not a solver's legitimate external-stub query. 5 new tests,
+`tests/test_geometry.py::TestCompoundGeometrySourceApertureClamps`,
+mutation-checked: three fail against the pre-fix code (proving they exercise
+the regression), the existing `test_x_outside_bounds_raises` still passes
+either way (proving the opt-in changed nothing for any existing caller). Fast
+suite 482 passed, 1 skipped.
+
+**Bug 2, NOT FIXED, and the real blocker.** Clearing bug 1 exposed a second,
+unconditional crash one layer in: `solve() → to_meep_prisms() →
+geometry.polygons(stub_length=self.waveguide_length + self.dpml)`, and
+`CompoundGeometry.polygons(stub_length>0)` raises `NotImplementedError` by
+design — its own docstring: "no generic way to know per-port stub width for an
+arbitrary segment type" (attempt 3, 13 s, after attempt 2's 15 s wrongly
+attributed the same error to caching alone — `save_dir=None` only clears a
+*different*, cache-fingerprinting call to the same method). This is real,
+unfinished library work: `to_gds_eme()`/`section_gds()` already solve the
+equivalent stub-drawing problem via `_end_ports()`, but generalising that to
+plain `polygons()` needs an actual design decision for an ambiguous end (a
+multi-port `WaveguideRun`'s stub inherits which port's width?), which the
+existing code explicitly declined to guess at.
+
+**Left alone**, on the same caution basis as item 14 and item 12's guard fix
+this session: this is production-adjacent geometry logic (`polygons()`/
+`to_meep_prisms()` back every FDTD example in the repo) and deserves a real
+design pass plus device-level verification, not a mechanical patch under time
+pressure. `modal_multiplexer_fdtd.py` and `batch/run_modal_multiplexer_fdtd
+.batch` are both marked BLOCKED at the top of the file — do not run either
+until `notes.md` Geometry item 8 is actually closed. Three attempts total,
+~15 s and negligible node-seconds each; no wasted budget, no partial output
+(only `geometry.png` was ever written — every crash happens before
+`smat.save()`).
 
 ### Fixed — batch scripts billed an account that was out of billing minutes
 
@@ -264,6 +474,366 @@ gap 5 + `Order`, `modal_multiplexer_validation.md` gap 6, and
 (including the `reports/11585847_0.out` path to watch). Dates that read
 "in flight as of 2026-07-30" corrected to 07-31 where they now name a 07-31
 job.
+
+### Measured — item 13 closed: the duplicate guard's over-request is inert, and costs 3.2× (job 11586098)
+
+Job 11586098 completed in 1:54:50. Modal multiplexer interface 0, λ = 1.31 µm,
+res 60, 16 modes, `_DUP_MODE_MAX_EXTRA = 8`.
+
+| comparison | result |
+|---|---|
+| **C vs A** (24 requested vs 16, both unguarded) | max \|Δn_eff\| = **0.000e+00** across all 16 low bands |
+| **B vs C** (guarded-16 vs unguarded-24) | B = C's first 16 exactly; worst residual 0.000e+00; **no index skipped** |
+| **cost** | A 934.0 s, B 2948.5 s, C 2997.7 s → `B/A = 3.16×`, `C/A = 3.21×` |
+
+**The over-request does not move the eigenproblem.** Not "to within 1e-6" —
+exactly zero on every band. So `EMESolver.compute_modes(guard_duplicate_modes=
+True)` is a pure filter at production scale, item 0's res-12/3-mode inertness
+check does generalise to 16 modes on a res-60 mesh, and **no guarded EME number
+recorded anywhere in `validation_markdown/` carries an over-request artifact**.
+That was the open risk item 13 was raised for; it is closed.
+
+**What follows is a cost decision, deliberately not taken yet.** `B/A` and
+`C/A` agreeing to within 1.6% is the proof that B's expense is the extra 8
+bands and not the filtering, so `_DUP_MODE_MAX_EXTRA = 8` is ~2/3 of the wall
+time of every guarded `compute_modes()` call — including the 3h36m of job
+11575516 — in exchange for headroom the observed skip counts (≤ 3 on this
+device) never use. Left at 8 for now on two grounds: the skip-count evidence is
+from one device, and item 12 may replace the guard with a k-seeding fix that
+makes the constant moot. Recorded so the change is a one-line decision when
+those resolve, not a re-measurement.
+
+**Unplanned third finding — no duplicate fires at res 60.** Arm B filtered
+nothing, on the same cross-section where item 0 found meow's modes 10/11
+identical at res 40 and where the production run below fires the guard at res
+40. Consistent with job 11575516's meow-converged-by-60 plateau: the
+near-degenerate pair looks resolved into two genuine eigenvectors by res 60.
+Suggestive only — one cross-section, one wavelength, and the 24-band list still
+holds tight clusters above band 16 that a 16-mode request never reaches. It
+does turn "does the duplicate survive mesh refinement" into a real question for
+item 12.
+
+### Found — the meow duplicate guard fires on the *production* path (job 11585847, partial)
+
+Job 11585847 (modal multiplexer hybrid, this device's first real run in this
+tree) is still running, but its log already answers something the audit scripts
+could not. After the first two FDTD subregions, the first EME body solve logged
+— once per rank on all 96 ranks, one distinct event —
+
+```
+EMESolver.compute_modes: meow mode 9 duplicates already-accepted mode 8
+(self-overlap 1.000000 > 0.90) -- skipping it and reaching further up the spectrum.
+```
+
+This is the item-0 guard on `EMESolver`'s production `compute_modes()`, at the
+shipped `RESOLUTION = 40`, doing real `HybridSolver` work rather than replaying
+gap 1's field-overlap check (which is how item 0 was verified on 07-30). Absent
+the guard, this run's 16-channel interface basis would have been rank-deficient
+by one channel, on the device whose entire purpose is keeping 16 channels apart.
+
+`warn_on_transfer_duplicate` — the item-8 post-hoc `T`-column scan this job was
+submitted to exercise — has **not** fired; there is no `transfer` line in the
+log at all. That is the expected outcome if the upstream guard removes the
+duplicate before it reaches `T`, but a detector that has never fired and a
+detector that cannot fire are indistinguishable, so
+`modal_multiplexer_validation.md` gap 6's original ask stays open. Three
+interfaces and ~2h45 of wall remain.
+
+### Fixed — job 11586046 hung on an eigensolve with no solution; script now stops at the guided edge (resubmitted as 11588309)
+
+Job 11586046 (items 11 + 12) printed none of `diagnose_kpoint_ladder_v2.py`'s
+four per-policy blocks in 2h30 and was cancelled. **It was not slow, it was
+stuck** — an earlier revision of `running_jobs.md` diagnosed it as a wall-clock
+budget miss, which was wrong. Reconstructing the converged `k_x` per `band_num`
+from its MPB trace (target f = 0.763359, cladding n = 1.446804):
+
+| band_num | n_eff | guided? | |
+|---|---|---|---|
+| 1–9 | 2.7064 → 1.7637 | yes | |
+| **10, 11** | **1.7477, 1.7477** | yes | duplicate |
+| 12, 13 | 1.6836, 1.5936 | yes | |
+| **14, 15** | **1.4848, 1.4848** | yes | duplicate |
+| 16–18 | 1.4337 → 1.3877 | **no** | below cladding |
+| **19, 20** | **1.3491, 1.3491** | no | duplicate |
+| 21, 22 | 1.3226, 1.3075 | no | |
+| **23** | — | — | **no k reaches f** |
+
+`N_TARGET = 20` *distinct* modes needs band_num 23 because of the three
+duplicate pairs, and band 23 has no solution at the target frequency: MPB's
+k-search limit-cycles between k = 0.2346 (f = 0.4775) and k = 1.7480
+(f = 1.0283) indefinitely. It burned **161 MPB solves on that one band — 59% of
+the job's entire eigensolve work** — against 3–8 solves for each of bands 1–22.
+Bands 1–22 took ~58 min for 22 attempts, so the original ~25 s/solve budget was
+about right; no wall clock would have helped, and the 4-task split briefly
+recommended would have produced four hung tasks.
+
+**Script fix.** `N_TARGET` 20 → 16 (what `modal_multiplexer_hybrid.py` actually
+requests; the 20 was for comparability with v1's raw sweep, whose bands 16–20
+were unguided anyway), and the search now **stops when a raw solve returns
+`n_eff ≤ the cladding index`** — past there nothing is guided and the next
+band_num is the non-convergent one. This is a *physical* bound, not a timeout:
+MPB runs in C, so a Python signal or alarm cannot interrupt a solve already
+entered. The per-policy report now prints an explicit stop reason
+(`target` / `unguided` / `attempts`), because "found 13 of 16 because only 13
+exist" and "found 13 because it ran out of attempts" are different findings and
+must not read alike. Termination checked offline before resubmitting, meep-free:
+11586046's own measured n_eff sequence replayed through `_guarded_search` with
+fake `sim`/`mp` objects and the real `field_overlap_matrix` — all four policies
+stop at band 16, none requests the non-convergent band, and policy A reproduces
+the measured 13 accepted / 16 attempts / skips at 11 and 15.
+
+**Batch fix.** `run_diagnose_items_11_12.batch` now runs **item 11 first** and
+budgets 360 min (was 240). Ordering item 12 first was deliberate — protect the
+higher-value result from a wall-clock overrun — and it is precisely what cost
+both items: item 12 hung so it printed nothing, *and* item 11 never started.
+Item 11 is ~50 min with every band known to converge, so it banks a guaranteed
+result first; item 12 prints per policy and so degrades gracefully.
+
+### Fixed — four constants had drifted between notebooks and scripts, and one drifted inside an unrelated commit
+
+Found by diffing every notebook's constants against its script — an audit, not a
+failing test, because nothing checks this.
+
+| file | notebook | script | which was wrong |
+|---|---|---|---|
+| `directional_coupler_hybrid` | `N_MODES = 6` | **5** | notebook |
+| `mmi_1x2_hybrid` | `N_MODES = 12` | **8** | notebook |
+| `mmi_2x2_hybrid` | `N_MODES = 15` | **14** | notebook |
+| `directional_coupler_fdtd` | `COUPLING_LENGTH = 15.13` | 15.15 | **script** |
+
+**The first three: item 9 was not the cross-device pass it claimed to be.** It
+dropped each device's unguided mode in every `.py` and touched no notebook. The
+1×2's stale 12 matters most — that is precisely the configuration
+`mmi_1x2_validation.md` gap 3 identified as the failure mode (SOI_160's top bands
+piling up at cutoff), so anyone running that tutorial reproduced a known-bad
+basis. Notebooks synced to their scripts; one line changed in each, no
+reformatting churn.
+
+**The fourth is the reverse, and worse.** `COUPLING_LENGTH` was deliberately set
+to **15.13** in four places, with reasoning recorded in
+`archive/dc_validation_20260727.md` item 14: it comes from item 5's ground-truth
+crossing (15.129 µm) rather than the hybrid's grid-snapped 15.151, "since three
+of the four users are full-device FDTD runs and that reference is the finer
+measurement". Commit `e85b350` — message *"Remove cached example simulation files
+for ring resonator hybrid solve_neff BareStrip configurations"* — moved
+`directional_coupler_fdtd.py` to 15.15 and said nothing about it. The other three
+sites never moved, so this was a stray edit, not a decision. Restored to 15.13
+with the reasoning inlined at the constant so the next drift has to argue with
+it. No stored output was generated at 15.15 (this script's outputs are still the
+owed-regeneration ones at 13.5 µm), so nothing downstream needs redoing.
+
+Also cleared two stale doc entries: `resolved/directional_coupler_validation.md`
+still listed "Drop `N_MODES` 6 → 5" as an unbundled cleanup that item 9 had
+already done on 07-30, and four coupler example docstrings still described
+`N_MODES=6` in prose while their code said 5.
+
+### Measured — items 11 and 12 both resolved; k-seed laddering recovers a guided mode the shipped seed loses (job 11588309)
+
+The reshaped job completed in **34:55** — less than the hung predecessor had
+burned on a single non-convergent band. Both items it carries are answered.
+
+**Item 11 → CLOSED. The guard's diagnostic grid is clear at res 40 as well.**
+Same four grids, at the shipped `RESOLUTION` this time:
+
+| grid | points in core | skipped band_nums | worst overlap among accepted |
+|---|---|---|---|
+| 16×8 (shipped) | 8/16 | 11, 15 | **0.3877** |
+| 32×8 | 18/32 | 11, 15 | 0.1924 |
+| 64×16 | 36/64 | 11, 15 | 0.1201 |
+| 128×16 | 72/128 | 11, 15 | 0.1209 |
+
+All four agree exactly — same skips, same 16 accepted band_nums, identical n_eff
+— and both skips are exact n_eff ties, so they are confirmed genuine by a
+threshold-free test that needs no field sampling at all. The margin *did* narrow
+with resolution as the item predicted (0.3392 at res 20 → 0.3877 at res 40, on a
+0.9 threshold), which is now recorded as the quantity to re-check if this device
+ever moves to res 60+. Two resolutions is enough to close it as not live.
+
+Incidental: the third duplicate pair moves band position with the mesh — res 20
+skipped 11 and 16, res 40 skips 11 and 15. Both are exact ties at their own
+resolution, so both skips are correct; pair positions are mesh-dependent, not
+fixed properties of the device.
+
+**Item 12 → the fixed k-seed is silently losing a guided channel.** Four seeding
+policies under a real accept/skip/retry search, modal multiplexer interface 0,
+res 40:
+
+| policy | distinct guided found | attempts | skips | stopped because |
+|---|---|---|---|---|
+| **A** fixed (today's code) | **13** of 16 | 16 | 2 — bands 11, 15 | guided spectrum exhausted |
+| **B** naive ladder | **14** of 16 | 16 | 1 — band 10 | guided spectrum exhausted |
+| **C** step ladder (−0.005) | **14** of 16 | 16 | 1 — band 10 | guided spectrum exhausted |
+| **D** accepted ladder | **14** of 16 | 16 | 1 — band 10 | guided spectrum exhausted |
+
+B, C and D return A's set **plus** n_eff 1.512589 — a mode absent from A
+entirely, not reordered and not duplicated. It reproduces v1's recovered
+1.512589 exactly, now with the duplicate guard in the loop rather than a flat
+unguarded sweep.
+
+- **The loss is silent today.** A's two skips are both genuine duplicates,
+  correctly rejected; it still ends a mode short because bands 14 *and* 15 both
+  converge to 1.484797 from a constant seed. Nothing in the log distinguishes a
+  retry that found something new from one that re-found a neighbour — on the
+  device whose whole purpose is keeping 16 channels apart.
+- **Laddering costs nothing**: same 16 attempts, one fewer skip. The "strict
+  improvement" case the script was written to detect, so the fix direction is
+  settled — seed band *k* from band *k−1*, not from a constant.
+- **C and D are unnecessary here.** All three laddered policies gave
+  byte-identical sets, attempts and skips. The self-reconvergence risk that
+  motivated them did fire (all three skip band 10 at overlap 1.0, raw n_eff
+  1.763693 = band 9's answer), but the existing guard absorbed it and the retry
+  landed on a real mode. Not adopting the extra complexity on one cross-section's
+  evidence.
+- **Every policy stopped on the new cladding test**, none on the attempts
+  backstop — so no policy had duplicates eat the +8 headroom production also
+  relies on, and "found 13 because only 13 were reachable" is distinguishable in
+  the log from "found 13 because it ran out of attempts". That distinction is what
+  makes these counts readable as physics.
+
+**A correction this forced, in six files.** Yesterday's reading — "only 13
+distinct guided modes exist at res 40, so the 16-mode basis is unachievable by
+any seeding policy" — was inferred from the hung job's fixed-seed trace, i.e.
+from the enumeration under test. At least 14 are reachable. The shortfall against
+16 is real and the guard still pads it with unguided bands (item 14), but part of
+it is a software defect, which is the opposite of the conclusion first recorded.
+
+**Also noted against the script, not fixed mid-run:** the cross-policy summary
+reports "DIFFERENT modes, max |Δn_eff| 0.027793" for B/C/D against A. That is an
+artefact of comparing sorted 13- and 14-element prefixes when an inserted mode
+shifts the alignment — B ⊃ A exactly. The comparison should align on set
+membership, not position, when the counts differ.
+
+### Measured — 2×2 MMI gap 6 closed: "the cleanest device audited" survives both duplicate guards (job 11588569)
+
+`batch/verification/run_audit_mmi_2x2_gap6.batch` (new), 20:18. The 2026-07-26
+result behind that phrase was measured at `N_MODES = 15` before either duplicate
+guard existed, and is quoted in `README.md` Findings 1 and 2 plus three other
+files. Re-run at 14 with both guards live:
+
+| | 2026-07-26 (11500536) | 2026-07-31 (11588569) |
+|---|---|---|
+| modes requested | 15 | **14** |
+| guided | 14 of 15 | **14 of 14** |
+| correspondence | identity `[0 … 13]` | **identity `[0 … 13]`** |
+| worst guided \|Δn_eff\| | 0.0007 | **0.0007** |
+| duplicate guards | did not exist | **both live, neither fired** |
+
+Three things settled. The claim is current again rather than dated. **Neither
+guard fired at all** — the specific worry was that this is the repo's
+highest-mode-count SOI_220 device on the 2.8 µm body
+`fdtd_vs_EME_mode_validation.md` item 11 identifies as the meep guard's
+least-margin case, and it turns out to have nothing to fire on (item 11 closing
+the same day makes that a positive result, not merely an absence). And dropping
+the unguided band cost nothing measurable: worst guided |Δn_eff| is unchanged,
+which is what item 9 asserted and had never been checked here.
+
+Fixed on the way in: the audit's own `mmi_2x2` config still requested
+`n_modes=15` while its comment claimed to be pinned to `mmi_2x2_hybrid.py`, which
+moved to 14 on 07-30. Corrected.
+
+### Fixed — `section_mode_neff()` ignored `dispersive=` entirely, so job 11586986 measured nothing
+
+Found by reviewing the running jobs' output rather than by a test. Job 11586986's
+"dispersive" column came back **byte-identical** to its non-dispersive one — same
+n_eff, Δn_eff and Δβ to six decimals at every resolution it reached.
+
+`FDTDSolver._build_section_mode_sim()` built its media with
+`si_medium(wl_center)` **directly, bypassing `_media()`**, and so never read
+`self.dispersive`. That was a deliberate choice, recorded in
+`material_model_validation.md` work item 2 as *"930 is a single-wavelength mode
+solve, where the frozen index at that exact wavelength is already the correct
+medium"*. True for `section_mode_fields()`, which takes one wavelength. **False
+for `section_mode_neff()`**, which accepts a whole band and loops it on one
+structure — for that caller the frozen centre index is precisely the defect work
+item 2 fixed for `_build_domain()`/`solve_section()`, left in place by an
+argument that did not apply to it.
+
+`_build_section_mode_sim()` now takes `wavelengths=` and routes media through
+`_media()`; `section_mode_neff()` forwards its band. Scalar callers
+(`section_mode_fields()`, the three diagnostic scripts, the pad tests) are
+byte-unchanged, and structurally rather than by convention:
+`MaterialStack._medium()` requires **both** the flag and a real band
+(`size > 1 and min < max`), so a scalar cannot reach the dispersive path at all.
+
+Measured on a real solve, coupler body, SOI_220, 1.50–1.60 µm:
+
+| | max \|Δn_eff\| over the band | at centre 1.55 | at edge 1.60 |
+|---|---|---|---|
+| before | **0.000e+00** | 0 | 0 |
+| after | **5.29e-03** | 5.6e-05 | 4.6e-03 |
+
+Agreement at band centre with divergence at the edges *in opposite directions*
+is the signature of unfreezing a centre-pinned index — that is what says the fix
+does the intended thing and not merely something. meep also now reports
+`lorentzian susceptibility: frequency=0.543478` (λ₀ = 1.84 µm = 1.15 × band max,
+the band-derived pole from `4296ee7`) and `Dispersive medium detected on
+eigenmode monitor`, neither of which appeared before.
+
+**9 new tests**, `tests/test_fdtd_mode_sim_dispersive.py`, meep-free. They pin
+both halves — band caller gets per-wavelength media, scalar callers unchanged in
+either configuration, degenerate "bands" (one point, or min == max) stay inert —
+plus the one that would have caught this: `section_mode_neff()` must forward its
+whole band, not `mean(wavelengths)`. Verified by mutation: the two key tests fail
+against the pre-fix code while the seven unchanged-behaviour tests still pass,
+which is what establishes the change is confined to the band path. Fast suite
+**477 passed, 1 skipped**.
+
+`verify_item_8_dispersive_convergence.py` also no longer runs vacuously: it
+solves once per setting at the lowest resolution **first** and aborts non-zero if
+the two agree exactly, so an inert independent variable cannot be recorded as a
+measurement again. It additionally reports Δn_eff at a band **edge**, because
+dispersion is near-inert at band centre by construction — a smoke run gives
++1.7e-5 at centre against +5.9e-4 at the edge, so the centre-only reading this
+script used understates the effect ~34×.
+
+Material-model work item 4 is therefore back to **not started**; its record has
+been corrected in three places, including an earlier note of mine that blamed a
+stale λ₀ (irrelevant — λ₀ cannot matter when the dispersive medium is never
+built).
+
+**Salvaged:** 11586986's non-dispersive column is valid and preserved in work
+item 4. It carries an unrelated finding worth having — Δβ's convergence step
+collapses to +1.5e-05 at res 100, then reopens to −4.08e-04 at 120. Res 100
+looks converged and is not, on the exact quantity item 11's res-80 pin was set
+on, in a sweep run to check that pin (`README.md` Finding 4).
+
+### Found — this device's 16-mode basis is unachievable at res 40, and the production guard can hang (new item 14)
+
+Two findings fell out of diagnosing the hang above, both larger than what the
+job was sent to measure.
+
+**The requested basis cannot be supplied at res 40 — and part of the shortfall
+is a software defect, not the spectrum.** At the mux's interface 0, res 40,
+today's fixed k-seed resolves **13 distinct guided modes** of the 15 guided band
+slots; a laddered seed resolves **14** (job 11588309, below).
+`modal_multiplexer_hybrid.py` requests `N_MODES = 16`. So the shipped basis is
+short either way and the guard makes up the difference with bands below the
+cladding index — but one of the missing channels is recoverable in software,
+which is what item 12 was opened to determine. (This section first claimed the
+ceiling was 13 and that no seed policy could beat it; that was inferred from the
+fixed-seed trace and the re-run falsified it.) This sharpens
+`modal_multiplexer_validation.md` gap 2 from "the shipped resolution is below
+both engines' converged point" to "the shipped resolution cannot supply the
+requested basis", and it is item 9's concern arriving through the guard rather
+than through a device's `N_MODES`. Caveat kept with the number: whether the
+(10,11) pair is a solver duplicate or a genuine near-degenerate pair meep cannot
+separate is still `fdtd_vs_EME_mode_validation.md` item 1's open question, so 13
+is "distinct as meep resolves them at res 40", not a physics claim.
+
+**New item 14 — `_iter_distinct_bands()` can hang a production run.**
+`beef/solvers/fdtd.py:1049` walks `band_num` up to
+`n_modes + _DUP_BAND_MAX_EXTRA`, and its `RuntimeError` for "could not find
+`n_modes` distinct eigenmodes" can only fire *after* a solve returns — so a
+non-converging solve never reaches it and the loop hangs inside meep with no
+exception and no timeout. For this device at res 40 the guard already reaches
+band_num 19 (16 requested + 3 skips) against a failure point of 23: four
+band_nums of margin, on a device whose duplicate count is known at only two
+resolutions. Latent, not observed in production. **Recorded, not fixed** — the
+eventual fix (the same cladding stop) changes which modes a basis *contains*,
+not just how many attempts it makes, so it needs its own tests and a real
+before/after on a device known to skip; the same scope argument
+`modal_multiplexer_validation.md` gap 6 used when it declined to modify this
+method under-verified.
 
 ---
 

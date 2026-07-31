@@ -32,6 +32,26 @@ from beef import MMI, EMESolver, FDTDSolver, HybridSolver, SOI_160, plot_hybrid_
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_1x2", "mmi_1x2_hybrid"))
+
+# mmi_1x2_validation.md gap 5 found the hybrid 9.11% UNDER the full-device FDTD
+# reference at every wavelength -- a systematic under-prediction, not scatter,
+# which resolved/directional_coupler_validation.md items 6/14 name as the
+# Delta-beta-discretization signature: MPB (EME) and meep's time-stepper (FDTD)
+# agree on mode index but differ ~2.3%/mode in the phase actually accumulated,
+# so a body section propagated on its own EME neff drifts from what its
+# neighbouring FDTD sections would have measured. `HybridSolver(
+# calibrate_body_neff=True)` fixes exactly this by propagating each body
+# section on the beta the FDTD-side interfaces actually see instead of its own
+# mode solver's neff. Never tried on this device. On the coupler it took the
+# same signature from ~5% to 0.11% uncalibrated->calibrated.
+#
+# Off by default -- every recorded golden and the gap-5 baseline predate it,
+# same reasoning as directional_coupler_hybrid_stub_sweep.py's DC_CALIBRATE_BODY.
+# Separate output dir so the calibrated run cannot overwrite the uncalibrated
+# baseline gap 5 was measured against.
+CALIBRATE_BODY = bool(int(os.environ.get("MMI1X2_CALIBRATE_BODY", "0")))
+if CALIBRATE_BODY:
+    output_dir = output_dir + "_calibrated"
 os.makedirs(output_dir, exist_ok=True)
 save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
@@ -67,6 +87,7 @@ mmi = MMI(
     waveguide_height=0.16,
 )
 print(f"MMI total length: {mmi.total_length:.2f} µm")
+print(f"calibrate_body_neff = {CALIBRATE_BODY}  (output -> {output_dir})")
 
 # ---------------------------------------------------------------------------
 # 2. Configure sub-solvers — one per section, per the METHOD switches above.
@@ -157,6 +178,7 @@ hybrid = HybridSolver(
     solvers=[input_solver, body_solver, output_solver],
     boundaries=boundaries,
     interface_modes=interface_modes,
+    calibrate_body_neff=CALIBRATE_BODY,
 )
 
 # ---------------------------------------------------------------------------

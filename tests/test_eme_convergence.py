@@ -55,12 +55,28 @@ DEVICE = dict(
     waveguide_height=0.22,
 )
 
-_SCRIPTS = pathlib.Path(__file__).parent.parent / "examples" / "directional_coupler" / "python"
+_EXAMPLE_DIR = pathlib.Path(__file__).parent.parent / "examples" / "directional_coupler"
+_SCRIPTS = _EXAMPLE_DIR / "python"
+# The two sweep scripts moved to archive/ on 2026-07-31 (retired pending new
+# sweeping functionality -- see notes.md Misc #5), but they can still
+# silently regress on this exact bug sitting there, so the guard stays; only
+# the resolution path changes.
+_ARCHIVED_SCRIPTS = _EXAMPLE_DIR / "archive"
 _HYBRID_SCRIPTS = (
     "directional_coupler_hybrid.py",
     "directional_coupler_hybrid_stub_sweep.py",
     "directional_coupler_hybrid_modes_sweep.py",
 )
+
+
+def _script_source(name: str) -> str:
+    for base in (_SCRIPTS, _ARCHIVED_SCRIPTS):
+        path = base / name
+        if path.exists():
+            return path.read_text()
+    raise FileNotFoundError(
+        f"{name} not found in {_SCRIPTS} or {_ARCHIVED_SCRIPTS}"
+    )
 
 
 class TestExampleScriptsPinTheConvergedResolution:
@@ -70,13 +86,13 @@ class TestExampleScriptsPinTheConvergedResolution:
 
     @pytest.mark.parametrize("script", _HYBRID_SCRIPTS)
     def test_declares_separate_engine_resolutions(self, script):
-        src = (_SCRIPTS / script).read_text()
+        src = _script_source(script)
         assert "FDTD_RESOLUTION" in src, f"{script}: no FDTD_RESOLUTION"
         assert "EME_RESOLUTION" in src, f"{script}: no EME_RESOLUTION"
 
     @pytest.mark.parametrize("script", _HYBRID_SCRIPTS)
     def test_eme_resolution_is_the_converged_one(self, script):
-        src = (_SCRIPTS / script).read_text()
+        src = _script_source(script)
         m = re.search(r"^EME_RESOLUTION\s*=\s*([0-9.]+)", src, re.M)
         assert m, f"{script}: EME_RESOLUTION not assigned at module level"
         assert float(m.group(1)) >= EME_RES_CONVERGED, (
@@ -89,7 +105,7 @@ class TestExampleScriptsPinTheConvergedResolution:
         """One knob for two engines is the actual defect -- re-introducing a
         bare `res=RESOLUTION` would re-couple them even if both constants
         still exist."""
-        src = (_SCRIPTS / script).read_text()
+        src = _script_source(script)
         assert not re.search(r"res\s*=\s*RESOLUTION\b", src), (
             f"{script}: a shared RESOLUTION is being passed to a solver again"
         )

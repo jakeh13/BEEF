@@ -2,7 +2,7 @@
 Tutorial: directional coupler — hybrid FDTD/EME mesh-resolution convergence sweep.
 
 The same 220 nm SOI, C-band device and method as directional_coupler_hybrid.py
-(2 FDTD S-bend sections + 1 EME body, N_MODES=6), at a single FIXED
+(2 FDTD S-bend sections + 1 EME body, N_MODES=5), at a single FIXED
 coupling_length = 15.13 µm — the same 3 dB length used by
 directional_coupler_fdtd_resolution_sweep.py (and directional_coupler_fdtd.py)
 — so the two resolution-convergence studies are directly, apples-to-apples

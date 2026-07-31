@@ -221,6 +221,95 @@ class TestCompoundGeometry:
             g.width_at(100.0)
 
 
+class TestCompoundGeometrySourceApertureClamps:
+    """`source_aperture_at()`'s out-of-bounds x is deliberately NOT a caller
+    error, unlike width_at/center_at/section_prisms/section_gds above.
+
+    Found 2026-07-31: `FDTDSolver.solve()` (the full single-domain path, as
+    opposed to solve_section()'s per-section calls, which HybridSolver keeps
+    well inside a section's own bounds) queries source_aperture_at() at the
+    solver's external stub position -- `waveguide_length` past the device's
+    own physical extent, for PML clearance. Every leaf geometry already
+    tolerates this by construction (MMI.width_at() clamps to the terminal
+    waveguide_width for any x past its taper start, however far past), but
+    CompoundGeometry._locate() had no segment "out there" to delegate to and
+    raised instead -- the first script to call solve() (not solve_section())
+    with a CompoundGeometry as the top-level device (modal_multiplexer_fdtd.py)
+    hit it immediately, on its very first FDTD run, before this fix.
+    """
+
+    def _compound(self):
+        # First segment: a 2-output MMI with use_neighbor_aperture on, so its
+        # source_aperture_at() is the interesting (non-None, width_at-driven)
+        # case rather than a Taper/WaveguideRun's unconditional None.
+        mmi = MMI(
+            n_inputs=1, n_outputs=2,
+            mm_length=4.0, mm_width=2.0, waveguide_width=0.35,
+            taper_length=1.0, taper_width=0.8, waveguide_offset=1.0,
+            use_neighbor_aperture=True,
+        )
+        run = WaveguideRun(length=2.0, ports=[(0.5, 0.35), (-0.5, 0.35)])
+        return CompoundGeometry([mmi, run]), mmi
+
+    def test_within_bounds_unaffected_by_the_clamp_flag(self):
+        """clamp=True must not change any answer that clamp=False already
+        gave -- it only extends behaviour past the edges, never inside."""
+        g, _ = self._compound()
+        lo, hi = -g.total_length / 2, g.total_length / 2
+        for x in (lo, lo / 2, 0.0, hi / 2, hi):
+            seg, seg_lo, _ = g._locate(x, clamp=False)
+            seg_clamped, seg_lo_clamped, _ = g._locate(x, clamp=True)
+            assert seg is seg_clamped and seg_lo == seg_lo_clamped
+
+    def test_past_the_input_end_delegates_instead_of_raising(self):
+        g, mmi = self._compound()
+        half_total = g.total_length / 2
+        x_stub = -half_total - 0.5   # solver's external stub, past the MMI's own input taper
+        # Must not raise (this is exactly what crashed before the fix), and
+        # must genuinely delegate to the end segment (mmi), not just avoid
+        # crashing some other way.
+        seg, _, _ = g._locate(x_stub, clamp=True)
+        assert seg is mmi
+        # Since MMI.width_at()/source_aperture_at() clamp to the terminal
+        # value for any x past the input taper start, querying deep in the
+        # stub must equal querying right at the segment's own edge -- both
+        # land in the same "clamped to terminal" regime.
+        aperture = g.source_aperture_at(x_stub)
+        at_edge = g.source_aperture_at(-half_total)
+        assert aperture == pytest.approx(at_edge)
+
+    def test_past_the_output_end_delegates_instead_of_raising(self):
+        g, _ = self._compound()
+        half_total = g.total_length / 2
+        x_stub = half_total + 0.5   # past the WaveguideRun's own end
+        # WaveguideRun.source_aperture_at() is always None (checked via
+        # isinstance in CompoundGeometry.source_aperture_at()), so the only
+        # claim here is that it does not raise.
+        assert g.source_aperture_at(x_stub) is None
+
+    def test_far_outside_still_delegates_to_the_same_end_segment(self):
+        """Not just 'doesn't raise at a small overshoot' -- arbitrarily far
+        past the edge must keep resolving to the same end segment, matching
+        solve()'s stub position however large waveguide_length+dpml is."""
+        g, _ = self._compound()
+        half_total = g.total_length / 2
+        near = g.source_aperture_at(-half_total - 0.5)
+        far = g.source_aperture_at(-half_total - 50.0)
+        assert near == pytest.approx(far)
+
+    def test_width_at_and_center_at_are_NOT_clamped_by_default(self):
+        """The opt-in is scoped to source_aperture_at() only -- width_at()/
+        center_at() must keep raising outside bounds, since an out-of-bounds
+        cut there is a genuine caller error building physical geometry, not
+        a solver's legitimate external-stub query."""
+        g, _ = self._compound()
+        half_total = g.total_length / 2
+        with pytest.raises(ValueError, match="outside CompoundGeometry"):
+            g.width_at(-half_total - 0.5)
+        with pytest.raises(ValueError, match="outside CompoundGeometry"):
+            g.center_at(-half_total - 0.5)
+
+
 class TestCompoundGeometryStubIsAppliedExactlyOnce:
     """Regression guards for a real stub double-application bug (notes.md
     Geometry item 6).

@@ -2,7 +2,7 @@
 Tutorial: directional coupler — hybrid FDTD/EME body-stub convergence sweep.
 
 The same 220 nm SOI, C-band device and method as directional_coupler_hybrid.py
-(2 FDTD S-bend sections + 1 EME body, N_MODES=6, FDTD 40 / EME 80 px/µm) on ONE fixed
+(2 FDTD S-bend sections + 1 EME body, N_MODES=5, FDTD 40 / EME 80 px/µm) on ONE fixed
 directional coupler, but sweeping where the FDTD/EME section interfaces are
 cut:
 

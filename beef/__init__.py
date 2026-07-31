@@ -50,6 +50,12 @@ Core public API:
                                       authoritative correspondence check
                                       (fdtd_vs_EME_mode_validation.md layer 3)
 
+    Interface-mode convergence (device-agnostic — see beef.interface_modes_convergence):
+        interface_modes_convergence — plateau/step of a solve()'d SMatrix across a
+                                      sequence of interface_modes counts; the
+                                      completeness check
+                                      (fdtd_vs_EME_mode_validation.md layer 2)
+
     Utilities:
         extrude_polygons           — {layer: [polygons]} dict -> meow Structure3D list
         atomic_replace_write       — write-to-tmp-then-os.replace, for files a
@@ -79,6 +85,7 @@ __version__ = "0.1.0"
 
 from ._utils import atomic_replace_write, extrude_polygons
 from .cut_position_invariance import cut_position_invariance
+from .interface_modes_convergence import interface_modes_convergence
 from .geometry import (
     MMI, MMIPort, BendGeometry, DirectionalCoupler, Taper, SBend,
     CompoundGeometry, WaveguideRun, GdsGeometry, load_gds_polygons,
@@ -120,6 +127,8 @@ __all__ = [
     "overlap_diagnostics", "self_overlap_diagnostics",
     # cut-position invariance
     "cut_position_invariance",
+    # interface-mode convergence
+    "interface_modes_convergence",
     # results
     "SMatrix",
     # solvers

@@ -175,7 +175,10 @@ fitted form is one meep Lorentzian by construction. Verified end to end — meep
 4. **Re-run the resolution sweeps.** `notes.md` #9 already budgets this as part of the
    change, not as a follow-up: smoothing moves the mesh-convergence point, so item 11's
    res-80 EME pin is not inherited across this change.
-   (`batch/sweep/run_directional_coupler_*_resolution_sweep.batch`.)
+   (`batch/archive/run_directional_coupler_*_resolution_sweep.batch` -- moved
+   to archive 2026-07-31, retired pending new sweeping functionality, but
+   still the literal scripts this item names; revive or replace them when
+   this item is actually run.)
 
    **Started 2026-07-31 with the cheap half first — job 11586986.**
    `examples/verification/python/verify_item_8_dispersive_convergence.py`. The literal
@@ -185,6 +188,81 @@ fitted form is one meep Lorentzian by construction. Verified end to end — meep
    propagation, no S-matrix. So "does the convergence point move" is answerable on **one
    serial task** (~2 h, measured ~40 s per point at res 20, growing ~res²), and that runs
    first to decide whether the node-days are warranted and over what range.
+
+   > ### ⚠️ Job 11586986 measured nothing. This item is NOT started.
+   >
+   > **Corrected 2026-07-31.** That job's "dispersive" column came back
+   > **byte-identical** to its non-dispersive one — same n_eff, same Δn_eff, same Δβ to
+   > six decimals at res 20/30/40/60/80. Not a small effect: the flag never reached the
+   > calculation.
+   >
+   > `FDTDSolver._build_section_mode_sim()` built its media with `si_medium(wl_center)`
+   > **directly, bypassing `_media()`**, so it never read `self.dispersive`. The
+   > justification was work item 2's own — *"930 is a single-wavelength mode solve, where
+   > the frozen index at that exact wavelength is already the correct medium"* — and that
+   > is true for `section_mode_fields()`, which takes one wavelength. It is **false for
+   > `section_mode_neff()`**, which accepts a whole band and loops it on one structure. For
+   > a band caller the frozen centre index is the exact defect work item 2 fixed for
+   > `_build_domain()`/`solve_section()`, left in place by an argument that did not apply
+   > to it.
+   >
+   > An earlier revision of `running_jobs.md` blamed a stale λ₀ (the job predates λ₀
+   > becoming band-derived in `4296ee7`). That was also wrong: λ₀ cannot matter when the
+   > dispersive medium is never built.
+   >
+   > **Fixed the same day.** `_build_section_mode_sim()` gained a `wavelengths=` parameter
+   > and routes media through `_media()`; `section_mode_neff()` forwards its band. Scalar
+   > callers are byte-unchanged and not by convention — `MaterialStack._medium()` requires
+   > **both** the flag and a real band (`size > 1 and min < max`), so a scalar cannot reach
+   > the dispersive path. Measured on a real solve after the fix:
+   >
+   > | | max \|Δn_eff\| over 1.50–1.60 µm | at centre 1.55 | at edge 1.60 |
+   > |---|---|---|---|
+   > | before | **0.000e+00** | 0 | 0 |
+   > | after | **5.29e-03** | 5.6e-05 | 4.6e-03 |
+   >
+   > Agreement at band centre and divergence at the edges with opposite signs is the
+   > signature of unfreezing a centre-pinned index, which is what confirms the fix does the
+   > intended thing rather than merely *something*.
+   >
+   > **9 new tests** (`tests/test_fdtd_mode_sim_dispersive.py`), meep-free, pinning both
+   > halves: a band caller under `dispersive=True` gets per-wavelength media, every scalar
+   > caller is unchanged in either configuration, and — the one that would have caught
+   > this — `section_mode_neff()` forwards its whole band rather than just the centre.
+   > Both key tests fail against the pre-fix code; the seven unchanged-behaviour tests pass
+   > against it, which is what shows the fix is confined to the band path.
+   >
+   > **The script now refuses to run vacuously.** It solves once per setting at the lowest
+   > resolution first and **aborts with a non-zero exit** if the two agree exactly, so an
+   > inert independent variable can never again be recorded as a measurement. It also
+   > reports Δn_eff at a band **edge** as well as at centre, because dispersion is
+   > near-inert at centre by construction — a smoke run shows +1.7e-5 at centre against
+   > +5.9e-4 at the edge, so a centre-only reading understates it ~34×.
+   >
+   > **Salvaged from 11586986: its non-dispersive column is valid**, and it is the only
+   > half that ever meant anything. Coupler body, SOI_220, band centre 1.55 µm, Δn_eff of
+   > the even/odd pair:
+   >
+   > | res | n_eff[0] | n_eff[1] | Δn_eff | step in Δn | Δβ | sec |
+   > |---|---|---|---|---|---|---|
+   > | 20 | 2.243923 | 2.216122 | 0.027802 | — | 0.11270 | 35.9 |
+   > | 30 | 2.301684 | 2.277158 | 0.024526 | −3.28e-03 | 0.09942 | 85.1 |
+   > | 40 | 2.323677 | 2.300177 | 0.023501 | −1.03e-03 | 0.09526 | 137.1 |
+   > | 60 | 2.335676 | 2.312802 | 0.022874 | −6.27e-04 | 0.09272 | 334.1 |
+   > | 80 | 2.350117 | 2.328029 | 0.022089 | −7.85e-04 | 0.08954 | 618.2 |
+   > | 100 | 2.351338 | 2.329235 | 0.022104 | **+1.50e-05** | 0.08960 | 886.1 |
+   > | 120 | 2.355171 | 2.333476 | 0.021695 | **−4.08e-04** | 0.08795 | 1392.2 |
+   >
+   > **Worth reading on its own, independent of dispersion: Δβ is not converged at res
+   > 120, and res 100 looks converged only by accident.** The step collapses to +1.5e-05 at
+   > 100 — a factor of 50 below its neighbours, and the kind of number a sweep stopping
+   > there would report as a plateau — then reopens to −4.08e-04 at 120, an order of
+   > magnitude larger. That is `README.md` Finding 4 ("a converged-looking number can still
+   > be wrong, and a resolution sweep will not tell you") appearing on the very quantity
+   > item 11's res-80 pin was set on, in a sweep run to check that pin. Not acted on here —
+   > it is `resolved/directional_coupler_validation.md` item 11's territory, and one
+   > non-monotone step is not yet a case — but any re-derivation of that pin should sweep
+   > past 120 rather than stopping at the first small step.
 
    Sweeps res 20→120 on the coupler body cross-section, both material settings, reporting
    the *step* between consecutive resolutions rather than the absolute value — the same

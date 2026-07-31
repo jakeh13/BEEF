@@ -54,8 +54,20 @@ from beef import SMatrix
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", "..", ".."))
 FDTD_PKL = os.path.join(_ROOT, "example_output", "mmi_1x2", "mmi_1x2_fdtd", "smatrix.pkl")
-HYBRID_PKL = os.path.join(_ROOT, "example_output", "mmi_1x2", "mmi_1x2_hybrid", "smatrix_hybrid.pkl")
-output_dir = os.path.join(_ROOT, "example_output", "verification", "mmi_1x2_hybrid_vs_fdtd")
+
+# CALIBRATED points this at mmi_1x2_hybrid.py's MMI1X2_CALIBRATE_BODY=1 output
+# instead of the default uncalibrated one -- gap 5's follow-up, testing whether
+# HybridSolver(calibrate_body_neff=True) closes the measured 9.11% the way it
+# did for the coupler (~5% -> 0.11%, resolved/directional_coupler_validation.md
+# items 6/14). FDTD_PKL is deliberately NOT redirected: it is the shared
+# full-device reference both the calibrated and uncalibrated hybrid are
+# measured against, same reasoning as directional_coupler_hybrid_stub_sweep.py
+# not redirecting _FDTD_SWEEP_NPZ.
+CALIBRATED = bool(int(os.environ.get("MMI1X2_HYBRID_CALIBRATED", "0")))
+_hybrid_dir = "mmi_1x2_hybrid_calibrated" if CALIBRATED else "mmi_1x2_hybrid"
+HYBRID_PKL = os.path.join(_ROOT, "example_output", "mmi_1x2", _hybrid_dir, "smatrix_hybrid.pkl")
+_out_name = "mmi_1x2_hybrid_vs_fdtd_calibrated" if CALIBRATED else "mmi_1x2_hybrid_vs_fdtd"
+output_dir = os.path.join(_ROOT, "example_output", "verification", _out_name)
 
 # (fdtd port, hybrid port) pairs -- both physical outputs of the single-input device.
 PORT_PAIRS = [("out_0", "out_top"), ("out_1", "out_bot")]
@@ -98,13 +110,19 @@ def provenance(smat_fdtd, smat_hybrid):
 
 
 def main():
+    print(f"CALIBRATED = {CALIBRATED}  (hybrid pkl -> {HYBRID_PKL})")
     for path, name in [(FDTD_PKL, "mmi_1x2_fdtd.py"), (HYBRID_PKL, "mmi_1x2_hybrid.py")]:
         if not os.path.exists(path):
+            hint = (
+                "MMI1X2_CALIBRATE_BODY=1 python mmi_1x2_hybrid.py"
+                if CALIBRATED and path == HYBRID_PKL else
+                f"`{name}` (e.g. `make mmi_1x2_fdtd mmi_1x2_hybrid` from "
+                f"examples/, or batch/run_mmi_1x2_examples.batch array indices "
+                f"1-2)"
+            )
             raise SystemExit(
                 f"verify_mmi_1x2_hybrid_vs_fdtd: {path} does not exist -- run "
-                f"`{name}` first (e.g. `make mmi_1x2_fdtd mmi_1x2_hybrid` from "
-                f"examples/, or batch/run_mmi_1x2_examples.batch array indices "
-                f"1-2)."
+                f"{hint} first."
             )
 
     smat_fdtd = SMatrix.load(FDTD_PKL)
@@ -167,8 +185,9 @@ def main():
         ax.legend(fontsize=8)
         ax.grid(True)
         ax.set_ylim(0, 1.05)
-    plt.suptitle("1×2 MMI — Hybrid vs Full-Device FDTD (mmi_1x2_validation.md gap 5)",
-                fontsize=11)
+    _cal_tag = " (calibrate_body_neff=True)" if CALIBRATED else ""
+    plt.suptitle(f"1×2 MMI — Hybrid{_cal_tag} vs Full-Device FDTD "
+                f"(mmi_1x2_validation.md gap 5)", fontsize=11)
     plt.tight_layout()
 
     os.makedirs(output_dir, exist_ok=True)
@@ -177,15 +196,29 @@ def main():
 
     worst_overall = max(r["max_abs_dT"] for r in results.values())
     print(f"Worst max|dT| across both ports: {worst_overall:.4f}")
-    print(
-        "Informational only -- no threshold enforced here. "
-        "mmi_1x2_validation.md gap 4 (engine agreement) is not yet measured "
-        "for this device, so there is no basis yet to say how much of this "
-        "gap (if any) is calibratable vs. structural. See "
-        "resolved/directional_coupler_validation.md items 6/14 for how that "
-        "played out on the coupler (uncalibrated hybrid ~5% off; calibrated "
-        "0.11% off)."
-    )
+    if CALIBRATED:
+        print(
+            "Calibrated run. Compare this max|dT| against the uncalibrated "
+            "baseline (0.0359, 9.11% of mean T_fdtd, every dT negative -- "
+            "mmi_1x2_validation.md gap 5) to see whether calibrate_body_neff "
+            "closes the gap the way it did for the coupler (~5% -> 0.11%, "
+            "resolved/directional_coupler_validation.md items 6/14). No "
+            "threshold enforced here either -- gap 4 (engine agreement) is "
+            "still not measured for this device, so there is still no basis "
+            "to call a residual calibratable vs. structural, only to compare "
+            "it against the uncalibrated number."
+        )
+    else:
+        print(
+            "Informational only -- no threshold enforced here. "
+            "mmi_1x2_validation.md gap 4 (engine agreement) is not yet measured "
+            "for this device, so there is no basis yet to say how much of this "
+            "gap (if any) is calibratable vs. structural. See "
+            "resolved/directional_coupler_validation.md items 6/14 for how that "
+            "played out on the coupler (uncalibrated hybrid ~5% off; calibrated "
+            "0.11% off). Re-run with MMI1X2_HYBRID_CALIBRATED=1 after generating "
+            "the calibrated hybrid output to test that directly on this device."
+        )
 
     prov = provenance(smat_fdtd, smat_hybrid)
     prov["ports"] = {

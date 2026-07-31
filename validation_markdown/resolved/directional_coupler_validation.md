@@ -2,7 +2,7 @@
 
 Status, open work, and outstanding verification. **Everything already closed — items 1–7,
 9–12 and 14, with their measurements, jobs and reasoning — lives in
-[`archive/dc_validation_20260727.md`](archive/dc_validation_20260727.md).** (Item 14 closed
+[`archive/dc_validation_20260727.md`](../archive/dc_validation_20260727.md).** (Item 14 closed
 2026-07-28, after that file's own date; it was updated in place rather than left stale.)
 
 > **This file was `dc_validation.md` until 2026-07-27.** Roughly 76 references across the
@@ -50,7 +50,7 @@ wherever the 0.11% is quoted.
 
 ### Where things stand per check
 
-The four checks are defined in [`README.md`](README.md).
+The four checks are defined in [`README.md`](../README.md).
 
 | check | coupler |
 |---|---|
@@ -71,7 +71,7 @@ full-device reference) and its full record has moved to the archive. Item 8's st
 done: both engines now share one index model and agree to 4e-16, and the C-band kink is
 gone. Its step 2 (a dispersive FDTD medium) was implemented, measured 0.0496 *worse* in
 n_eff, and reverted — see the item for why and what would make it work; the checked plan,
-with a strip-test gate, is [`material_model_validation.md`](material_model_validation.md).
+with a strip-test gate, is [`material_model_validation.md`](../material_model_validation.md).
 
 Nothing from either is in the published example outputs or the goldens yet. All four
 goldens are `@pytest.mark.slow`, were never run during this work, and are **stale** —
@@ -184,7 +184,7 @@ means it is one pass rather than three.
 
    **That prescription has now been checked against meep's actual `LorentzianSusceptibility`
    shape, and the checked version — the fit band, the λ₀ degeneracy, the strip-test gate —
-   is recorded in [`material_model_validation.md`](material_model_validation.md), since it
+   is recorded in [`material_model_validation.md`](../material_model_validation.md), since it
    reaches every device, not just this one.**
 
    **Three findings worth keeping.**
@@ -234,8 +234,12 @@ means it is one pass rather than three.
 - **Delete the items 1–2 harness.** `verify_items_1_2.py`, its batch file, and the
   Makefile's `verify_items_1_2` / `clean_verification` targets were to go once item 6
   closed. It has. Deserves its own commit.
-- **Drop `N_MODES` 6 → 5** on the coupler — one of the six interface modes is a radiation
-  mode (check 2 above).
+- ~~**Drop `N_MODES` 6 → 5** on the coupler — one of the six interface modes is a radiation
+  mode (check 2 above).~~ **DONE 2026-07-30** as part of
+  `fdtd_vs_EME_mode_validation.md` item 9's cross-device pass (band 5, n_eff
+  1.4367, below the 1.4443 cladding), across `directional_coupler_hybrid.py`,
+  `_stub_sweep.py` and `_resolution_sweep.py`. This entry was left standing on
+  this list until 2026-07-31; the code had already moved.
 - **Rank-gate `aggregate()`.** The calibrated re-run wrote *zero* new cache entries and
   still took 34 min/task, because all 48 ranks redundantly unpickle ~55 MB and redo the
   `[200 × 11 × 6 × 6]` einsum and the plotting. Cached is not the same as cheap. Same

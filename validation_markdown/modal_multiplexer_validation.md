@@ -22,7 +22,12 @@ disagree, at *every* resolution from 20 to 60, about one member of a
 near-degenerate mode pair — meow finds both, meep's per-band ladder finds one.
 That is a driver-level defect, not a mesh one, and it is tracked as
 `fdtd_vs_EME_mode_validation.md` items 11–13 rather than here, since it is not
-specific to this device. Gap 6's exercise run (job 11585847) is still queued.
+specific to this device. **Items 11, 12 and 13 all closed 2026-07-31** (jobs
+11588309, 11586098) — the guard's diagnostic grid is clear at res 40, the EME
+guard's over-request is inert, and k-seed laddering recovers one guided mode the
+shipped fixed seed loses. Gap 6's exercise run (job 11585847) is **running** and
+has already fired the meow-side guard six times on the production path; see
+gap 6.
 
 **Status 2026-07-30:** gap 1 (mode identity) was **run and FAILED — and the
 root cause was not what it looked like.** All four interfaces disagree between
@@ -230,6 +235,32 @@ So it has the most ways to be wrong and the fewest ways to find out.
      mean no absolute n_eff or S-matrix number from this device is a converged
      one yet.
 
+   **Sharpened 2026-07-31 — res 40 does not merely under-resolve this basis, it
+   cannot supply it.** The "meep 13/16 guided at res 40" entry above was read as
+   a resolution shortfall. Job 11586046's MPB trace shows the mechanism, and it
+   is worse than that. Reconstructing the converged `k_x` band by band at this
+   same cross-section (cladding n = 1.446804):
+
+   - bands 1–15 are guided, but **10/11 and 14/15 are duplicate solves** — so
+     **10/11 and 14/15 are duplicate solves under today's fixed k-seed**, so
+     it finds only **13 distinct guided modes** at res 40 — while a laddered
+     seed finds **14** on the same mesh (job 11588309), i.e. at least 14 exist
+     and today's enumeration misses one;
+   - bands 16–22 sit *below* the cladding index — unguided;
+   - band 23 has no k that reaches the target frequency at all.
+
+   13 is exactly the guided count the table above recorded, which corroborates
+   it from a second job by a different route. What is new is what the other 3 of
+   the 16 are: the duplicate guard reaches past band 15 and **pads the basis
+   with unguided modes** to reach the requested count. So `N_MODES = 16` at
+   `RESOLUTION = 40` does not describe a basis that exists — three of its
+   channels are not guided modes of this cross-section, whatever the resolution
+   sweep says about the other thirteen. Two consequences: the fix is a *joint*
+   choice of `RESOLUTION` and `N_MODES`, not resolution alone, and the padding
+   behaviour itself is a library defect
+   (`fdtd_vs_EME_mode_validation.md` **item 14**, which also covers the hang one
+   band further up).
+
    Per check 3, the remaining question is which quantity *this device's*
    result depends on — the coupler's lesson was that sweeping an insensitive
    observable hid a 7% error in a sensitive one. A mode spectrum is not that
@@ -243,6 +274,40 @@ So it has the most ways to be wrong and the fewest ways to find out.
    first: even a res-20 reference that only resolves the qualitative
    mode-sorting would catch a cascade that is mixing modes, which is the failure
    mode gap 1 is about.
+
+   **⚠️ BLOCKED 2026-07-31 — this is a real library gap, not a cost problem.**
+   `modal_multiplexer_fdtd.py` was written (same `CompoundGeometry` the hybrid
+   script builds, one single-domain `FDTDSolver.solve()` per input mode instead
+   of five cascaded sections, res 20 default per the note above). It cannot run:
+   `FDTDSolver.solve()` (the full single-domain path) is unconditionally
+   incompatible with `CompoundGeometry` as the top-level device.
+   `solve() → to_meep_prisms() → geometry.polygons(stub_length=...)`, and
+   `CompoundGeometry.polygons(stub_length>0)` raises `NotImplementedError` by
+   design — "no generic way to know per-port stub width for an arbitrary
+   segment type" (its own docstring). `HybridSolver` never hits this because
+   it only ever calls `solve_section()`, which uses `section_gds()`/
+   `to_gds_eme()` instead — this device's own `modal_multiplexer_hybrid.py`
+   has run fine (job 11585847) the whole time.
+
+   Confirmed by three cheap failed submissions (11589771/11589899/11589936,
+   ~15 s each — see `running_jobs.md`), not by inspection alone. One real,
+   smaller bug found and fixed along the way: `CompoundGeometry.
+   source_aperture_at()` used to raise for any x past its own footprint, where
+   every leaf geometry (e.g. `MMI.width_at()`) already clamps to its terminal
+   value for arbitrary overshoot — `FDTDSolver.solve()`'s own source-position
+   query lands exactly in that region for PML clearance, so the *actual
+   simulation* would have hit this too, not just the geometry-preview plot
+   that caught it first. Fixed and tested (`beef/geometry/compound.py`,
+   `tests/test_geometry.py::TestCompoundGeometrySourceApertureClamps`) — real,
+   but not sufficient on its own.
+
+   **Not fixed further.** The `polygons()` gap needs a genuine design decision
+   (which segment's stub-port width wins at an ambiguous end, e.g. a
+   multi-port `WaveguideRun`), not a mechanical patch — the same caution this
+   doc's own gap 6 already applied when declining to touch `solve_section()`
+   under-verified. See `notes.md` Geometry item 8. `modal_multiplexer_fdtd.py`
+   and its batch script are both marked BLOCKED; do not run either until this
+   is implemented.
 
 4. **No golden.** Add a `modal_multiplexer_hybrid` target to
    `tests/test_golden_examples.py`'s `TARGETS`. As with the 2×2 MMI, do it after
@@ -355,6 +420,50 @@ So it has the most ways to be wrong and the fewest ways to find out.
    scan against this device's real four interfaces for the first time;
    watch `reports/11585847_0.out` for `warn_on_transfer_duplicate` firing on
    either solver.
+
+   **Partial reading, 2026-07-31 10:53 (job still RUNNING, 2h12 of 5h) — the
+   meow-side guard fires on the production path.** Two of the FDTD subregions
+   have completed (`run 0 finished`), and the first EME body solve after them
+   logged, once per rank across all 96 ranks:
+
+   ```
+   EMESolver.compute_modes: meow mode 9 duplicates already-accepted mode 8
+   (self-overlap 1.000000 > 0.90) -- skipping it and reaching further up the
+   spectrum.
+   ```
+
+   That is the item-0 guard, on `EMESolver`'s production `compute_modes()`, on
+   this device's real interfaces at the shipped `RESOLUTION = 40` — the first
+   time the meow-side duplicate has been caught outside an audit script.
+
+   **Updated 12:16 (3h35 in): six firings now, from two distinct pairs.**
+   576 log lines / 96 ranks = 6 events — **four** of `mode 9 duplicates mode 8`
+   and **two** of `mode 11 duplicates mode 10`, both at self-overlap 1.000000.
+   The second pair is the one item 0 originally found (meow's modes 10 and 11
+   identical at res 40 on this cross-section), so **both** of item 0's pairs are
+   now confirmed firing on the production path, repeatedly, across this device's
+   interfaces and wavelength points rather than once. Three
+   things follow:
+
+   - **It confirms the defect is live in production, not an artifact of the
+     audit harness.** Item 0 was verified against a re-run of gap 1's own
+     field-overlap check (job 11573880); this is `HybridSolver` doing real work.
+     Exactly one distinct event so far (mode 9 → mode 8), replicated across
+     ranks, not 96 separate firings.
+   - **Had the guard not been there, this run's interface basis would be
+     rank-deficient by one of the 16 requested channels** — on the device whose
+     entire purpose is to keep 16 channels separate. The guard's own log line
+     says as much; this is the first device where that sentence is not
+     hypothetical.
+   - **`warn_on_transfer_duplicate` has NOT fired** (no `transfer` line in the
+     log at all) — so the item-8 post-hoc `T`-column scan, the thing this job
+     was submitted to exercise, is still silent. That is the expected outcome
+     *if* the upstream guard is doing its job — the scan looks for duplicates
+     that survive into `T`, and the duplicate was rejected before it got there.
+     It is **not yet** evidence the scan works, since a detector that has never
+     fired and a detector that cannot fire look identical. Gap 6's original ask
+     (exercise the scan) is therefore still open at the time of writing; the run
+     has ~2h45 left and three more interfaces to reach.
 
 ## Order
 

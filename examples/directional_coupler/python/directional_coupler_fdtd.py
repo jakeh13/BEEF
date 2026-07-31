@@ -93,7 +93,15 @@ N_WL = 11           # number of wavelength points
 # from the pre-fix hybrid sweep, which reported L₅₀ = 13.65 µm *with the
 # wavelength axis reversed* (item 1), and it survived both that fix and item 5's
 # ground-truth rebuild because nothing rechecked it.
-COUPLING_LENGTH = 15.15   # µm, hard-coded — the 3 dB length; see above
+COUPLING_LENGTH = 15.13   # µm, hard-coded — the 3 dB length; see above.
+                          # 15.13, not the hybrid's grid-snapped 15.151:
+                          # this is a full-device FDTD run, so item 5's
+                          # ground-truth crossing (15.129 µm) is the finer
+                          # reference. Documented in archive/
+                          # dc_validation_20260727.md item 14. Commit
+                          # e85b350 (a ring-resonator CACHE cleanup) moved
+                          # this to 15.15 with no mention of it; restored
+                          # 2026-07-31.
 
 # ---------------------------------------------------------------------------
 # 1. Geometry — identical to directional_coupler_hybrid.py except that

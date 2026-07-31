@@ -138,6 +138,34 @@ the 1×2's problem is *stale* references, which at least fail loudly under
    pass measures the hybrid at the same not-yet-converged resolution gap 2
    already flags, not a clean result.
 
+   **✅ MEASURED 2026-07-31 — job 11585849 (18 s), and the signature is
+   different from the 1×2's.** `check_passive()` true both sides.
+
+   | port | max\|ΔT\| | mean\|ΔT\| | % of mean T_fdtd | worst λ |
+   |---|---|---|---|---|
+   | bar | 0.0028 | 0.0012 | 0.62% | 1.5615 µm |
+   | cross | 0.0043 | 0.0017 | 0.82% | 1.5650 µm |
+
+   Under 1% on both ports — an order of magnitude tighter than the 1×2's 9.11%
+   — but **the sign is not uniform**: both ports start positive (hybrid over
+   full-device FDTD) at the blue edge, cross zero near 1.544 µm, and end
+   negative at the red edge. That is *not* the 1×2's signature (`mmi_1x2_
+   validation.md` gap 5 — every ΔT negative, systematic under-prediction, the
+   Δβ-discretization pattern items 6/14 describe on the coupler). A slope that
+   changes sign across the band looks more like a resolution- or
+   dispersion-sensitive phase term than a single constant offset, so
+   `calibrate_body_neff=True` — which corrects one constant bias in the body's
+   propagated phase — is not obviously the fix here the way it is for the 1×2.
+   **Not yet tried on this device regardless**; worth one run to see whether it
+   moves the crossing point or the magnitude at all, but expect a smaller or
+   different effect than the 1×2's, not assume the same win.
+
+   Also unresolved and probably entangled with the above: this measurement is
+   at the shipped, not-yet-converged `RESOLUTION = 40` (gap 2), so part of the
+   sign flip could be a resolution artifact rather than physics — cannot be
+   separated from calibration's effect until gap 2 is measured on this device.
+   Output under `example_output/verification/mmi_2x2_hybrid_vs_fdtd/`.
+
 6. **New, opened 2026-07-30 — this device's mode-identity pass predates both
    duplicate-mode guards.** Gap 3's result (job 11500536, 2026-07-26) is the
    evidence for "cleanest device audited", and it is quoted that way in
@@ -159,18 +187,53 @@ the 1×2's problem is *stale* references, which at least fail loudly under
    Cheap to close: re-run `audit_interface_modes.py mmi_2x2` at `N_MODES = 14`
    with the guards on and confirm the identity permutation and worst
    |Δn_eff| 0.0007 still hold. Any guard firing in that log is itself the
-   finding. Until then, treat "the cleanest device audited" as a 2026-07-26
-   measurement of a superseded configuration, not a current claim.
+   finding. ~~Until then, treat "the cleanest device audited" as a 2026-07-26
+   measurement of a superseded configuration, not a current claim.~~
+
+   **✅ CLOSED 2026-07-31 — job 11588569 (20:18), and it holds up exactly.**
+   `batch/verification/run_audit_mmi_2x2_gap6.batch`, `N_MODES = 14`, res 40,
+   λ = 1.55 µm, both duplicate guards live. The audit's own config had still been
+   asking for 15 while claiming to be "pinned to `mmi_2x2_hybrid.py`"; corrected
+   to 14 as part of this run.
+
+   | | 2026-07-26 (job 11500536) | 2026-07-31 (job 11588569) |
+   |---|---|---|
+   | modes requested | 15 | **14** |
+   | guided | 14 of 15 | **14 of 14** |
+   | correspondence | identity `[0 … 13]` | **identity `[0 … 13]`** |
+   | worst guided \|Δn_eff\| | 0.0007 | **0.0007** |
+   | duplicate guards | did not exist | **both live, neither fired** |
+
+   Three things this settles:
+
+   - **"The cleanest device audited" is a current claim again**, not a dated one.
+     `README.md` Findings 1 and 2 and the three other files that quote 0.0007 can
+     be read at face value.
+   - **Neither guard fired — zero firings in the log.** That is the specific risk
+     this gap raised: `fdtd_vs_EME_mode_validation.md` item 11 identifies a 2.8 µm
+     body at high mode count as exactly where the meep-side guard has the least
+     discriminating margin, and this device is the repo's highest-mode-count
+     SOI_220 geometry on precisely that body width. It had nothing to fire on.
+     Combined with item 11 closing the same day, the "guard might mis-fire here"
+     concern is answered rather than merely unobserved.
+   - **Dropping the unguided band cost nothing measurable.** Worst guided
+     |Δn_eff| is unchanged at 0.0007 with band 15 gone, which is what item 9
+     predicted ("at no cost") and had not previously been checked on this device.
+
+   Per-band table in `reports/11588569.out`; every band 0–13 is guided, worst
+   disagreement 0.0007 at band 12 (meep 1.570726 / meow 1.571412).
 
 ## Order
 
 ~~**3** first~~ — done 2026-07-26, passed. Remaining:
 
-1. **Gap 6** (re-audit at `N_MODES = 14` with the duplicate guards on) — new
+1. ~~**Gap 6** (re-audit at `N_MODES = 14` with the duplicate guards on) — new
    2026-07-30 and now first, because it is a smoke run and because everything
-   below quotes gap 3's numbers as though they still describe this device.
-2. **Gap 2**, the resolution question — it gates gap 1, and the audit has
-   already shown res 40 is not converged.
+   below quotes gap 3's numbers as though they still describe this device.~~
+   **✅ Done 2026-07-31, job 11588569 — passed unchanged (identity, 0.0007,
+   14/14 guided, neither guard fired).** See gap 6.
+2. **Gap 2**, the resolution question — **now first.** It gates gap 1, and the
+   audit has already shown res 40 is not converged.
 3. **Gap 5** (hybrid vs full-device FDTD), which needs no new scripts.
    *In flight as of 2026-07-31 — jobs 11585844 / 11585849, see gap 5.*
 4. **Gap 1** (goldens) once the configuration has stopped moving. ~~Dropping

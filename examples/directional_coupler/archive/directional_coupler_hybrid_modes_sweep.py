@@ -11,9 +11,12 @@ default), this sweeps
 interfaces — while still sweeping the full 200-point coupling_length range
 at each N_MODES value. hybrid.py's own module docstring claims each arm is
 single-mode by design, so 2 modes (even + odd) should fully capture the
-coupling physics, and its N_MODES=6 default is set generously above that
+coupling physics, and its N_MODES=5 default is set generously above that
 minimum ("bump N_MODES up only if the arm width supports higher-order
-per-arm modes too"). This sweep tests that claim directly: does the hybrid
+per-arm modes too"). That default was 6 until 2026-07-30, when
+`fdtd_vs_EME_mode_validation.md` item 9 dropped the sixth mode as unguided
+(n_eff 1.4367, below the 1.4443 cladding); the sweep range below still starts
+at 2 and reaches past 5, so the comparison this script makes is unaffected. This sweep tests that claim directly: does the hybrid
 method's result actually change as more modes are carried, or does it
 converge by N_MODES=2 as expected?
 
@@ -72,7 +75,7 @@ for _d in (output_dir, plot_dir, data_dir):
     os.makedirs(_d, exist_ok=True)
 save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
-# hybrid.py's own fixed-N_MODES=6 length sweep — overlaid on panel 1 of the
+# hybrid.py's own fixed-N_MODES=5 length sweep — overlaid on panel 1 of the
 # aggregate plot when present, as a reference against the repo's existing
 # tutorial example.
 _HYBRID_SWEEP_NPZ = os.path.abspath(os.path.join(

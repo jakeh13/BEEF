@@ -17,22 +17,27 @@ MMI_1X2_EXAMPLES = mmi_1x2_eme mmi_1x2_fdtd mmi_1x2_hybrid
 MMI_2X2_EXAMPLES = mmi_2x2_eme mmi_2x2_fdtd mmi_2x2_hybrid
 DIRECTIONAL_COUPLER_EXAMPLES = directional_coupler_hybrid directional_coupler_mode directional_coupler_fdtd
 MODAL_MULTIPLEXER_EXAMPLES = modal_multiplexer_hybrid
+# modal_multiplexer_fdtd (gap 3's full-device reference, added 2026-07-31) is
+# deliberately NOT in this list: run_modal_multiplexer_examples.batch is a
+# single-task `--array=0-0` positionally bound to index 0 = hybrid, and a job
+# is running off that exact file as this comment is written. Given its own
+# batch script (run_modal_multiplexer_fdtd.batch) instead of reshaping a
+# live array.
 RING_RESONATOR_EXAMPLES = ring_resonator_hybrid ring_resonator_hybrid_cascaded
 
 EXAMPLES = $(MMI_1X2_EXAMPLES) $(MMI_2X2_EXAMPLES) $(DIRECTIONAL_COUPLER_EXAMPLES) $(MODAL_MULTIPLEXER_EXAMPLES) $(RING_RESONATOR_EXAMPLES)
 DEVICES = mmi_1x2 mmi_2x2 directional_coupler modal_multiplexer ring_resonator
 
-# The brute-force FDTD coupling-length sweep (and the N_MODES / mesh-
-# resolution / body-stub convergence sweeps below) are deliberately NOT in
-# EXAMPLES or the directional_coupler aggregate: each is a long production
-# sweep with its own batch script (batch/sweep/run_directional_coupler_*_sweep.batch
-# at the duty root, one SLURM array task per swept value), and keeping their
-# names out of every other script's list is what guarantees no other batch
-# script's per-example cleanup ever removes their output folders. SWEEP_INDEX
-# selects one value from the relevant sweep's list (length 0..30,
-# N_MODES/resolution 0..10, body stub 0..8); empty runs the whole sweep
-# serially.
-SWEEP_INDEX ?=
+# The five directional-coupler sweep drivers (brute-force FDTD coupling-
+# length, N_MODES, mesh-resolution x2, body-stub) moved to
+# examples/directional_coupler/archive/ on 2026-07-31, retired pending new,
+# more general sweeping functionality once every device is verified (see
+# notes.md Misc #5). Their targets, SWEEP_INDEX, and clean_* rules were
+# removed from here with them; batch/archive/ holds their old batch scripts.
+# test_eme_convergence.py still reads the archived stub/modes sweeps directly
+# by path to guard the item-11 resolution-knob regression they're each
+# checked for, so they're not orphaned, just not runnable via `make` until
+# revived.
 
 # TEMPORARY — verification harness for dc_validation.md items 1-2, kept out of
 # EXAMPLES for the same reason the sweeps are (nothing else's cleanup should
@@ -40,7 +45,7 @@ SWEEP_INDEX ?=
 # examples/verification/ once those items are signed off.
 VERIFICATION = verify_items_1_2 verify_cache_multirank verify_item_5_ground_truth verify_item_6_engine_agreement
 
-.PHONY: all $(DEVICES) $(EXAMPLES) directional_coupler_fdtd_sweep directional_coupler_hybrid_modes_sweep directional_coupler_fdtd_resolution_sweep directional_coupler_hybrid_resolution_sweep directional_coupler_hybrid_stub_sweep $(VERIFICATION) clean clean_directional_coupler_fdtd_sweep clean_directional_coupler_hybrid_modes_sweep clean_directional_coupler_fdtd_resolution_sweep clean_directional_coupler_hybrid_resolution_sweep clean_directional_coupler_hybrid_stub_sweep clean_verification
+.PHONY: all $(DEVICES) $(EXAMPLES) $(VERIFICATION) clean clean_verification
 
 all: $(EXAMPLES)
 
@@ -79,21 +84,6 @@ directional_coupler_mode:
 directional_coupler_fdtd:
 	$(runner) $(my_python) directional_coupler/python/directional_coupler_fdtd.py
 
-directional_coupler_fdtd_sweep:
-	$(runner) $(my_python) directional_coupler/python/directional_coupler_fdtd_sweep.py $(SWEEP_INDEX)
-
-directional_coupler_hybrid_modes_sweep:
-	$(runner) $(my_python) directional_coupler/python/directional_coupler_hybrid_modes_sweep.py $(SWEEP_INDEX)
-
-directional_coupler_fdtd_resolution_sweep:
-	$(runner) $(my_python) directional_coupler/python/directional_coupler_fdtd_resolution_sweep.py $(SWEEP_INDEX)
-
-directional_coupler_hybrid_resolution_sweep:
-	$(runner) $(my_python) directional_coupler/python/directional_coupler_hybrid_resolution_sweep.py $(SWEEP_INDEX)
-
-directional_coupler_hybrid_stub_sweep:
-	$(runner) $(my_python) directional_coupler/python/directional_coupler_hybrid_stub_sweep.py $(SWEEP_INDEX)
-
 # TEMPORARY (see VERIFICATION above). VERIFY_ARGS=--static-only runs just the
 # no-meep checks, which is safe on a login node.
 VERIFY_ARGS ?=
@@ -131,6 +121,9 @@ verify_item_6_engine_agreement:
 modal_multiplexer_hybrid:
 	$(runner) $(my_python) modal_multiplexer/python/modal_multiplexer_hybrid.py
 
+modal_multiplexer_fdtd:
+	$(runner) $(my_python) modal_multiplexer/python/modal_multiplexer_fdtd.py
+
 # RING_TEST_MODE=0 forces the full-res 3-D production run (defaults to the
 # fast 2-D smoke test otherwise — see the script's own TEST_MODE docstring).
 ring_resonator_hybrid:
@@ -141,21 +134,6 @@ ring_resonator_hybrid_cascaded:
 
 clean:
 	rm -rf ../../example_output
-
-clean_directional_coupler_fdtd_sweep:
-	rm -rf ../../example_output/directional_coupler/directional_coupler_fdtd_sweep
-
-clean_directional_coupler_hybrid_modes_sweep:
-	rm -rf ../../example_output/directional_coupler/directional_coupler_hybrid_modes_sweep
-
-clean_directional_coupler_fdtd_resolution_sweep:
-	rm -rf ../../example_output/directional_coupler/directional_coupler_fdtd_resolution_sweep
-
-clean_directional_coupler_hybrid_resolution_sweep:
-	rm -rf ../../example_output/directional_coupler/directional_coupler_hybrid_resolution_sweep
-
-clean_directional_coupler_hybrid_stub_sweep:
-	rm -rf ../../example_output/directional_coupler/directional_coupler_hybrid_stub_sweep
 
 clean_verification:
 	rm -rf ../../example_output/verification

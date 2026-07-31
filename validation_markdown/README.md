@@ -161,7 +161,20 @@ reversed wavelength axis. It rules out gross errors, not wrong physics.
 
 ## Status
 
-Updated 2026-07-30 after job 11575516 (mode-spectrum resolution convergence on
+Updated 2026-07-31 after jobs 11585850 (1×2 MMI hybrid vs full-device FDTD,
+9.11%, uniform sign), 11585849 (2×2 MMI hybrid vs full-device FDTD, 0.82%, sign
+FLIPS across the band — a different mechanism from the 1×2's), 11586098
+(`fdtd_vs_EME_mode_validation.md` item 13 — the EME duplicate guard's
+over-request measured inert at 16 modes/res 60, at a 3.2× cost), 11588309
+(items 11 and 12 — the guard's diagnostic grid cleared at res 40 as well, and
+k-seed laddering recovers a guided mode the shipped fixed seed loses) and
+11588569 (2×2 MMI gap 6 — the "cleanest device audited" result re-confirmed
+under both duplicate guards). A `calibrate_body_neff` test for the 1×2 is in
+flight (11589770/11589779); writing the mux's first full-device FDTD reference
+hit a real library gap — `CompoundGeometry` cannot back `FDTDSolver.solve()`'s
+single-domain path (`notes.md` Geometry item 8) — blocked, not run.
+2026-07-30
+after job 11575516 (mode-spectrum resolution convergence on
 the modal multiplexer) and the day's mode-identity work
 (`fdtd_vs_EME_mode_validation.md` items 0–13); 2026-07-28 after job 11526547
 (tutorial calibration) and the item 8 material-model change; 2026-07-27 after
@@ -172,9 +185,9 @@ audit).
 | device | 1 engine agreement | 2 mode identity | 3 convergence | 4 FDTD reference |
 |---|---|---|---|---|
 | directional coupler | ✅ **closed** — β-calibrated, L₅₀ 0.11% off reference | ✅ identity, worst 0.0023 | done, engines split | done, with provenance |
-| 1×2 MMI | not run | ✅ **fixed** — `N_MODES` 12→8, identity, worst 0.0003 | measured, worst of the three | ✅ **measured 2026-07-31** — hybrid 9.11% under full-device FDTD, uncalibrated (11585850) |
-| 2×2 MMI | not run | ✅ identity, worst 0.0007 — **but pre-guard, `N_MODES` 15** (gap 6) | measured, not converged | comparison in flight (11585844/11585849) |
-| modal multiplexer | not run | run, failed, root cause fixed — **one pair-member disagreement open** | **measured** — EME converged res 60, FDTD not at 60, shipped 40 too low | **no FDTD script** |
+| 1×2 MMI | not run | ✅ **fixed** — `N_MODES` 12→8, identity, worst 0.0003 | measured, worst of the three | ✅ **measured 2026-07-31** — hybrid 9.11% under full-device FDTD, uniform sign, uncalibrated (11585850); calibration test in flight (11589770/11589779) |
+| 2×2 MMI | not run | ✅ identity, worst 0.0007 — **re-confirmed 2026-07-31 at `N_MODES` 14 with both guards live, neither fired** (11588569, gap 6) | measured, not converged | ✅ **measured 2026-07-31** — hybrid 0.82% under full-device FDTD, sign FLIPS across band (11585849) |
+| modal multiplexer | not run | run, failed, root cause fixed — **one pair-member disagreement open**; guard confirmed firing on the *production* path 2026-07-31 (11585847) | **measured** — EME converged res 60, FDTD not at 60, and as of 2026-07-31 shipped res 40 **cannot supply** the requested 16-mode basis — at most 14 distinct guided modes are reachable there, and today's fixed k-seed finds only 13 (gap 2) | ⚠️ **BLOCKED 2026-07-31** — script written, cannot run: `CompoundGeometry` can't back `FDTDSolver.solve()` (`notes.md` Geometry item 8) |
 | ring resonator | not applicable | not applicable | shared knob | **no FDTD script** |
 
 Three entries need their qualifier read, not just their tick:

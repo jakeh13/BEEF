@@ -127,6 +127,14 @@ script.
 diagonal. The upgrade path is additive: the matrix statistics are computable
 from the `η` it already builds.
 
+**2026-07-31 — layers 2 and 3 are now both reusable, device-agnostic
+functions**, `beef.interface_modes_convergence.interface_modes_convergence()`
+and `beef.cut_position_invariance.cut_position_invariance()`. Both take
+already-solved `SMatrix` sequences and leave the device-specific sweep
+construction to the caller; both are unexercised against a real device sweep
+as of this writing (item 6's tool is brand new, item 7's is still awaiting
+its own migration — see each item).
+
 ## To-do
 
 Ordered. Item 0 was discovered by item 2's own machinery on its first
@@ -168,7 +176,8 @@ comparison here.
       - Every meow-side number in `validation_markdown/` that assumed 16
         independent modes needs re-reading.
 
-      **Fix implemented 2026-07-30, real-device verification pending.**
+      **Fix implemented 2026-07-30; verified on an audit re-run the same day and
+      on the production path 2026-07-31 (job 11585847).**
       `EMESolver.compute_modes()` now over-requests by
       `_DUP_MODE_MAX_EXTRA = 8`, rejects any mode whose self-overlap against an
       already-accepted one exceeds `_DUP_MODE_OVERLAP_THRESHOLD = 0.9`, and
@@ -200,6 +209,18 @@ comparison here.
         item 1 below — the pre-existing orphan at meep mode 9 is byte-for-byte
         the same in both runs, confirming it is a *separate* defect from this
         one).
+      - **Fires on the production path, confirmed 2026-07-31** — job
+        **11585847**, the modal multiplexer's real `modal_multiplexer_hybrid.py`
+        run at the shipped res 40, logged `meow mode 9 duplicates
+        already-accepted mode 8 (self-overlap 1.000000)` from a body solve
+        inside `HybridSolver`, not from an audit script. The "covers the
+        production path from the start" claim above is now observed rather than
+        argued. See `modal_multiplexer_validation.md` gap 6.
+      - **Does not fire at res 60** on that same cross-section — job
+        **11586098** (item 13) requested 24 and the guard filtered none of them,
+        so the res-40 duplicate looks like a mesh-resolvable near-degeneracy
+        rather than an unconditional driver defect. One cross-section only; see
+        item 13's third reading.
       - **Results changed**: any EME result where this fires shifts. Goldens
         are already stale from the 2026-07-28 material-model change
         (`README.md` Finding 6), so they need regeneration regardless — but
@@ -214,7 +235,14 @@ comparison here.
 
 Item 1 is measured; item 2 is done. Both were prerequisites for trusting
 anything else here. What item 1's measurement left behind is items 11–13, and
-those are now the prerequisites.
+those are now the prerequisites. **Item 13 is closed as of 2026-07-31** (job
+11586098 — the guard's over-request is exactly inert, so nothing measured under
+it needs re-reading, and what remains there is a cost decision). Items 11 and 12
+are still the live prerequisites; the job carrying both hung on its first attempt
+(11586046 → refixed and resubmitted as **11588309**), and diagnosing that hang
+opened **item 14** — the same non-convergent eigensolve can hang the production
+guard, and item 12's band table shows this device's shipped 16-mode basis is
+unachievable at res 40 in the first place.
 
 - [~] **1. Resolve the outstanding meep↔meow discrepancy on the modal
       multiplexer.** *(**Measured at scale 2026-07-30 — job 11575516**
@@ -419,16 +447,63 @@ those are now the prerequisites.
       meep/meow-free. Does not itself turn `check_mode_correspondence=True` on
       for the three affected examples — that is a separate decision requiring
       real-device verification, not bundled here.
-- [ ] **6. Address (b) — `interface_modes` convergence (layer 2).** No device
+- [~] **6. Address (b) — `interface_modes` convergence (layer 2).** No device
       has this measured. Do it after item 5, since the sweep needs the check to
       be runnable per device.
+
+      **The reusable check itself: DONE 2026-07-31** —
+      `beef.interface_modes_convergence.interface_modes_convergence()`, built
+      the same way item 7's `cut_position_invariance()` was: hand it one
+      already-solved `SMatrix` per `interface_modes` count plus the counts
+      themselves, and it reports, for every `(port, in_mode, out_mode)` key,
+      the wavelength-mean transmission at each count and the **step** between
+      consecutive counts. Deliberately NOT a fitted slope like layer 3's tool
+      — cut-position invariance's correct answer is a horizontal line (the
+      S-matrix must not move at all), so a near-zero slope is the right
+      criterion; a mode-count sweep is expected to move while the basis is
+      incomplete and plateau once it is not, with no reason to be linear in
+      between. `last_step` (has it stopped moving at the HIGHEST count tried
+      — the literal "does the final S-matrix plateau" question this item
+      asks) is the headline metric, `max_step` is informational. Raises if
+      the supplied SMatrices don't all carry the same key set, same
+      reasoning as layer 3's tool. 7 new tests
+      (`tests/test_interface_modes_convergence.py`), meep/meow-free.
+
+      **Not yet done — exercising it on a real device, and now explicitly
+      deferred.** Same split item 7 landed in: the generic comparison exists,
+      wiring a real sweep onto it needs an actual meep/meow campaign, not a
+      code change. `directional_coupler_hybrid_modes_sweep.py`
+      (`examples/directional_coupler/archive/` as of 2026-07-31 — see below)
+      already sweeps `N_MODES = 2..12` on the coupler (across the full
+      `coupling_length` range, saving per-N `.npz` grids) and would have been
+      the closest existing candidate, the same relationship
+      `directional_coupler_hybrid_stub_sweep.py` had to item 7 before it was
+      migrated — not a drop-in fit either way, since it saves raw
+      `T_bar`/`T_cross` arrays rather than `SMatrix` objects and grids over
+      *two* axes (mode count and coupling length) where this tool wants only
+      the mode-count axis varied at one fixed device configuration.
+
+      **Deliberately not picked up now.** All five directional-coupler sweep
+      drivers, including this one, moved to
+      `examples/directional_coupler/archive/` the same day this tool was
+      built — retired pending new, more general sweeping functionality once
+      every device is verified (`notes.md` Misc #5). Migrating a real device
+      sweep onto this tool is real future work, not blocked by anything here;
+      it is simply not this session's task. Whichever device is chosen when
+      it is picked up must be resolution-converged first (item 6's own
+      precondition, echoing item 1 point 5) — the mux is a poor first choice
+      on that count alone, since gap 2 there is still open and res 40 does
+      not even supply the requested basis (item 12); the coupler, already
+      converged at res 80, is the safer first target, archived driver or a
+      fresh one.
 
       **Naming collision, not a status update:** `verify_item_6_engine_agreement.py`
       and `batch/verification/run_item_6_res_sweep.batch` serve `resolved/
       directional_coupler_validation.md`'s item 6 (engine agreement, closed),
       not this one — that doc's own numbering, unrelated question, unrelated
-      device. This item has no tooling yet. Reaching for "the item 6 script"
-      by name alone gets the wrong item.
+      device. ~~This item has no tooling yet.~~ The reusable comparison now
+      exists (above); no *device* has been exercised through it yet. Reaching
+      for "the item 6 script" by name alone still gets the wrong item.
 
       **Still open, and job 11575516 did NOT close it** — recorded because both
       `mode_spectrum_convergence.py`'s docstring and `running_jobs.md`'s
@@ -466,6 +541,18 @@ those are now the prerequisites.
       for another device) onto this function, to confirm it reproduces the
       167x drift-collapse result — deferred since that needs a real
       meep/meow run, not a code change.
+
+      **2026-07-31 — explicitly deferred further, not just unstarted.**
+      `directional_coupler_hybrid_stub_sweep.py` and every other
+      directional-coupler sweep driver moved to
+      `examples/directional_coupler/archive/` (`notes.md` Misc #5): new,
+      more general sweeping functionality is planned once every device is
+      verified, and migrating this one script onto `cut_position_invariance()`
+      is no longer the obvious next step ahead of that redesign. The function
+      itself is unaffected — it never depended on the script, only on
+      already-solved `SMatrix` objects — and the archived script is still
+      exactly where a future migration (of it or its replacement) would start
+      from.
 - [x] **8. Close the `solve_section()` gap for (a) and (c) — the scoped
       zero-cost step.** **DONE 2026-07-30** — added
       `beef.mode_identity.transfer_matrix_duplicate_scan()` (plus
@@ -572,9 +659,9 @@ Items 11–13 are all **opened 2026-07-30 by item 1's measurement** (job
 added earlier that day are now load-bearing on the production path, and none of
 the three properties they need has been checked.
 
-- [~] **11. The meep-side guard's duplicate check runs on a grid that cannot
-      resolve the modes it is judging — checked 2026-07-30, NOT live at res
-      20.** `_iter_distinct_bands()`
+- [x] **11. The meep-side guard's duplicate check runs on a grid that cannot
+      resolve the modes it is judging — CLOSED 2026-07-31, not live at res 20
+      OR res 40.** `_iter_distinct_bands()`
       (`beef/solvers/fdtd.py`) decides "same eigenvector or not" from a fixed
       `_DUP_BAND_DIAG_NY = 16` × `_DUP_BAND_DIAG_NZ = 8` sample spanning the
       whole **monitor** width. On job 11575516's cross-section that monitor is
@@ -643,6 +730,40 @@ the three properties they need has been checked.
       resolution packs more oscillation into the same core width and could in
       principle narrow the margin further. Re-run the same script with
       `RES = 40.0` to check.
+
+      **CLOSED 2026-07-31 — clear at res 40 too, job 11588309.** The missing
+      data point is in. Same script (`BEEF_DIAG_RES=40`), same four grids, at the
+      shipped `RESOLUTION`:
+
+      | grid | points in core | skipped band_nums | worst overlap among accepted |
+      |---|---|---|---|
+      | 16×8 (shipped) | 8/16 | 11, 15 | **0.3877** |
+      | 32×8 | 18/32 | 11, 15 | 0.1924 |
+      | 64×16 | 36/64 | 11, 15 | 0.1201 |
+      | 128×16 | 72/128 | 11, 15 | 0.1209 |
+
+      **All four grids agree exactly again** — same two skips, same 16 accepted
+      band_nums, identical resulting n_eff to the printed precision — and both
+      skips are independently confirmed as genuine by the threshold-free test:
+      `(10,11)` and `(14,15)` are exact n_eff ties (|Δn_eff| < 1e-9). The
+      idealized-slab aliasing argument that opened this item does not transfer at
+      res 40 either.
+
+      **The margin did narrow with resolution, as predicted, and it is still not
+      close.** Worst off-diagonal overlap among accepted bands on the shipped
+      grid: **0.3392 at res 20 → 0.3877 at res 40**. That is the direction this
+      item warned about — a finer mesh packs more oscillation into the same
+      2.8 µm core — but it sits less than half way to the 0.9 threshold, and the
+      finer grids' 0.12–0.19 bracket the coupler's 0.1257 reference. Two
+      resolutions is enough to close the item as *not live*, while recording that
+      the quantity to re-check if this device ever moves to res 60+ is the
+      accepted-band margin, not the skip decisions.
+
+      **Note the skip list changed between resolutions:** res 20 skipped 11 and
+      **16**, res 40 skips 11 and **15**. Both are exact ties at their own
+      resolution, so both are correct — the third duplicate pair simply sits at a
+      different band_num on a different mesh. Read the pair positions as
+      mesh-dependent, not as fixed properties of the device.
 
       **Blast radius, now bounded rather than open.** Every recorded
       mode-identity number measured before 2026-07-30 was taken with no guard
@@ -732,7 +853,138 @@ the three properties they need has been checked.
       just demonstrated. (b) (one simultaneous `compute_modes_meep()` call as
       a count reference) not yet run.
 
-- [ ] **13. `guard_duplicate_modes=True` changes the solve, not just the
+      **Attempt at C and D, 2026-07-31 — job 11586046 HUNG and was cancelled.
+      Resubmitted as 11588309 after a script fix. But it produced one result
+      before dying, and it is a bigger one than what it was sent to measure.**
+
+      The job asked `diagnose_kpoint_ladder_v2.py` for `N_TARGET = 20` distinct
+      modes and never printed a single policy block in 2h21. Reconstructing the
+      converged `k_x` per `band_num` from its MPB trace (target f = 0.763359,
+      cladding n = 1.446804) shows why:
+
+      | band_num | n_eff | guided? | |
+      |---|---|---|---|
+      | 1–9 | 2.7064 → 1.7637 | yes | |
+      | **10, 11** | **1.7477, 1.7477** | yes | duplicate |
+      | 12, 13 | 1.6836, 1.5936 | yes | |
+      | **14, 15** | **1.4848, 1.4848** | yes | duplicate |
+      | 16–18 | 1.4337 → 1.3877 | **no** | below cladding |
+      | **19, 20** | **1.3491, 1.3491** | no | duplicate |
+      | 21, 22 | 1.3226, 1.3075 | no | |
+      | **23** | — | — | **no k reaches f at all** |
+
+      Bands 1–22 each converged in 3–8 MPB solves (~58 min for 22 attempts, so
+      the original ~25 s/solve budget was about right). **Band 23 burned 161
+      solves — 59% of the job's entire eigensolve work — without converging**,
+      limit-cycling between k = 0.2346 (f = 0.4775) and k = 1.7480 (f = 1.0283)
+      either side of the target. Twenty *distinct* modes needs band_num 23
+      because of the three duplicate pairs, and band 23 does not exist at this
+      frequency. No wall clock would ever have been enough, and MPB runs in C so
+      no Python timeout can interrupt it — the only defence is not asking for
+      the band.
+
+      **Superseded by the re-run's own measurement — the ceiling is 14, not 13,
+      and the difference is the whole point of this item.** The paragraph that
+      stood here inferred from the hung job's fixed-seed trace that "only 13
+      distinct guided modes exist at res 40", and concluded the 16-mode basis was
+      "unachievable by any seeding policy". Job 11588309 falsified the premise:
+      three of the four seeding policies find **14**. The inference was drawn
+      from the enumeration under test, which is exactly the thing this item says
+      cannot be trusted to enumerate.
+
+      Corrected reading: at the mux's interface 0, res 40, **at least 14 distinct
+      guided modes exist, and today's fixed seed finds 13.** The device requests
+      16, so a shortfall remains — but part of it is a seeding defect that is
+      fixable in software, not a property of the spectrum, and that part is
+      exactly what item 12 was opened to find.
+
+      **Caveat on "duplicate" for the (10,11) pair specifically.** meep returns
+      byte-identical `k_x` for both, but 11575516 found meow resolves that same
+      region into a genuine pair with a 3.1e-4 splitting by res 80. Whether
+      (10,11) is a solver duplicate or a real near-degenerate pair meep fails to
+      separate is precisely item 1's open question, still open. Every count here
+      is "distinct as meep resolves them at res 40", not a claim about the
+      physics.
+
+      **Script fixed and resubmitted as job 11588309.**
+      `diagnose_kpoint_ladder_v2.py` now targets 16 (what the device requests,
+      not 20 chosen for comparability with v1's raw sweep — whose bands 16–20
+      were unguided anyway) and **stops the search when a raw solve returns
+      n_eff ≤ the cladding index**: past that point nothing above is guided, and
+      the next band_num is where the k-search stops converging. A physical
+      bound, not a timeout. Termination verified offline against this job's own
+      measured n_eff sequence with fake `sim`/`mp` objects (all four policies
+      stop at band 16, none reaches the non-convergent region, policy A
+      reproduces the measured 13 accepted / 16 attempts / skips at 11 and 15).
+      The batch script also **runs item 11 first now** — putting item 12 first
+      to protect the higher-value result is what cost both items when item 12
+      hung.
+
+      **RESULT — job 11588309, COMPLETED in 34:55 (item 12's half took 19:42).
+      Laddering is a strict improvement, and the fixed seed is losing a real
+      channel.** Modal multiplexer interface 0, res 40, λ = 1.31 µm, target 16
+      distinct guided modes, cladding 1.446804:
+
+      | policy | distinct guided found | attempts | skips | stopped |
+      |---|---|---|---|---|
+      | **A** fixed (today's code) | **13** of 16 | 16 | 2 — bands 11, 15 | guided spectrum exhausted |
+      | **B** naive ladder (raw previous) | **14** of 16 | 16 | 1 — band 10 | guided spectrum exhausted |
+      | **C** step ladder (raw − 0.005) | **14** of 16 | 16 | 1 — band 10 | guided spectrum exhausted |
+      | **D** accepted ladder | **14** of 16 | 16 | 1 — band 10 | guided spectrum exhausted |
+
+      Every policy terminated on the cladding test at band_num 16
+      (n_eff 1.433726 ≤ 1.446804), none on the attempts backstop — so no policy
+      had duplicates eat the +8 headroom production also relies on, and the
+      script's own stop-reason line distinguishes "found 13 because only 13 were
+      there" from "found 13 because it ran out of attempts". That distinction is
+      why the counts below can be read as physics.
+
+      **B, C and D return A's set plus one mode: n_eff 1.512589**, sitting
+      between 1.593585 and 1.484797. It is *absent entirely* from A — not
+      reordered, not duplicated, never found. This reproduces v1's recovered
+      1.512589 exactly, now under a real accept/skip/retry search rather than a
+      flat sweep, so the recovery survives the guard being in the loop.
+
+      **Four readings, in order of what they change:**
+
+      - **The fixed seed loses a guided channel, and the loss is silent.** On the
+        device whose entire purpose is keeping 16 channels separate, today's code
+        builds an interface basis missing one of them, with no warning: A's two
+        skips are both genuine duplicates, correctly rejected, and it still ends
+        up a mode short because band 14 *and* band 15 both converge to 1.484797
+        under a fixed seed. Nothing in the log says a mode was missed — a skip
+        looks the same whether the retry finds something new or re-finds a
+        neighbour.
+      - **Laddering costs nothing.** 16 attempts either way, and one *fewer*
+        skip. This is the "strict improvement: cheaper AND correct" case the
+        script was written to look for, so item 12's fix direction is settled:
+        seed band *k* from band *k−1*, do not re-seed from a constant.
+      - **C and D are unnecessary refinements — B is enough here.** All three
+        laddered policies returned byte-identical sets, attempt counts and skip
+        lists. The self-reconvergence risk that motivated C and D did fire (all
+        three skip band 10, overlap 1.0, raw n_eff 1.763693 = band 9's answer, so
+        band 10 re-found band 9), but the existing duplicate guard absorbed it
+        and the retry landed on a genuine mode. So the guard and the naive ladder
+        together are sufficient on this cross-section; C's step and D's
+        accepted-only seed buy nothing measurable. Do not adopt the extra
+        complexity on this evidence — one cross-section, and the argument for C/D
+        was always about robustness in cases not seen here.
+      - **The cross-policy "DIFFERENT modes" flag is an artefact of my own
+        comparison, not a finding.** It reports max |Δn_eff| = 0.027793 vs A,
+        which is what you get comparing sorted 13- and 14-element prefixes when
+        the extra mode shifts the alignment. B ⊃ A exactly. The comparison should
+        align on set membership, not position, when the counts differ — noted
+        against the script rather than fixed mid-run.
+
+      **What is still open for this item.** The count is 14 of 16 requested, so
+      two channels remain unaccounted for even with laddering, and whether those
+      are (a) genuinely absent from the spectrum at res 40, (b) more fixed-seed
+      losses a different policy would recover, or (c) the (10,11) pair being one
+      mode rather than two (item 1) is not settled by this run. Sub-item (b) is
+      now the cheap one to test: the same harness at res 60, where 11575516 found
+      meow reaches 16/16 and item 13 found no duplicate fires at all.
+
+- [x] **13. `guard_duplicate_modes=True` changes the solve, not just the
       filter.** `EMESolver.compute_modes()` over-requests
       `num_modes + _DUP_MODE_MAX_EXTRA` (= +8) in a single
       `compute_modes_meep()` call whenever the guard is on — so the guarded and
@@ -747,7 +999,7 @@ the three properties they need has been checked.
       artifact; if they don't, `_DUP_MODE_MAX_EXTRA` can be cut on cost
       grounds.
 
-      **In flight 2026-07-31 — job 11586098**,
+      **MEASURED 2026-07-31 — job 11586098 COMPLETED (1:54:50)**,
       `examples/verification/python/diagnose_guard_over_request.py`. Measured
       with **three** arms rather than the two this item asked for, because
       "guard on vs off" is exactly the unclean comparison described above —
@@ -767,6 +1019,106 @@ the three properties they need has been checked.
       `_DUP_MODE_MAX_EXTRA` on the `C/A` cost ratio alone. Run at res 60 for
       the reason item 1 point 5 gives: res 40 is not converged on this device,
       so a difference measured there would not be attributable.
+
+      **Result — the over-request is inert, and it costs 3.2×.** Modal
+      multiplexer interface 0 (`mmi1` local x = −7.7100 µm), λ = 1.31 µm,
+      res 60, `N_MODES = 16`, `_DUP_MODE_MAX_EXTRA = 8` (so B and C both solve
+      24).
+
+      | comparison | result |
+      |---|---|
+      | **C vs A** — first 16 bands, positionally | max \|Δn_eff\| = **0.000e+00**, every per-band entry 0.000e+00 |
+      | **B vs C** — what the filter dropped | B's 16 map to C indices 0…15, worst match residual 0.000e+00, **no C index skipped** |
+
+      | arm | guard | requests | wall |
+      |---|---|---|---|
+      | A | off | 16 | **934.0 s** |
+      | B | on | 16 (solves 24) | **2948.5 s** |
+      | C | off | 24 | **2997.7 s** |
+
+      Two readings, and the cost one is the actionable half:
+
+      - **The guard is a pure filter at production scale.** Asking MPB for 24
+        instead of 16 does not perturb the low bands *at all* — not "to 1e-6",
+        exactly 0.000e+00 across all 16. So no guarded EME number anywhere in
+        `validation_markdown/` carries an over-request artifact, and item 0's
+        res-12/3-mode inertness check does generalise to 16 modes on a res-60
+        mesh. That was the open risk this item was raised for, and it is
+        closed.
+      - **`_DUP_MODE_MAX_EXTRA = 8` is therefore pure cost.** `B/A = 3.16×`,
+        `C/A = 3.21×` — the two agree, which is itself the confirmation that
+        B's expense is the eigenproblem and not the filtering (the filter's own
+        cost is the 1.6% gap between B and C). Since the extra 8 bands changed
+        no answer here, the constant is a free knob: cutting it to the smallest
+        headroom that still covers the observed skip counts (≤ 3 on this
+        device, per item 12's ladder runs) would take ~2/3 of the wall time off
+        every guarded `compute_modes()` call, including the 3h36m of job
+        11575516. **Not yet changed** — the skip-count evidence is from one
+        device, and item 12 may yet replace the guard with a seeding fix that
+        makes the question moot.
+
+      **Third reading, unplanned and relevant elsewhere: at res 60 no
+      duplicate fired on this cross-section.** Arm B filtered nothing — B is
+      literally C's first 16 — where item 0 found meow's modes 10/11 identical
+      at res **40** on this device, and where the production hybrid run (job
+      11585847, res 40) does fire the guard (mode 9 duplicating mode 8, see
+      `modal_multiplexer_validation.md` gap 6). Consistent with 11575516's
+      finding that meow reaches 16/16 guided and plateaus by res 60: the
+      near-degenerate pair the guard trips over at res 40 appears to be
+      resolved into two distinct eigenvectors by res 60. **Suggestive, not
+      established** — this is one cross-section at one wavelength, and B/C's
+      24-band list still shows tight non-degenerate clusters higher up
+      (1.261133 / 1.260187 / 1.259385 at indices 16–18; 1.158071 / 1.157491 at
+      22–23) which the 16-mode production request never reaches. It does mean
+      "does the duplicate survive mesh refinement" is now a real question for
+      item 12 rather than an assumption, and that the res-40 firings are the
+      regime that needs the fix.
+
+- [ ] **14. NEW 2026-07-31 — `_iter_distinct_bands()` can hang a production run
+      indefinitely, with no exception and no timeout.** Found by job 11586046
+      hanging (item 12): when `sim.get_eigenmode()` is asked for a `band_num`
+      that has no solution at the target frequency, MPB's k-search does not
+      error — it limit-cycles between two k values forever. 161 solves and
+      counting on one band, until SLURM killed it.
+
+      The production guard has the same exposure. `_iter_distinct_bands()`
+      (`beef/solvers/fdtd.py:1049`) walks `band_num` upward to
+      `n_modes + _DUP_BAND_MAX_EXTRA`, and its `RuntimeError` for
+      "could not find `n_modes` distinct eigenmodes" can only fire **after** a
+      solve returns. A non-converging solve never reaches it, so the bound is
+      not a bound: the loop hangs inside meep instead of raising. `parity=
+      mp.NO_PARITY`, `_KPOINT_SEED_NEFF` and the retry count are all irrelevant
+      to this — it is the `band_num` request itself that has no root.
+
+      **How close this is to firing today.** For the modal multiplexer at res
+      40: 16 requested + 3 skips ⇒ the guard already reaches band_num 19, and
+      band 23 is where convergence fails. Four band_nums of margin, on a device
+      whose duplicate count is only known at two resolutions and whose shipped
+      `RESOLUTION` is already below both engines' converged point (gap 2). Any
+      device with a shallower guided spectrum, or one more duplicate pair, hangs.
+      It has **not** been observed in production — job 11585847 is the only real
+      hybrid run of this device on record and it fires the meow-side guard, not
+      this one — so this is latent, not demonstrated.
+
+      **Fix, when it is taken:** the same physical bound the diagnostic now
+      uses — stop when a raw solve returns `n_eff ≤ cladding index`, since
+      nothing above it is guided and the next band_num is the non-convergent
+      one. That is strictly better than a larger retry budget, and it fixes a
+      second thing at the same time: as of today the guard will happily accept
+      **unguided** bands as basis members to reach its count (bands 16–18 at the
+      mux's interface 0, n_eff 1.4337–1.3877 against a 1.446804 cladding), which
+      is item 9's concern arriving through the guard rather than through a
+      device's `N_MODES`. A raise-instead-of-pad decision belongs with it: if
+      the cross-section cannot supply `n_modes` guided modes, a loud failure is
+      more useful than a silently unguided basis.
+
+      **Deliberately not fixed 2026-07-31.** `_iter_distinct_bands()` is the
+      production path `modal_multiplexer_validation.md` gap 6 already declined
+      to modify under-verified, and the same argument applies with more force
+      here: this change alters which modes a basis contains (not just how many
+      attempts it makes), so it needs its own meep-free tests plus a real
+      before/after on a device known to skip. Recorded now with the reproduction
+      attached so that work does not start from scratch.
 
 ## Open questions
 

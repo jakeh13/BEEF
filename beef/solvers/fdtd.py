@@ -874,6 +874,18 @@ class FDTDSolver:
         answer must fall between the cladding and core indices — the competing
         normalizations land at 0.37 and 14.5 and are not close calls.
 
+        **One structure, every wavelength.** All ``len(wavelengths)`` solves run
+        on a single ``mp.Simulation``, because the geometry does not depend on
+        wavelength and rebuilding it per point would multiply the cost by
+        ``len(wavelengths)`` for nothing. The *material* does depend on
+        wavelength, though, so under ``dispersive=True`` the media are built
+        across the band (one meep medium whose ε is frequency-dependent) rather
+        than frozen at its centre — fixed 2026-07-31, see
+        ``_build_section_mode_sim()``. Under ``dispersive=False`` (today's
+        default) the index is still frozen at ``mean(wavelengths)``, so results
+        away from band centre carry that error: up to 0.008 in n_Si across the
+        O-band (``material_model_validation.md``).
+
         Args:
             x0, x1: device-frame bounds of the section (µm). The cross-section
                 is taken at their midpoint, so both must lie in the same
@@ -894,8 +906,14 @@ class FDTDSolver:
         """
         wavelengths = np.asarray(wavelengths, dtype=float)
         wl_center = float(np.mean(wavelengths))
+        # Hand the whole band down, not just its centre: under
+        # `dispersive=True` the media are then built across it rather than
+        # frozen at wl_center, which is the point of the flag for a multi-
+        # wavelength caller. Inert when the band is one point, or when
+        # dispersion is off. See `_build_section_mode_sim()`.
         sim, where, mea_c, mea_w = self._build_section_mode_sim(
-            geometry, wl_center, x0, x1, monitor_center, monitor_size, pad=pad, **geometry_kwargs)
+            geometry, wl_center, x0, x1, monitor_center, monitor_size, pad=pad,
+            wavelengths=wavelengths, **geometry_kwargs)
 
         neff = np.zeros((len(wavelengths), n_modes))
         for i, wl in enumerate(wavelengths):
@@ -920,6 +938,7 @@ class FDTDSolver:
         self, geometry, wl_center: float, x0: float, x1: float,
         monitor_center: Optional[float], monitor_size: Optional[float],
         pad: Optional[float] = None,
+        wavelengths: Optional[np.ndarray] = None,
         **geometry_kwargs,
     ):
         """Shared preamble for section_mode_neff()/section_mode_fields(): the
@@ -930,6 +949,31 @@ class FDTDSolver:
         Split out of section_mode_neff() verbatim (no behavior change) so
         section_mode_fields() can reuse the identical sim setup rather than
         duplicating it.
+
+        `wavelengths` (µm, default None -> use `wl_center` alone): the caller's
+        whole band, when it has one. Media are built from it via `_media()`, so
+        a band caller under `dispersive=True` gets per-wavelength media instead
+        of one index frozen at `wl_center`.
+
+        Why this parameter exists at all. Until 2026-07-31 this method built its
+        media with `si_medium(wl_center)` directly, bypassing `_media()` and so
+        never consulting `self.dispersive`. That was justified as "a mode solve
+        is single-wavelength, where the frozen index at that exact wavelength is
+        already the correct medium" (`material_model_validation.md` work item 2)
+        — true for `section_mode_fields()`, which takes one wavelength, but NOT
+        for `section_mode_neff()`, which accepts a whole band and loops it on
+        this one structure. For that caller the frozen centre index is the exact
+        defect work item 2 fixed for `_build_domain()`/`solve_section()`, left
+        in place here by an argument that did not apply. The measured
+        consequence: `FDTDSolver(dispersive=True).section_mode_neff(g, band, …)`
+        returned n_eff byte-identical to `dispersive=False` — max |Δn_eff| =
+        0.000e+00 — while the media differ by 0.031 in ε (12.063 vs 12.095 at
+        1.60 µm on SOI_220). Job 11586986 swept both settings for ~1 h and
+        produced two identical columns because of it.
+
+        Scalar callers are byte-unchanged, and not by convention — `_medium()`
+        needs BOTH the flag and a real band (`size > 1 and min < max`), so a
+        scalar falls through to the frozen index under either setting.
 
         `pad` (µm, default None -> `self.dpml`): straight-material clearance
         drawn past x0/x1 on each side, and the `mp.PML()` thickness of the
@@ -958,8 +1002,8 @@ class FDTDSolver:
 
         clearance = self.dpml if pad is None else float(pad)
 
-        si_med = self.material_stack.si_medium(wl_center)
-        sio2_med = self.material_stack.sio2_medium(wl_center)
+        si_med, sio2_med = self._media(
+            wl_center if wavelengths is None else wavelengths)
 
         prisms = geometry.section_prisms(
             x0, x1, si_med,

@@ -131,8 +131,17 @@ def _mmi_2x2():
         waveguide_height=0.22,
     )
     # Body spans +/-14, so [-1, +1] is 13 um clear of either seam.
+    #
+    # n_modes 15 -> 14 on 2026-07-31, so this tracks the device again: band 15
+    # (n_eff 1.4078) is below the 1.4443 cladding index and `mmi_2x2_hybrid.py`
+    # dropped it as part of fdtd_vs_EME_mode_validation.md item 9. The 15-mode
+    # result this audit produced on 2026-07-26 (job 11500536: identity, worst
+    # guided |dn_eff| 0.0007, "the cleanest device audited") therefore described
+    # a request the device no longer makes -- which is what
+    # mmi_2x2_validation.md gap 6 was opened to fix, along with the fact that
+    # it predates both duplicate-mode guards.
     return dict(
-        geometry=mmi, n_modes=15, wl=1.55, stack=SOI_220,
+        geometry=mmi, n_modes=14, wl=1.55, stack=SOI_220,
         section=(-1.0, 1.0), sim_width=5.0, sim_height=1.5, dpml=0.5, res=40.0,
         note="2.8 x 0.22 um slab body, mm_length 28 um, C-band",
     )

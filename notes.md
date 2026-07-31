@@ -605,6 +605,19 @@ lives in "Current library reference" above, not here.
    ε∞ carries the bulk of the permittivity and the susceptibilities only its
    wavelength dependence, then re-running the resolution sweeps. `meep_medium()` is
    kept in `materials/stack.py` as the correct model to start that from.
+
+   *(2026-07-31 — the re-parameterisation landed and is opt-in via
+   `dispersive=`; see `material_model_validation.md`. One trap found the same day
+   and worth carrying forward: **turning a flag on is not the same as the flag
+   reaching the physics.** `FDTDSolver.section_mode_neff()` accepted
+   `dispersive=True` and returned n_eff byte-identical to `dispersive=False` for
+   ~1.5 h of node time, because `_build_section_mode_sim()` built its media
+   directly instead of through `_media()`. Nothing in a 468-test suite noticed,
+   because nothing asserted on which `mp.Medium` was constructed — only on
+   numbers downstream of it. Any future material or solver flag wants a test that
+   pins the **object built**, plus a runtime liveness check in the script that
+   sweeps it, which is what `verify_item_8_dispersive_convergence.py` now
+   carries.)*
 6. **Symmetry exploitation in `FDTDSolver`.** `MMI`/`DirectionalCoupler` are
    frequently mirror-symmetric about y=0; `solve_section()` currently always draws
    and simulates the full cross-section. An opt-in `mp.Mirror` symmetry when the
@@ -686,7 +699,9 @@ lives in "Current library reference" above, not here.
    index yields interface pixels differing by up to ~0.23 in ε. A "just the
    materials" change would therefore quietly move the mode basis and the
    mesh-convergence point along with it — budget a re-run of the resolution
-   sweeps (`batch/sweep/run_directional_coupler_*_resolution_sweep.batch`) as part of
+   sweeps (`batch/archive/run_directional_coupler_*_resolution_sweep.batch` --
+   moved there 2026-07-31, retired pending new sweeping functionality; still
+   the literal scripts this budget refers to) as part of
    #5, not as a follow-up. While in there: `FDTDSolver` neither exposes nor
    logs `eps_averaging`/`subpixel_tol`/`subpixel_maxeval`, so a knob that
    demonstrably moves `neff` at the second decimal is set entirely by meep's
@@ -1061,15 +1076,78 @@ lives in "Current library reference" above, not here.
     previous band instead of landing on it) or from the last **accepted**
     band rather than the raw previous solve — either is a plausible fix for
     the self-reconvergence failure just demonstrated. (b), one simultaneous
-    `compute_modes_meep()` call as a count reference, not yet run.
+    `compute_modes_meep()` call as a count reference, not yet run. **Attempted
+    2026-07-31, job 11586046 — it HUNG and was cancelled; retrying as
+    11588309.** The attempt is worth recording because it changes the framing:
+    asking for 20 distinct modes walked `get_eigenmode()` up to band_num 23,
+    where **MPB's k-search has no root and limit-cycles forever** (161 solves on
+    one band, 59% of the job's eigensolve work, against 3–8 for every band below
+    it). The re-run (11588309) then **answered the seeding question outright, and
+    in laddering's favour**: policy A (today's fixed seed) finds 13 distinct
+    guided modes at this cross-section, while all three laddered policies find
+    **14** — the extra being n_eff 1.512589, absent from A entirely rather than
+    reordered. Same 16 attempts, one fewer skip, so laddering is a strict
+    improvement and the fix direction is settled: seed band *k* from band *k−1*.
+    C's step and D's accepted-only refinement buy nothing measurable over the
+    naive ladder here; do not adopt them on this evidence.
 
-    Related, smaller: `guard_duplicate_modes=True` makes
-    `EMESolver.compute_modes()` over-request `num_modes + 8` in a single call,
-    so guarded and unguarded hand MPB **different eigenproblems** — "guard on
-    vs off" is not a clean A/B, and inertness was only checked at 3 modes/res
-    12. At the production end (16 modes → 24 on a res-80 mesh) neither the
-    inertness nor the cost is measured, and job 11575516's 3h36m was dominated
-    by exactly that (`fdtd_vs_EME_mode_validation.md` item 13).
+    A shortfall does remain — 14 of 16 requested — and the guard makes up the
+    difference by reaching past the guided edge and **padding with unguided
+    modes**. That half is item 19 below and
+    `fdtd_vs_EME_mode_validation.md` item 14. (An earlier revision of this entry
+    said only 13 distinct guided modes *exist* and that no seed policy could
+    recover them. That was inferred from the fixed-seed trace — i.e. from the
+    enumeration under test — and the re-run falsified it.)
+
+    Related, smaller — **now measured and closed, 2026-07-31, job 11586098**:
+    `guard_duplicate_modes=True` makes `EMESolver.compute_modes()` over-request
+    `num_modes + 8` in a single call, so guarded and unguarded hand MPB
+    **different eigenproblems** — "guard on vs off" is not a clean A/B, and
+    inertness had only been checked at 3 modes/res 12. Measured at 16 modes/res
+    60 with three arms (guard off/16, guard on/16, guard off/24): the
+    over-request is **exactly inert** (max |Δn_eff| = 0.000e+00 on all 16 low
+    bands), so the guard is a pure filter and no guarded EME number carries an
+    over-request artifact. It costs **3.2×** (934 s → 2948 s), which makes
+    `_DUP_MODE_MAX_EXTRA = 8` pure cost against skip counts of ≤ 3 — deliberately
+    left at 8 until the skip evidence covers more than one device and item 12
+    settles whether a k-seeding fix retires the guard entirely.
+    (`fdtd_vs_EME_mode_validation.md` item 13.)
+
+19. **New, 2026-07-31 — `_iter_distinct_bands()` has no effective upper bound:
+    it can hang a production run forever, and short of that it pads a basis
+    with unguided modes.** (`fdtd_vs_EME_mode_validation.md` item 14.) Found by
+    job 11586046 hanging on the diagnostic version of the same loop.
+
+    `sim.get_eigenmode()` asked for a `band_num` with no solution at the target
+    frequency does not raise — MPB's k-search limit-cycles between two k values
+    indefinitely (measured: k = 0.2346 ↔ 1.7480 either side of f = 0.7634, 161
+    solves before SLURM killed it). `_iter_distinct_bands()`
+    (`beef/solvers/fdtd.py:1049`) walks `band_num` up to
+    `n_modes + _DUP_BAND_MAX_EXTRA` and its `RuntimeError` can only fire *after*
+    a solve returns, so that bound never engages: the loop hangs inside meep
+    with no exception and no timeout. A Python alarm cannot help — MPB is C, so
+    the signal handler does not run until the call returns.
+
+    The same walk has a quieter failure below the hang. At the mux's interface 0,
+    res 40 at most **14 distinct guided modes are reachable** — 15 guided band
+    slots, with duplicate solves inside them (10/11 and 14/15 under a fixed seed,
+    10 alone under a laddered one), and bands 16–22 below the cladding index. The
+    device requests 16, so the guard reaches past band 15 and **accepts unguided
+    modes** to make up the count — two or three of that basis's channels are not
+    guided modes of the cross-section, depending on the seed policy. That is item 9's concern arriving
+    through the guard rather than through a device's `N_MODES`, and it is why the
+    mux's `RESOLUTION`/`N_MODES` pair has to be chosen jointly
+    (`modal_multiplexer_validation.md` gap 2).
+
+    **Fix, when taken:** stop the walk when a raw solve returns `n_eff ≤` the
+    cladding index — nothing above it is guided and the next band_num is the
+    non-convergent one, so one physical test closes both failures. Decide
+    raise-vs-pad at the same time: if a cross-section cannot supply `n_modes`
+    guided modes, failing loudly beats returning a basis whose rank is a lie.
+    `diagnose_kpoint_ladder_v2.py` already does exactly this (job 11588309), so
+    the behaviour has a working reference; the library change is deliberately
+    deferred because it alters which modes a basis *contains*, and gap 6's scope
+    argument for not touching this method under-verified still applies.
 
 ### Geometry
 
@@ -1214,6 +1292,49 @@ lives in "Current library reference" above, not here.
    left edge returns the access-waveguide width (0.35) rather than the old
    mid-taper value (0.467).
 
+8. **New, 2026-07-31 — `CompoundGeometry` cannot back `FDTDSolver.solve()`'s
+   single-domain path at all. One part fixed, one part real and open.**
+   Found writing `modal_multiplexer_fdtd.py` (`modal_multiplexer_validation.md`
+   gap 3) — the first script in this repo to call `.solve()` (as opposed to
+   `.solve_section()`, the only thing `HybridSolver` ever calls) with a
+   `CompoundGeometry` as the top-level device. Every existing full-device FDTD
+   script (`mmi_1x2_fdtd.py`, `mmi_2x2_fdtd.py`) passes a plain `MMI`, so this
+   combination had literally never run before.
+
+   **Part 1, FIXED — `source_aperture_at()`'s bounds check.**
+   `FDTDSolver.solve()` queries `geometry.source_aperture_at(x)` at the
+   solver's external PML-clearance stub position, `waveguide_length` past the
+   device's own physical extent. Every leaf geometry already tolerates
+   arbitrary overshoot there by construction — `MMI.width_at()` clamps to the
+   terminal `waveguide_width` for any x past its taper start, however far
+   past, and `MMI.source_aperture_at()` is built on top of it — but
+   `CompoundGeometry._locate()` had no segment "out there" to delegate to and
+   raised instead. `_locate(x, tol, clamp=False)` gained an opt-in
+   `clamp=True` that delegates out-of-bounds x to the nearest end segment,
+   wired into `source_aperture_at()` only — `width_at()`/`center_at()`/
+   `section_prisms()`/etc. keep raising by default, since an out-of-bounds cut
+   *there* is a genuine caller error building physical geometry, not a
+   solver's legitimate external-stub query. 5 new tests,
+   `tests/test_geometry.py::TestCompoundGeometrySourceApertureClamps`,
+   mutation-checked against the pre-fix code.
+
+   **Part 2, NOT FIXED — `polygons(stub_length>0)`.** Clearing part 1 exposed
+   a second, unconditional crash: `solve()` → `to_meep_prisms()` →
+   `geometry.polygons(stub_length=self.waveguide_length + self.dpml)`, and
+   `CompoundGeometry.polygons(stub_length>0)` raises `NotImplementedError` by
+   design — its own docstring says "no generic way to know per-port stub
+   width for an arbitrary segment type". This one is real, unfinished work,
+   not a mechanical patch: `to_gds_eme()`/`section_gds()` already solve the
+   equivalent problem via `_end_ports()`, but generalising that to plain
+   `polygons()` needs an actual decision for an ambiguous end (e.g. a
+   multi-port `WaveguideRun` — which port's width does the external stub
+   inherit?), which whoever wrote the existing `NotImplementedError` declined
+   to guess at. Left alone, same caution bar as Solver items 14 and 12's
+   guard fix this session: not touching production-adjacent, under-verified
+   geometry logic without a real design pass plus device-level verification.
+   `modal_multiplexer_fdtd.py` and its batch script are marked BLOCKED
+   pending this.
+
 ### Plotting
 
 1. **FDTD time-domain field/movie export.** `plot_eme_fields` only covers EME (static
@@ -1311,8 +1432,11 @@ lives in "Current library reference" above, not here.
    `examples/*.py` scripts hand-roll their own `os.makedirs`/`output_dir` logic
    instead) — worth consolidating on the existing utility everywhere instead of ad
    hoc per-script path-building.
-5. **Array-task sweep harness.** Five sweep drivers now exist under
-   `examples/directional_coupler/python/` —
+5. **Array-task sweep harness.** *(2026-07-31 — the five drivers this item
+   named moved to `examples/directional_coupler/archive/`, retired pending
+   new sweeping functionality once every device is verified; this
+   recommendation is unaffected and applies to whatever replaces them.)* Five
+   sweep drivers existed under `examples/directional_coupler/python/` —
    `directional_coupler_fdtd_sweep.py`, `..._fdtd_resolution_sweep.py`,
    `..._hybrid_modes_sweep.py`, `..._hybrid_resolution_sweep.py`, and
    `..._hybrid_stub_sweep.py` — and every one hand-copies the same harness:
@@ -1339,6 +1463,35 @@ lives in "Current library reference" above, not here.
    mirror would leave a published tutorial silently teaching the old
    convention. jupytext pairing (or generating the notebooks from the scripts)
    plus a CI check that the pair is in sync removes the whole class of drift.
+
+   **The predicted drift happened, and it was found by audit rather than by
+   anything failing (2026-07-31).** Diffing every notebook's constants against
+   its script turned up four mismatches, three of them from one pass:
+
+   | file | notebook | script | |
+   |---|---|---|---|
+   | `directional_coupler_hybrid` | `N_MODES = 6` | **5** | item 9 missed it |
+   | `mmi_1x2_hybrid` | `N_MODES = 12` | **8** | item 9 missed it |
+   | `mmi_2x2_hybrid` | `N_MODES = 15` | **14** | item 9 missed it |
+   | `directional_coupler_fdtd` | `COUPLING_LENGTH = 15.13` | 15.15 | **script** was wrong |
+
+   `fdtd_vs_EME_mode_validation.md` item 9 called itself a cross-device pass and
+   updated every script; no notebook moved. The 1×2's stale 12 is the worst of
+   them — that is the exact configuration `mmi_1x2_validation.md` gap 3 identified
+   as *the* failure mode (degenerate bands piling up at cutoff on SOI_160), so
+   running that tutorial reproduced a known-bad basis.
+
+   The fourth is the reverse and the more interesting one: the notebook was
+   right. `COUPLING_LENGTH` was deliberately set to 15.13 in four places with
+   documented reasoning (item 5's ground-truth crossing 15.129 µm, not the
+   hybrid's grid-snapped 15.151, because three of the four users are full-device
+   FDTD runs — `archive/dc_validation_20260727.md` item 14). Commit `e85b350`,
+   whose message is *"Remove cached example simulation files for ring resonator
+   hybrid…"*, moved `directional_coupler_fdtd.py` to 15.15 without mentioning it.
+   A physics constant in a reference run drifted inside a cache-cleanup commit
+   and nothing noticed for two days. All four are corrected; the case for
+   generating notebooks from scripts, and for keeping unrelated changes out of
+   cleanup commits, is now empirical rather than hypothetical.
 
 ## Not recommending
 
