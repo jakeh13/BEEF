@@ -58,9 +58,76 @@ a real, unfinished library gap — `CompoundGeometry` cannot back
 `FDTDSolver.solve()`'s single-domain path — with one genuine sub-bug found and
 fixed along the way and the larger design question correctly left alone.
 
-Last, item 6 (layer 2, completeness) got its reusable tool, the same way item 7
+Item 6 (layer 2, completeness) got its reusable tool, the same way item 7
 (layer 3) got one on 2026-07-30: generic function built and tested, an actual
-device-level exercise run explicitly deferred rather than rushed.
+device-level exercise run explicitly deferred rather than rushed. Then, at the
+user's direction, all five directional-coupler sweep drivers and their batch
+scripts were archived pending new, more general sweeping functionality. Last,
+the mux's own hybrid exercise run (job 11585847) timed out after its full 5h
+budget — a plain resubmit once the disk cache was confirmed to have carried
+sections 0-3 forward, not a reshape, since the batch script's cost estimate
+wasn't wrong, the device was just this expensive.
+
+### Found — job 11585847 timed out after its full 5h; disk cache carried sections 0-3 forward, resubmitted as 11590663
+
+Gap 6's mux hybrid exercise run (`modal_multiplexer_hybrid.py`, 4 nodes × 24
+ranks, `-t 300`) hit `State=TIMEOUT` at 13:42, `ExitCode=0:0` — SLURM killed
+it, it did not crash. Reading `example_sim_cache/` mtimes against the script's
+fixed section order (0 input FDTD, 1 EME MMI1 body, 2 FDTD transition, 3 EME
+MMI2 body — a 2h17m `solve_section_length_sweep` call, by far the single most
+expensive piece — 4 output FDTD, once per port) shows sections 0-3 fully
+cached by 13:40:31, 1m41s before the kill, with the log tail mid-way through
+building the first section-4 (output) FDTD grid. **Net: zero of the 3 per-port
+section-4 solves completed**, but the entire shared prefix is now on disk.
+
+Resubmitted unchanged as **11590663** — nothing touched since the original
+08:41 submission changes `modal_multiplexer_hybrid.py`'s or the solvers'
+cache fingerprints, so a clean hit on sections 0-3 is expected, leaving only
+the 3 section-4 solves as real new work (comparable single-section FDTD
+solves earlier in the same log took 5-33 min, well inside the unchanged 5h
+budget). `running_jobs.md` and `modal_multiplexer_validation.md` gap 6
+corrected — both had the job recorded as still `RUNNING`, and one line in
+gap 3 read "has run fine (job 11585847) the whole time," which was true of
+`solve_section()` never hitting the `CompoundGeometry.polygons()` bug but
+overstated the job's own outcome.
+
+### Measured — material model work item 4 closed for the mode-solve half (job 11588997)
+
+The re-run of `verify_item_8_dispersive_convergence.py` after its `dispersive=`
+plumbing fix (below) completed in 1:56:53. At the coupler body's band centre,
+dispersion changes nothing: identical convergence resolution to the
+non-dispersive column at every threshold tested. At the band edge — the column
+that actually matters, since centre is near-inert by construction — the 1e-3
+threshold moves from res 60 to res 80 under dispersion, but item 11 already
+pins production's EME resolution at 80 for an unrelated reason (Δβ on this
+same cross-section), so the dispersive requirement lands exactly on what
+already ships. The one real gap: at the tightest threshold (3e-5) the edge
+never converges under dispersion within the tested range (20-120), though the
+dispersive-vs-non-dispersive difference itself oscillates at noise-floor
+levels with no resolution trend. **Verdict: the proposed 11-array-task,
+up-to-24h full-device sweep is not warranted** at the tolerance item 11
+actually used. Full table in `material_model_validation.md` work item 4;
+`running_jobs.md` updated.
+
+### Added — `verify_mmi_2x2_gap2_dbeta.py`, testing the right quantity for mmi_2x2's own resolution question (job 11590785, in flight)
+
+`mmi_2x2_validation.md` gap 2 measured the MMI body's fundamental n_eff still
+moving at res 100 but explicitly declined to conclude anything from it — the
+doc names item 11's coupler lesson (sweep Δβ, not T_cross) as the reason.
+Applied here: a 2×2 MMI's self-imaging length depends on the beat length
+between its two lowest guided modes, Δβ_01 = 2π/λ·(n_eff[0]-n_eff[1]), not
+either mode's own n_eff — same logic, different device, different mode pair.
+New script sweeps res 40/60/80/100/120 measuring Δβ_01 directly via
+`EMESolver.compute_modes(num_modes=2)` (cheap by construction — MPB solves
+the lowest N bands in one call, so 2 modes instead of the device's real 14
+costs little extra). A login-node smoke check at res 40 alone measured 206 s
+(`OMP_NUM_THREADS=1`) — slower than expected for 2 modes — so the full sweep
+runs as a proper batch job instead
+(`batch/verification/run_mmi_2x2_gap2_dbeta.batch`, 1 node/8 cpus/180 min).
+Chosen over an mmi_2x2 golden test (notes.md High-level #1) at the user's
+direction: `mmi_2x2_validation.md`'s own `## Order` section sequences golden
+tests after gap 2 closes, not just after gaps 5/6 — a sequencing this session
+had initially missed.
 
 ### Added — `interface_modes_convergence()`, the reusable layer-2 completeness check (item 6)
 

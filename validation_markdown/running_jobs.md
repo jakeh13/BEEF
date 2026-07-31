@@ -1,7 +1,9 @@
 # Active SLURM jobs — snapshot
 
-**Snapshot taken 2026-07-31, 13:05 EDT** (seventh snapshot of the day: 07-30
-21:46 → 07-31 08:22 re-queue → 08:46 → 10:35 → 10:53 → 12:05 → now). This is a point-in-time list, not a
+**Snapshot taken 2026-07-31, 13:44 EDT** (eighth snapshot of the day: 07-30
+21:46 → 07-31 08:22 re-queue → 08:46 → 10:35 → 10:53 → 12:05 → 13:05 → now).
+This update: 11585847 TIMEOUT confirmed and resubmitted as 11590663 (queued,
+awaiting 4 nodes). This is a point-in-time list, not a
 live view — job states, elapsed times and queue positions all move. Check
 `squeue -u jhiesener3` (or `sacct -j <id>` once finished) for current status;
 this file exists so the *purpose* of each job is recorded somewhere durable,
@@ -23,13 +25,14 @@ of billing minutes; `gts-sr108-gedc_main` had headroom). Cancelled all five
 | ~~11577986~~ → **11585849** | `beef_mmi_2x2_gap5` | ✅ **COMPLETED** 12:46, 0:18 — **worst max\|ΔT\| 0.0043 (0.82%), sign FLIPS across the band (not the 1×2's uniform signature); results folded in** | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 5 (comparison) |
 | ~~11578018~~ → **11585845** `[1-2]` | `beef_mmi_1x2_examples` | ✅ **COMPLETED** — `_1` 8:57, `_2` 1:46:59; both SMatrix files on disk | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 (data) |
 | ~~11578019~~ → **11585850** | `beef_mmi_1x2_gap5` | ✅ **COMPLETED** 10:28, 0:09 — **max\|ΔT\| 0.0359 (9.11%), results folded in** | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 (comparison) |
-| ~~11578026~~ → **11585847** `[0]` | `beef_modal_mux_examples` | 🟢 **RUNNING** (4:22 of 5h, 4 nodes) — meow-side guard now firing **6×/2 pairs** on the production path | [modal_multiplexer_validation.md](modal_multiplexer_validation.md) gap 6 (exercise run) |
+| ~~11578026~~ → ~~11585847~~ → **11590663** `[0]` | `beef_modal_mux_examples` | 11585847 ❌ **TIMEOUT** 13:42 (full 5h, 4 nodes) — sections 0-3 (both EME bodies incl. a 2h17m length-sweep, input+transition FDTD) cached to disk before it died mid-section-4; resubmitted unchanged as **11590663 🟢 RUNNING**, cache should skip straight to the un-finished per-port output section | [modal_multiplexer_validation.md](modal_multiplexer_validation.md) gap 6 (exercise run) |
 | ~~**11586046**~~ → **11588309** | `beef_diagnose_items_11_12` | 11586046 ❌ **CANCELLED** 11:12 (hung, not slow); refixed → **11588309 ✅ COMPLETED 11:50, 34:55 — BOTH ITEMS RESOLVED:** item 11 closed (all four grids agree at res 40 too), item 12 decisive (laddering recovers a 14th guided mode at equal cost) | [fdtd_vs_EME_mode_validation.md](fdtd_vs_EME_mode_validation.md) items 11 + 12; it also opened item 14 |
 | **11586098** | `beef_diagnose_item_13` | ✅ **COMPLETED** 10:50, 1:54:50 — **C vs A inert (max \|Δn_eff\| 0.000e+00), cost 3.2×; results folded in** | [fdtd_vs_EME_mode_validation.md](fdtd_vs_EME_mode_validation.md) item 13 |
-| ~~**11586986**~~ → **11588997** | `beef_dispersive_convergence` | 11586986 ❌ **CANCELLED** 12:00 — **it was measuring nothing**, `dispersive=` never reached the mode solve (library bug, fixed); refixed → **11588997 🟢 RUNNING** (1:03 of 8h), liveness check passed at 7.87e-03 | [material_model_validation.md](material_model_validation.md) work item 4 (cheap half) |
+| ~~11586986~~ → ~~11588997~~ | `beef_dispersive_convergence` | 11586986 ❌ **CANCELLED** 12:00 — **it was measuring nothing**, `dispersive=` never reached the mode solve (library bug, fixed); refixed → **11588997 ✅ COMPLETED** 13:56, 1:56:53 — **pin holds at centre, holds at the edge only up to the 1e-3 tolerance production actually uses (needs res 80, not 60, under dispersion — which is what's already shipped); does not fully converge at 3e-5 at the edge within res 20–120** | [material_model_validation.md](material_model_validation.md) work item 4 (cheap half) |
 | **11588569** | `beef_audit_mmi_2x2_gap6` | ✅ **COMPLETED** 11:58, 20:18 — **gap 6 closed:** identity `[0…13]`, worst \|Δn_eff\| 0.0007, 14/14 guided, **neither guard fired** | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 6 |
 | **11589770** | `beef_mmi_1x2_hybrid_calibrated` | 🟢 **RUNNING** (21:24 of 5h) | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 follow-up (calibration) |
 | **11589779** | `beef_mmi_1x2_gap5_calibrated` | PENDING (dep on 11589770) | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 follow-up (comparison) |
+| **11590785** | `beef_mmi_2x2_gap2_dbeta` | 🟢 **RUNNING** | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 2 (does Δβ_01, not n_eff[0], converge?) |
 | ~~11589771~~ ~~11589899~~ ~~11589936~~ | `beef_modal_mux_fdtd` | ❌ **BLOCKED, do not resubmit** — three cheap failures (~15 s each) converged on a real library gap: `CompoundGeometry` cannot back `FDTDSolver.solve()` at all | [modal_multiplexer_validation.md](modal_multiplexer_validation.md) gap 3 |
 
 **Six items resolved today; three jobs cancelled as unproductive, two refixed
@@ -190,7 +193,7 @@ and rationale are unchanged from the 07-30 submission.
   `example_output/verification/mmi_1x2_hybrid_vs_fdtd/`. Provenance records
   beef `1cc8edc`.
 
-### 11585847 `[0]` — `beef_modal_mux_examples`
+### 11585847 `[0]` → 11590663 — `beef_modal_mux_examples`
 - **Script:** `batch/run_modal_multiplexer_examples.batch` → `make
   modal_multiplexer_hybrid`
 - **Resources:** 4 nodes × 24 ranks, 5h limit — the most expensive single
@@ -221,6 +224,35 @@ and rationale are unchanged from the 07-30 submission.
   upstream guard rejected the duplicate before it reached `T`, but is not yet
   evidence the scan works. Full reading in `modal_multiplexer_validation.md`
   gap 6.
+- **❌ TIMEOUT 2026-07-31 13:42, full 5h.** `sacct` confirms `State=TIMEOUT`,
+  `ExitCode=0:0` — killed by SLURM mid-run, not a crash. The batch script's `-t
+  300` was sized off the earlier device estimates, not this device's own cost:
+  this is the repo's most expensive hybrid chain (16 modes × 4 interfaces) and
+  its own `save_dir`/`cache=` mean a re-run doesn't restart from zero, so the
+  fix is a plain resubmit rather than a reshape (contrast the 11586046 case,
+  where the batch script's *cost model* was wrong and needed reshaping, not
+  just more wall clock).
+  - **What finished, read off `example_sim_cache/` mtimes against the
+    script's fixed section order (0 input FDTD, 1 EME MMI1 body, 2 FDTD
+    transition, 3 EME MMI2 body, 4 output FDTD, once per port):** section 0 by
+    08:50, section 1 (EME) by 10:10, section 2 (FDTD transition,
+    `CompoundGeometry`) by 10:23, then a **2h17m** gap to 12:45 for section 3's
+    EME solve (a `solve_section_length_sweep` call — by far the single most
+    expensive piece of this device), then one more EME
+    `CompoundGeometry`-keyed cache write at 13:40:31 — 1m41s before the kill.
+    The tail of `reports/11585847_0.out` is mid-way through building the first
+    section-4 (output) FDTD grid when SLURM cancelled it. **Net: sections 0-3
+    are fully cached; zero of the 3 per-port section-4 solves completed.**
+  - **Resubmitted unchanged as 11590663** (same `batch/run_modal_multiplexer_
+    examples.batch`, no script edits — nothing touched since 08:41 changes
+    `modal_multiplexer_hybrid.py`'s or the solvers' cache fingerprints, so a
+    clean disk-cache hit on sections 0-3 is expected). Remaining real work is
+    the 3 section-4 FDTD solves; comparable single-section FDTD solves earlier
+    in this same log took 5-33 min, so the 5h budget should now be generous
+    rather than tight. Watch `reports/11590663_0.out` — if it doesn't reach
+    `example_output/modal_multiplexer/modal_multiplexer_hybrid/` output within
+    the first ~15 min, the cache did not hit as expected and this entry needs
+    another look.
 
 ### 11586046 — `beef_diagnose_items_11_12` — ❌ CANCELLED (hung), superseded by 11588309
 - **Script:** `batch/verification/run_diagnose_items_11_12.batch` → two python
@@ -429,6 +461,26 @@ and rationale are unchanged from the 07-30 submission.
   20→120, all seven rows) is valid and is preserved in that entry, so nothing is
   lost by superseding this job.
 
+### 11588997 — `beef_dispersive_convergence` (replaces 11586986) — ✅ COMPLETED
+- **Same script, post-fix.** `reports/11588997.out`, 1:56:53.
+- **Result:** at band centre (1.55 µm) dispersion changes nothing — identical
+  convergence resolution to the non-dispersive column at every threshold
+  (1e-3/3e-4/1e-4/3e-5 all first clear at res 60/100/100/100 either way). At
+  the band edge (1.60 µm, where dispersion is not near-inert by construction),
+  the 1e-3 threshold moves from res 60 to res 80 under dispersion — but item
+  11 already pins production's EME resolution at 80, so the dispersive case's
+  actual requirement lands exactly on what already ships; nothing currently
+  deployed was ever run at res 60. The tightest threshold (3e-5) is the one
+  gap: non-dispersive clears it everywhere by res 100, dispersive never drops
+  under it at the edge inside the tested range (20–120) — though the raw
+  dispersive-vs-non-dispersive Δn_eff difference oscillates at ±(3–5)e-4 with
+  no resolution trend, reading like noise floor rather than a growing effect.
+- **Verdict: the proposed node-day full-device sweep (11 array tasks × 2 nodes
+  × 24 ranks, up to 24h) is not warranted** at the 1e-3-class tolerance item 11
+  actually used to set the shipped resolution. Full table in
+  `material_model_validation.md` work item 4, now closed for the mode-solve
+  half.
+
 ### 11589770 — `beef_mmi_1x2_hybrid_calibrated`
 - **Script:** `batch/run_mmi_1x2_hybrid_calibrated.batch` (new) →
   `MMI1X2_CALIBRATE_BODY=1 make mmi_1x2_hybrid`.
@@ -456,6 +508,26 @@ and rationale are unchanged from the 07-30 submission.
 - **Why:** answers whether `calibrate_body_neff` closes this device's 9.11%
   the way it closed the coupler's ~5%. Compare its worst max|ΔT| against
   11585850's 0.0359 once both have run.
+
+### 11590785 — `beef_mmi_2x2_gap2_dbeta`
+- **Script:** `batch/verification/run_mmi_2x2_gap2_dbeta.batch` (new) →
+  `examples/verification/python/verify_mmi_2x2_gap2_dbeta.py` (new).
+- **Resources:** 1 node, 8 cpus, serial, 180 min budget. Eigensolve only —
+  `EMESolver.compute_modes()` at `num_modes=2`, no FDTD, no time-stepping.
+- **Why:** `mmi_2x2_validation.md` gap 2's existing measurement (job 11500536)
+  shows the MMI body's fundamental n_eff still moving at res 100, but that
+  doc explicitly declines to conclude anything from an arbitrary quantity —
+  same "sweep the wrong thing, hide the real error" lesson item 11 taught on
+  the coupler (there: T_cross vs Δβ). For a 2×2 MMI the physically load-bearing
+  quantity is Δβ_01 = 2π/λ·(n_eff[0]−n_eff[1]) between the two lowest guided
+  modes — the beat length `mm_length=28.0` was chosen against — not either
+  mode's own n_eff. This sweeps res 40/60/80/100/120 measuring Δβ_01 directly,
+  the same pattern item 11 used for the coupler's even/odd pair.
+- **Cost note:** a login-node smoke check (`OMP_NUM_THREADS=1`, res 40 only)
+  measured 205.8 s for one point — slower than expected for a 2-mode solve,
+  hence the batch submission (8 threads) rather than running the full sweep
+  on the login node. 180 min budgets generously for the higher-resolution
+  points, whose mesh cost does not scale linearly with `res`.
 
 ### 11589771 / 11589899 / 11589936 — `beef_modal_mux_fdtd` — ❌ BLOCKED, do not resubmit
 - **Script:** `batch/run_modal_multiplexer_fdtd.batch` (new) → `make

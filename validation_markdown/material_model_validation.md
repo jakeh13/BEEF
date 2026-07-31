@@ -268,13 +268,45 @@ fitted form is one meep Lorentzian by construction. Verified end to end — meep
    the *step* between consecutive resolutions rather than the absolute value — the same
    criterion item 11 and `mode_spectrum_convergence.py` use.
 
-   - **Convergence resolution unchanged** ⇒ item 11's res-80 pin is inherited; the full
-     device sweep becomes confirmation rather than discovery and can be scoped down.
-   - **Convergence resolution moves** ⇒ the full sweep is required, and this says which
-     range it must cover instead of guessing.
-
-   It cannot speak for the *cascade's S-matrix* convergence, which only the full sweep
-   measures — just for the quantity the pin was actually set on.
+   > ### ✅ MEASURED 2026-07-31 — job 11588997 (1:56:53). The pin holds where production
+   > uses it; it does not hold at every threshold.
+   >
+   > First resolution whose step drops under each threshold, non-dispersive vs dispersive:
+   >
+   > | threshold | centre — non-disp | centre — disp | edge — non-disp | edge — disp |
+   > |---|---|---|---|---|
+   > | 1e-3 | 60 | 60 | 60 | **80** |
+   > | 3e-4 | 100 | 100 | 100 | 100 |
+   > | 1e-4 | 100 | 100 | 100 | 100 |
+   > | 3e-5 | 100 | 100 | 100 | **not reached by 120** |
+   >
+   > **At band centre, dispersion changes nothing** — identical convergence resolution at
+   > every threshold, the clean "unchanged" case this item's setup anticipated. The edge is
+   > where it has to be judged instead (dispersion is near-inert at centre by construction,
+   > per the script's own read-me), and there it is not free: the 1e-3 threshold moves from
+   > res 60 to res 80 under dispersion.
+   >
+   > **That move does not cost anything production doesn't already have.** Item 11 already
+   > pins the shipped EME resolution at 80, for an unrelated reason (Δβ on this exact
+   > cross-section). The dispersive case's actual requirement, measured here, lands exactly
+   > on the resolution already shipped — so while a literal reading of the two-branch
+   > criterion above ("moved ⇒ full sweep required") is triggered by the 60→80 change, there
+   > is no gap between what this measures and what is already running: nothing currently
+   > deployed was ever simulated at res 60.
+   >
+   > **What does not close:** at the tightest threshold (3e-5), non-dispersive converges
+   > everywhere by res 100; dispersive converges at centre but **never drops under 3e-5 at
+   > the edge inside the tested range (20–120)**. The raw dispersive-minus-non-dispersive
+   > Δn_eff table oscillates at ±(3–5)e-4 with no visible trend across resolution — reading
+   > like noise-floor disagreement rather than a growing one — but "fully converged at any
+   > tolerance" cannot be claimed at the edge under dispersion from this data.
+   >
+   > **Verdict on the node-day sweep this item originally proposed: not warranted**, at the
+   > 1e-3-class tolerance item 11 actually used to set the shipped resolution. Downgrading a
+   > global material-model check to "did the specific number production ships change" is
+   > exactly what this cheap serial task was for. This closes the mode-solve half of work
+   > item 4; it still says nothing about the cascade's *S-matrix* convergence (only the full
+   > sweep would), and dispersion itself remains opt-in (`dispersive=False` default).
 
 5. **Add the `HybridSolver` guard from `notes.md` #9** — assert the FDTD and EME sections
    resolve the same index at the same wavelength — as the regression test for this work.

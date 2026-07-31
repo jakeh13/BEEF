@@ -25,9 +25,11 @@ That is a driver-level defect, not a mesh one, and it is tracked as
 specific to this device. **Items 11, 12 and 13 all closed 2026-07-31** (jobs
 11588309, 11586098) — the guard's diagnostic grid is clear at res 40, the EME
 guard's over-request is inert, and k-seed laddering recovers one guided mode the
-shipped fixed seed loses. Gap 6's exercise run (job 11585847) is **running** and
-has already fired the meow-side guard six times on the production path; see
-gap 6.
+shipped fixed seed loses. Gap 6's exercise run (job 11585847) **TIMED OUT**
+2026-07-31 13:42 after the full 5h, having already fired the meow-side guard
+six times on the production path; resubmitted unchanged as **11590663** (disk
+cache carries sections 0-3 forward, so it should reach the un-finished
+per-port output section quickly) — see gap 6.
 
 **Status 2026-07-30:** gap 1 (mode identity) was **run and FAILED — and the
 root cause was not what it looked like.** All four interfaces disagree between
@@ -287,7 +289,9 @@ So it has the most ways to be wrong and the fewest ways to find out.
    segment type" (its own docstring). `HybridSolver` never hits this because
    it only ever calls `solve_section()`, which uses `section_gds()`/
    `to_gds_eme()` instead — this device's own `modal_multiplexer_hybrid.py`
-   has run fine (job 11585847) the whole time.
+   has never hit this `polygons()` bug through job 11585847/11590663's real
+   `solve_section()` calls, independent of that job's own TIMEOUT (a
+   wall-clock/scheduling problem, not this one).
 
    Confirmed by three cheap failed submissions (11589771/11589899/11589936,
    ~15 s each — see `running_jobs.md`), not by inspection alone. One real,
@@ -464,6 +468,18 @@ So it has the most ways to be wrong and the fewest ways to find out.
      fired and a detector that cannot fire look identical. Gap 6's original ask
      (exercise the scan) is therefore still open at the time of writing; the run
      has ~2h45 left and three more interfaces to reach.
+
+   **❌ TIMEOUT 2026-07-31 13:42, full 5h — gap 6's original ask (exercise
+   `warn_on_transfer_duplicate`) is STILL open.** The job never reached a
+   third interface, let alone finished all output ports: `example_sim_cache/`
+   shows sections 0-3 (both EME bodies, input+transition FDTD) cached by
+   12:45, one more EME cache write at 13:40:31, then killed 1m41s later
+   mid-way through building the first section-4 (per-port output) FDTD grid.
+   No `transfer` line ever appeared in the log — still not distinguishable
+   from "cannot fire" per the same caveat above. Resubmitted unchanged as
+   **11590663**; the disk cache should skip straight past sections 0-3 this
+   time, leaving only the 3 per-port section-4 solves as real new work. See
+   `running_jobs.md` for the full accounting.
 
 ## Order
 
