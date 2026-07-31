@@ -66,7 +66,7 @@ from __future__ import annotations
 import numpy as np
 
 from beef.materials.stack import (
-    _REPARAM_LAM0_UM, reparam_lorentz, sellmeier_index,
+    reparam_lam0, reparam_lorentz, sellmeier_index,
 )
 
 # Bands the examples actually run. The C-band is the coupler's sweep; the
@@ -78,9 +78,10 @@ BANDS = {
     "full    1.26-1.70 (union)": (1.26, 1.70),
 }
 
-LAM0_DEFAULT = _REPARAM_LAM0_UM   # the shipped pole; see the degeneracy
-                                  # table below and the strip gate for why
-LAM0_TRIALS = (2.0, 3.0, 5.0, 10.0)
+# The shipped pole is derived per band (1.15 x band max), so there is no
+# single default -- this is the C-band's, used for the comparison tables.
+LAM0_DEFAULT = reparam_lam0((1.50, 1.60))
+LAM0_TRIALS = (1.84, 2.0, 3.0, 10.0)
 N_GRID = 201              # sample density across a band for the lstsq
 CONTRAST_WL = 1.55        # where the doc quotes the true Si/SiO2 ε contrast
 

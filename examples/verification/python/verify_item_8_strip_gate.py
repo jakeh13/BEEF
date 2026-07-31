@@ -44,18 +44,31 @@ from beef.materials.stack import (
     meep_medium, meep_medium_reparam, sellmeier_index,
 )
 
-WL = 1.55                 # where the baseline was measured
-BAND = (1.50, 1.60)       # C-band, the fit window (see the reparam script)
 RES = 40.0                # the baseline's resolution
-W_SI, H_SI = 0.45, 0.22   # 450 x 220 nm strip
+W_SI = 0.45               # 450 nm strip width
 CELL_Y, CELL_Z = 2.0, 2.0 # cladding span around it
 X_SPAN = 0.2              # short run of uniform waveguide; no propagation here
 BASELINE = 2.313398       # recorded non-dispersive n_eff (the doc's number)
 REVERTED = 2.363038       # what the eps_inf=1 attempt scored
 TOL = 0.002               # acceptance, per the validation doc
 
+# (label, core height um, band) -- every (stack, band) combination the examples
+# actually run. The original gate covered only the first row; SOI_160 is what
+# mmi_1x2 and the modal multiplexer use, and a 160 nm core confines far more
+# weakly, so proportionally more of the mode sits at the Si/SiO2 interface --
+# which is exactly where subpixel smoothing acts and therefore exactly what
+# this gate measures. A 220 nm pass does not transfer to it for free
+# (cf. mmi_1x2 gap 3 and modal_multiplexer gap 2, where SOI_160 behaved
+# differently from SOI_220 on unrelated axes).
+CASES = [
+    ("SOI_220, C-band (coupler, mmi_2x2, ring)", 0.22, (1.50, 1.60)),
+    ("SOI_220, O-band", 0.22, (1.26, 1.36)),
+    ("SOI_160, C-band", 0.16, (1.50, 1.60)),
+    ("SOI_160, O-band (mmi_1x2, modal_mux)", 0.16, (1.26, 1.36)),
+]
 
-def _solve_neff(si_med, sio2_med, label):
+
+def _solve_neff(si_med, sio2_med, label, h_si=0.22, wl=1.55):
     """Fundamental-mode n_eff of the strip under one pair of media.
 
     Subpixel smoothing is left at meep's default (`eps_averaging=True`) --
@@ -64,7 +77,7 @@ def _solve_neff(si_med, sio2_med, label):
     import meep as mp
 
     cell = mp.Vector3(X_SPAN, CELL_Y, CELL_Z)
-    geometry = [mp.Block(size=mp.Vector3(mp.inf, W_SI, H_SI),
+    geometry = [mp.Block(size=mp.Vector3(mp.inf, W_SI, h_si),
                          center=mp.Vector3(), material=si_med)]
     sim = mp.Simulation(
         cell_size=cell,
@@ -75,7 +88,7 @@ def _solve_neff(si_med, sio2_med, label):
         eps_averaging=True,
     )
     sim.init_sim()
-    f = 1.0 / WL
+    f = 1.0 / wl
     where = mp.Volume(center=mp.Vector3(), size=mp.Vector3(0, CELL_Y, CELL_Z))
     em = sim.get_eigenmode(f, mp.X, where, 1,
                            mp.Vector3(f * 2.4, 0, 0), parity=mp.NO_PARITY)
@@ -91,81 +104,77 @@ def _solve_neff(si_med, sio2_med, label):
     return neff, eps_inst
 
 
-def main():
+def _run_case(label, h_si, band_lo, band_hi):
+    """One (core height, band) combination. Returns (delta_B, delta_C, ok)."""
     import meep as mp
 
-    n_si = float(sellmeier_index("si", WL))
-    n_ox = float(sellmeier_index("sio2", WL))
-    print("=" * 74, flush=True)
-    print(f"Strip gate: {W_SI*1000:.0f} x {H_SI*1000:.0f} nm Si in SiO2, "
-          f"res {RES:.0f}, wl {WL} um", flush=True)
-    print(f"exact n_Si({WL}) = {n_si:.6f}   n_SiO2 = {n_ox:.6f}   "
+    wl = 0.5 * (band_lo + band_hi)
+    band = np.linspace(band_lo, band_hi, 21)
+    n_si = float(sellmeier_index("si", wl))
+    n_ox = float(sellmeier_index("sio2", wl))
+
+    print("\n" + "=" * 74, flush=True)
+    print(f"CASE: {label}", flush=True)
+    print(f"  {W_SI*1000:.0f} x {h_si*1000:.0f} nm Si in SiO2, res {RES:.0f}, "
+          f"band {band_lo}-{band_hi} um, solved at {wl:.3f}", flush=True)
+    print(f"  exact n_Si = {n_si:.6f}, n_SiO2 = {n_ox:.6f}, "
           f"true eps contrast = {n_si**2 - n_ox**2:.4f}", flush=True)
-    print(f"acceptance: |dn_eff| <= {TOL} vs arm A", flush=True)
     print("=" * 74, flush=True)
 
-    band = np.linspace(*BAND, 21)
-
-    print("\n--- A. non-dispersive (today's shipped behaviour) ---", flush=True)
     n_a, eps_a = _solve_neff(mp.Medium(index=n_si), mp.Medium(index=n_ox),
-                             "mp.Medium(index=n)")
-
-    print("\n--- C. legacy Sellmeier, eps_inf=1 (the REVERTED attempt) ---",
-          flush=True)
-    print("  If this does not reproduce the failure, the harness is not "
-          "measuring\n  what the original attempt measured and B proves "
-          "nothing.", flush=True)
+                             "A non-dispersive", h_si, wl)
     n_c, eps_c = _solve_neff(meep_medium("si"), meep_medium("sio2"),
-                             "eps_inf=1 + Lorentzians")
-
-    print("\n--- B. re-parameterised (UNDER TEST) ---", flush=True)
+                             "C legacy eps_inf=1 (reverted)", h_si, wl)
     n_b, eps_b = _solve_neff(meep_medium_reparam("si", band),
                              meep_medium_reparam("sio2", band),
-                             "eps_inf + 1 Lorentzian")
+                             "B re-parameterised", h_si, wl)
 
-    # ---- verdict ------------------------------------------------------
     d_b, d_c = n_b - n_a, n_c - n_a
-    print("\n" + "=" * 74, flush=True)
-    print("RESULTS", flush=True)
-    print("=" * 74, flush=True)
-    print(f"  A non-dispersive : {n_a:.6f}   (doc baseline {BASELINE:.6f}, "
-          f"delta {n_a - BASELINE:+.6f})", flush=True)
-    print(f"  C legacy eps_inf=1: {n_c:.6f}   dn vs A = {d_c:+.6f}   "
-          f"(doc recorded {REVERTED - BASELINE:+.6f})", flush=True)
-    print(f"  B re-parameterised: {n_b:.6f}   dn vs A = {d_b:+.6f}", flush=True)
-
-    print("\n  Harness validity (does C reproduce the known failure?)",
-          flush=True)
-    if abs(d_c) > 10 * TOL:
-        print(f"    YES -- C is off by {d_c:+.4f}, the smoothing loss is real "
-              "here.\n    B's number is therefore evidence about the fix.",
-              flush=True)
-        harness_ok = True
-    else:
-        print(f"    NO -- C only moved {d_c:+.4f}. This harness does not "
-              "reproduce the\n    original failure, so B tells us nothing. "
-              "Do NOT pass the gate on it.", flush=True)
-        harness_ok = False
-
-    print(f"\n  eps_inf(Si) actually smoothed: A {eps_a:.4f} | C {eps_c:.4f} "
+    harness_ok = abs(d_c) > 10 * TOL
+    passed = harness_ok and abs(d_b) <= TOL
+    print(f"  -> C reproduces the failure: "
+          f"{'YES' if harness_ok else 'NO -- result inconclusive'} "
+          f"({d_c:+.6f})", flush=True)
+    print(f"  -> B dn_eff vs A: {d_b:+.6f}   "
+          f"{'PASS' if passed else ('INCONCLUSIVE' if not harness_ok else 'FAIL')}"
+          f"  (tol {TOL})", flush=True)
+    print(f"  -> eps_inf(Si) smoothed: A {eps_a:.4f} | C {eps_c:.4f} "
           f"| B {eps_b:.4f}", flush=True)
-    print("    C at 1.0 IS the mechanism: nothing for subpixel averaging to\n"
-          "    act on. B restores it, which is the whole point of the re-fit.",
-          flush=True)
+    return d_b, d_c, passed
 
-    print("\n  GATE", flush=True)
-    if not harness_ok:
-        print("    INCONCLUSIVE -- fix the harness before reading the gate.",
-              flush=True)
-    elif abs(d_b) <= TOL:
-        print(f"    PASS -- |dn_eff| = {abs(d_b):.6f} <= {TOL}. The "
-              "re-parameterisation keeps\n    subpixel smoothing. Work items 4 "
-              "(resolution sweeps) and 5's hard\n    assert are unblocked.",
-              flush=True)
-    else:
-        print(f"    FAIL -- |dn_eff| = {abs(d_b):.6f} > {TOL}. Smoothing is "
-              "still degraded;\n    do not enable dispersion by default.",
-              flush=True)
+
+def main():
+    print("=" * 74, flush=True)
+    print("Strip gate -- every (material stack, band) the examples run",
+          flush=True)
+    print(f"acceptance: |dn_eff| <= {TOL} vs the non-dispersive arm, and arm C",
+          flush=True)
+    print("must reproduce the reverted attempt's failure or the case is void.",
+          flush=True)
+    print("=" * 74, flush=True)
+
+    results = {}
+    for label, h_si, (lo, hi) in CASES:
+        results[label] = _run_case(label, h_si, lo, hi)
+
+    print("\n" + "=" * 74, flush=True)
+    print("SUMMARY", flush=True)
+    print("=" * 74, flush=True)
+    print(f"  {'case':<40} {'dn_eff(B)':>11} {'dn_eff(C)':>11} {'gate':>8}",
+          flush=True)
+    print(f"  {'-'*40} {'-'*11} {'-'*11} {'-'*8}", flush=True)
+    for label, (d_b, d_c, ok) in results.items():
+        print(f"  {label:<40} {d_b:+11.6f} {d_c:+11.6f} "
+              f"{'PASS' if ok else 'FAIL':>8}", flush=True)
+
+    every = all(ok for _, _, ok in results.values())
+    print("\n  OVERALL: " + ("PASS -- every stack/band combination the examples "
+                             "use clears the\n  gate, so dispersion is safe to "
+                             "enable across the device set."
+                             if every else
+                             "FAIL -- at least one combination does not clear "
+                             "the gate.\n  Dispersion must not be enabled by "
+                             "default for the affected devices."), flush=True)
     print("=" * 74, flush=True)
 
 

@@ -14,7 +14,7 @@ import pytest
 
 from beef.materials.stack import (
     MaterialStack,
-    _REPARAM_LAM0_UM,
+    reparam_lam0,
     meep_medium_reparam,
     reparam_lorentz,
     resolved_material_config,
@@ -64,14 +64,29 @@ class TestReparamFit:
 
     def test_band_approaching_the_pole_is_refused(self):
         """The fitted term is near-resonant as the band approaches lam0, so it
-        must raise rather than return a model that is quietly meaningless."""
-        with pytest.raises(ValueError, match="too close to the fitted pole"):
-            reparam_lorentz("si", np.linspace(1.8, 1.95, 11))
+        must raise rather than return a model that is quietly meaningless.
 
-    def test_the_widest_example_band_still_clears_the_pole(self):
-        """1.26-1.70 is the union of every band the examples run; it must not
-        trip the guard at the shipped lam0."""
-        reparam_lorentz("si", np.linspace(1.26, 1.70, 21))
+        Only reachable with an EXPLICIT lam0: the derived pole is 1.15x the
+        band's top edge and the guard trips at 1.10x, so auto-derived fits
+        clear their own guard by construction. That is the intended behaviour,
+        and this pins the guard for callers who override it.
+        """
+        with pytest.raises(ValueError, match="too close to the fitted pole"):
+            reparam_lorentz("si", C_BAND, lam0=1.65)
+
+    def test_derived_lam0_always_clears_its_own_guard(self):
+        """The auto rule must never produce a fit it would itself refuse —
+        including on the widest band the examples span (1.26-1.70)."""
+        for band in (C_BAND, O_BAND, np.linspace(1.26, 1.70, 21)):
+            reparam_lorentz("si", band)          # must not raise
+            assert reparam_lam0(band) > float(band.max()) * 1.10
+
+    def test_lam0_tracks_the_band(self):
+        """A single global pole cannot serve both bands — SOI_160/O-band needs
+        <= 1.60 to clear the strip gate while the C-band's own guard floor is
+        1.76. The pole must therefore move with the band."""
+        assert reparam_lam0(O_BAND) < reparam_lam0(C_BAND)
+        assert reparam_lam0(O_BAND) < 1.60
 
     def test_global_fit_is_worse_than_the_error_being_fixed(self):
         """Finding 1: this cannot be fit once across the full example range,
@@ -113,11 +128,35 @@ class TestSmoothableContrastIsRestored:
 
     def test_built_medium_disperses_to_the_fit_accuracy(self):
         """meep's own evaluation of the Medium must track Sellmeier across the
-        band, not just at one point -- otherwise nothing was gained."""
+        band, not just at one point -- otherwise nothing was gained.
+
+        Bound is 1e-3 rather than tighter because the shipped pole trades fit
+        accuracy for a better smoothed/unsmoothed split; what matters is that
+        this stays far below the ~0.008 the frozen medium is wrong by at the
+        band edges, which the next test pins directly.
+        """
         med = meep_medium_reparam("si", C_BAND)
         for wl in (1.50, 1.55, 1.60):
             n_meep = float(np.sqrt(med.epsilon(1.0 / wl)[0][0].real))
-            assert abs(n_meep - float(sellmeier_index("si", wl))) < 5e-4
+            assert abs(n_meep - float(sellmeier_index("si", wl))) < 1e-3
+
+    def test_dispersive_beats_the_frozen_medium_by_a_wide_margin(self):
+        """The actual value proposition, stated as a test rather than a claim:
+        across the band the fitted medium must track n(λ) far better than a
+        single index frozen at band centre — which is what ships today."""
+        for band in (C_BAND, O_BAND):
+            med = meep_medium_reparam("si", band)
+            frozen = float(sellmeier_index("si", float(np.mean(band))))
+            worst_fit = worst_frozen = 0.0
+            for wl in (float(band.min()), float(band.max())):
+                true = float(sellmeier_index("si", wl))
+                fit = float(np.sqrt(med.epsilon(1.0 / wl)[0][0].real))
+                worst_fit = max(worst_fit, abs(fit - true))
+                worst_frozen = max(worst_frozen, abs(frozen - true))
+            assert worst_fit < 0.25 * worst_frozen, (
+                f"dispersive error {worst_fit:.2e} is not clearly better than "
+                f"the frozen medium's {worst_frozen:.2e}"
+            )
 
     def test_medium_has_real_dielectric_contrast(self):
         med = meep_medium_reparam("si", C_BAND)
@@ -168,7 +207,7 @@ class TestCacheFingerprint:
         fit = reparam_lorentz("si", C_BAND)
         assert eps_inf == pytest.approx(fit[0], abs=1e-9)
         assert sigma == pytest.approx(fit[1], abs=1e-9)
-        assert lam0 == pytest.approx(_REPARAM_LAM0_UM)
+        assert lam0 == pytest.approx(reparam_lam0(C_BAND))
 
     def test_different_bands_give_different_keys(self):
         """The media are per-run now, so two bands must not collide."""

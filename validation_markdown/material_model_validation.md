@@ -243,7 +243,26 @@ Arm A lands 0.0017 below the doc's 2.313398 baseline — this harness is a bare 
 2×2 µm cell, not whatever the original ad-hoc measurement used. Read Δ *within* a run, not
 absolute n_eff across runs; the C-vs-A reproduction is what validates that.
 
-**λ₀ changed 10.0 → 2.0, and the gate is what chose it.** At λ₀ = 10 the gate **failed**
+**λ₀ is now derived per band (1.15 × band max), not a constant — and the gate is what
+forced that.** The original gate covered only SOI_220; extending it to SOI_160 (2026-07-31,
+same day) **failed** on the O-band at −0.00375, the combination `mmi_1x2` and the modal
+multiplexer both use. A 160 nm core confines weakly, so more of the mode sits at the
+Si/SiO2 interface where smoothing acts — arm C's failure is ~2× larger there (+0.108 vs
++0.050), and a SOI_220 pass does not transfer.
+
+The conflict is **structural, not tuning**: SOI_160/O-band needs λ₀ ≤ 1.60, while the
+C-band's own near-resonance floor is 1.10 × 1.60 = 1.76. No single global λ₀ satisfies
+both. Scaling λ₀ to the band removes the conflict and clears the guard by construction:
+
+| case | λ₀ = 1.15·max | λ₀ = 1.25·max |
+|---|---|---|
+| SOI_220 C-band | −0.00033 ✅ | −0.00069 ✅ |
+| SOI_220 O-band | −0.00010 ✅ | −0.00060 ✅ |
+| SOI_160 C-band | −0.00109 ✅ | −0.00172 ✅ |
+| SOI_160 O-band | **−0.00141 ✅** | **−0.00239 ❌** |
+
+**Historical note — λ₀ 10.0 → 2.0 was the first correction, since superseded by the rule
+above.** The reasoning that produced it still stands: At λ₀ = 10 the gate **failed**
 (−0.00222 C-band, −0.00258 O-band) — the doc's own risk *"ε∞ contrast is 104% of the true
 contrast… whether that biases n_eff, and in which direction, is not predictable from the
 fit"* materialising, biasing **low**. λ₀ sets how the permittivity splits between the

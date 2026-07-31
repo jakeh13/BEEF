@@ -90,40 +90,55 @@ def meow_material(kind: str):
     return _material_cache[key]
 
 
-# Pinned pole for the re-parameterised single-Lorentzian fit (µm), sitting
-# above every band the examples use so the term is smooth and non-resonant
-# there. It CANNOT be fitted: for lam0 >> lambda only the ratio sigma/lam0^2 is
-# determined, so a free fit walks that ridge to its bounds. Pinning it also
-# makes the model linear in the two remaining parameters -- a deterministic
-# lstsq rather than an optimiser in the medium-build path.
+# Pole for the re-parameterised single-Lorentzian fit, as a MULTIPLE of the
+# band's upper edge rather than a fixed wavelength.
 #
-# **2.0, not 10.0 — chosen by the strip-test gate, not by fit quality.**
-# lam0 sets how the permittivity splits between the SMOOTHED eps_inf and the
-# UNSMOOTHED susceptibility, and only the split decides whether subpixel
-# averaging still works. Larger lam0 fits marginally better but pushes eps_inf
-# past the true contrast (104% at lam0=10) and leaves a large unsmoothed
-# residual, which biases n_eff low:
+# It cannot be *fitted*: for lam0 >> lambda only the ratio sigma/lam0^2 is
+# determined, so a free fit walks that ridge to its bounds. Pinning it makes the
+# model linear in the two remaining parameters -- a deterministic lstsq, no
+# optimiser in the medium-build path.
 #
-#   lam0    dn_eff vs non-dispersive        sigma (C/O band)   fit error
-#    10.0   -0.00222 (C) / -0.00258 (O)     17.6 / 37.7        2.4-3.3% of swing
-#     3.0   -0.00160 (C) / -0.00203 (O)      0.89 / 2.30       3.1-3.9%
-#     2.0   -0.00069 (C) / -0.00123 (O)      0.12 / 0.51       5.2-5.5%
+# **Scaled to the band, because no single global value works.** lam0 sets how
+# the permittivity splits between the SMOOTHED eps_inf and the UNSMOOTHED
+# susceptibility, and only that split decides whether subpixel averaging still
+# works. Larger lam0 fits better but leaves more unsmoothed, biasing n_eff low.
+# The conflict is structural, not a preference: SOI_160 over the O-band needs
+# lam0 <= 1.60 um to clear the strip gate, while the C-band's own
+# near-resonance floor is 1.10 * 1.60 = 1.76 um. Incompatible. Deriving lam0
+# from the band removes the conflict, and by construction always clears
+# `_REPARAM_MIN_LAM0_RATIO`.
 #
-# Acceptance is |dn_eff| <= 0.002 and 2.0 is the only value that clears it on
-# BOTH bands. It also drops sigma by two orders of magnitude, retiring the
-# "meep stability unverified at sigma = 17.6" risk. The cost is ~3% more of the
-# band's dispersion given up (still keeping ~95%). Measured by
+# 1.15 measured on every (stack, band) combination the examples use, against a
+# 0.002 tolerance -- worst case -0.00141, ~30% margin:
+#
+#   factor   SOI_220 C   SOI_220 O   SOI_160 C   SOI_160 O
+#    1.15     -0.00033    -0.00010    -0.00109    -0.00141   all PASS
+#    1.25     -0.00069    -0.00060    -0.00172    -0.00239   SOI_160 O FAILS
+#
+# SOI_160 is the binding constraint: a 160 nm core confines weakly, so more of
+# the mode sits at the Si/SiO2 interface where smoothing acts -- the reverted
+# attempt's failure is ~2x larger there (+0.108 vs +0.050). A tolerance met on
+# SOI_220 alone does not transfer. Measured by
 # `examples/verification/python/verify_item_8_strip_gate.py`.
-_REPARAM_LAM0_UM = 2.0
+_REPARAM_LAM0_FACTOR = 1.15
 _REPARAM_SAMPLES = 201
 # The fitted term blows up as the band approaches lam0, so refuse rather than
-# silently return a near-resonant model. 2.0 clears the widest band the
-# examples span (1.26-1.70) by 18%, but nothing structurally stops a caller
-# passing a band that reaches further.
+# silently return a near-resonant model. The derived lam0 above always clears
+# this; the check exists for callers passing lam0 explicitly.
 _REPARAM_MIN_LAM0_RATIO = 1.10
 
 
-def reparam_lorentz(kind: str, wl_band, lam0: float = _REPARAM_LAM0_UM):
+def reparam_lam0(wl_band) -> float:
+    """The pinned Lorentzian pole (µm) this band's fit should use.
+
+    Derived rather than constant so one rule covers every band — see
+    `_REPARAM_LAM0_FACTOR` for why a single global value cannot work.
+    """
+    wl = np.atleast_1d(np.asarray(wl_band, dtype=float))
+    return float(wl.max()) * _REPARAM_LAM0_FACTOR
+
+
+def reparam_lorentz(kind: str, wl_band, lam0: Optional[float] = None):
     """Fit ``eps(wl) ~= eps_inf + sigma*wl^2/(wl^2 - lam0^2)`` over `wl_band`.
 
     Returns ``(eps_inf, sigma, max_abs_dn)`` -- the last being the worst
@@ -152,6 +167,8 @@ def reparam_lorentz(kind: str, wl_band, lam0: float = _REPARAM_LAM0_UM):
     (`validation_markdown/material_model_validation.md` work item 1).
     """
     wl = np.atleast_1d(np.asarray(wl_band, dtype=float))
+    if lam0 is None:
+        lam0 = reparam_lam0(wl)
     if wl.size == 1:
         raise ValueError(
             "reparam_lorentz() needs a wavelength band, not a single point -- "
@@ -174,7 +191,7 @@ def reparam_lorentz(kind: str, wl_band, lam0: float = _REPARAM_LAM0_UM):
     return float(eps_inf), float(sigma), max_dn
 
 
-def meep_medium_reparam(kind: str, wl_band, lam0: float = _REPARAM_LAM0_UM):
+def meep_medium_reparam(kind: str, wl_band, lam0: Optional[float] = None):
     """meep Medium for `kind`, dispersive across `wl_band` AND smoothable.
 
     The point of the re-parameterisation: `meep_medium()` below puts eps_inf=1
@@ -189,6 +206,12 @@ def meep_medium_reparam(kind: str, wl_band, lam0: float = _REPARAM_LAM0_UM):
     """
     import meep as mp
 
+    # Resolve the pole BEFORE fitting, so the Lorentzian below is built at the
+    # same lam0 the fit used. Deriving it twice, or letting `reparam_lorentz`
+    # resolve it internally while this function kept `None`, would silently
+    # pair one band's coefficients with another band's pole.
+    if lam0 is None:
+        lam0 = reparam_lam0(wl_band)
     eps_inf, sigma, _ = reparam_lorentz(kind, wl_band, lam0=lam0)
     return mp.Medium(
         epsilon=eps_inf,
@@ -478,7 +501,7 @@ def resolved_material_config(material_stack, wavelengths: np.ndarray) -> Dict[st
         for kind in ("si", "sio2"):
             eps_inf, sigma, _ = reparam_lorentz(kind, wl)
             config[f"resolved_{kind}_reparam"] = [
-                round(eps_inf, 9), round(sigma, 9), round(_REPARAM_LAM0_UM, 9)]
+                round(eps_inf, 9), round(sigma, 9), round(reparam_lam0(wl), 9)]
     return config
 
 
