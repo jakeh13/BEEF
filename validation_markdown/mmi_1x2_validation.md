@@ -248,8 +248,10 @@ the only device with all three golden fixtures (`mmi_1x2_eme.json`,
    `SMatrix` pickles, reconciles `mmi_1x2_fdtd.py`'s `out_0`/`out_1` against
    `mmi_1x2_hybrid.py`'s `out_top`/`out_bot`, reports per-wavelength ΔT with
    provenance, no pass/fail threshold (same reasoning as the 2×2: gap 4 not
-   measured yet). SLURM job 11578018 (array indices 1-2) generates the two
-   SMatrix files; job 11578019 (`--dependency=afterany:11578018`) runs the
+   measured yet). SLURM job 11585845 (array indices 1-2, re-queued
+   2026-07-31 under `gts-sr108-gedc_main` — the original 07-30 submission
+   never started, blocked on `AssocGrpBillingMinutes`) generates the two
+   SMatrix files; job 11585850 (`--dependency=afterany:11585845`) runs the
    comparison once they land. Also run *before* gap 2 here, same as the
    2×2 — this device's basis is already fixed (gap 3, `N_MODES` 12→8) so the
    ordering concern the `## Order` section raises below (comparing a

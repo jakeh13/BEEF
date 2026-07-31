@@ -1,23 +1,34 @@
 # Active SLURM jobs — snapshot
 
-**Snapshot taken 2026-07-30, 21:46 EDT.** This is a point-in-time list, not a
+**Snapshot taken 2026-07-31, 08:22 EDT** (updated from the 2026-07-30 21:46
+snapshot — see re-queue note below). This is a point-in-time list, not a
 live view — job states, elapsed times and queue positions all move. Check
 `squeue -u jhiesener3` (or `sacct -j <id>` once finished) for current status;
 this file exists so the *purpose* of each job is recorded somewhere durable,
 not to be a dashboard. Update or delete entries as jobs complete and their
 results get folded into the relevant validation doc.
 
+**Re-queue, 2026-07-31 08:22 EDT:** the five jobs below never started —
+`scontrol show job` confirmed `Account=gts-sr108-ece`,
+`Reason=AssocGrpBillingMinutes` on the three parents (that association is out
+of billing minutes; `gts-sr108-gedc_main` had headroom). Cancelled all five
+(old IDs 11577985/11577986/11578018/11578019/11578026) and resubmitted under
+`gts-sr108-gedc_main`. Also switched all other batch scripts hardcoding
+`gts-sr108-ece` to `gedc_main` so this doesn't recur.
+
 | job | name | state (at snapshot) | for |
 |---|---|---|---|
 | 11575516 | `beef_mode_spec_converge` | ✅ **COMPLETED** 21:17, 3:36:13 — results folded in, entry retained for provenance | [fdtd_vs_EME_mode_validation.md](fdtd_vs_EME_mode_validation.md) item 1 + [modal_multiplexer_validation.md](modal_multiplexer_validation.md) gap 2 |
-| 11577985 `[1-2]` | `beef_mmi_2x2_examples` | PENDING (not yet started) | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 5 (data) |
-| 11577986 | `beef_mmi_2x2_gap5` | PENDING (dep on 11577985) | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 5 (comparison) |
-| 11578018 `[1-2]` | `beef_mmi_1x2_examples` | PENDING (not yet started) | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 (data) |
-| 11578019 | `beef_mmi_1x2_gap5` | PENDING (dep on 11578018) | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 (comparison) |
-| 11578026 `[0]` | `beef_modal_mux_examples` | PENDING (not yet started) | [modal_multiplexer_validation.md](modal_multiplexer_validation.md) gap 6 (exercise run) |
+| ~~11577985~~ → **11585844** `[1-2]` | `beef_mmi_2x2_examples` | 🟢 **RUNNING** (task `_1` started 08:24; `gedc_main`) | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 5 (data) |
+| ~~11577986~~ → **11585849** | `beef_mmi_2x2_gap5` | PENDING (dep on 11585844) | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 5 (comparison) |
+| ~~11578018~~ → **11585845** `[1-2]` | `beef_mmi_1x2_examples` | PENDING (`gedc_main`; `ReqNodeNotAvail`, not a billing block) | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 (data) |
+| ~~11578019~~ → **11585850** | `beef_mmi_1x2_gap5` | PENDING (dep on 11585845) | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 (comparison) |
+| ~~11578026~~ → **11585847** `[0]` | `beef_modal_mux_examples` | PENDING (`gedc_main`; `ReqNodeNotAvail`, not a billing block) | [modal_multiplexer_validation.md](modal_multiplexer_validation.md) gap 6 (exercise run) |
 
-All five outstanding jobs are still queued with no start time assigned — none
-has begun, so nothing below has partial output to read yet.
+As of 08:24 EDT, `11585844_1` (2×2 MMI) has **started running**; the other
+four are still queued. The detail sections below carry the current job IDs —
+only the ID and billing account changed in the re-queue, so each entry's
+script, resources and rationale are unchanged from the 07-30 submission.
 
 ## Details
 
@@ -52,7 +63,7 @@ has begun, so nothing below has partial output to read yet.
   item sweeps the requested mode *count* and requires the *S-matrix* to
   plateau, neither of which this job did. See item 6's note.
 
-### 11577985 `[1-2]` — `beef_mmi_2x2_examples` (array indices 1,2 only)
+### 11585844 `[1-2]` — `beef_mmi_2x2_examples` (array indices 1,2 only)
 - **Script:** `batch/run_mmi_2x2_examples.batch` → `make mmi_2x2_fdtd
   mmi_2x2_hybrid`
 - **Resources:** 2 nodes × 24 ranks per array task, 5h limit each.
@@ -63,11 +74,11 @@ has begun, so nothing below has partial output to read yet.
 - **Why:** gap 5 ("no hybrid-vs-full-device comparison on record") needs
   both scripts' saved output to exist before anything can compare them.
 
-### 11577986 — `beef_mmi_2x2_gap5`
+### 11585849 — `beef_mmi_2x2_gap5`
 - **Script:** `batch/verification/run_verify_mmi_2x2_hybrid_vs_fdtd.batch` →
   `examples/verification/python/verify_mmi_2x2_hybrid_vs_fdtd.py`
-- **Resources:** 1 node, 1 cpu, 20 min. `--dependency=afterany:11577985`.
-- **What it does:** Loads both SMatrix pickles from 11577985, reconciles
+- **Resources:** 1 node, 1 cpu, 20 min. `--dependency=afterany:11585844`.
+- **What it does:** Loads both SMatrix pickles from 11585844, reconciles
   port names (`out_0`/`out_1` vs `bar`/`cross`), reports per-wavelength
   transmission difference with provenance (git sha, config, mtimes). No
   meep/meow import cost of its own beyond loading `beef`.
@@ -75,22 +86,22 @@ has begun, so nothing below has partial output to read yet.
   gap 4, engine agreement, isn't measured for this device yet, so there's
   no basis to call a given disagreement expected vs. a bug).
 
-### 11578018 `[1-2]` — `beef_mmi_1x2_examples` (array indices 1,2 only)
-- Same shape as 11577985, for the 1×2 MMI: `make mmi_1x2_fdtd
+### 11585845 `[1-2]` — `beef_mmi_1x2_examples` (array indices 1,2 only)
+- Same shape as 11585844, for the 1×2 MMI: `make mmi_1x2_fdtd
   mmi_1x2_hybrid`.
 - **Why:** `mmi_1x2_validation.md` gap 5, same reasoning as the 2×2's. This
   device's basis mismatch (gap 3, `N_MODES` 12→8) is already fixed, so —
   unlike the 2×2 — there's no open mode-identity concern underneath this
   comparison; only gap 2 (resolution) remains unsettled.
 
-### 11578019 — `beef_mmi_1x2_gap5`
+### 11585850 — `beef_mmi_1x2_gap5`
 - **Script:** `batch/verification/run_verify_mmi_1x2_hybrid_vs_fdtd.batch` →
   `examples/verification/python/verify_mmi_1x2_hybrid_vs_fdtd.py`
-- Same shape as 11577986, ported to `mmi_1x2`'s port names (`out_0`/`out_1`
-  vs `out_top`/`out_bot`). `--dependency=afterany:11578018`.
+- Same shape as 11585849, ported to `mmi_1x2`'s port names (`out_0`/`out_1`
+  vs `out_top`/`out_bot`). `--dependency=afterany:11585845`.
 - **Why:** `mmi_1x2_validation.md` gap 5.
 
-### 11578026 `[0]` — `beef_modal_mux_examples`
+### 11585847 `[0]` — `beef_modal_mux_examples`
 - **Script:** `batch/run_modal_multiplexer_examples.batch` → `make
   modal_multiplexer_hybrid`
 - **Resources:** 4 nodes × 24 ranks, 5h limit — the most expensive single
@@ -106,13 +117,19 @@ has begun, so nothing below has partial output to read yet.
   against this device's real `solve_section()` interfaces for the first
   time — `modal_multiplexer_validation.md` gap 6 flags this as "not yet
   exercised... needs an actual meep/meow run." Watch
-  `reports/11578026_0.out` for `warn_on_transfer_duplicate` firing on
+  `reports/11585847_0.out` for `warn_on_transfer_duplicate` firing on
   either solver.
 
 ## Not listed here
 
-Three `elevator_*` array-task jobs (11568634 array, 11569468 array) were
-also running/queued at snapshot time, under
+An `elevator_*` array job (11585814 at the 07-31 snapshot; the 07-30
+snapshot's 11568634 / 11569468 have since cleared) is also queued, under
 `/storage/scratch1/8/jhiesener3/esc/elevator_sim_tower_from_gds/` — a
 different project entirely, unrelated to BEEF or anything in this
 directory. Omitted above; see that project's own tree if they matter.
+
+A second set of these same three device jobs was briefly submitted on
+2026-07-31 08:26 to `cpu-medium` at `--mem-per-cpu=16G` (11585878/79/80,
+`sbatch` overrides only, no script changes) and **cancelled before any of
+them started** — no output, no billing, nothing to fold in. Recorded only so
+the gap in the job-ID sequence isn't mistaken for a lost run.

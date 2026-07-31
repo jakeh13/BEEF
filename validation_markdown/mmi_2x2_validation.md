@@ -20,7 +20,9 @@ still no goldens.
 
 **Status 2026-07-30:** two config changes and one new doubt. `N_MODES` is now
 **14**, not 15 (gap 3, done — the unguided column is dropped). Gap 5 is in
-flight as jobs 11577985/11577986. And gap 6 is **new**: the passing check-2
+flight as jobs 11585844/11585849 (re-queued 2026-07-31 under
+`gts-sr108-gedc_main` — the original 07-30 submission never started, blocked
+on `AssocGrpBillingMinutes`). And gap 6 is **new**: the passing check-2
 result above was measured before either duplicate-mode guard existed, on a
 mode count this device no longer requests, so it needs a cheap re-run before it
 can be quoted as current. Checks 1 and 3 remain unrun; still no goldens.
@@ -128,9 +130,9 @@ the 1×2's problem is *stale* references, which at least fail loudly under
    basis to say how much of any observed gap is calibratable
    (`resolved/directional_coupler_validation.md` items 6/14 precedent: ~5%
    uncalibrated, 0.11% after `calibrate_body_neff`) vs. structural.
-   SLURM job 11577985 (array indices 1-2, `mmi_2x2_fdtd`/`mmi_2x2_hybrid`)
-   generates the two SMatrix files; job 11577986
-   (`--dependency=afterany:11577985`) runs the comparison once they land.
+   SLURM job 11585844 (array indices 1-2, `mmi_2x2_fdtd`/`mmi_2x2_hybrid`)
+   generates the two SMatrix files; job 11585849
+   (`--dependency=afterany:11585844`) runs the comparison once they land.
    Note this runs *before* gap 2 (resolution) despite the Order section
    below — both examples still share `RESOLUTION = 40.0`, so this first
    pass measures the hybrid at the same not-yet-converged resolution gap 2
@@ -170,7 +172,7 @@ the 1×2's problem is *stale* references, which at least fail loudly under
 2. **Gap 2**, the resolution question — it gates gap 1, and the audit has
    already shown res 40 is not converged.
 3. **Gap 5** (hybrid vs full-device FDTD), which needs no new scripts.
-   *In flight as of 2026-07-30 — jobs 11577985 / 11577986, see gap 5.*
+   *In flight as of 2026-07-31 — jobs 11585844 / 11585849, see gap 5.*
 4. **Gap 1** (goldens) once the configuration has stopped moving. ~~Dropping
    `N_MODES` to 14 per gap 3 counts as the configuration moving, so do it
    before recording anything.~~ **That drop is done** (gap 3, 2026-07-30), so

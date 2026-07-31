@@ -22,7 +22,7 @@ disagree, at *every* resolution from 20 to 60, about one member of a
 near-degenerate mode pair — meow finds both, meep's per-band ladder finds one.
 That is a driver-level defect, not a mesh one, and it is tracked as
 `fdtd_vs_EME_mode_validation.md` items 11–13 rather than here, since it is not
-specific to this device. Gap 6's exercise run (job 11578026) is still queued.
+specific to this device. Gap 6's exercise run (job 11585847) is still queued.
 
 **Status 2026-07-30:** gap 1 (mode identity) was **run and FAILED — and the
 root cause was not what it looked like.** All four interfaces disagree between
@@ -343,14 +343,17 @@ So it has the most ways to be wrong and the fewest ways to find out.
    exercised against this device's own real interfaces (needs an actual
    meep/meow run, not a code change).
 
-   **Exercise run submitted 2026-07-30** — SLURM job **11578026**
+   **Exercise run submitted 2026-07-30, re-queued 2026-07-31** — SLURM job
+   **11585847** (the 07-30 submission never started, blocked on
+   `AssocGrpBillingMinutes` under `gts-sr108-ece`; resubmitted under
+   `gts-sr108-gedc_main`)
    (`batch/run_modal_multiplexer_examples.batch`), this device's first real
    run of `modal_multiplexer_hybrid.py` in this tree (no
    `example_output/modal_multiplexer/` existed before this). 4 nodes × 24
    ranks, up to 5h — the most expensive single job run this session, per
    "most demanding hybrid device" above. Exercises the item-8 `T`-column
    scan against this device's real four interfaces for the first time;
-   watch `reports/11578026_0.out` for `warn_on_transfer_duplicate` firing on
+   watch `reports/11585847_0.out` for `warn_on_transfer_duplicate` firing on
    either solver.
 
 ## Order

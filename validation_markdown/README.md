@@ -172,8 +172,8 @@ audit).
 | device | 1 engine agreement | 2 mode identity | 3 convergence | 4 FDTD reference |
 |---|---|---|---|---|
 | directional coupler | ✅ **closed** — β-calibrated, L₅₀ 0.11% off reference | ✅ identity, worst 0.0023 | done, engines split | done, with provenance |
-| 1×2 MMI | not run | ✅ **fixed** — `N_MODES` 12→8, identity, worst 0.0003 | measured, worst of the three | comparison in flight (11578018/11578019) |
-| 2×2 MMI | not run | ✅ identity, worst 0.0007 — **but pre-guard, `N_MODES` 15** (gap 6) | measured, not converged | comparison in flight (11577985/11577986) |
+| 1×2 MMI | not run | ✅ **fixed** — `N_MODES` 12→8, identity, worst 0.0003 | measured, worst of the three | comparison in flight (11585845/11585850) |
+| 2×2 MMI | not run | ✅ identity, worst 0.0007 — **but pre-guard, `N_MODES` 15** (gap 6) | measured, not converged | comparison in flight (11585844/11585849) |
 | modal multiplexer | not run | run, failed, root cause fixed — **one pair-member disagreement open** | **measured** — EME converged res 60, FDTD not at 60, shipped 40 too low | **no FDTD script** |
 | ring resonator | not applicable | not applicable | shared knob | **no FDTD script** |
 

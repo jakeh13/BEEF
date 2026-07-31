@@ -7,6 +7,59 @@ fuller write-up, it points there rather than repeating it.
 
 ---
 
+## 2026-07-31
+
+Infrastructure only — no library or physics change, no test run needed.
+
+### Fixed — batch scripts billed an account that was out of billing minutes
+
+The five jobs submitted the evening of 2026-07-30 (`mmi_1x2`/`mmi_2x2` gap-5
+data + comparisons, modal-multiplexer gap-6 exercise run) never started.
+`scontrol show job` gave the reason: the three parent jobs carried
+`#SBATCH --account=gts-sr108-ece`, and that association is out of allocated
+billing minutes — `Reason=AssocGrpBillingMinutes`, indefinitely pending.
+`gts-sr108-gedc_main` had headroom (`sshare` `EffectvUsage` 0.045 vs. ece's
+0.40).
+
+Switched **every** batch script hardcoding `gts-sr108-ece` to
+`gts-sr108-gedc_main` — seven files, not just the three behind the stuck jobs,
+so the next submission of any of them doesn't hit the same wall:
+`batch/run_mmi_1x2_examples.batch`, `batch/run_mmi_2x2_examples.batch`,
+`batch/run_modal_multiplexer_examples.batch`,
+`batch/run_golden_directional_coupler_hybrid.batch`, `batch/run_examples.batch`,
+`batch/sweep/run_directional_coupler_fdtd_sweep.batch`,
+`batch/sweep/run_directional_coupler_hybrid_modes_sweep.batch`.
+(`batch/run_ring_resonator_examples.batch` bills plain `gts-sr108` and was left
+alone.) Cancelled and resubmitted all five jobs; the two dependent comparison
+jobs needed fresh `--dependency=afterany:<new_id>` values, since that flag was
+passed on the command line, not stored in the script.
+
+Job IDs moved 11577985→11585844, 11577986→11585849, 11578018→11585845,
+11578019→11585850, 11578026→11585847. The 2×2 MMI's first array task started
+within minutes of the re-queue — the first of these five to run at all.
+
+**Not addressed:** SLURM takes one account per job, so no batch script can
+express a multi-account fallback on its own. Rotating a stuck job across
+accounts would need `scontrol update JobId=<id> Account=<next>` driven by a
+watcher polling for `Reason=AssocGrpBillingMinutes`; noted as an option, not
+built. A submit-time "pick the account with headroom" check is the weaker
+alternative — `sacctmgr show assoc ... format=GrpTRESMins` returns empty for
+all three accounts here, so remaining balance isn't reliably queryable before
+submitting.
+
+### Docs — job IDs refreshed after the re-queue
+
+`validation_markdown/running_jobs.md` re-snapshotted (07-31 08:22) with the
+old→new ID mapping, the billing diagnosis, and current states; the per-job
+detail sections and `mmi_1x2_validation.md` gap 5, `mmi_2x2_validation.md`
+gap 5 + `Order`, `modal_multiplexer_validation.md` gap 6, and
+`validation_markdown/README.md`'s status table all updated to the new IDs
+(including the `reports/11585847_0.out` path to watch). Dates that read
+"in flight as of 2026-07-30" corrected to 07-31 where they now name a 07-31
+job.
+
+---
+
 ## 2026-07-30
 
 A single session, working down `validation_markdown/`'s gap lists. Three real
