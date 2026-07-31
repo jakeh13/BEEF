@@ -14,7 +14,7 @@ whether they agree, and whether either is right.
 |---|---|---|
 | 0 | resolved indices reach the cache fingerprint | ✅ done |
 | 1 | one shared analytic model, both engines | ✅ done — agree to 4e-16 |
-| 2 | FDTD medium actually dispersive across the band | ❌ **open** — attempted, measured, reverted |
+| 2 | FDTD medium actually dispersive across the band | 🟡 **implemented, opt-in, gate not run** — work items 1–3 done 2026-07-31; `MaterialStack(dispersive=True)` exists and is off by default until the strip test passes |
 
 **Steps 0 and 1 are closed.** Both engines evaluate one Sellmeier model
 (`beef/materials/stack.py::_SELLMEIER` — Salzberg 1957 Si, Malitson 1965 fused silica,
@@ -101,27 +101,68 @@ that n_Si genuinely moves across that band, so the parameterisation keeps ~98% o
 dispersion it is there to capture.
 
 *Reproducing this:* evaluate `_SELLMEIER` on a grid across the band, then solve
-`ε(λ) ≈ ε∞ + σ·λ²/(λ² − λ₀²)` for `[ε∞, σ]` by linear least squares at fixed λ₀. Not yet
-committed as a script — see work item 1.
+`ε(λ) ≈ ε∞ + σ·λ²/(λ² − λ₀²)` for `[ε∞, σ]` by linear least squares at fixed λ₀.
+~~Not yet committed as a script — see work item 1.~~ **Committed 2026-07-31** as
+`beef.materials.stack.reparam_lorentz()`, with
+`examples/verification/python/verify_item_8_reparameterisation.py` emitting every table
+above. All figures reproduce (ε∞ 12.5287 / σ +17.6106 / max Δn 1.96e-4 for Si; 2.1114 /
++1.0635 / 3.71e-6 for SiO2; contrast 10.4174 vs true 10.0094 = 104.1%).
+
+**Two corrections from running it.** The O-band fit error is **4.9e-4**, not 4.7e-4, and
+the full-range is **5.6e-3**, not 5.5e-3 — grid-density artifacts of the original
+hand-computation, conclusions unchanged. And λ₀ is *not* strictly degenerate: max |Δn|
+runs 2.11e-4 / 1.96e-4 / 1.93e-4 / 1.92e-4 at λ₀ = 5 / 10 / 20 / 50 µm, improving
+slightly and converging as λ₀ grows rather than being identical. The operative point is
+unaffected — σ swings 3.78 → 461 across that range, so σ/λ₀² is what is determined and λ₀
+must still be pinned, not fitted.
+
+**Why the re-fit works where the algebraic split cannot** (worth stating plainly, since
+the doc above only says the split fails): meep's `LorentzianSusceptibility`
+`σ·f₀²/(f₀² − f²)` is, in wavelength, exactly `σ·λ²/(λ² − λ₀²)` — the same form as a
+Sellmeier term, which is why `meep_medium()` can represent the model exactly today. What
+is *not* expressible is the **remainder** after peeling ε∞ off analytically, which carries
+a λ₀² numerator. Re-fitting directly into `ε∞ + σ·λ²/(λ² − λ₀²)` sidesteps that: the
+fitted form is one meep Lorentzian by construction. Verified end to end — meep's own
+`Medium.epsilon()` tracks Sellmeier across the C-band to 1.96e-4, exactly the fit error.
 
 ## Work
 
-1. **Commit the fit.** `examples/verification/python/verify_item_8_reparameterisation.py`,
-   emitting the tables above so the choice of λ₀ and the per-band restriction are
-   reproducible rather than asserted here.
+1. ~~**Commit the fit.**~~ **DONE 2026-07-31.** `reparam_lorentz()` in
+   `beef/materials/stack.py` (shipped, so the medium builder and the verification script
+   share one implementation), with
+   `examples/verification/python/verify_item_8_reparameterisation.py` emitting the tables.
+   Pure numpy — imports neither meep nor meow, runs in milliseconds on a login node.
 
-2. **Per-band media.** `MaterialStack.si_medium(wl)` / `sio2_medium(wl)` take a scalar
-   today and must take the band. Three call sites, all of the form
-   `si_medium(wl_center)`: `beef/solvers/fdtd.py` lines 526, 776, 1175. `meep_medium()`
-   already exists in `materials/stack.py` as the model to start from.
+2. ~~**Per-band media.**~~ **DONE 2026-07-31**, opt-in and inert by default.
+   `MaterialStack(dispersive=False)` is the new constructor flag;
+   `si_medium(wl)`/`sio2_medium(wl)` now accept a scalar *or* the run's whole wavelength
+   array, and build `meep_medium_reparam()` only when the flag is on **and** a real band
+   was passed.
 
-3. **Fingerprint the parameterisation — this one bites.** `resolved_material_config()`
-   records three probe *indices* from `sellmeier_index()`, and step 2 does not change that
-   function. Turning dispersion on would therefore leave the cache key **identical**, and
-   every existing entry would keep matching and be served the old physics — precisely the
-   defect step 0 was created to kill, recurring one level up. The band itself is already
-   pinned (`resolved_probe_wl` records min/mean/max), so what is missing is ε∞ and σ.
-   Record them directly rather than relying on the band plus a model-version tag.
+   **The doc's "three call sites at lines 526, 776, 1175" was wrong on both counts.** The
+   real sites are `beef/solvers/fdtd.py` 615/616, 930/931, 1581/1582 — and only **two**
+   should change. 615 (`_build_domain`) and 1581 (`solve_section`) are broadband and now
+   receive `wavelengths`; **930 is a single-wavelength mode solve**, where the frozen index
+   at that exact wavelength is already the correct medium and dispersion is meaningless.
+   Left scalar deliberately.
+
+   Two further callers are off the library path and unchanged:
+   `examples/ring_resonator/python/ring_resonator_hybrid{,_cascaded}.py` call
+   `si_medium(wl_center)` directly — the same "ring bypasses the solvers" problem
+   `ring_resonator_validation.md` is about.
+
+   Default is **False** because the strip-test gate below has not run. Switchable so the
+   gate is a clean A/B, matching `guard_duplicate_modes` / `calibrate_body_neff`.
+
+3. ~~**Fingerprint the parameterisation — this one bites.**~~ **DONE 2026-07-31.**
+   `resolved_material_config()` now adds `resolved_dispersive` and
+   `resolved_{si,sio2}_reparam = [ε∞, σ, λ₀]` whenever the stack is dispersive over a real
+   band. Confirmed by test that flipping the flag moves the key, and that two different
+   bands give different keys (the media are per-run now, so they must not collide). The
+   fitted numbers are recorded **directly** rather than via a model-version tag, so any
+   change to band, pinned λ₀, sample count, or the Sellmeier coefficients underneath moves
+   the key on its own with nothing to remember to bump. The non-dispersive key is
+   byte-unchanged, so everything already cached keeps matching.
 
 4. **Re-run the resolution sweeps.** `notes.md` #9 already budgets this as part of the
    change, not as a follow-up: smoothing moves the mesh-convergence point, so item 11's

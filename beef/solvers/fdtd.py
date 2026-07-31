@@ -612,8 +612,13 @@ class FDTDSolver:
         wl_center = float(np.mean(wavelengths))
         Sx = geometry.total_length + 2 * self.waveguide_length + 2 * self.dpml
         Sy = self.sim_width + 2 * self.dpml   # full cell: inner + PML on both sides
-        si_med = self.material_stack.si_medium(wl_center)
-        sio2_med = self.material_stack.sio2_medium(wl_center)
+        # Whole band, not wl_center: a broadband run gets ONE Medium for its
+        # entire span, so a frozen centre index is wrong at the edges by up to
+        # 0.008 in n_Si on the O-band. `MaterialStack(dispersive=True)` uses
+        # the band; the default ignores it and returns the same frozen medium
+        # as before, so this is inert until that flag is turned on.
+        si_med = self.material_stack.si_medium(wavelengths)
+        sio2_med = self.material_stack.sio2_medium(wavelengths)
         return Sx, Sy, wl_center, si_med, sio2_med
 
     def solve(
@@ -1578,8 +1583,10 @@ class FDTDSolver:
             )
 
         wl_center = float(np.mean(wavelengths))
-        si_med = self.material_stack.si_medium(wl_center)
-        sio2_med = self.material_stack.sio2_medium(wl_center)
+        # Band, not centre — see `_build_domain()`. Inert unless the stack was
+        # built with `dispersive=True`.
+        si_med = self.material_stack.si_medium(wavelengths)
+        sio2_med = self.material_stack.sio2_medium(wavelengths)
 
         # Draw the waveguide dpml further than it functionally needs to reach
         # (on *both* sides, always — every section is its own independent

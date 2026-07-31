@@ -90,6 +90,85 @@ def meow_material(kind: str):
     return _material_cache[key]
 
 
+# Pinned pole for the re-parameterised single-Lorentzian fit (µm). Far below
+# every band the examples use, so the term is smooth and non-resonant there.
+# It CANNOT be fitted: for lam0 >> lambda only the ratio sigma/lam0^2 is
+# determined, so a free fit walks that ridge to its bounds. Pinning it also
+# makes the model linear in the two remaining parameters -- a deterministic
+# lstsq rather than an optimiser in the medium-build path.
+_REPARAM_LAM0_UM = 10.0
+_REPARAM_SAMPLES = 201
+
+
+def reparam_lorentz(kind: str, wl_band, lam0: float = _REPARAM_LAM0_UM):
+    """Fit ``eps(wl) ~= eps_inf + sigma*wl^2/(wl^2 - lam0^2)`` over `wl_band`.
+
+    Returns ``(eps_inf, sigma, max_abs_dn)`` -- the last being the worst
+    refractive-index error against the exact Sellmeier model across the band.
+
+    **Why a re-fit rather than an algebraic split.** Item 8 / `notes.md` #5
+    prescribe "move the bulk of the permittivity into eps_inf". Algebraically
+    ``s*wl^2/(wl^2 - li^2) = s + s*li^2/(wl^2 - li^2)``, and that leading `s`
+    is exactly what belongs in eps_inf -- but the remainder has an ``li^2``
+    numerator, while meep's `LorentzianSusceptibility` is
+    ``sigma*f0^2/(f0^2 - f^2)``, which in wavelength is
+    ``sigma*wl^2/(wl^2 - lam0^2)`` -- a ``wl^2`` numerator. The exact split is
+    therefore not expressible in meep and the model has to be re-fit into the
+    form meep *can* represent. That form is what this function returns, so its
+    output drops straight into a single `LorentzianSusceptibility`.
+
+    **Per band, not global.** Silicon's telecom dispersion comes from a UV
+    resonance at 0.3015 µm and no far-IR Lorentzian reproduces it across the
+    whole range the examples span: fitting 1.26-1.70 µm at once gives max |dn|
+    ~5.6e-3, worse than the ~2e-3 the dispersion is worth. Per band it is
+    ~2e-4 (C-band) to ~4.9e-4 (O-band). This is why the media become a
+    per-run quantity -- see `MaterialStack.si_medium()`.
+
+    Reproduced end to end, with the tables, by
+    `examples/verification/python/verify_item_8_reparameterisation.py`
+    (`validation_markdown/material_model_validation.md` work item 1).
+    """
+    wl = np.atleast_1d(np.asarray(wl_band, dtype=float))
+    if wl.size == 1:
+        raise ValueError(
+            "reparam_lorentz() needs a wavelength band, not a single point -- "
+            "there is no dispersion to fit across one wavelength."
+        )
+    grid = np.linspace(float(wl.min()), float(wl.max()), _REPARAM_SAMPLES)
+    eps_true = sellmeier_index(kind, grid) ** 2
+    basis = np.column_stack(
+        [np.ones_like(grid), grid**2 / (grid**2 - lam0**2)])
+    (eps_inf, sigma), *_ = np.linalg.lstsq(basis, eps_true, rcond=None)
+    n_fit = np.sqrt(basis @ np.array([eps_inf, sigma]))
+    max_dn = float(np.max(np.abs(n_fit - sellmeier_index(kind, grid))))
+    return float(eps_inf), float(sigma), max_dn
+
+
+def meep_medium_reparam(kind: str, wl_band, lam0: float = _REPARAM_LAM0_UM):
+    """meep Medium for `kind`, dispersive across `wl_band` AND smoothable.
+
+    The point of the re-parameterisation: `meep_medium()` below puts eps_inf=1
+    and the entire index in susceptibilities, which meep leaves unsmoothed --
+    the structure has `epsilon diagonal = (1,1,1)`, no contrast for subpixel
+    averaging to act on, and that cost +0.0496 in n_eff when it was tried. Here
+    eps_inf carries ~100% of the Si/SiO2 contrast, so smoothing is back, and
+    the single Lorentzian carries only the wavelength dependence.
+
+    Not cached: unlike `meep_medium()`/`meow_material()` this depends on the
+    caller's band, so a global key would collide across runs.
+    """
+    import meep as mp
+
+    eps_inf, sigma, _ = reparam_lorentz(kind, wl_band, lam0=lam0)
+    return mp.Medium(
+        epsilon=eps_inf,
+        E_susceptibilities=[
+            mp.LorentzianSusceptibility(
+                frequency=1.0 / lam0, gamma=0, sigma=sigma)
+        ],
+    )
+
+
 def meep_medium(kind: str):
     """Dispersive meep Medium for `kind`, from the same coefficients.
 
@@ -124,11 +203,23 @@ class MaterialStack:
     Args:
         wg_height: Si core thickness (µm).
         sz: total vertical simulation span for meow cross-sections (µm).
+        dispersive: build the FDTD media from the re-parameterised
+            single-Lorentzian fit (`reparam_lorentz`) over the run's own band
+            instead of freezing one index at band centre. **Default False**,
+            deliberately: the re-parameterisation is verified as a *model*
+            (`verify_item_8_reparameterisation.py`) but has not yet passed its
+            strip-test gate on a real meep solve
+            (`validation_markdown/material_model_validation.md`, Verification),
+            and turning it on changes every FDTD number. Switchable so the gate
+            can be measured as a clean A/B, the same pattern as
+            `guard_duplicate_modes` and `calibrate_body_neff`.
     """
 
-    def __init__(self, wg_height: float = 0.16, sz: float = 2.0):
+    def __init__(self, wg_height: float = 0.16, sz: float = 2.0,
+                 dispersive: bool = False):
         self.wg_height = wg_height
         self.sz = sz
+        self.dispersive = bool(dispersive)
 
     @property
     def extrusion_rules(self) -> dict:
@@ -202,17 +293,37 @@ class MaterialStack:
         so the EME and FDTD agree on n(wl) to machine precision at any given
         wavelength — the frozen-band limitation remains, the silent
         engine-to-engine disagreement does not.
+
+        **`dispersive=True` changes this** (opt-in, off by default). `wl` may
+        then be the run's whole wavelength array, and the medium is built by
+        `meep_medium_reparam()` — eps_inf carrying ~100% of the Si/SiO2
+        contrast so subpixel smoothing still acts, one Lorentzian carrying the
+        band's wavelength dependence. A scalar `wl` still gives the plain
+        frozen medium under either setting: there is no band to disperse over,
+        and a single-wavelength mode solve wants exactly the index at that
+        wavelength.
+        """
+        return self._medium("si", wl)
+
+    def sio2_medium(self, wl):
+        """meep Medium for SiO2 at wavelength wl (µm), or across a band when
+        `dispersive=True`. See `si_medium()`."""
+        return self._medium("sio2", wl)
+
+    def _medium(self, kind: str, wl):
+        """Shared body of `si_medium()`/`sio2_medium()`.
+
+        Dispersion is opt-in AND requires a real band — a scalar `wl` falls
+        through to the frozen index under either setting, so single-wavelength
+        callers (mode solves) are unaffected by the flag by construction.
         """
         import meep as mp
 
-        return mp.Medium(index=self.si_index(wl))
-
-    def sio2_medium(self, wl: float):
-        """meep Medium for SiO2 at wavelength wl (µm). See `si_medium()` for
-        why this is non-dispersive."""
-        import meep as mp
-
-        return mp.Medium(index=self.sio2_index(wl))
+        wl_arr = np.atleast_1d(np.asarray(wl, dtype=float))
+        if self.dispersive and wl_arr.size > 1 and wl_arr.min() < wl_arr.max():
+            return meep_medium_reparam(kind, wl_arr)
+        index_of = self.si_index if kind == "si" else self.sio2_index
+        return mp.Medium(index=index_of(float(np.mean(wl_arr))))
 
 
 def resolved_material_config(material_stack, wavelengths: np.ndarray) -> Dict[str, Any]:
@@ -246,11 +357,31 @@ def resolved_material_config(material_stack, wavelengths: np.ndarray) -> Dict[st
     """
     wl = np.asarray(wavelengths, dtype=float)
     probes = (float(wl.min()), float(np.mean(wl)), float(wl.max()))
-    return {
+    config = {
         "resolved_probe_wl": [round(w, 9) for w in probes],
         "resolved_si_index": [round(material_stack.si_index(w), 9) for w in probes],
         "resolved_sio2_index": [round(material_stack.sio2_index(w), 9) for w in probes],
     }
+
+    # The probe indices above come from `sellmeier_index()`, which the
+    # dispersive re-parameterisation does NOT change -- so without the
+    # following, flipping `dispersive` on would leave this key byte-identical
+    # and every existing cache entry would keep matching and be served the old
+    # non-dispersive physics. That is precisely the defect this function was
+    # created to kill, recurring one level up
+    # (`material_model_validation.md` work item 3).
+    #
+    # Recorded directly as the fitted (eps_inf, sigma) rather than as a
+    # model-version tag, so any change to the fit -- band, pinned lam0, sample
+    # count, or the Sellmeier coefficients underneath it -- moves the key on
+    # its own, with nothing to remember to bump.
+    if getattr(material_stack, "dispersive", False) and wl.min() < wl.max():
+        config["resolved_dispersive"] = True
+        for kind in ("si", "sio2"):
+            eps_inf, sigma, _ = reparam_lorentz(kind, wl)
+            config[f"resolved_{kind}_reparam"] = [
+                round(eps_inf, 9), round(sigma, 9), round(_REPARAM_LAM0_UM, 9)]
+    return config
 
 
 # Pre-built stacks for common SOI platforms.

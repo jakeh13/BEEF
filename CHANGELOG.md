@@ -95,6 +95,43 @@ notes job 11575516's 3h36m was dominated by this over-request. Run at res 60:
 above the shipped 40, and where 11575516 measured meow as converged, so a
 difference cannot be blamed on an unconverged mesh.
 
+### Added — dispersive FDTD media, re-parameterised and opt-in (material model step 2, work items 1–3)
+
+`material_model_validation.md` step 2 was implemented once and reverted: the Sellmeier
+form puts ε∞ = 1 with the whole index in susceptibilities, meep leaves those unsmoothed,
+and the resulting `epsilon diagonal = (1,1,1)` structure lost +0.0496 in n_eff to
+disabled subpixel averaging — 25× the ~0.002 the dispersion was worth. Work items 1–3
+build the re-parameterised version that keeps smoothing. **Off by default; the strip-test
+gate has not run.**
+
+- **`reparam_lorentz(kind, band, lam0=10.0)`** (`beef/materials/stack.py`) — least-squares
+  fit of `ε(λ) ≈ ε∞ + σ·λ²/(λ² − λ₀²)`, linear in both parameters at fixed λ₀, so a
+  deterministic `lstsq` rather than an optimiser in the medium-build path. The fitted form
+  *is* one meep `LorentzianSusceptibility` by construction — which is why re-fitting works
+  where peeling ε∞ off analytically cannot (the remainder carries a λ₀² numerator meep has
+  no shape for). Verified end to end: meep's own `Medium.epsilon()` tracks Sellmeier across
+  the C-band to 1.96e-4, exactly the fit error.
+- **`meep_medium_reparam()`** — ε∞ carries 104% of the true Si/SiO2 ε contrast (against 0%
+  today), so smoothing acts again; the single Lorentzian carries only the dispersion.
+- **`MaterialStack(dispersive=False)`** — new opt-in flag. `si_medium()`/`sio2_medium()`
+  now take a scalar *or* a band and only disperse when the flag is on and a real band was
+  passed, so single-wavelength mode solves are unaffected by construction.
+- **Cache fingerprint** — `resolved_material_config()` records `[ε∞, σ, λ₀]` per material.
+  Without this, flipping the flag would leave the key **identical** (the probe indices come
+  from `sellmeier_index()`, which the re-parameterisation does not change) and every stale
+  entry would keep matching — the defect step 0 was created to kill, one level up.
+- `examples/verification/python/verify_item_8_reparameterisation.py` reproduces every table
+  in the validation doc. Pure numpy, no meep/meow import.
+- 14 new tests, `tests/test_material_reparam.py`. Fast suite 447 passed, 14 skipped.
+
+**Three doc corrections found by implementing it.** The prescribed call sites
+(`fdtd.py` 526/776/1175) were stale — the real ones are 615/616, 930/931, 1581/1582, and
+only **two** should change: 930 is a single-wavelength mode solve where the frozen index is
+already correct. The O-band and full-range fit errors are 4.9e-4 and 5.6e-3, not 4.7e-4 and
+5.5e-3. And λ₀ is not strictly degenerate — fit quality improves slightly and converges as
+λ₀ grows (2.11e-4 → 1.92e-4 over λ₀ 5 → 50 µm) rather than being identical; σ still swings
+3.78 → 461 across that range, so the pinning argument stands unchanged.
+
 ### Docs — item 6 naming collision, v1 ladder script marked superseded
 
 Two docs both number an item 6, unrelated to each other:
