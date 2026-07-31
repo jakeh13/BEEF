@@ -9,7 +9,13 @@ fuller write-up, it points there rather than repeating it.
 
 ## 2026-07-31
 
-Infrastructure only — no library or physics change, no test run needed.
+Started as infrastructure (a billing-account fix and a re-queue), then became a
+material-model session: dispersion is now implemented, gated on real solves
+across every stack/band the examples use, and wired to per-solver flags. Sections
+below are in the order they were written, so later ones supersede earlier ones
+where they overlap — notably λ₀, which moved twice (10.0 → 2.0 → derived per
+band) as each measurement replaced the previous reasoning. Fast suite ends the
+day at **468 passed, 14 skipped**.
 
 ### Fixed — batch scripts billed an account that was out of billing minutes
 
@@ -101,10 +107,12 @@ difference cannot be blamed on an unconverged mesh.
 form puts ε∞ = 1 with the whole index in susceptibilities, meep leaves those unsmoothed,
 and the resulting `epsilon diagonal = (1,1,1)` structure lost +0.0496 in n_eff to
 disabled subpixel averaging — 25× the ~0.002 the dispersion was worth. Work items 1–3
-build the re-parameterised version that keeps smoothing. **Off by default; the strip-test
-gate has not run.**
+build the re-parameterised version that keeps smoothing. **Off by default** (the gate had
+not run when this was written; it has since passed — see below, and note λ₀ has moved twice
+since this section).
 
-- **`reparam_lorentz(kind, band, lam0=10.0)`** (`beef/materials/stack.py`) — least-squares
+- **`reparam_lorentz(kind, band, lam0=None)`** (`beef/materials/stack.py`; λ₀ was a
+  fixed 10.0 when first written — see the two later sections) — least-squares
   fit of `ε(λ) ≈ ε∞ + σ·λ²/(λ² − λ₀²)`, linear in both parameters at fixed λ₀, so a
   deterministic `lstsq` rather than an optimiser in the medium-build path. The fitted form
   *is* one meep `LorentzianSusceptibility` by construction — which is why re-fitting works
@@ -122,7 +130,8 @@ gate has not run.**
   entry would keep matching — the defect step 0 was created to kill, one level up.
 - `examples/verification/python/verify_item_8_reparameterisation.py` reproduces every table
   in the validation doc. Pure numpy, no meep/meow import.
-- 14 new tests, `tests/test_material_reparam.py`. Fast suite 447 passed, 14 skipped.
+- 14 new tests, `tests/test_material_reparam.py` (28 by end of day). Fast suite 447
+  passed at this point, 468 by end of day.
 
 **Solver-level flags (follow-up, same day).** `dispersive=` now exists on `FDTDSolver` and
 `EMESolver`, so the setting no longer has to be baked into a shared `MaterialStack` — the
