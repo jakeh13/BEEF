@@ -312,3 +312,62 @@ class TestHybridConsistencyGuard:
         with caplog.at_level("WARNING"):
             self._hybrid()._check_material_consistency(np.array([1.31]))
         assert "disagree on material dispersion" not in caplog.text
+
+
+class TestMaterialIndexAgreement:
+    """Work item 5's hard check. Two properties decide whether it is worth
+    anything: it must compare the media actually built (not the shared index
+    model, which agrees in every configuration), and it must use a tolerance
+    (the dispersive FDTD is a *fit*; the EME stays exact)."""
+
+    def _hybrid(self, fdtd_disp=None, eme_disp=None, action="warn"):
+        from beef import EMESolver, FDTDSolver, HybridSolver
+
+        stack = MaterialStack(wg_height=0.22)
+        f = FDTDSolver(res=10, material_stack=stack, dispersive=fdtd_disp)
+        e = EMESolver(num_modes=[2], num_cells=[1], lengths=[1.0],
+                      material_stack=stack, dispersive=eme_disp)
+        return HybridSolver(solvers=[f, e], boundaries=[0.0, 1.0, 2.0],
+                            interface_modes=[2],
+                            material_consistency_action=action)
+
+    def test_todays_default_really_does_disagree(self):
+        """The check would be worthless if it passed the configuration that
+        ships. A frozen FDTD against a per-wavelength EME differs by ~0.008 in
+        n_Si at the O-band edges -- this pins that as a real, measured gap."""
+        gap, wl, kind, a, b = self._hybrid()._material_disagreement(O_BAND)
+        assert gap > 5e-3, f"expected the known ~0.008 mismatch, got {gap:.2e}"
+
+    def test_enabling_dispersion_closes_it_to_the_fit_error(self):
+        gap, *_ = self._hybrid(fdtd_disp=True, eme_disp=True)._material_disagreement(O_BAND)
+        assert gap < 2e-3, f"dispersive chain still disagrees by {gap:.2e}"
+
+    def test_both_frozen_agree_exactly(self):
+        """Same frozen index on both sides -- the A/B configuration."""
+        gap, *_ = self._hybrid(fdtd_disp=False, eme_disp=False)._material_disagreement(O_BAND)
+        assert gap < 1e-12
+
+    def test_raise_action_rejects_the_broken_chain(self):
+        with pytest.raises(ValueError, match="resolve different si indices"):
+            self._hybrid(action="raise")._check_material_index_agreement(O_BAND)
+
+    def test_raise_action_accepts_the_fixed_chain(self):
+        self._hybrid(fdtd_disp=True, eme_disp=True, action="raise") \
+            ._check_material_index_agreement(O_BAND)
+
+    def test_ignore_action_is_silent(self, caplog):
+        with caplog.at_level("WARNING"):
+            self._hybrid(action="ignore")._check_material_index_agreement(O_BAND)
+        assert "resolve different" not in caplog.text
+
+    def test_it_does_not_compare_index_lookups(self):
+        """The trap this check exists to avoid: `si_index()` is the shared
+        Sellmeier model, so it agrees to machine precision in EVERY
+        configuration, including the broken one. If the guard ever starts
+        reading that instead of the built media, this fails."""
+        stack = MaterialStack(wg_height=0.22)
+        assert abs(stack.si_index(1.26) - stack.si_index(1.26)) < 1e-15
+        gap, *_ = self._hybrid()._material_disagreement(O_BAND)
+        assert gap > 1e-6, (
+            "guard is reading the shared index model, not the built media"
+        )

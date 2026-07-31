@@ -14,7 +14,7 @@ whether they agree, and whether either is right.
 |---|---|---|
 | 0 | resolved indices reach the cache fingerprint | ✅ done |
 | 1 | one shared analytic model, both engines | ✅ done — agree to 4e-16 |
-| 2 | FDTD medium actually dispersive across the band | 🟢 **implemented, gate PASSED 2026-07-31** (Δn_eff −0.00069, tol 0.002) — items 1–3 and 5's warning guard done; still **opt-in** (`dispersive=True`) pending item 4's resolution sweeps |
+| 2 | FDTD medium actually dispersive across the band | 🟢 **implemented, gate PASSED 2026-07-31 on all 4 stack/band combinations** (worst Δn_eff −0.00141 on SOI_160/O-band, tol 0.002) — items 1–3 and 5's warning guard done; still **opt-in** (`dispersive=True`) pending item 4's resolution sweeps |
 
 **Steps 0 and 1 are closed.** Both engines evaluate one Sellmeier model
 (`beef/materials/stack.py::_SELLMEIER` — Salzberg 1957 Si, Malitson 1965 fused silica,
@@ -87,12 +87,13 @@ Pinning λ₀ and solving for ε∞ and σ gives *identical* fit quality at λ�
 50 µm, and makes the model **linear in both remaining parameters** — a deterministic
 least-squares solve, no optimiser in the build path.
 
-> ⚠️ **λ₀ = 10 below is superseded — the shipped value is 2.0.** Everything in the rest of
-> this section is correct as *fit* analysis, and the "pin it, don't fit it" conclusion
-> stands. But λ₀ = 10 **fails the strip gate**, because fit quality is not what λ₀ actually
-> controls — it controls how the permittivity splits between the smoothed ε∞ and the
-> unsmoothed susceptibility. See **GATE PASSED** below for the numbers that replaced it.
-> The 104% contrast figure quoted here is precisely the symptom that failed.
+> ⚠️ **λ₀ = 10 below is superseded. The shipped pole is now DERIVED per band —
+> 1.15 × the band's upper edge — not a constant at all.** Everything in the rest of this
+> section is correct as *fit* analysis, and the "pin it, don't fit it" conclusion stands.
+> But λ₀ = 10 **fails the strip gate**: fit quality is not what λ₀ actually controls — it
+> controls how the permittivity splits between the smoothed ε∞ and the unsmoothed
+> susceptibility. The 104% contrast figure quoted below is precisely the symptom that
+> failed. A single global value cannot work at all; see **GATE PASSED** below.
 
 With λ₀ = 10 µm over the coupler's own 1.50–1.60 µm sweep:
 
@@ -201,7 +202,36 @@ fitted form is one meep Lorentzian by construction. Verified end to end — meep
    resolve the same index at the same wavelength — as the regression test for this work.
    It needs a **tolerance, not equality**: see the last risk below.
 
-   **Cheap half done 2026-07-31, warning-only.** `HybridSolver._check_material_consistency()`
+   **DONE 2026-07-31.** `HybridSolver._check_material_index_agreement()`, controlled by
+   the new `material_consistency_action` ("warn" default / "raise" / "ignore"), tolerance
+   `_MATERIAL_INDEX_TOL = 2e-3`.
+
+   Both of the doc's requirements turned out to be load-bearing:
+
+   - **Compare built media, not index lookups.** `si_index()` is the shared Sellmeier
+     model both engines call, so it agrees to machine precision in *every* configuration,
+     including the broken one. A guard reading it would be vacuous. `_effective_index()`
+     instead evaluates the `mp.Medium` the FDTD actually builds and the per-wavelength
+     value the EME actually solves at. A test pins this specifically.
+   - **Tolerance, not equality.** With dispersion on the FDTD runs a *fit* while the EME
+     stays exact, so they legitimately differ by ~1.3e-3. Equality would fail the correct
+     configuration. 2e-3 sits above that and far below the 7.9e-3 a frozen medium is wrong
+     by at the O-band edge.
+
+   Measured on a real chain (FDTD + EME, O-band):
+
+   | configuration | worst index gap | verdict |
+   |---|---|---|
+   | **today's default** (frozen FDTD, exact EME) | **0.007862** | over tolerance |
+   | both dispersive | 0.001349 | passes |
+   | both frozen | 0.000000 | passes |
+
+   Default is "warn" rather than "raise" precisely because the shipped default does not
+   satisfy it — raising would break every existing hybrid chain over a pre-existing
+   condition. Best-effort: solvers or stacks that cannot be interrogated are skipped, not
+   guessed at (caught by the existing `_FakeStack` tests, which this initially crashed).
+
+   ~~**Cheap half done 2026-07-31, warning-only.**~~ `HybridSolver._check_material_consistency()`
    runs on every `solve()`/`solve_length_sweep()` and logs a WARNING when the chain's
    sections disagree about dispersion, naming which sections are on which side and the
    worst n_Si gap across the band. The hard assert still waits on the gate, which is what

@@ -78,6 +78,13 @@ _CORR_DEFAULT_RES = 40.0
 # small enough to sit inside a straight/uniform stub, per
 # CompoundGeometry.section_prisms()'s own cut-inside-a-taper failure mode.
 _CORR_HALF_SPAN = 0.05
+# Item 5's tolerance for "do the sections resolve the same index".
+# Above the dispersive FDTD fit's ~1e-3 worst-case departure from exact
+# Sellmeier (the EME keeps exact, so the two legitimately differ by that
+# much), and far below the ~0.008 in n_Si a band-centre-frozen medium is
+# wrong by at the O-band edges. So it passes the fixed configuration and
+# fails the broken one -- which is the only way it earns its place.
+_MATERIAL_INDEX_TOL = 2e-3
 
 
 def _supports_save_dir(method) -> bool:
@@ -247,6 +254,7 @@ class HybridSolver:
         mirror_axis: Optional[float] = None,
         mirror_check_samples: int = 25,
         mirror_check_tol: float = 1e-3,
+        material_consistency_action: Literal["warn", "raise", "ignore"] = "warn",
         calibrate_body_neff: bool = False,
         calibrate_lengths: Optional[List[float]] = None,
         check_mode_correspondence: bool = False,
@@ -267,6 +275,7 @@ class HybridSolver:
                 f"interface_modes must have len(solvers)-1 = {len(solvers) - 1} "
                 f"entries, got {len(interface_modes)}."
             )
+        self.material_consistency_action = material_consistency_action
         self.solvers = solvers
         self.boundaries = boundaries
         self.interface_modes = interface_modes
@@ -799,7 +808,129 @@ class HybridSolver:
         own = getattr(solver, "dispersive", None)
         if hasattr(solver, "section_modes"):        # EME-style
             return True if own is None else bool(own)
-        return stack.resolve_dispersive(own)        # FDTD-style
+        # FDTD-style. Best-effort like the correspondence check: a custom or
+        # stubbed stack that doesn't implement the flag has no opinion, and is
+        # skipped rather than guessed at or crashed on.
+        resolve = getattr(stack, "resolve_dispersive", None)
+        if resolve is None:
+            return None
+        return resolve(own)
+
+    def _effective_index(self, solver, band, wl: float, kind: str = "si"):
+        """The index `solver` will ACTUALLY simulate `kind` with at `wl`.
+
+        Deliberately **not** `material_stack.si_index(wl)`. That reads the
+        shared Sellmeier model, which both engines call, so it returns the same
+        number in every configuration — including the mismatched one shipping
+        today. A guard written against it would read 4e-16 always and catch
+        nothing. What differs between the engines is the medium each one
+        *builds*:
+
+          FDTD, frozen     : one index pinned at band centre — wrong at the
+                             band edges by up to 0.008 in n_Si.
+          FDTD, dispersive : the re-parameterised fit, within ~1e-3 of exact.
+          EME, dispersive  : exact Sellmeier, re-solved per wavelength.
+          EME, frozen      : pinned at band centre, like the FDTD.
+
+        Returns None for solvers with no material stack (custom types), which
+        the caller skips rather than guessing at.
+        """
+        stack = getattr(solver, "material_stack", None)
+        eff = self._effective_dispersive(solver)
+        if stack is None or eff is None:
+            return None
+        centre = float(np.mean(np.atleast_1d(np.asarray(band, dtype=float))))
+        index_of = getattr(stack, "si_index" if kind == "si" else "sio2_index",
+                           None)
+        if index_of is None:
+            return None
+
+        if hasattr(solver, "section_modes"):          # EME-style
+            # meow re-evaluates its SampledMaterial at each Environment's
+            # wavelength, so dispersive really is exact per wavelength.
+            return float(index_of(wl if eff else centre))
+
+        # FDTD-style: interrogate the Medium it will actually build. Skipped
+        # rather than approximated if the stack cannot build one — this is a
+        # diagnostic, and a wrong number here would be worse than no number.
+        build = getattr(stack, "si_medium" if kind == "si" else "sio2_medium",
+                        None)
+        if build is None:
+            return None
+        try:
+            med = build(band if eff else centre, dispersive=eff)
+            try:
+                eps = float(np.real(med.epsilon(1.0 / wl)[0][0]))
+            except Exception:                          # non-dispersive Medium
+                eps = float(np.real(med.epsilon_diag.x))
+        except Exception:
+            return None
+        return float(np.sqrt(eps))
+
+    def _material_disagreement(self, wavelengths):
+        """Worst index disagreement between any two sections across the band.
+
+        Returns (worst, wl, kind, section_a, section_b), or None when fewer
+        than two sections expose a material stack.
+        """
+        band = np.atleast_1d(np.asarray(wavelengths, dtype=float))
+        probes = (float(band.min()), float(np.mean(band)), float(band.max()))
+        worst = None
+        for kind in ("si", "sio2"):
+            for wl in probes:
+                vals = [(k, self._effective_index(s, band, wl, kind))
+                        for k, s in enumerate(self.solvers)]
+                vals = [(k, v) for k, v in vals if v is not None]
+                if len(vals) < 2:
+                    continue
+                lo = min(vals, key=lambda kv: kv[1])
+                hi = max(vals, key=lambda kv: kv[1])
+                gap = hi[1] - lo[1]
+                if worst is None or gap > worst[0]:
+                    worst = (gap, wl, kind, lo[0], hi[0])
+        return worst
+
+    def _check_material_index_agreement(self, wavelengths) -> None:
+        """Item 5's hard check: do the sections agree on the actual index?
+
+        `material_model_validation.md` work item 5 — "assert the FDTD and EME
+        sections resolve the same index at the same wavelength". Two things it
+        requires, both of which cost a wrong implementation its whole value:
+
+        1. **Compare built media, not index lookups.** See `_effective_index()`.
+        2. **A tolerance, not equality.** With dispersion on, the FDTD runs a
+           *fit* (~5e-4 of exact over a band) while the EME keeps exact
+           Sellmeier — so the two legitimately differ, and an equality assert
+           would fail the correct configuration. `_MATERIAL_INDEX_TOL` is set
+           above that fit error and far below the ~0.008 a frozen medium is
+           wrong by at the band edges, so it passes the fixed configuration and
+           fails the broken one.
+
+        Action is controlled by `material_consistency_action`; default "warn"
+        because today's shipped default (frozen FDTD + per-wavelength EME) does
+        NOT satisfy it, and raising by default would break every existing
+        hybrid chain for a pre-existing condition.
+        """
+        if self.material_consistency_action == "ignore":
+            return
+        worst = self._material_disagreement(wavelengths)
+        if worst is None:
+            return
+        gap, wl, kind, a, b = worst
+        if gap <= _MATERIAL_INDEX_TOL:
+            return
+        msg = (
+            f"HybridSolver: sections {a} and {b} resolve different {kind} "
+            f"indices at {wl:.4f} um — they differ by {gap:.5f}, over the "
+            f"{_MATERIAL_INDEX_TOL} tolerance. The chain contracts their modes "
+            f"as if solved in the same medium. This is the expected result "
+            f"when a broadband FDTD section (index frozen at band centre) is "
+            f"chained to an EME body (exact per wavelength); enabling "
+            f"dispersion on the FDTD side closes it."
+        )
+        if self.material_consistency_action == "raise":
+            raise ValueError(msg)
+        logger.warning("%s", msg)
 
     def _check_material_consistency(self, wavelengths) -> None:
         """Warn when the sections are not modelling the same material.
@@ -921,6 +1052,7 @@ class HybridSolver:
         n_in_list, n_out_list = self._mode_lists(in_modes, out_modes)
 
         self._check_material_consistency(wavelengths)
+        self._check_material_index_agreement(wavelengths)
         self._check_all_interfaces(geometry, wavelengths, kwargs_per_section)
 
         mats = self._solve_sections(
@@ -1018,6 +1150,7 @@ class HybridSolver:
             geometry, sweep_section, kwargs_per_section[sweep_section]
         )
         self._check_material_consistency(wavelengths)
+        self._check_material_index_agreement(wavelengths)
         self._check_all_interfaces(geometry, wavelengths, kwargs_per_section)
 
         mats = self._solve_sections(
