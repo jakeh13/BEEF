@@ -176,6 +176,27 @@ fitted form is one meep Lorentzian by construction. Verified end to end — meep
    res-80 EME pin is not inherited across this change.
    (`batch/sweep/run_directional_coupler_*_resolution_sweep.batch`.)
 
+   **Started 2026-07-31 with the cheap half first — job 11586986.**
+   `examples/verification/python/verify_item_8_dispersive_convergence.py`. The literal
+   instruction is 11 array tasks × 2 nodes × 24 ranks at up to 24 h each, which answers the
+   question by brute force. But **item 11's pin was justified on Δβ**, the even/odd
+   supermode difference, and Δβ is a *mode-solve* quantity — no time-stepping, no
+   propagation, no S-matrix. So "does the convergence point move" is answerable on **one
+   serial task** (~2 h, measured ~40 s per point at res 20, growing ~res²), and that runs
+   first to decide whether the node-days are warranted and over what range.
+
+   Sweeps res 20→120 on the coupler body cross-section, both material settings, reporting
+   the *step* between consecutive resolutions rather than the absolute value — the same
+   criterion item 11 and `mode_spectrum_convergence.py` use.
+
+   - **Convergence resolution unchanged** ⇒ item 11's res-80 pin is inherited; the full
+     device sweep becomes confirmation rather than discovery and can be scoped down.
+   - **Convergence resolution moves** ⇒ the full sweep is required, and this says which
+     range it must cover instead of guessing.
+
+   It cannot speak for the *cascade's S-matrix* convergence, which only the full sweep
+   measures — just for the quantity the pin was actually set on.
+
 5. **Add the `HybridSolver` guard from `notes.md` #9** — assert the FDTD and EME sections
    resolve the same index at the same wavelength — as the regression test for this work.
    It needs a **tolerance, not equality**: see the last risk below.
