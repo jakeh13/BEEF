@@ -252,7 +252,46 @@ the only device with all three golden fixtures (`mmi_1x2_eme.json`,
    2026-07-31 under `gts-sr108-gedc_main` — the original 07-30 submission
    never started, blocked on `AssocGrpBillingMinutes`) generates the two
    SMatrix files; job 11585850 (`--dependency=afterany:11585845`) runs the
-   comparison once they land. Also run *before* gap 2 here, same as the
+   comparison once they land.
+
+   **✅ MEASURED 2026-07-31 — job 11585850** (beef `1cc8edc`; FDTD data from
+   11585845_1, hybrid from 11585845_2). This is **this device's first
+   hybrid-vs-full-device number**, and check 4's first result on any MMI.
+
+   | | `out_0`/`out_top` | `out_1`/`out_bot` |
+   |---|---|---|
+   | max \|ΔT\| | **0.03588** | 0.03590 |
+   | mean \|ΔT\| | 0.02530 | 0.02532 |
+   | max \|ΔT\| / mean(T_fdtd) | **9.11%** | 9.11% |
+   | worst λ | 1.33 µm | 1.33 µm |
+
+   `check_passive()` true for both S-matrices. The two ports agree to four
+   decimals, so **splitter symmetry survives the cascade** — a useful negative
+   result, since a mode-mixing failure at an interface would not be expected to
+   preserve it.
+
+   **The disagreement is systematic, not scatter: every ΔT is negative** — the
+   hybrid under-predicts transmission at all 11 wavelengths, by a margin that
+   grows from 0.021 at 1.26 µm to 0.036 at 1.33 µm. A random basis or meshing
+   error would not sign itself so consistently. That is the signature of the Δβ
+   discretization gap `resolved/directional_coupler_validation.md` items 6/14
+   diagnosed: MPB's index and the phase meep's time-stepper accumulates differ
+   ~2.3% per mode, which the `β/Δβ` lever amplifies.
+
+   **For scale:** the coupler's uncalibrated hybrid sat ~5% off its own
+   full-device reference and dropped to **0.11%** with
+   `HybridSolver(calibrate_body_neff=True)`. This device is at 9.11%
+   *uncalibrated* and has never been run with that flag. Trying it is the
+   obvious next step and costs one more hybrid run, not a new script.
+
+   **Two caveats on reading 9.11% as the device's real error.** Both examples
+   still share `RESOLUTION = 40.0`, which gap 2 shows is not converged here
+   (and this is the worst-converging device audited), so part of this is mesh.
+   And no threshold is enforced, deliberately: gap 4 (engine agreement) is
+   still unmeasured for this device, so there is no basis to split this number
+   into calibratable versus structural. Output:
+   `example_output/verification/mmi_1x2_hybrid_vs_fdtd/`
+   (`hybrid_vs_fdtd.png`, `comparison.npz`, `provenance.json`). Also run *before* gap 2 here, same as the
    2×2 — this device's basis is already fixed (gap 3, `N_MODES` 12→8) so the
    ordering concern the `## Order` section raises below (comparing a
    mismatched basis against a reference with "no such notion") no longer

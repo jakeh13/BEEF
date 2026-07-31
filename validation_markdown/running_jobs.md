@@ -1,7 +1,7 @@
 # Active SLURM jobs — snapshot
 
-**Snapshot taken 2026-07-31, 08:46 EDT** (third snapshot of the day: 07-30
-21:46 → 07-31 08:22 re-queue → now). This is a point-in-time list, not a
+**Snapshot taken 2026-07-31, 10:35 EDT** (fourth snapshot of the day: 07-30
+21:46 → 07-31 08:22 re-queue → 08:46 → now). This is a point-in-time list, not a
 live view — job states, elapsed times and queue positions all move. Check
 `squeue -u jhiesener3` (or `sacct -j <id>` once finished) for current status;
 this file exists so the *purpose* of each job is recorded somewhere durable,
@@ -19,21 +19,23 @@ of billing minutes; `gts-sr108-gedc_main` had headroom). Cancelled all five
 | job | name | state (at snapshot) | for |
 |---|---|---|---|
 | 11575516 | `beef_mode_spec_converge` | ✅ **COMPLETED** 21:17, 3:36:13 — results folded in, entry retained for provenance | [fdtd_vs_EME_mode_validation.md](fdtd_vs_EME_mode_validation.md) item 1 + [modal_multiplexer_validation.md](modal_multiplexer_validation.md) gap 2 |
-| ~~11577985~~ → **11585844** `[1-2]` | `beef_mmi_2x2_examples` | 🟢 **RUNNING** — both tasks (`_1` 08:24, `_2` 08:30) | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 5 (data) |
+| ~~11577985~~ → **11585844** `[1-2]` | `beef_mmi_2x2_examples` | `_1` ✅ **COMPLETED** 1:16:45; `_2` 🟢 **RUNNING** | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 5 (data) |
 | ~~11577986~~ → **11585849** | `beef_mmi_2x2_gap5` | PENDING (dep on 11585844) | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 5 (comparison) |
-| ~~11578018~~ → **11585845** `[1-2]` | `beef_mmi_1x2_examples` | `_1` ✅ **COMPLETED** 08:50 (8:57, FDTD SMatrix landed); `_2` 🟢 **RUNNING** (hybrid SMatrix not yet written) | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 (data) |
-| ~~11578019~~ → **11585850** | `beef_mmi_1x2_gap5` | PENDING (dep on 11585845) | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 (comparison) |
+| ~~11578018~~ → **11585845** `[1-2]` | `beef_mmi_1x2_examples` | ✅ **COMPLETED** — `_1` 8:57, `_2` 1:46:59; both SMatrix files on disk | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 (data) |
+| ~~11578019~~ → **11585850** | `beef_mmi_1x2_gap5` | ✅ **COMPLETED** 10:28, 0:09 — **max\|ΔT\| 0.0359 (9.11%), results folded in** | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 (comparison) |
 | ~~11578026~~ → **11585847** `[0]` | `beef_modal_mux_examples` | 🟢 **RUNNING** (08:38, 4 nodes) | [modal_multiplexer_validation.md](modal_multiplexer_validation.md) gap 6 (exercise run) |
 | **11586046** | `beef_diagnose_items_11_12` | 🟢 **RUNNING** (08:42) — new, submitted 2026-07-31 | [fdtd_vs_EME_mode_validation.md](fdtd_vs_EME_mode_validation.md) items 11 + 12 |
 | **11586098** | `beef_diagnose_item_13` | 🟢 **RUNNING** (08:56) — new, submitted 2026-07-31 | [fdtd_vs_EME_mode_validation.md](fdtd_vs_EME_mode_validation.md) item 13 |
+| **11586986** | `beef_dispersive_convergence` | 🟢 **RUNNING** (10:25) — new, submitted 2026-07-31 | [material_model_validation.md](material_model_validation.md) work item 4 (cheap half) |
 
-**All of the re-queued work is now running** — the billing block cleared and
-the whole backlog started within ~20 min of resubmission. The two `gap5`
-comparison jobs are the only things still pending, and only on their own
-dependencies, which is correct. The detail sections below carry the current
-job IDs — for the five re-queued jobs only the ID and billing account changed,
-so each entry's script, resources and rationale are unchanged from the 07-30
-submission.
+**First real results are in.** The 1×2 MMI's whole gap-5 chain has completed
+end to end (both data tasks plus the comparison) and its numbers are folded
+into `mmi_1x2_validation.md`. `11585849` (2×2 comparison) is still pending only
+on `11585844_2`, which is correct. Everything else is running.
+
+The detail sections below carry the current job IDs — for the five re-queued
+jobs only the ID and billing account changed, so each entry's script, resources
+and rationale are unchanged from the 07-30 submission.
 
 ## Details
 
@@ -99,12 +101,22 @@ submission.
   unlike the 2×2 — there's no open mode-identity concern underneath this
   comparison; only gap 2 (resolution) remains unsettled.
 
-### 11585850 — `beef_mmi_1x2_gap5`
+### 11585850 — `beef_mmi_1x2_gap5` — ✅ COMPLETED
 - **Script:** `batch/verification/run_verify_mmi_1x2_hybrid_vs_fdtd.batch` →
   `examples/verification/python/verify_mmi_1x2_hybrid_vs_fdtd.py`
 - Same shape as 11585849, ported to `mmi_1x2`'s port names (`out_0`/`out_1`
   vs `out_top`/`out_bot`). `--dependency=afterany:11585845`.
 - **Why:** `mmi_1x2_validation.md` gap 5.
+- **Result (10:28, 9 s):** max |ΔT| **0.0359** at λ = 1.33 µm, mean |ΔT|
+  0.0253, **9.11%** of mean T_fdtd. `check_passive()` true both sides; the two
+  output ports agree to 4 decimals, so splitter symmetry survives the cascade.
+  **Every ΔT is negative** — a systematic under-prediction, not scatter, which
+  is the Δβ-discretization signature from
+  `resolved/directional_coupler_validation.md` items 6/14 (coupler: ~5%
+  uncalibrated → 0.11% with `calibrate_body_neff=True`, never tried here).
+  Folded into `mmi_1x2_validation.md` gap 5; output under
+  `example_output/verification/mmi_1x2_hybrid_vs_fdtd/`. Provenance records
+  beef `1cc8edc`.
 
 ### 11585847 `[0]` — `beef_modal_mux_examples`
 - **Script:** `batch/run_modal_multiplexer_examples.batch` → `make
@@ -184,6 +196,27 @@ submission.
   back inert the `C/A` ratio is the whole argument for tuning
   `_DUP_MODE_MAX_EXTRA` down — pure cost, no effect on the answer. Item 13
   notes job 11575516's 3h36m was dominated by exactly this over-request.
+
+### 11586986 — `beef_dispersive_convergence`
+- **Script:** `batch/verification/run_dispersive_convergence.batch` →
+  `examples/verification/python/verify_item_8_dispersive_convergence.py`
+- **Resources:** 1 node, 8 cpus, serial, 480 min budget. Eigensolve only.
+- **Output:** `reports/11586986.out`.
+- **What it does:** Sweeps res 20→120 on the coupler body cross-section under
+  both material settings, reporting Δn_eff of the even/odd supermode pair and
+  the *step* between consecutive resolutions.
+- **Why:** `material_model_validation.md` work item 4 asks for a re-run of the
+  full resolution sweeps, because smoothing moves the mesh-convergence point
+  and item 11's res-80 pin is not inherited once dispersion is on. That sweep
+  is 11 array tasks × 2 nodes × 24 ranks at up to 24 h. But the pin was
+  justified on **Δβ**, a mode-solve quantity — so this answers "does the
+  convergence point move" on one serial task first, to decide whether the
+  node-days are warranted and over what range.
+- **Caveat, recorded 2026-07-31:** submitted *before* λ₀ became band-derived
+  (commit `4296ee7`), so its **dispersive column is stale** — it used the old
+  fixed λ₀ = 2.0. The non-dispersive column and the qualitative
+  "does-the-point-move" reading are unaffected, but the dispersive half needs
+  re-running before any number here is recorded as current.
 
 ## Not listed here
 

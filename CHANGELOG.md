@@ -154,6 +154,35 @@ latter, enabling dispersion improves FDTD-vs-EME agreement ~16× (0.00786 → 4.
 item 5's guard must therefore compare built media, not `si_index()` lookups — the latter
 reads 4e-16 in every configuration, including today's broken one.
 
+### Measured — 1×2 MMI check 4: hybrid vs full-device FDTD (job 11585850)
+
+**The repo's first hybrid-vs-full-device comparison on an MMI**, closing
+`mmi_1x2_validation.md` gap 5 as a measurement. Both data tasks (11585845_1/_2)
+plus the comparison completed end to end.
+
+| | max \|ΔT\| | mean \|ΔT\| | rel. to mean T_fdtd | worst λ |
+|---|---|---|---|---|
+| `out_top` | 0.03588 | 0.02530 | **9.11%** | 1.33 µm |
+| `out_bot` | 0.03590 | 0.02532 | 9.11% | 1.33 µm |
+
+`check_passive()` true both sides. The two ports agree to four decimals, so
+**splitter symmetry survives the cascade** — worth recording as a negative
+result, since interface mode-mixing would not be expected to preserve it.
+
+**The disagreement is systematic, not scatter: every ΔT is negative**, growing
+0.021 → 0.036 from 1.26 to 1.33 µm. The hybrid under-predicts at all 11
+wavelengths. That is the Δβ-discretization signature from
+`resolved/directional_coupler_validation.md` items 6/14, where the coupler sat
+~5% off uncalibrated and **0.11%** with `HybridSolver(calibrate_body_neff=True)`
+— a flag this device has never been run with. Trying it is the obvious next
+step and costs one hybrid run, not a new script.
+
+Two caveats against reading 9.11% as the device's true error: both examples
+still share `RESOLUTION = 40.0`, which gap 2 shows is unconverged here (and this
+is the worst-converging device audited), and gap 4 (engine agreement) is still
+unmeasured, so there is no basis to split the number into calibratable versus
+structural. No threshold enforced, deliberately.
+
 ### ✅ Strip-test gate PASSED — and it moved λ₀ from 10.0 to 2.0
 
 `examples/verification/python/verify_item_8_strip_gate.py` (new). Three arms on a
