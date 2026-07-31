@@ -5,7 +5,7 @@ calls scattered across every master and sweep script.
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import numpy as np
 
@@ -169,6 +169,32 @@ def meep_medium_reparam(kind: str, wl_band, lam0: float = _REPARAM_LAM0_UM):
     )
 
 
+def _flat_meow_material(kind: str, wl: float):
+    """meow material with a CONSTANT index, pinned at `wl`.
+
+    The EME-side counterpart of the FDTD's frozen `mp.Medium(index=n)`. Built
+    as a two-sample `SampledMaterial` with equal endpoints rather than an
+    `IndexMaterial` so it stays the same meow type as the dispersive path —
+    meow types `Structure3D.material` as a closed union, and keeping one type
+    means the frozen and dispersive branches cannot diverge in how meow
+    handles them.
+
+    Spans `_MODEL_RANGE_UM` so any `Environment` wavelength the solvers use
+    interpolates to exactly this index rather than falling off the end.
+    """
+    key = f"meow_flat:{kind}:{wl:.9f}"
+    if key not in _material_cache:
+        import meow as mw
+
+        n = float(sellmeier_index(kind, wl))
+        _material_cache[key] = mw.SampledMaterial(
+            name=f"beef_{kind}_flat_{wl:.4f}",
+            n=np.array([n, n], dtype=complex),
+            params={"wl": np.asarray(_MODEL_RANGE_UM, dtype=float)},
+        )
+    return _material_cache[key]
+
+
 def meep_medium(kind: str):
     """Dispersive meep Medium for `kind`, from the same coefficients.
 
@@ -221,14 +247,39 @@ class MaterialStack:
         self.sz = sz
         self.dispersive = bool(dispersive)
 
-    @property
-    def extrusion_rules(self) -> dict:
-        """meow GDS extrusion rules (layer → list[GdsExtrusionRule])."""
+    def resolve_dispersive(self, override: Optional[bool] = None) -> bool:
+        """This stack's `dispersive` setting, or `override` when not None.
+
+        The single place the three solvers agree on what "dispersive" means,
+        so `FDTDSolver(dispersive=...)`, `EMESolver(dispersive=...)` and the
+        stack cannot drift apart in how they interpret the flag.
+        """
+        return self.dispersive if override is None else bool(override)
+
+    def extrusion_rules_at(self, wl: Optional[float] = None) -> dict:
+        """meow GDS extrusion rules, optionally frozen at one wavelength.
+
+        `wl=None` (the default, and what `extrusion_rules` gives) uses the
+        dispersive `SampledMaterial`s — meow then re-evaluates the index at
+        whatever wavelength each `Environment` names, which is why the EME
+        side has never had the FDTD's frozen-band problem.
+
+        Passing a wavelength substitutes **flat** materials pinned at that
+        index. That is strictly a downgrade of the EME side and exists for one
+        reason: `EMESolver(dispersive=False)` lets both engines be frozen the
+        same way, so a hybrid A/B can separate "dispersion changed the answer"
+        from "the two engines were modelling different materials all along"
+        (`material_model_validation.md`, engine-agreement risk).
+        """
         import meow as mw
 
         h = self.wg_height
         sz = self.sz
-        si, ox = meow_material("si"), meow_material("sio2")
+        if wl is None:
+            si, ox = meow_material("si"), meow_material("sio2")
+        else:
+            si, ox = (_flat_meow_material("si", float(wl)),
+                      _flat_meow_material("sio2", float(wl)))
         return {
             (2, 0): [
                 mw.GdsExtrusionRule(material=ox, h_min=-sz/2, h_max=-h/2, mesh_order=2),
@@ -239,6 +290,15 @@ class MaterialStack:
                 mw.GdsExtrusionRule(material=ox, h_min=-sz/2, h_max=sz/2, mesh_order=2),
             ],
         }
+
+    @property
+    def extrusion_rules(self) -> dict:
+        """meow GDS extrusion rules (layer → list[GdsExtrusionRule]).
+
+        Dispersive. Kept as a property for the many existing callers; see
+        `extrusion_rules_at()` for the frozen variant.
+        """
+        return self.extrusion_rules_at(None)
 
     def si_index(self, wl: float) -> float:
         """Refractive index of silicon at wavelength wl (µm), from the shared
@@ -258,7 +318,7 @@ class MaterialStack:
         """Refractive index of SiO2 at wavelength wl (µm). See `si_index()`."""
         return float(sellmeier_index("sio2", wl))
 
-    def si_medium(self, wl: float):
+    def si_medium(self, wl, dispersive: Optional[bool] = None):
         """meep Medium for silicon at wavelength wl (µm).
 
         **Non-dispersive, and that is now a measured choice rather than an
@@ -302,25 +362,33 @@ class MaterialStack:
         frozen medium under either setting: there is no band to disperse over,
         and a single-wavelength mode solve wants exactly the index at that
         wavelength.
+
+        `dispersive=None` (the default) uses this stack's own setting; pass
+        True/False to override it for one call, which is how
+        `FDTDSolver(dispersive=...)` overrides a shared stack without mutating
+        it — the module-level `SOI_160`/`SOI_220` singletons are shared by
+        every solver in the process.
         """
-        return self._medium("si", wl)
+        return self._medium("si", wl, dispersive)
 
-    def sio2_medium(self, wl):
+    def sio2_medium(self, wl, dispersive: Optional[bool] = None):
         """meep Medium for SiO2 at wavelength wl (µm), or across a band when
-        `dispersive=True`. See `si_medium()`."""
-        return self._medium("sio2", wl)
+        dispersion is enabled. See `si_medium()`."""
+        return self._medium("sio2", wl, dispersive)
 
-    def _medium(self, kind: str, wl):
+    def _medium(self, kind: str, wl, dispersive: Optional[bool] = None):
         """Shared body of `si_medium()`/`sio2_medium()`.
 
-        Dispersion is opt-in AND requires a real band — a scalar `wl` falls
+        Dispersion requires BOTH the flag and a real band — a scalar `wl` falls
         through to the frozen index under either setting, so single-wavelength
         callers (mode solves) are unaffected by the flag by construction.
+        `dispersive=None` inherits the stack's own setting.
         """
         import meep as mp
 
         wl_arr = np.atleast_1d(np.asarray(wl, dtype=float))
-        if self.dispersive and wl_arr.size > 1 and wl_arr.min() < wl_arr.max():
+        if (self.resolve_dispersive(dispersive)
+                and wl_arr.size > 1 and wl_arr.min() < wl_arr.max()):
             return meep_medium_reparam(kind, wl_arr)
         index_of = self.si_index if kind == "si" else self.sio2_index
         return mp.Medium(index=index_of(float(np.mean(wl_arr))))

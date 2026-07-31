@@ -124,6 +124,36 @@ gate has not run.**
   in the validation doc. Pure numpy, no meep/meow import.
 - 14 new tests, `tests/test_material_reparam.py`. Fast suite 447 passed, 14 skipped.
 
+**Solver-level flags (follow-up, same day).** `dispersive=` now exists on `FDTDSolver` and
+`EMESolver`, so the setting no longer has to be baked into a shared `MaterialStack` — the
+`SOI_160`/`SOI_220` singletons are process-wide, so mutating one to A/B a run would leak
+into every other solver.
+
+The two defaults are **deliberately asymmetric**, because the engines start from opposite
+places. `FDTDSolver(dispersive=None)` inherits the stack (off by default) — that engine is
+the one with the frozen-band problem. `EMESolver(dispersive=None)` means **dispersive**,
+and only an explicit `False` freezes it: EME has always been exact per wavelength via
+`SampledMaterial` + one `Environment` per wavelength, so inheriting an off-by-default stack
+would have silently downgraded every existing EME run. `EMESolver(dispersive=False)` builds
+a flat `SampledMaterial` pinned at band centre — strictly a downgrade, and it exists only so
+a hybrid A/B can hold *both* engines frozen the same way.
+
+`HybridSolver` gets no flag of its own: it composes pre-built solvers, so it inherits
+theirs, and a hybrid-level setting could only work by mutating the caller's objects. It
+gets a guard instead — `_check_material_consistency()` warns when sections disagree about
+dispersion, naming the sections and the worst n_Si gap. That is the cheap half of work
+item 5; the hard assert waits on the strip test to fix a tolerance.
+
+**The guard fires on the default configuration, and that is the point.** A broadband
+`FDTDSolver` frozen at band centre chained to an `EMESolver` solving per wavelength have
+always been contracting modes computed in two different materials — 0.00786 apart in n_Si
+at the O-band edges. That mismatch predates all of this work; nothing had ever checked it.
+It also sharpens the doc's "engine agreement regresses 4e-16 → 2e-4": that 4e-16 measures
+agreement between the two *index models*, not between the media actually simulated. On the
+latter, enabling dispersion improves FDTD-vs-EME agreement ~16× (0.00786 → 4.9e-4). Work
+item 5's guard must therefore compare built media, not `si_index()` lookups — the latter
+reads 4e-16 in every configuration, including today's broken one.
+
 **Three doc corrections found by implementing it.** The prescribed call sites
 (`fdtd.py` 526/776/1175) were stale — the real ones are 615/616, 930/931, 1581/1582, and
 only **two** should change: 930 is a single-wavelength mode solve where the frozen index is

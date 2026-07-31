@@ -92,6 +92,7 @@ class EMESolver:
         temperature: float = 25.0,
         mode_solver: str = "meep",
         guard_duplicate_modes: bool = True,
+        dispersive: Optional[bool] = None,
     ):
         if len(num_modes) != len(num_cells):
             raise ValueError(
@@ -104,6 +105,7 @@ class EMESolver:
         if mode_solver not in ("meep", "tidy3d"):
             raise ValueError(f"unknown mode_solver {mode_solver!r}, expected 'meep' or 'tidy3d'")
         self.guard_duplicate_modes = bool(guard_duplicate_modes)
+        self.dispersive = dispersive
         self.num_modes = num_modes
         self.num_cells = num_cells
         self.lengths = lengths
@@ -115,6 +117,40 @@ class EMESolver:
         self.temperature = temperature
         self.mode_solver = mode_solver
 
+    def _extrusion_rules(self, wavelengths):
+        """meow extrusion rules for this run, dispersive unless frozen off.
+
+        **The EME side has never had the FDTD's frozen-band problem**: meow
+        re-evaluates a `SampledMaterial` at whatever wavelength each
+        `Environment` names, and this solver builds one `Environment` per
+        wavelength, so its materials are already exact Sellmeier everywhere.
+        `dispersive` therefore only ever *removes* accuracy here.
+
+        It exists for one reason: with `dispersive=False` on both engines, a
+        hybrid A/B can hold the material model fixed and frozen on both sides,
+        separating "dispersion changed the answer" from "the two engines were
+        modelling different materials all along" — which today they are, by up
+        to 0.008 in n_Si across the O-band
+        (`validation_markdown/material_model_validation.md`).
+
+        **Asymmetric with `FDTDSolver.dispersive` on purpose.** There, `None`
+        inherits the stack, whose default is False. Here `None` means
+        **dispersive**, and only an explicit `False` freezes: inheriting the
+        stack would silently downgrade every existing EME run the moment a
+        shared stack was left at its default, turning an exact model into a
+        frozen one with no caller asking for it. The flag reads the same on
+        both solvers ("True = track the band"); only the default differs,
+        because the two engines start from opposite places.
+        """
+        dispersive = True if self.dispersive is None else bool(self.dispersive)
+        if dispersive or wavelengths is None:
+            # wavelengths=None means a caller that never had a band to freeze
+            # at; the dispersive rules are correct there and are also what it
+            # got before this flag existed.
+            return self.material_stack.extrusion_rules
+        return self.material_stack.extrusion_rules_at(
+            float(np.mean(np.atleast_1d(np.asarray(wavelengths, dtype=float)))))
+
     def _build_mesh(self):
         import meow as mw
 
@@ -125,7 +161,8 @@ class EMESolver:
                           int(self.res * self.oxide_height) + 1),
         )
 
-    def _build_cells(self, geometry: DeviceGeometry, side: str = "top", **geometry_kwargs):
+    def _build_cells(self, geometry: DeviceGeometry, side: str = "top",
+                     wavelengths=None, **geometry_kwargs):
         import meow as mw
 
         gds_polys = geometry.to_gds_eme(
@@ -135,7 +172,7 @@ class EMESolver:
             side=side,
             **geometry_kwargs,
         )
-        structs = extrude_polygons(gds_polys, self.material_stack.extrusion_rules)
+        structs = extrude_polygons(gds_polys, self._extrusion_rules(wavelengths))
 
         Ls = []
         for region_len, n_cells in zip(self.lengths, self.num_cells):
@@ -319,7 +356,9 @@ class EMESolver:
             x0, x1, self.oxide_width,
             stub_left=stub_left, stub_right=stub_right, **geometry_kwargs
         )
-        structs = extrude_polygons(gds_polys, self.material_stack.extrusion_rules)
+        # Scalar wavelength: freezing at it and evaluating exactly at it are
+        # the same material, so this site is inert under the flag either way.
+        structs = extrude_polygons(gds_polys, self._extrusion_rules(wavelength))
         mesh = self._build_mesh() if mesh is None else mesh
         cells = mw.create_cells(structures=structs, mesh=mesh, Ls=[length])
         env = mw.Environment(wl=float(wavelength), T=self.temperature)
@@ -430,7 +469,7 @@ class EMESolver:
             x0, x1, self.oxide_width,
             stub_left=stub_left, stub_right=stub_right, **geometry_kwargs
         )
-        structs = extrude_polygons(gds_polys, self.material_stack.extrusion_rules)
+        structs = extrude_polygons(gds_polys, self._extrusion_rules(wavelengths))
         mesh = self._build_mesh()
         cells = mw.create_cells(structures=structs, mesh=mesh, Ls=[length])
 
@@ -580,7 +619,7 @@ class EMESolver:
             x0, x1, self.oxide_width,
             stub_left=stub_left, stub_right=stub_right, **geometry_kwargs
         )
-        structs = extrude_polygons(gds_polys, self.material_stack.extrusion_rules)
+        structs = extrude_polygons(gds_polys, self._extrusion_rules(wavelengths))
         mesh = self._build_mesh()
         cells = mw.create_cells(structures=structs, mesh=mesh, Ls=[1.0])  # length is a placeholder
 
@@ -680,7 +719,7 @@ class EMESolver:
                     f"cache_only=False to populate the cache."
                 )
 
-            cells = self._build_cells(geometry, side=side, **kwargs)
+            cells = self._build_cells(geometry, side=side, wavelengths=wavelengths, **kwargs)
             amplitudes = np.zeros(len(wavelengths), dtype=complex)
 
             for wl_idx, wl in enumerate(wavelengths):
@@ -805,7 +844,7 @@ class EMESolver:
                     f"with cache_only=False to populate the cache."
                 )
 
-            cells = self._build_cells(geometry, side=side, **kwargs)
+            cells = self._build_cells(geometry, side=side, wavelengths=wavelengths, **kwargs)
             amps = np.zeros((len(lengths), len(wavelengths)), dtype=complex)
 
             for wl_idx, wl in enumerate(wavelengths):
@@ -854,7 +893,9 @@ class EMESolver:
         split_left = cumcells[center_region]
         split_right = cumcells[center_region + 1]
 
-        cells_per_port = {side: self._build_cells(geometry, side=side) for side in ports}
+        cells_per_port = {side: self._build_cells(geometry, side=side,
+                                                  wavelengths=wavelengths)
+                          for side in ports}
         left_mode_counts = modes_per_cell[:split_left]
         center_mode_count = modes_per_cell[split_left]
         right_mode_counts = modes_per_cell[split_right:]

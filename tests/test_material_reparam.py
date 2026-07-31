@@ -25,6 +25,15 @@ C_BAND = np.linspace(1.50, 1.60, 21)
 O_BAND = np.linspace(1.26, 1.36, 21)
 
 
+def _si_material(rules):
+    """The silicon material out of a meow extrusion-rule dict.
+
+    Layer (2, 0) is [oxide below, silicon core, oxide above]; the core is the
+    mesh_order=1 entry.
+    """
+    return next(r.material for r in rules[(2, 0)] if r.mesh_order == 1)
+
+
 class TestReparamFit:
     def test_per_band_fit_is_far_better_than_the_dispersion_is_worth(self):
         """The whole justification: fit error must be small against the ~0.008
@@ -146,3 +155,95 @@ class TestCacheFingerprint:
         cfg = resolved_material_config(MaterialStack(wg_height=0.22), C_BAND)
         assert set(cfg) == {
             "resolved_probe_wl", "resolved_si_index", "resolved_sio2_index"}
+
+
+class TestSolverFlags:
+    """`dispersive=` on FDTDSolver / EMESolver, and the deliberate asymmetry
+    in what `None` means on each."""
+
+    def test_fdtd_none_inherits_the_stack(self):
+        from beef import FDTDSolver
+
+        off = FDTDSolver(res=10, material_stack=MaterialStack(wg_height=0.22))
+        on = FDTDSolver(res=10, material_stack=MaterialStack(wg_height=0.22,
+                                                            dispersive=True))
+        assert not off._media(C_BAND)[0].E_susceptibilities
+        assert on._media(C_BAND)[0].E_susceptibilities
+
+    def test_fdtd_flag_overrides_the_stack_without_mutating_it(self):
+        """The SOI_* stacks are process-wide singletons; a solver-level
+        override must not leak into other solvers sharing one."""
+        from beef import FDTDSolver
+
+        stack = MaterialStack(wg_height=0.22)          # dispersive=False
+        solver = FDTDSolver(res=10, material_stack=stack, dispersive=True)
+        assert solver._media(C_BAND)[0].E_susceptibilities
+        assert stack.dispersive is False
+        assert not FDTDSolver(res=10, material_stack=stack)._media(
+            C_BAND)[0].E_susceptibilities
+
+    def test_eme_defaults_to_dispersive_even_on_a_non_dispersive_stack(self):
+        """The regression this asymmetry exists to prevent: EME has always been
+        exact per wavelength, so inheriting an off-by-default stack would
+        silently downgrade every existing EME run."""
+        from beef import EMESolver
+
+        from beef.materials.stack import meow_material
+
+        eme = EMESolver(num_modes=[2], num_cells=[1], lengths=[1.0],
+                        material_stack=MaterialStack(wg_height=0.22))
+        assert _si_material(eme._extrusion_rules(C_BAND)) is meow_material("si")
+
+    def test_eme_explicit_false_freezes(self):
+        from beef import EMESolver
+        from beef.materials.stack import meow_material
+
+        eme = EMESolver(num_modes=[2], num_cells=[1], lengths=[1.0],
+                        dispersive=False)
+        si = _si_material(eme._extrusion_rules(C_BAND))
+        assert si is not meow_material("si")
+        assert np.allclose(si.n, si.n[0]), "frozen material still varies with wl"
+
+    def test_frozen_eme_material_is_constant_across_the_band(self):
+        from beef.materials.stack import _flat_meow_material
+
+        mat = _flat_meow_material("si", 1.31)
+        assert float(np.real(mat.n[0])) == pytest.approx(
+            float(sellmeier_index("si", 1.31)))
+        assert np.allclose(mat.n, mat.n[0])
+
+
+class TestHybridConsistencyGuard:
+    def _hybrid(self, fdtd_disp=None, eme_disp=None):
+        from beef import EMESolver, FDTDSolver, HybridSolver
+
+        f = FDTDSolver(res=10, dispersive=fdtd_disp)
+        e = EMESolver(num_modes=[2], num_cells=[1], lengths=[1.0],
+                      dispersive=eme_disp)
+        return HybridSolver(solvers=[f, e], boundaries=[0.0, 1.0, 2.0],
+                            interface_modes=[2])
+
+    def test_default_configuration_is_flagged(self, caplog):
+        """Today's default really is mismatched -- frozen FDTD against an
+        exact-per-wavelength EME. The guard must say so rather than pass."""
+        with caplog.at_level("WARNING"):
+            self._hybrid()._check_material_consistency(O_BAND)
+        assert "disagree on material dispersion" in caplog.text
+        assert "0.00786" in caplog.text
+
+    def test_both_dispersive_is_quiet(self, caplog):
+        with caplog.at_level("WARNING"):
+            self._hybrid(fdtd_disp=True, eme_disp=True)._check_material_consistency(O_BAND)
+        assert "disagree on material dispersion" not in caplog.text
+
+    def test_both_frozen_is_quiet(self, caplog):
+        """The A/B configuration the EME flag exists for."""
+        with caplog.at_level("WARNING"):
+            self._hybrid(fdtd_disp=False, eme_disp=False)._check_material_consistency(O_BAND)
+        assert "disagree on material dispersion" not in caplog.text
+
+    def test_single_wavelength_is_not_flagged(self, caplog):
+        """No band, nothing to disagree about."""
+        with caplog.at_level("WARNING"):
+            self._hybrid()._check_material_consistency(np.array([1.31]))
+        assert "disagree on material dispersion" not in caplog.text

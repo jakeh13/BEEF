@@ -517,6 +517,18 @@ class FDTDSolver:
             to avoid, so it always spans the full sim_width regardless of
             this setting.
         material_stack: material index lookup for Si / SiO₂.
+        dispersive: build the media from the re-parameterised single-Lorentzian
+            fit over this run's band instead of freezing one index at band
+            centre. `None` (default) inherits `material_stack.dispersive`;
+            True/False override it for this solver only, without mutating the
+            stack — the `SOI_160`/`SOI_220` singletons are shared process-wide.
+
+            A broadband run gets one Medium for its whole span, so the frozen
+            index is wrong at the band edges by up to 0.008 in n_Si on the
+            O-band, while the EME side re-solves per wavelength. Turning this
+            on cuts that mismatch ~16×. **Off by default** until the strip-test
+            gate in `validation_markdown/material_model_validation.md` runs.
+            Single-wavelength calls (mode solves) are unaffected either way.
         decay_tol: DFT field decay tolerance for early-stop criterion.
             Lower = more accurate but slower; 1e-9 is faster, 1e-11 is tight.
         source_bandwidth_factor: Gaussian pulse width as a multiple of the
@@ -556,6 +568,7 @@ class FDTDSolver:
         half_domain_aperture: bool = False,
         three_d: bool = False,
         material_stack: MaterialStack = SOI_160,
+        dispersive: Optional[bool] = None,
         decay_tol: float = 1e-11,
         source_bandwidth_factor: float = 2.0,
         eps_averaging: bool = True,
@@ -575,6 +588,7 @@ class FDTDSolver:
         self.output_monitor_widths = output_monitor_widths  # None → sim_width per monitor
         self.half_domain_aperture = half_domain_aperture     # True → half-domain aperture for single-mode ports
         self.material_stack = material_stack
+        self.dispersive = dispersive
         self.decay_tol = decay_tol
         self.source_bandwidth_factor = source_bandwidth_factor
         self.eps_averaging = eps_averaging
@@ -602,6 +616,24 @@ class FDTDSolver:
         (None → legacy infinite 2-D extrusion)."""
         return self.material_stack.wg_height if self.three_d else None
 
+    def _media(self, wavelengths):
+        """(si_medium, sio2_medium) for this run's band.
+
+        One place so `_build_domain()` and `solve_section()` cannot drift.
+        `self.dispersive` overrides `self.material_stack.dispersive` when set;
+        None inherits the stack, which is what every existing caller gets.
+
+        A broadband FDTD run gets ONE Medium for its whole span, so a frozen
+        centre index is wrong at the band edges — up to 0.008 in n_Si on the
+        O-band, against an EME side that re-solves per wavelength. Passing the
+        band lets the dispersive path fix that; the non-dispersive path ignores
+        it and returns the same frozen medium as before.
+        """
+        dispersive = self.material_stack.resolve_dispersive(self.dispersive)
+        wl = wavelengths if dispersive else float(np.mean(wavelengths))
+        return (self.material_stack.si_medium(wl, dispersive=dispersive),
+                self.material_stack.sio2_medium(wl, dispersive=dispersive))
+
     def _build_domain(self, geometry: DeviceGeometry, wavelengths: np.ndarray):
         """Return (Sx, Sy, wl_center, si_medium, sio2_medium).
 
@@ -612,13 +644,7 @@ class FDTDSolver:
         wl_center = float(np.mean(wavelengths))
         Sx = geometry.total_length + 2 * self.waveguide_length + 2 * self.dpml
         Sy = self.sim_width + 2 * self.dpml   # full cell: inner + PML on both sides
-        # Whole band, not wl_center: a broadband run gets ONE Medium for its
-        # entire span, so a frozen centre index is wrong at the edges by up to
-        # 0.008 in n_Si on the O-band. `MaterialStack(dispersive=True)` uses
-        # the band; the default ignores it and returns the same frozen medium
-        # as before, so this is inert until that flag is turned on.
-        si_med = self.material_stack.si_medium(wavelengths)
-        sio2_med = self.material_stack.sio2_medium(wavelengths)
+        si_med, sio2_med = self._media(wavelengths)
         return Sx, Sy, wl_center, si_med, sio2_med
 
     def solve(
@@ -1583,10 +1609,7 @@ class FDTDSolver:
             )
 
         wl_center = float(np.mean(wavelengths))
-        # Band, not centre — see `_build_domain()`. Inert unless the stack was
-        # built with `dispersive=True`.
-        si_med = self.material_stack.si_medium(wavelengths)
-        sio2_med = self.material_stack.sio2_medium(wavelengths)
+        si_med, sio2_med = self._media(wavelengths)
 
         # Draw the waveguide dpml further than it functionally needs to reach
         # (on *both* sides, always — every section is its own independent

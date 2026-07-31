@@ -783,6 +783,65 @@ class HybridSolver:
                 raise RuntimeError(message)
             logger.warning(message)
 
+    def _effective_dispersive(self, solver) -> Optional[bool]:
+        """What `solver` will actually do about dispersion, or None if it has
+        no opinion (a custom solver type with no material stack).
+
+        Encodes the deliberate asymmetry between the two engines: FDTD's
+        `None` inherits the stack (default off), EME's `None` means dispersive,
+        because EME has always been exact per wavelength and inheriting an
+        off-by-default stack would silently downgrade it. See
+        `EMESolver._extrusion_rules()`.
+        """
+        stack = getattr(solver, "material_stack", None)
+        if stack is None:
+            return None
+        own = getattr(solver, "dispersive", None)
+        if hasattr(solver, "section_modes"):        # EME-style
+            return True if own is None else bool(own)
+        return stack.resolve_dispersive(own)        # FDTD-style
+
+    def _check_material_consistency(self, wavelengths) -> None:
+        """Warn when the sections are not modelling the same material.
+
+        The chain contracts one section's modes against the next's assuming
+        both were solved in the same medium. Nothing checked that until now,
+        and today the default configuration **fails it**: a broadband FDTD
+        section freezes its index at band centre while an EME body re-solves
+        per wavelength, so the two disagree by up to 0.008 in n_Si across the
+        O-band — a real, silent, pre-existing mismatch, not one this flag
+        introduced (`validation_markdown/material_model_validation.md`).
+
+        Warning-only and best-effort, deliberately. This is the cheap half of
+        that doc's work item 5; the hard-assert-with-tolerance version is
+        gated on the strip test, which decides what tolerance is even correct.
+        Solvers with no material stack are skipped rather than guessed at.
+        """
+        wl = np.atleast_1d(np.asarray(wavelengths, dtype=float))
+        if wl.size < 2 or wl.min() >= wl.max():
+            return                        # nothing to disagree about
+        modes = {}
+        for k, solver in enumerate(self.solvers):
+            eff = self._effective_dispersive(solver)
+            if eff is not None:
+                modes.setdefault(eff, []).append(k)
+        if len(modes) < 2:
+            return
+        stack = next((getattr(s, "material_stack", None) for s in self.solvers
+                      if getattr(s, "material_stack", None) is not None), None)
+        gap = ""
+        if stack is not None:
+            centre = stack.si_index(float(np.mean(wl)))
+            worst = max(abs(stack.si_index(float(w)) - centre)
+                        for w in (wl.min(), wl.max()))
+            gap = f" Worst n_Si gap across this band: {worst:.5f}."
+        logger.warning(
+            "HybridSolver: sections disagree on material dispersion — "
+            "dispersive sections %s, frozen sections %s. The chain contracts "
+            "their modes as if solved in the same medium.%s",
+            modes.get(True, []), modes.get(False, []), gap,
+        )
+
     def _check_all_interfaces(
         self, geometry, wavelengths: np.ndarray, kwargs_per_section: List[dict],
     ) -> None:
@@ -861,6 +920,7 @@ class HybridSolver:
         kwargs_per_section = self._kwargs_per_section(geometry_kwargs)
         n_in_list, n_out_list = self._mode_lists(in_modes, out_modes)
 
+        self._check_material_consistency(wavelengths)
         self._check_all_interfaces(geometry, wavelengths, kwargs_per_section)
 
         mats = self._solve_sections(
@@ -957,6 +1017,7 @@ class HybridSolver:
         self._validate_uniform_sweep_section(
             geometry, sweep_section, kwargs_per_section[sweep_section]
         )
+        self._check_material_consistency(wavelengths)
         self._check_all_interfaces(geometry, wavelengths, kwargs_per_section)
 
         mats = self._solve_sections(

@@ -173,6 +173,18 @@ fitted form is one meep Lorentzian by construction. Verified end to end — meep
    resolve the same index at the same wavelength — as the regression test for this work.
    It needs a **tolerance, not equality**: see the last risk below.
 
+   **Cheap half done 2026-07-31, warning-only.** `HybridSolver._check_material_consistency()`
+   runs on every `solve()`/`solve_length_sweep()` and logs a WARNING when the chain's
+   sections disagree about dispersion, naming which sections are on which side and the
+   worst n_Si gap across the band. The hard assert still waits on the gate, which is what
+   decides the tolerance.
+
+   **It fires on today's default configuration, and that is correct.** A broadband
+   `FDTDSolver` freezes its index at band centre while an `EMESolver` body re-solves per
+   wavelength, so the chain has *always* contracted modes solved in two different
+   materials — 0.00786 apart in n_Si at the O-band edges. That mismatch predates this work
+   entirely; it was simply never checked.
+
 ## Verification
 
 **The gate is the strip test**, and it is cheap: re-measure the 450×220 nm strip at res 40,
@@ -200,3 +212,22 @@ the outstanding cold regeneration pass — which already owes the goldens, the
   only the FDTD is fit. That is a real cost and the reason work item 5 needs a tolerance.
   It is worth paying: 2e-4 of disagreement *across the band* replaces a band that is
   currently frozen at one wavelength and wrong by up to 0.008 at its edges.
+
+  **Sharpened 2026-07-31 — the two numbers measure different things, and on the one that
+  decides correctness this is an improvement, not a regression.** The 4e-16 is agreement
+  between the two engines' *index models*: both call `sellmeier_index()`, so they return
+  the same number at any wavelength you ask. It is not agreement between the media they
+  actually simulate with. The FDTD then collapses its model to a single wavelength when it
+  builds `mp.Medium`, while the EME evaluates per wavelength — so the *simulated* materials
+  already differ today, by up to 0.00786 in n_Si across the O-band. Measured:
+
+  | | FDTD medium vs EME's exact n(λ), worst over O-band |
+  |---|---|
+  | today (frozen at centre) | **0.00786** |
+  | `dispersive=True` | **4.9e-4** |
+
+  So enabling dispersion improves real FDTD-vs-EME material agreement ~16×. What genuinely
+  regresses is model-level agreement — the FDTD's fit differs from exact Sellmeier by
+  ~2e-4 where before it differed by 0. Work item 5's guard must therefore compare **built
+  media, not index lookups**: a guard written against `si_index()` would read 4e-16 in
+  every configuration and be vacuous, including the mismatched one shipping today.
