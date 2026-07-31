@@ -918,6 +918,7 @@ class FDTDSolver:
         neff = np.zeros((len(wavelengths), n_modes))
         for i, wl in enumerate(wavelengths):
             f = 1.0 / float(wl)
+            n_clad = self.material_stack.sio2_index(float(wl))
             # kpoint only seeds the solve; match_frequency then iterates to the
             # true k. Any guided mode sits between the cladding and core
             # indices, so the midpoint of that range is a seed that cannot be
@@ -927,7 +928,7 @@ class FDTDSolver:
             # docstring / gap 6) -- band as yielded may skip some meep
             # band_nums, but always fills n_modes distinct logical positions.
             for band, em in enumerate(
-                self._iter_distinct_bands(sim, where, f, mea_c, mea_w, n_modes), start=1
+                self._iter_distinct_bands(sim, where, f, mea_c, mea_w, n_modes, n_clad), start=1
             ):
                 neff[i, band - 1] = float(np.real(em.k.x)) / f
 
@@ -1045,7 +1046,7 @@ class FDTDSolver:
                           size=mp.Vector3(0, mea_w, self._mon_sz))
         return sim, where, mea_c, mea_w
 
-    def _iter_distinct_bands(self, sim, where, f, mea_c, mea_w, n_modes):
+    def _iter_distinct_bands(self, sim, where, f, mea_c, mea_w, n_modes, n_clad):
         """Yields `n_modes` distinct-eigenvector ``EigenmodeData`` objects
         for consecutive logical band positions, silently skipping any meep
         `band_num` whose field is (numerically) IDENTICAL to an
@@ -1075,6 +1076,44 @@ class FDTDSolver:
         `field_overlap_matrix()`'s `dy`/`dz` cancel exactly in its
         normalized ratio, so passing 1.0 for both here (rather than this
         grid's real spacing) gives the identical answer.
+
+        **2026-07-31 — two more failure modes closed**
+        (`fdtd_vs_EME_mode_validation.md` items 12 and 14), both verified
+        offline against a real device's own measured band trace
+        (`diagnose_kpoint_ladder_v2.py`, job 11588309) before landing here:
+
+        - **The k-seed now ladders instead of staying fixed.** Every attempt
+          used to start `get_eigenmode()`'s k-search from the same
+          `_KPOINT_SEED_NEFF` guess — the textbook shape of the duplicate
+          this guard works around, since two adjacent targeted solves
+          launched from an identical point can converge to the same
+          eigenpair. Seeding attempt *k* from attempt *(k-1)*'s own raw
+          (accepted-or-skipped) converged n_eff instead recovers a genuinely
+          distinct mode the fixed seed silently drops, at no extra attempt
+          cost (measured: same attempt count, one fewer skip, on the
+          cross-section this was found on — three seeding variants tried,
+          all equivalent, so the simplest one is what ships).
+        - **The walk now stops at the guided edge, not just at
+          `max_band_num`.** A `band_num` with no solution at the target
+          frequency does not raise — MPB's k-search limit-cycles between two
+          k values forever, hanging the process (measured: 161 solves on one
+          band, 59% of a job's entire eigensolve time, before SLURM killed
+          it). Every raw solve's n_eff is now checked against `n_clad`
+          *before* the duplicate-overlap sampling: once a raw solve returns
+          `n_eff <= n_clad`, nothing above it is guided and the *next*
+          `band_num` is where a real cross-section's non-convergent region
+          begins, so the walk stops there rather than reaching it. If fewer
+          than `n_modes` were accepted by then, this raises immediately —
+          a basis silently padded with unguided modes has a rank that is a
+          lie (see `fdtd_vs_EME_mode_validation.md` item 9 for why an
+          unguided column is worthless to `HybridSolver` anyway), and
+          failing loudly here beats discovering it downstream.
+
+        Args:
+            n_clad: cladding refractive index at this cross-section's
+                wavelength (``self.material_stack.sio2_index(wl)``) — the
+                guided/unguided boundary the stop condition above checks
+                against.
         """
         import meep as mp
 
@@ -1089,6 +1128,7 @@ class FDTDSolver:
         accepted_ez: List[np.ndarray] = []
         band_num = 0
         n_accepted = 0
+        last_raw_neff: Optional[float] = None
         max_band_num = n_modes + _DUP_BAND_MAX_EXTRA
         while n_accepted < n_modes:
             band_num += 1
@@ -1100,10 +1140,25 @@ class FDTDSolver:
                     f"this guard tolerates. See validation_markdown/"
                     f"modal_multiplexer_validation.md gap 6."
                 )
+            seed_neff = last_raw_neff if last_raw_neff is not None else _KPOINT_SEED_NEFF
             em = sim.get_eigenmode(
-                f, mp.X, where, band_num, mp.Vector3(f * _KPOINT_SEED_NEFF, 0, 0),
+                f, mp.X, where, band_num, mp.Vector3(f * seed_neff, 0, 0),
                 parity=mp.NO_PARITY,
             )
+            n = float(np.real(em.k.x)) / f
+            last_raw_neff = n
+            if n <= n_clad:
+                raise RuntimeError(
+                    f"FDTDSolver: this cross-section supplies only {n_accepted} "
+                    f"guided mode(s) of the {n_modes} requested -- band_num="
+                    f"{band_num} returned n_eff={n:.6f}, at or below the "
+                    f"cladding index {n_clad:.6f}. Nothing above the guided "
+                    f"edge is a real channel, and walking further risks a "
+                    f"non-convergent MPB k-search (see fdtd_vs_EME_mode_"
+                    f"validation.md item 14). Reduce n_modes to what this "
+                    f"cross-section actually supports, or choose a "
+                    f"resolution where it supports more."
+                )
             ey = np.array([[em.amplitude(mp.Vector3(0, float(y), float(z)), mp.Ey)
                             for z in diag_z] for y in diag_y])
             ez = np.array([[em.amplitude(mp.Vector3(0, float(y), float(z)), mp.Ez)
@@ -1202,11 +1257,12 @@ class FDTDSolver:
         neff = np.zeros(n_modes)
 
         f = 1.0 / wl_center
+        n_clad = self.material_stack.sio2_index(wl_center)
         # _iter_distinct_bands() guards against get_eigenmode() returning the
         # same eigenvector for two different band numbers (see its docstring
         # / validation_markdown/modal_multiplexer_validation.md gap 6).
         for band, em in enumerate(
-            self._iter_distinct_bands(sim, where, f, mea_c, mea_w, n_modes), start=1
+            self._iter_distinct_bands(sim, where, f, mea_c, mea_w, n_modes, n_clad), start=1
         ):
             neff[band - 1] = float(np.real(em.k.x)) / f
             for iy, y in enumerate(y_grid):

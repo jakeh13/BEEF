@@ -91,6 +91,40 @@ gap 3 read "has run fine (job 11585847) the whole time," which was true of
 `solve_section()` never hitting the `CompoundGeometry.polygons()` bug but
 overstated the job's own outcome.
 
+### Fixed — `FDTDSolver._iter_distinct_bands()`: k-seed laddering (item 12) and the guided-edge stop (item 14)
+
+Both items this session's earlier diagnostic jobs (11588309, and the hang that
+produced it) opened, closed together in the one method they share. The seed
+now ladders — attempt *k* starts from attempt *(k−1)*'s own raw converged
+n_eff instead of a fixed guess every time — recovering a guided mode the
+fixed seed silently drops, at no extra cost (policy B, measured
+byte-identical to the fancier step/accepted-only variants, so shipped as the
+simplest one). And the walk now stops the instant a raw solve's n_eff drops
+to or below the cladding index, raising immediately if fewer than `n_modes`
+were found by then, instead of either padding the basis with unguided modes
+or continuing toward a `band_num` where MPB's k-search can limit-cycle
+forever (measured: 161 solves on one such band before SLURM killed the job
+that found this). Landed together deliberately — laddering alone would still
+be exposed to the hang, and the stop condition is what makes it safe to ship.
+
+Both fixes were diagnosed and verified offline first
+(`diagnose_kpoint_ladder_v2.py`, job 11588309) before touching the production
+method, per this session's own standing caution about changing this
+particular code path under-verified. 6 new meep-free tests
+(`tests/test_duplicate_band_guard.py::TestSeedLaddering`,
+`TestGuidedEdgeStop`), mutation-checked — all 11 tests in the file fail
+against the pre-fix signature. Fast suite 489 → 495.
+
+**Known, deliberate consequence:** any device whose shipped `N_MODES` exceeds
+what a cross-section actually supports will now raise instead of silently
+padding. The modal multiplexer is exactly this case (16 requested, 14
+reachable at res 40) — its currently-running hybrid job (11590663) started
+before this change and is unaffected, but the *next* resubmission of
+`modal_multiplexer_hybrid.py` will raise until `N_MODES`/`RESOLUTION` are
+decided jointly (`modal_multiplexer_validation.md` gap 2). Not fixed as a
+side effect of this change — that doc is explicit the two need a real joint
+decision, not a quick unblock to whatever today's ceiling happens to be.
+
 ### Measured — material model work item 4 closed for the mode-solve half (job 11588997)
 
 The re-run of `verify_item_8_dispersive_convergence.py` after its `dispersive=`

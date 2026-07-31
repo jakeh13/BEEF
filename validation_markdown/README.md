@@ -8,12 +8,12 @@ One file per example device, recording what has to hold before that device's
     modal_multiplexer_validation.md    modal multiplexer
     ring_resonator_validation.md       ring resonator
 
-    material_model_validation.md       cross-device — shared Si/SiO2 model, both engines
     fdtd_vs_EME_mode_validation.md     cross-device — the mode-correspondence MECHANISM itself
     running_jobs.md                    snapshot — active SLURM jobs and which gap/item each is for
     archive/                           closed items, kept whole
     resolved/                          whole docs sufficiently addressed (open to-dos may remain)
     resolved/directional_coupler_validation.md  directional coupler — the worked example
+    resolved/material_model_validation.md       cross-device — shared Si/SiO2 model, both engines
 
 Check 2 below (mode identity) has grown its own cross-device file:
 `fdtd_vs_EME_mode_validation.md` covers the *mechanism* — what must hold for any
@@ -45,6 +45,16 @@ docs still name it bare, as `directional_coupler_validation.md`. They are
 backticked prose references rather than markdown links (no link in this
 directory is broken — checked), so they resolve by name; read a bare citation as
 `resolved/directional_coupler_validation.md`.
+
+**`material_model_validation.md` moved into `resolved/` on 2026-07-31**, once
+its five work items (`beef.materials.stack.reparam_lorentz()` committed, the
+per-band media, the fingerprint, `HybridSolver`'s index-agreement guard, and
+the resolution-sensitivity sweep) all closed and its strip-test gate passed on
+every stack/band combination. Same convention as the coupler's own move: the
+handful of bare-backtick citations across these docs are left as-is (they
+resolve by name), and the three actual markdown-link references were
+repointed. `dispersive=True` remains opt-in, default off, for every solver —
+that is a design choice now, not an open gap.
 
 ## The four checks
 
@@ -327,9 +337,14 @@ agree to 4e-16. Two consequences that reach every device here:
 - n_Si shifts by ~0.002, because meow's silicon table was a different, noisier
   source. **All four goldens must be regenerated**; they are `@pytest.mark.slow`,
   so the fast suite has not been checking them.
-- Making the FDTD genuinely *dispersive* is still open, and for a measured
-  reason: meep subpixel-averages only the instantaneous ε, and the Sellmeier
+- Making the FDTD genuinely *dispersive* was tried the naive way first and
+  reverted: meep subpixel-averages only the instantaneous ε, and the Sellmeier
   form puts ε∞ = 1 with the whole index in susceptibilities, so the structure
   has no contrast to smooth. On a 450x220 nm strip at res 40 that moved n_eff
-  by **+0.0496** — 25x the ~0.002 the dispersion was worth. See `notes.md` #5
-  and, for the checked re-parameterisation fix, `material_model_validation.md`.
+  by **+0.0496** — 25x the ~0.002 the dispersion was worth. See `notes.md` #5.
+  **2026-07-31 — the re-parameterised fix landed, passed its strip-test gate on
+  every stack/band combination, and (job 11588997) its resolution sensitivity
+  on the coupler's own body cross-section matches what production already
+  ships at.** It is opt-in (`dispersive=True`, default off) for every solver —
+  turning it on by default anywhere is a separate, unstarted decision. Full
+  record in `material_model_validation.md`.

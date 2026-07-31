@@ -5,8 +5,9 @@
 > each doing its own nearest-tabulated lookup, which shifts n_Si by ~0.002 and
 > removes a 0.0063 step that sat in the middle of the C-band. Any golden or stored
 > result for this device predates that and needs regenerating; see
-> `directional_coupler_validation.md` item 8 and, for the still-open dispersive-FDTD
-> half, `material_model_validation.md`.
+> `directional_coupler_validation.md` item 8 and, for the dispersive-FDTD
+> re-parameterisation (built and gate-passed 2026-07-31, opt-in via
+> `dispersive=True`, off by default), `material_model_validation.md`.
 
 
 

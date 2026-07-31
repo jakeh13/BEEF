@@ -5,8 +5,9 @@
 > each doing its own nearest-tabulated lookup, which shifts n_Si by ~0.002 and
 > removes a 0.0063 step that sat in the middle of the C-band. Any golden or stored
 > result for this device predates that and needs regenerating; see
-> `directional_coupler_validation.md` item 8 and, for the still-open dispersive-FDTD
-> half, `material_model_validation.md`.
+> `directional_coupler_validation.md` item 8 and, for the dispersive-FDTD
+> re-parameterisation (built and gate-passed 2026-07-31, opt-in via
+> `dispersive=True`, off by default), `material_model_validation.md`.
 
 
 
@@ -262,6 +263,21 @@ So it has the most ways to be wrong and the fewest ways to find out.
    behaviour itself is a library defect
    (`fdtd_vs_EME_mode_validation.md` **item 14**, which also covers the hang one
    band further up).
+
+   > ⚠️ **Items 12 and 14 are now fixed in the library, 2026-07-31 — this
+   > device's own `N_MODES=16` will raise the next time it runs.**
+   > `_iter_distinct_bands()` now ladders its k-seed (item 12) and stops at
+   > the cladding index instead of padding with unguided modes (item 14) —
+   > raising a clear error the moment a cross-section can't supply the
+   > requested count, which is exactly this device's situation (14 reachable,
+   > 16 requested). The currently in-flight hybrid run (job 11590663) started
+   > before this change and is unaffected. Any *future* resubmission of
+   > `modal_multiplexer_hybrid.py` will fail immediately at whichever interface
+   > it reaches first, until `N_MODES`/`RESOLUTION` are actually decided
+   > jointly — see `fdtd_vs_EME_mode_validation.md` items 12/14 for the fix
+   > itself, and the two bullets just above for why 14 (not 16, not the
+   > unmeasured FDTD-converged count above res 60) is the number this
+   > decision has to reconcile.
 
    Per check 3, the remaining question is which quantity *this device's*
    result depends on — the coupler's lesson was that sweeping an insensitive

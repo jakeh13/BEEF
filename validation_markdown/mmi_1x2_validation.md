@@ -5,8 +5,9 @@
 > each doing its own nearest-tabulated lookup, which shifts n_Si by ~0.002 and
 > removes a 0.0063 step that sat in the middle of the C-band. Any golden or stored
 > result for this device predates that and needs regenerating; see
-> `directional_coupler_validation.md` item 8 and, for the still-open dispersive-FDTD
-> half, `material_model_validation.md`.
+> `directional_coupler_validation.md` item 8 and, for the dispersive-FDTD
+> re-parameterisation (built and gate-passed 2026-07-31, opt-in via
+> `dispersive=True`, off by default), `material_model_validation.md`.
 
 
 
@@ -138,6 +139,12 @@ the only device with all three golden fixtures (`mmi_1x2_eme.json`,
    Do this **after** gap 3's `N_MODES` reduction — dropping the near-cutoff
    bands removes the modes that are hardest to converge, so the answer will
    change.
+
+   **In flight, 2026-07-31 — job 11591224.** Same recipe as the 2×2's own
+   gap 2 (job 11590785, mmi_2x2_validation.md): this device's self-imaging
+   length (`mm_length=4.5`) is set by Δβ_01 between its two lowest guided
+   modes, not either mode's own n_eff. `verify_mmi_1x2_gap2_dbeta.py` sweeps
+   res 40/60/80/100/120 measuring it directly.
 
 3. **Mode identity — RUN, FAILED at N_MODES=12, and the fix is DONE (2026-07-30).**
 

@@ -71,7 +71,7 @@ full-device reference) and its full record has moved to the archive. Item 8's st
 done: both engines now share one index model and agree to 4e-16, and the C-band kink is
 gone. Its step 2 (a dispersive FDTD medium) was implemented, measured 0.0496 *worse* in
 n_eff, and reverted — see the item for why and what would make it work; the checked plan,
-with a strip-test gate, is [`material_model_validation.md`](../material_model_validation.md).
+with a strip-test gate, is [`material_model_validation.md`](material_model_validation.md).
 
 Nothing from either is in the published example outputs or the goldens yet. All four
 goldens are `@pytest.mark.slow`, were never run during this work, and are **stale** —
@@ -184,8 +184,20 @@ means it is one pass rather than three.
 
    **That prescription has now been checked against meep's actual `LorentzianSusceptibility`
    shape, and the checked version — the fit band, the λ₀ degeneracy, the strip-test gate —
-   is recorded in [`material_model_validation.md`](../material_model_validation.md), since it
+   is recorded in [`material_model_validation.md`](material_model_validation.md), since it
    reaches every device, not just this one.**
+
+   **2026-07-31 — landed, gate-passed, and the resolution question closed on this device's
+   own cross-section.** The re-parameterisation shipped as `dispersive=True` (opt-in, off by
+   default) and passed the strip-test gate on both stacks/bands. Job 11588997 then swept
+   res 20→120 on **this coupler's own body cross-section** under both settings: at band
+   centre dispersion changes nothing (identical convergence resolution throughout); at the
+   band edge the 1e-3 threshold moves from res 60 to res 80 under dispersion, which is
+   exactly the resolution item 11 above already pins production at — so nothing currently
+   shipped needs to change. Full table in `material_model_validation.md` work item 4. Step 2
+   is therefore no longer simply "open" — it exists, is gated, and its one open question
+   (this device's own resolution sensitivity) has an answer; turning it on by default for
+   any example is still a separate, unstarted decision.
 
    **Three findings worth keeping.**
 
@@ -265,7 +277,9 @@ an already-supported path; if it lands with MPB, that is two operators against o
 
 ### Standing
 
-- **Fast suite: 271 passed, 1 skipped.** Includes `test_beta_calibration.py` (26 tests on
+- **Fast suite: 271 passed, 1 skipped as of this file's 2026-07-28 date; 489 passed, 1
+  skipped as of 2026-07-31** (growth is unrelated library work across other devices, not a
+  regression here). Includes `test_beta_calibration.py` (26 tests on
   the β extraction and its two guards), `test_atomic_write.py` (9, on the concurrent-write
   fix), `test_mode_identity.py`, `test_engine_agreement.py`, `test_eme_convergence.py`.
 - **Goldens: 4, and all four are now STALE — item 8 invalidated them.** Every golden is

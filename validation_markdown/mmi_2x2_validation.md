@@ -5,8 +5,9 @@
 > each doing its own nearest-tabulated lookup, which shifts n_Si by ~0.002 and
 > removes a 0.0063 step that sat in the middle of the C-band. Any golden or stored
 > result for this device predates that and needs regenerating; see
-> `directional_coupler_validation.md` item 8 and, for the still-open dispersive-FDTD
-> half, `material_model_validation.md`.
+> `directional_coupler_validation.md` item 8 and, for the dispersive-FDTD
+> re-parameterisation (built and gate-passed 2026-07-31, opt-in via
+> `dispersive=True`, off by default), `material_model_validation.md`.
 
 
 
@@ -74,6 +75,18 @@ the 1×2's problem is *stale* references, which at least fail loudly under
    quantity the physics is not sensitive to (T_cross) hid a 7% error in one it
    is (Δβ). Do not simply raise the resolution and assume it is fixed.
 
+   **In flight, 2026-07-31 — job 11590785.** This device's own self-imaging
+   length (`mm_length=28.0`) is set by the beat length between its two lowest
+   guided modes, Δβ_01 = 2π/λ·(n_eff[0]−n_eff[1]) — the same logic as the
+   coupler's Δβ, applied to this device's own relevant mode pair rather than
+   assumed to transfer. `verify_mmi_2x2_gap2_dbeta.py` sweeps res
+   40/60/80/100/120 measuring it directly. Early readout (through res 80, job
+   still running): steps of −0.00092 (40→60) and −0.00049 (60→80) rad/µm
+   against an absolute value of ~0.164 — roughly an order of magnitude
+   tighter, proportionally, than the absolute-n_eff steps above. Promising,
+   not yet a result: two resolutions remain and this item should not be
+   closed until they land.
+
 3. ~~**Mode identity — this is the most exposed device in the repo.**~~
    **Done 2026-07-26 — passed, and the prediction behind this gap was wrong.**
 
@@ -114,6 +127,15 @@ the 1×2's problem is *stale* references, which at least fail loudly under
    phase. The extraction helper
    (`tests/test_engine_agreement.py::dbeta_from_phases`) is device-independent
    and already tested — it takes lengths and phases, nothing coupler-specific.
+
+   **In flight, 2026-07-31 — job 11591249.** `verify_mmi_2x2_engine_agreement.py`
+   (new), 4 lengths (2/4/6/8 µm, deeper margin than the minimum two since the
+   body has room), same `dbeta_from_phases` helper, same 2-mode pair gap 2's
+   own Δβ_01 measures. Answers whether this device's own hybrid-vs-FDTD gap
+   (0.82%, sign flips across the band) has the coupler's discretization
+   mechanism underneath it or something else — `calibrate_body_neff` has never
+   been tried here. Real FDTD time-domain runs, not eigensolves — 2 nodes, 5h
+   budget, same shape as this device's own production jobs.
 
 5. **No hybrid-vs-full-device comparison on record.** `mmi_2x2_fdtd.py` exists,
    so the reference run is available; nothing asserts the hybrid reproduces it.

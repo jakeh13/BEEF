@@ -775,7 +775,7 @@ the three properties they need has been checked.
       firing at all on that device, not about this grid being untrustworthy
       when they do.
 
-- [~] **12. Every band's eigensolve starts from the same k guess — the likely
+- [x] **12. DONE 2026-07-31 (library fix landed). Every band's eigensolve starts from the same k guess — the likely
       root cause of the duplicates both guards are working around. TESTED
       2026-07-30, net positive but not a clean fix.**
       `_iter_distinct_bands()` calls `sim.get_eigenmode(..., band_num,
@@ -984,6 +984,31 @@ the three properties they need has been checked.
       now the cheap one to test: the same harness at res 60, where 11575516 found
       meow reaches 16/16 and item 13 found no duplicate fires at all.
 
+      **Library fix landed 2026-07-31.** `FDTDSolver._iter_distinct_bands()` now
+      seeds attempt *k* from attempt *(k−1)*'s own raw (accepted-or-skipped)
+      converged n_eff instead of the fixed `_KPOINT_SEED_NEFF` every time —
+      policy B, the naive ladder, since B/C/D were shown byte-identical on the
+      cross-section this was measured on and the extra machinery in C/D buys
+      nothing. Landed together with item 14's cladding stop below, since both
+      touch the same method and the stop condition is what makes the fix safe
+      to ship (laddering alone, with no guided-edge bound, would still be
+      exposed to the same non-convergent-k hang). 6 new meep-free tests in
+      `tests/test_duplicate_band_guard.py::TestSeedLaddering` (+3) and
+      `TestGuidedEdgeStop` (+3, item 14's own), pinning the seed mechanism
+      directly rather than re-deriving the physics claim (that's what job
+      11588309 already measured). Mutation-checked: all 11 tests in the file
+      fail against the pre-fix signature. Fast suite 489 → 495.
+
+      **Known consequence, not a regression:** any device whose shipped
+      `N_MODES` exceeds what a cross-section can actually supply at its
+      resolution will now raise instead of silently padding with unguided
+      modes (see item 14 below) — the modal multiplexer is exactly this case
+      today (16 requested, 14 reachable) and its own example script will need
+      `N_MODES` addressed before it can run again. Deliberately not fixed as
+      part of this change: `modal_multiplexer_validation.md` gap 2 is explicit
+      that `N_MODES`/`RESOLUTION` need to be decided jointly, not patched to
+      whatever today's ceiling happens to be.
+
 - [x] **13. `guard_duplicate_modes=True` changes the solve, not just the
       filter.** `EMESolver.compute_modes()` over-requests
       `num_modes + _DUP_MODE_MAX_EXTRA` (= +8) in a single
@@ -1112,13 +1137,39 @@ the three properties they need has been checked.
       the cross-section cannot supply `n_modes` guided modes, a loud failure is
       more useful than a silently unguided basis.
 
-      **Deliberately not fixed 2026-07-31.** `_iter_distinct_bands()` is the
-      production path `modal_multiplexer_validation.md` gap 6 already declined
-      to modify under-verified, and the same argument applies with more force
-      here: this change alters which modes a basis contains (not just how many
-      attempts it makes), so it needs its own meep-free tests plus a real
-      before/after on a device known to skip. Recorded now with the reproduction
-      attached so that work does not start from scratch.
+      **Deliberately not fixed 2026-07-31 [morning] ... FIXED 2026-07-31
+      [same day, later].** The caution above was right at the time — this
+      needed its own tests plus a real before/after, not a blind patch — and
+      both now exist. `_iter_distinct_bands()` checks every raw solve's
+      n_eff against the cross-section's cladding index (computed once per
+      caller from `self.material_stack.sio2_index(wl)`, threaded through
+      both call sites) *before* the duplicate-overlap sampling, and raises
+      immediately if the guided spectrum is exhausted with fewer than
+      `n_modes` accepted — the raise-instead-of-pad direction this item
+      itself recommended, since a basis silently padded with unguided modes
+      (item 9's concern) has a rank that is a lie. Landed together with item
+      12's seed laddering, since both touch the same method and the stop
+      condition is what makes laddering safe to ship without reopening the
+      hang risk. 3 new tests
+      (`tests/test_duplicate_band_guard.py::TestGuidedEdgeStop`), covering:
+      raises when a raw solve crosses cladding before `n_modes` accepted;
+      stays inert when every requested mode is guided; and the cladding
+      check fires *before* the duplicate-overlap check would have silently
+      skipped the same band and continued past it. All meep-free, mutation-
+      checked against the pre-fix signature (see item 12's entry for the
+      shared verification).
+
+      **Consequence, not a regression, and worth restating plainly:** this
+      raises the bar from "never observed in production" to "will fire the
+      next time a cross-section can't supply what its caller requests" —
+      which is exactly the modal multiplexer's own shipped `N_MODES=16`
+      against the 14 reachable at res 40 (item 12 above). The currently
+      in-flight hybrid run (job 11590663) started before this change and is
+      unaffected; any *future* resubmission of `modal_multiplexer_hybrid.py`
+      will raise until its `N_MODES`/`RESOLUTION` pair is actually decided
+      (`modal_multiplexer_validation.md` gap 2) — deliberately not patched
+      to 14 as a side effect of this fix, since that doc is explicit the two
+      need a joint decision, not a quick unblock.
 
 ## Open questions
 

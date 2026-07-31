@@ -1035,8 +1035,14 @@ lives in "Current library reference" above, not here.
     point before closing the item, but the res-20 result already moves it
     from "latent risk" to "checked and clear so far."
 18. **New, 2026-07-30 — every band's eigensolve starts from the same k guess,
-    and it is the likely root cause of item 12. TESTED 2026-07-30 — net
-    positive, not a clean fix.** (`fdtd_vs_EME_mode_validation.md` item 12.)
+    and it is the likely root cause of item 12. TESTED 2026-07-30, FIXED
+    2026-07-31 — `_iter_distinct_bands()` now ladders the seed (policy B,
+    the naive ladder — measured byte-identical to the fancier C/D variants,
+    so shipped as-is), landed together with item 19's cladding stop since
+    laddering alone would still be exposed to the same hang. 6 new tests,
+    `tests/test_duplicate_band_guard.py::TestSeedLaddering`/
+    `TestGuidedEdgeStop`. See `fdtd_vs_EME_mode_validation.md` items 12/14
+    for the full record.** (`fdtd_vs_EME_mode_validation.md` item 12.)
     `_iter_distinct_bands()` calls `sim.get_eigenmode(..., band_num,
     mp.Vector3(f * _KPOINT_SEED_NEFF, 0, 0))` with `_KPOINT_SEED_NEFF = 2.5` —
     the same starting vector for band 1 and band 18 alike, *N* independent
@@ -1148,6 +1154,19 @@ lives in "Current library reference" above, not here.
     the behaviour has a working reference; the library change is deliberately
     deferred because it alters which modes a basis *contains*, and gap 6's scope
     argument for not touching this method under-verified still applies.
+
+    **FIXED 2026-07-31.** Both halves landed together: the walk now stops
+    the instant a raw solve's n_eff crosses the cladding index (computed
+    once per caller via `self.material_stack.sio2_index(wl)`), and raises
+    immediately if fewer than `n_modes` were accepted by then — the
+    raise-vs-pad decision above resolved in favor of raising. 3 new tests,
+    `tests/test_duplicate_band_guard.py::TestGuidedEdgeStop`. The deferral
+    reasoning above was correct at the time (this needed its own tests plus
+    a real before/after, not a blind patch) and both now exist — see
+    `fdtd_vs_EME_mode_validation.md` item 14 for the full record, including
+    the direct consequence: the modal multiplexer's own shipped `N_MODES=16`
+    now raises on the next resubmission (14 reachable at res 40), which is
+    the fix working as designed, not a new bug.
 
 ### Geometry
 

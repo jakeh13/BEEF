@@ -14,7 +14,7 @@ whether they agree, and whether either is right.
 |---|---|---|
 | 0 | resolved indices reach the cache fingerprint | ✅ done |
 | 1 | one shared analytic model, both engines | ✅ done — agree to 4e-16 |
-| 2 | FDTD medium actually dispersive across the band | 🟢 **implemented, gate PASSED 2026-07-31 on all 4 stack/band combinations** (worst Δn_eff −0.00141 on SOI_160/O-band, tol 0.002) — items 1–3 and 5's warning guard done; still **opt-in** (`dispersive=True`) pending item 4's resolution sweeps |
+| 2 | FDTD medium actually dispersive across the band | ✅ **done 2026-07-31** — implemented, gate PASSED on all 4 stack/band combinations (worst Δn_eff −0.00141 on SOI_160/O-band, tol 0.002); item 4's resolution sweeps closed the same day (job 11588997 — the pin holds at the tolerance production uses). **Opt-in** (`dispersive=True`, default off) is a deliberate design choice now, not a pending blocker — turning it on for any example is separate, unstarted work |
 
 **Steps 0 and 1 are closed.** Both engines evaluate one Sellmeier model
 (`beef/materials/stack.py::_SELLMEIER` — Salzberg 1957 Si, Malitson 1965 fused silica,
@@ -26,7 +26,9 @@ alternatives, is in `directional_coupler_validation.md` item 8.
 Adopting Salzberg shifts n_Si by ~0.002 against meow's old table. **All four goldens are
 stale because of it**, and being `@pytest.mark.slow` they have not been re-run.
 
-**Step 2 is open, and the reason is measured rather than assumed** — see below.
+**Step 2 is closed as of 2026-07-31** — the re-parameterisation was implemented, gate-passed,
+and its resolution-sensitivity question (work item 4) answered, all measured rather than
+assumed; see below.
 
 ## Why step 2 was reverted
 
