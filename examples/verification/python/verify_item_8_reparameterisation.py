@@ -41,10 +41,13 @@ reports three things the doc asserts:
        a UV resonance at 0.3015 µm and no far-IR Lorentzian reproduces it
        across the full range the examples span. Per-band it is comfortable;
        full-range is worse than the error being fixed.
-    2. λ₀ is degenerate and must be pinned. For λ₀ >> λ only the ratio σ/λ₀²
-       matters, so a free fit walks a ridge to its bounds with no gain. Pinning
-       λ₀ makes the model linear in both remaining parameters -- a
-       deterministic lstsq, no optimiser in the build path.
+    2. λ₀ is weakly determined and must be pinned. For λ₀ >> λ only the ratio
+       σ/λ₀² matters, so a free fit walks a ridge to its bounds. Pinning λ₀
+       makes the model linear in both remaining parameters -- a deterministic
+       lstsq, no optimiser in the build path. **Which λ₀ to pin is NOT decided
+       here**: fit quality improves monotonically with λ₀ over the usable
+       range, while the smoothing split gets worse. `verify_item_8_strip_gate.py`
+       is what chose the shipped value, on the opposite criterion.
     3. The number that decides it: how much of the true Si/SiO2 ε contrast the
        re-parameterised ε∞ makes available to subpixel averaging. Today it is
        0% (ε∞ = 1 for both). Anything near 100% means smoothing is back.
@@ -62,7 +65,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from beef.materials.stack import reparam_lorentz, sellmeier_index
+from beef.materials.stack import (
+    _REPARAM_LAM0_UM, reparam_lorentz, sellmeier_index,
+)
 
 # Bands the examples actually run. The C-band is the coupler's sweep; the
 # O-band is what both MMIs and the modal multiplexer use; the union is what a
@@ -73,8 +78,9 @@ BANDS = {
     "full    1.26-1.70 (union)": (1.26, 1.70),
 }
 
-LAM0_DEFAULT = 10.0       # µm -- pinned, see the degeneracy table below
-LAM0_TRIALS = (5.0, 10.0, 20.0, 50.0)
+LAM0_DEFAULT = _REPARAM_LAM0_UM   # the shipped pole; see the degeneracy
+                                  # table below and the strip gate for why
+LAM0_TRIALS = (2.0, 3.0, 5.0, 10.0)
 N_GRID = 201              # sample density across a band for the lstsq
 CONTRAST_WL = 1.55        # where the doc quotes the true Si/SiO2 ε contrast
 
@@ -122,12 +128,21 @@ def main():
     for lam0 in LAM0_TRIALS:
         e, s, dn = fit_reparam("si", lo, hi, lam0=lam0)
         print(f"  {lam0:10.1f} {e:12.4f} {s:12.4f} {dn:12.2e}", flush=True)
-    print("\n  Identical max|dn| across lam0 with eps_inf and sigma trading off",
+    print("\n  sigma swings ~150x while max|dn| moves only ~2x -> the fit is",
           flush=True)
-    print("  ->  only the ratio sigma/lam0^2 is determined. lam0 must be pinned,",
+    print("  weakly determined in lam0: it must be PINNED, not fitted, or a free",
           flush=True)
-    print("  not fitted, or a free optimiser walks the ridge to its bounds.",
+    print("  optimiser walks the sigma/lam0^2 ridge to its bounds.", flush=True)
+    print("\n  Note the trend runs OPPOSITE to how lam0 was actually chosen.",
           flush=True)
+    print("  Larger lam0 fits better here, but pushes eps_inf past the true",
+          flush=True)
+    print("  contrast and leaves more permittivity in the UNSMOOTHED", flush=True)
+    print("  susceptibility -- which is what the strip gate measures, and what",
+          flush=True)
+    print(f"  actually decided lam0 = {LAM0_DEFAULT}. Fit quality is not the",
+          flush=True)
+    print("  criterion; see verify_item_8_strip_gate.py.", flush=True)
 
     # ---- 3. the number that decides it ----------------------------------
     print(f"\n3. How much eps contrast becomes available to subpixel smoothing?"

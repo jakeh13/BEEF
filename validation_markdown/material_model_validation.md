@@ -14,7 +14,7 @@ whether they agree, and whether either is right.
 |---|---|---|
 | 0 | resolved indices reach the cache fingerprint | ✅ done |
 | 1 | one shared analytic model, both engines | ✅ done — agree to 4e-16 |
-| 2 | FDTD medium actually dispersive across the band | 🟡 **implemented, opt-in, gate not run** — work items 1–3 done 2026-07-31; `MaterialStack(dispersive=True)` exists and is off by default until the strip test passes |
+| 2 | FDTD medium actually dispersive across the band | 🟢 **implemented, gate PASSED 2026-07-31** (Δn_eff −0.00069, tol 0.002) — items 1–3 and 5's warning guard done; still **opt-in** (`dispersive=True`) pending item 4's resolution sweeps |
 
 **Steps 0 and 1 are closed.** Both engines evaluate one Sellmeier model
 (`beef/materials/stack.py::_SELLMEIER` — Salzberg 1957 Si, Malitson 1965 fused silica,
@@ -86,6 +86,13 @@ matters, so a free fit walks a ridge to its bounds (σ = 500 at λ₀ = 52 µm) 
 Pinning λ₀ and solving for ε∞ and σ gives *identical* fit quality at λ₀ = 5, 10, 20 and
 50 µm, and makes the model **linear in both remaining parameters** — a deterministic
 least-squares solve, no optimiser in the build path.
+
+> ⚠️ **λ₀ = 10 below is superseded — the shipped value is 2.0.** Everything in the rest of
+> this section is correct as *fit* analysis, and the "pin it, don't fit it" conclusion
+> stands. But λ₀ = 10 **fails the strip gate**, because fit quality is not what λ₀ actually
+> controls — it controls how the permittivity splits between the smoothed ε∞ and the
+> unsmoothed susceptibility. See **GATE PASSED** below for the numbers that replaced it.
+> The 104% contrast figure quoted here is precisely the symptom that failed.
 
 With λ₀ = 10 µm over the coupler's own 1.50–1.60 µm sweep:
 
@@ -195,18 +202,67 @@ on exactly this test, so it is a like-for-like comparison against a known failur
 Work items 4 and 5 should not be queued until that gate passes; item 4 is the only
 expensive part of this change.
 
+### ✅ GATE PASSED — 2026-07-31, and it moved λ₀
+
+`examples/verification/python/verify_item_8_strip_gate.py`, run on a login node in ~4 s.
+Three arms, because two cannot establish that the harness reproduces the original problem:
+
+| arm | n_eff | Δ vs A | ε∞(Si) actually smoothed |
+|---|---|---|---|
+| A non-dispersive (shipped) | 2.311707 | — | 12.0946 |
+| C legacy ε∞=1 (the reverted attempt) | 2.361645 | **+0.049938** | **1.0000** |
+| B re-parameterised | 2.311019 | **−0.000688** ✅ | 12.2714 |
+
+**C reproduces the recorded +0.049640 to 3e-4**, so the harness measures what the original
+attempt measured and B's number is evidence about the fix rather than about the test. The
+ε∞ column is the mechanism, stated numerically for the first time: the reverted attempt
+handed meep a structure with *no dielectric contrast at all* to average.
+
+Arm A lands 0.0017 below the doc's 2.313398 baseline — this harness is a bare strip in a
+2×2 µm cell, not whatever the original ad-hoc measurement used. Read Δ *within* a run, not
+absolute n_eff across runs; the C-vs-A reproduction is what validates that.
+
+**λ₀ changed 10.0 → 2.0, and the gate is what chose it.** At λ₀ = 10 the gate **failed**
+(−0.00222 C-band, −0.00258 O-band) — the doc's own risk *"ε∞ contrast is 104% of the true
+contrast… whether that biases n_eff, and in which direction, is not predictable from the
+fit"* materialising, biasing **low**. λ₀ sets how the permittivity splits between the
+smoothed ε∞ and the unsmoothed susceptibility, and only that split decides whether
+smoothing still works:
+
+| λ₀ | Δn_eff C-band | Δn_eff O-band | σ (C/O) | fit, % of band swing |
+|---|---|---|---|---|
+| 10.0 | −0.00222 ❌ | −0.00258 ❌ | 17.6 / 37.7 | 2.4 / 3.3 |
+| 3.0 | −0.00160 ✅ | −0.00203 ❌ | 0.89 / 2.30 | 3.1 / 3.9 |
+| **2.0** | **−0.00069 ✅** | **−0.00123 ✅** | **0.12 / 0.51** | **5.5 / 5.2** |
+
+2.0 is the only value clearing both bands. **Fit quality is the wrong criterion** — it
+improves monotonically with λ₀ over this range while the gate result gets worse. The cost
+is ~3% more of the band's dispersion given up (still keeping ~95%).
+
+**This also retires the σ risk below.** σ drops from 17.6 to 0.12; "meep stability is
+unverified at σ = 17.6" no longer applies, and no stability warnings appeared.
+
+λ₀ = 2.0 sits inside `_MODEL_RANGE_UM` (1.10–2.10), so `reparam_lorentz()` now **raises**
+if a band comes within 10% of the pole rather than returning a near-resonant model. The
+widest band the examples span (1.26–1.70) clears it by 18%.
+
+**Items 4 and 5 are unblocked.**
+
 **Sequencing.** This invalidates the four goldens a second time. It must land **before**
 the outstanding cold regeneration pass — which already owes the goldens, the
 `COUPLING_LENGTH` change and step 1's n_Si shift — or that pass gets paid for twice.
 
 ## Risks
 
-- **The ε∞ contrast is 104% of the true contrast, not 100%.** Smoothing will act on
-  slightly too much. Whether that biases n_eff, and in which direction, is not predictable
-  from the fit and is what the strip test measures.
-- **meep stability is unverified** at σ = 17.6 with f₀ = 0.1. Expected to be fine — ε∞ is
-  large and the resonance is far below the band — but meep's stability warnings must be
-  read, not assumed silent.
+- ~~**The ε∞ contrast is 104% of the true contrast, not 100%.**~~ **Measured 2026-07-31 —
+  the risk was real.** It biases n_eff **low**, and at λ₀ = 10 that bias (−0.0022 C-band,
+  −0.0026 O-band) failed the gate outright. Fixed by moving λ₀ to 2.0, which brings the
+  contrast to 101.7% and the bias to −0.0007. This is the one risk on this list that
+  actually fired.
+- ~~**meep stability is unverified** at σ = 17.6 with f₀ = 0.1.~~ **Retired 2026-07-31.**
+  The strip gate moved λ₀ to 2.0, which drops σ to 0.12 (C-band) / 0.51 (O-band) — two
+  orders of magnitude down, squarely unremarkable. The gate run logged no meep stability
+  warnings.
 - **Engine agreement regresses from 4e-16 to ~2e-4.** The EME keeps the exact Sellmeier
   model via `SampledMaterial` and solves per wavelength, so it needs no re-parameterisation;
   only the FDTD is fit. That is a real cost and the reason work item 5 needs a tolerance.

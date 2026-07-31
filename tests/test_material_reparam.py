@@ -36,16 +36,42 @@ def _si_material(rules):
 
 class TestReparamFit:
     def test_per_band_fit_is_far_better_than_the_dispersion_is_worth(self):
-        """The whole justification: fit error must be small against the ~0.008
-        that n_Si actually moves across a band."""
+        """Fit error must stay small against the ~0.008-0.015 that n_Si
+        actually moves across a band.
+
+        The bound is 10%, not tighter, because the shipped lam0 deliberately
+        trades fit quality for a better smoothed/unsmoothed split — lam0=10
+        fits to ~2.4% of swing but fails the strip gate, lam0=2 fits to ~5.5%
+        and passes it. Fit quality is the wrong thing to optimise here; this
+        test only guards against it becoming badly wrong.
+        """
         for band in (C_BAND, O_BAND):
             _, _, max_dn = reparam_lorentz("si", band)
             swing = abs(float(sellmeier_index("si", band.min())
                               - sellmeier_index("si", band.max())))
-            assert max_dn < 0.05 * swing, (
-                f"fit error {max_dn:.2e} is more than 5% of the {swing:.5f} "
+            assert max_dn < 0.10 * swing, (
+                f"fit error {max_dn:.2e} is more than 10% of the {swing:.5f} "
                 "dispersion it exists to capture"
             )
+
+    def test_shipped_lam0_keeps_sigma_small_enough_to_be_unremarkable(self):
+        """lam0=10 needed sigma ~17.6 (Si, C-band) and ~37.7 (O-band), and
+        meep stability was never verified there. The shipped pole keeps sigma
+        O(1), which retires that risk rather than arguing about it."""
+        for band in (C_BAND, O_BAND):
+            _, sigma, _ = reparam_lorentz("si", band)
+            assert abs(sigma) < 5.0, f"sigma {sigma:.3f} is back in the risky range"
+
+    def test_band_approaching_the_pole_is_refused(self):
+        """The fitted term is near-resonant as the band approaches lam0, so it
+        must raise rather than return a model that is quietly meaningless."""
+        with pytest.raises(ValueError, match="too close to the fitted pole"):
+            reparam_lorentz("si", np.linspace(1.8, 1.95, 11))
+
+    def test_the_widest_example_band_still_clears_the_pole(self):
+        """1.26-1.70 is the union of every band the examples run; it must not
+        trip the guard at the shipped lam0."""
+        reparam_lorentz("si", np.linspace(1.26, 1.70, 21))
 
     def test_global_fit_is_worse_than_the_error_being_fixed(self):
         """Finding 1: this cannot be fit once across the full example range,

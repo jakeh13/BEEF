@@ -90,14 +90,37 @@ def meow_material(kind: str):
     return _material_cache[key]
 
 
-# Pinned pole for the re-parameterised single-Lorentzian fit (µm). Far below
-# every band the examples use, so the term is smooth and non-resonant there.
-# It CANNOT be fitted: for lam0 >> lambda only the ratio sigma/lam0^2 is
+# Pinned pole for the re-parameterised single-Lorentzian fit (µm), sitting
+# above every band the examples use so the term is smooth and non-resonant
+# there. It CANNOT be fitted: for lam0 >> lambda only the ratio sigma/lam0^2 is
 # determined, so a free fit walks that ridge to its bounds. Pinning it also
 # makes the model linear in the two remaining parameters -- a deterministic
 # lstsq rather than an optimiser in the medium-build path.
-_REPARAM_LAM0_UM = 10.0
+#
+# **2.0, not 10.0 — chosen by the strip-test gate, not by fit quality.**
+# lam0 sets how the permittivity splits between the SMOOTHED eps_inf and the
+# UNSMOOTHED susceptibility, and only the split decides whether subpixel
+# averaging still works. Larger lam0 fits marginally better but pushes eps_inf
+# past the true contrast (104% at lam0=10) and leaves a large unsmoothed
+# residual, which biases n_eff low:
+#
+#   lam0    dn_eff vs non-dispersive        sigma (C/O band)   fit error
+#    10.0   -0.00222 (C) / -0.00258 (O)     17.6 / 37.7        2.4-3.3% of swing
+#     3.0   -0.00160 (C) / -0.00203 (O)      0.89 / 2.30       3.1-3.9%
+#     2.0   -0.00069 (C) / -0.00123 (O)      0.12 / 0.51       5.2-5.5%
+#
+# Acceptance is |dn_eff| <= 0.002 and 2.0 is the only value that clears it on
+# BOTH bands. It also drops sigma by two orders of magnitude, retiring the
+# "meep stability unverified at sigma = 17.6" risk. The cost is ~3% more of the
+# band's dispersion given up (still keeping ~95%). Measured by
+# `examples/verification/python/verify_item_8_strip_gate.py`.
+_REPARAM_LAM0_UM = 2.0
 _REPARAM_SAMPLES = 201
+# The fitted term blows up as the band approaches lam0, so refuse rather than
+# silently return a near-resonant model. 2.0 clears the widest band the
+# examples span (1.26-1.70) by 18%, but nothing structurally stops a caller
+# passing a band that reaches further.
+_REPARAM_MIN_LAM0_RATIO = 1.10
 
 
 def reparam_lorentz(kind: str, wl_band, lam0: float = _REPARAM_LAM0_UM):
@@ -133,6 +156,13 @@ def reparam_lorentz(kind: str, wl_band, lam0: float = _REPARAM_LAM0_UM):
         raise ValueError(
             "reparam_lorentz() needs a wavelength band, not a single point -- "
             "there is no dispersion to fit across one wavelength."
+        )
+    if float(wl.max()) * _REPARAM_MIN_LAM0_RATIO > lam0:
+        raise ValueError(
+            f"band reaches {float(wl.max()):.3f} um, too close to the fitted "
+            f"pole lam0={lam0} um: the Lorentzian is near-resonant there and "
+            f"the fit would not describe a smooth medium. Need "
+            f"lam0 >= {_REPARAM_MIN_LAM0_RATIO} * max(band)."
         )
     grid = np.linspace(float(wl.min()), float(wl.max()), _REPARAM_SAMPLES)
     eps_true = sellmeier_index(kind, grid) ** 2

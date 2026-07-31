@@ -154,6 +154,46 @@ latter, enabling dispersion improves FDTD-vs-EME agreement ~16× (0.00786 → 4.
 item 5's guard must therefore compare built media, not `si_index()` lookups — the latter
 reads 4e-16 in every configuration, including today's broken one.
 
+### ✅ Strip-test gate PASSED — and it moved λ₀ from 10.0 to 2.0
+
+`examples/verification/python/verify_item_8_strip_gate.py` (new). Three arms on a
+450×220 nm Si strip at res 40, 1.55 µm — A non-dispersive, B re-parameterised, **C the
+reverted ε∞=1 attempt**. C exists so the harness can prove itself: it reproduces the
+recorded +0.049640 failure to 3e-4, which is what makes B's number evidence about the fix
+rather than about the test. Runs in ~4 s on a login node, no queue slot.
+
+**The gate initially FAILED at the shipped λ₀ = 10** (Δn_eff −0.00222 C-band, −0.00258
+O-band, tolerance 0.002). That is the doc's own risk firing — *"the ε∞ contrast is 104% of
+the true contrast… whether that biases n_eff, and in which direction, is not predictable
+from the fit"* — and the answer is: it biases **low**.
+
+λ₀ does not really control fit quality; it controls how the permittivity splits between
+the **smoothed** ε∞ and the **unsmoothed** susceptibility, and only that split decides
+whether subpixel averaging still works:
+
+| λ₀ | Δn_eff C / O band | σ (C/O) | fit, % of band swing |
+|---|---|---|---|
+| 10.0 | −0.00222 ❌ / −0.00258 ❌ | 17.6 / 37.7 | 2.4 / 3.3 |
+| 3.0 | −0.00160 ✅ / −0.00203 ❌ | 0.89 / 2.30 | 3.1 / 3.9 |
+| **2.0** | **−0.00069 ✅ / −0.00123 ✅** | **0.12 / 0.51** | **5.5 / 5.2** |
+
+2.0 is the only value clearing both bands, so `_REPARAM_LAM0_UM` is now 2.0. Fit quality
+is the *wrong* criterion — it improves monotonically with λ₀ while the gate result worsens.
+Cost is ~3% more of the band's dispersion given up, still keeping ~95%.
+
+Two further consequences. σ drops two orders of magnitude, which **retires** the standing
+"meep stability is unverified at σ = 17.6" risk (no stability warnings logged). And λ₀ = 2.0
+sits inside `_MODEL_RANGE_UM` (1.10–2.10), so `reparam_lorentz()` now **raises** if a band
+comes within 10% of the pole instead of returning a quietly near-resonant model; the widest
+band the examples span (1.26–1.70) clears it by 18%.
+
+Also recorded: arm A lands 0.0017 off the doc's 2.313398 baseline, because this harness is
+a bare strip in a 2×2 µm cell rather than the original ad-hoc setup. Δ must be read within
+a run, not as absolute n_eff across runs — which is exactly what arm C validates.
+
+**Items 4 (resolution sweeps) and 5's hard assert are unblocked.** 3 more tests
+(28 total in `tests/test_material_reparam.py`); fast suite 459 passed, 14 skipped.
+
 **Three doc corrections found by implementing it.** The prescribed call sites
 (`fdtd.py` 526/776/1175) were stale — the real ones are 615/616, 930/931, 1581/1582, and
 only **two** should change: 930 is a single-wavelength mode solve where the frozen index is
