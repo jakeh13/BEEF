@@ -13,6 +13,17 @@
 Opened 2026-07-26. This is the gap list against the four checks in
 [README.md](README.md).
 
+**Status 2026-07-30 (late):** gap 2 (resolution) is **measured** — job
+11575516 swept both engines' `res` independently at interface 0 and found the
+EME side plateaus between res 60 and 80 while the FDTD side is still moving at
+60, so the shipped shared `RESOLUTION = 40` is below both. Details in gap 2.
+That job also left a residue gap 1's fix did not remove: the two engines
+disagree, at *every* resolution from 20 to 60, about one member of a
+near-degenerate mode pair — meow finds both, meep's per-band ladder finds one.
+That is a driver-level defect, not a mesh one, and it is tracked as
+`fdtd_vs_EME_mode_validation.md` items 11–13 rather than here, since it is not
+specific to this device. Gap 6's exercise run (job 11578026) is still queued.
+
 **Status 2026-07-30:** gap 1 (mode identity) was **run and FAILED — and the
 root cause was not what it looked like.** All four interfaces disagree between
 engines (the cross-section is the same body slab at all four, so the result
@@ -151,19 +162,25 @@ So it has the most ways to be wrong and the fewest ways to find out.
    check is what separates these two very different failure modes; the
    n_eff-only check cannot.
 
-   **Still not yet checked:** whether `FDTDSolver.solve_section()`'s own
-   production interface-basis construction hits the same duplicate-band
-   failure. This check ran through `section_mode_neff()`/
-   `section_mode_fields()`, the audit-only entry points, not the real hybrid
-   cascade. Note that `HybridSolver(check_mode_correspondence=True)` (see
+   **Partially checked as of 2026-07-30** — see gap 6's "Recommended
+   follow-up", now implemented as `fdtd_vs_EME_mode_validation.md` item 8:
+   `FDTDSolver.solve_section()` (and `EMESolver.solve_section()`) now run a
+   post-hoc scan of their own already-computed `T` for near-duplicate
+   excited-side columns (`beef.mode_identity.transfer_matrix_duplicate_scan()`
+   /`warn_on_transfer_duplicate()`), logging a WARNING if found. This closes
+   the *detection* gap cheaply (no extra eigensolve) but not the *proof*
+   gap — it is explicitly a symptom, not confirmation, so `solve_section()`'s
+   production basis on this device has still never been run through it for
+   real (that needs an actual meep run of this device's interfaces, not yet
+   done). Note that `HybridSolver(check_mode_correspondence=True)` (see
    `notes.md` Solvers #14) does NOT answer this question either, even though
    it can now run against this device: it compares the two engines' *mode
    bases* at an interface via their own eigensolves, which is a different
    code path from `solve_section()`'s `get_eigenmode_coefficients()`-on-
-   DFT-flux basis construction. Settling it still needs the post-hoc `T`-column
-   diagnostic described in gap 6's "Recommended follow-up".
+   DFT-flux basis construction.
 
-   **Recommended fix, not yet implemented:** a duplicate-band guard in
+   **Recommended fix — since IMPLEMENTED, see gap 6 (done 2026-07-30):** a
+   duplicate-band guard in
    `FDTDSolver`'s eigenmode-solving methods — after solving each band, check
    its self-overlap against previously-solved bands in the same call; a
    near-1 match means the same eigenvector came back and the solver needs to
@@ -174,12 +191,50 @@ So it has the most ways to be wrong and the fewest ways to find out.
    fixed pair of indices, so a different `N_MODES` or resolution could just
    as easily hit a duplicate somewhere else.
 
-2. **Shared resolution knob.** `:86` passes one `RESOLUTION = 40.0` to both
-   sub-solvers (`:167` FDTD, `:186` EME) — `directional_coupler_validation.md` item 11's defect.
-   Must be measured fresh on SOI_160: a 160 nm core confines more weakly than
-   220 nm, so its modes extend further into the cladding and may well need a
-   *different* mesh than the coupler's res 80 to converge. Do not copy the number
-   across.
+2. **Shared resolution knob — now MEASURED (2026-07-30, job 11575516), and
+   res 40 is wrong for both engines.** `:86` passes one `RESOLUTION = 40.0` to
+   both sub-solvers (`:167` FDTD, `:186` EME) —
+   `directional_coupler_validation.md` item 11's defect. It had to be measured
+   fresh on SOI_160 rather than copied from the coupler's res 80, since a
+   160 nm core confines more weakly than 220 nm and its modes reach further
+   into the cladding. That measurement now exists:
+   `examples/verification/python/mode_spectrum_convergence.py` swept the two
+   engines' `res` **independently** at this device's interface 0, 16 modes,
+   1.31 µm.
+
+   Modes agreeing between consecutive resolutions of the *same* engine, out of
+   16, within |Δn_eff| ≤ 0.005:
+
+   | | 20→30 | 30→40 | 40→60 | 60→80 |
+   |---|---|---|---|---|
+   | meow (EME) | 1 | 1 | 2 | **16** |
+   | meep (FDTD) | 1 | 1 | 3 | *(not run)* |
+
+   Guided-mode count at each resolution, of 16 requested: meep 13/13/13/14 at
+   res 20/30/40/60; meow 14/14/14/15/15 at res 20/30/40/60/80.
+
+   **Read it as three separate statements:**
+
+   - **The EME side plateaus between res 60 and 80** — all 16 modes agree
+     across that step. That is the first converged-resolution result for
+     SOI_160 in this repo, and it is *not* the coupler's 80 arrived at by
+     coincidence: 60 already suffices here, 40 does not.
+   - **The FDTD side is still moving at res 60** (40→60 agrees on only 3 of
+     16), so its converged resolution is above 60 and remains unmeasured.
+     Extending the sweep to meep res 80/100 is the open action.
+   - **res 40 is below both**, so every number this device has ever produced —
+     including the gap 1 audit and gap 6's before/after — was taken on an
+     unconverged mesh for both engines. That does not invalidate gap 1's
+     *identity* findings (mode correspondence is a shape question, and the
+     mode-8+ story is `fdtd_vs_EME_mode_validation.md` item 1), but it does
+     mean no absolute n_eff or S-matrix number from this device is a converged
+     one yet.
+
+   Per check 3, the remaining question is which quantity *this device's*
+   result depends on — the coupler's lesson was that sweeping an insensitive
+   observable hid a 7% error in a sensitive one. A mode spectrum is not that
+   observable; it is the precondition for choosing one. So this gap is
+   measured, not closed.
 
 3. **No full-device FDTD reference.** Needs a `modal_multiplexer_fdtd.py` written
    before check 4 is possible. Cost is the concern — a multiplexer is long, and a
@@ -277,13 +332,26 @@ So it has the most ways to be wrong and the fewest ways to find out.
    delicately tuned, already well-tested production method, changing it
    under-verified was judged too risky.
 
-   **Recommended follow-up for whoever picks this up next**: a *post-hoc*
-   diagnostic inside `solve_section()` that checks its already-computed `T`
-   coefficient-array columns for near-duplicate values, once the flux-decayed
-   run has already completed. This costs zero extra simulation time (no new
-   eigensolves), reuses data `solve_section()` already produces, and would at
-   minimum turn today's silent rank-deficiency into a loud warning even
-   before a full fix lands there.
+   **Recommended follow-up — DONE 2026-07-30, see
+   `fdtd_vs_EME_mode_validation.md` item 8.** A *post-hoc* diagnostic inside
+   `solve_section()` that checks its already-computed `T` coefficient-array
+   columns for near-duplicate values, once the flux-decayed run has already
+   completed. Costs zero extra simulation time (no new eigensolves), reuses
+   data `solve_section()` already produces, and turns today's silent
+   rank-deficiency into a loud (logged, not raised) warning. Wired into both
+   `FDTDSolver.solve_section()` and `EMESolver.solve_section()`, not yet
+   exercised against this device's own real interfaces (needs an actual
+   meep/meow run, not a code change).
+
+   **Exercise run submitted 2026-07-30** — SLURM job **11578026**
+   (`batch/run_modal_multiplexer_examples.batch`), this device's first real
+   run of `modal_multiplexer_hybrid.py` in this tree (no
+   `example_output/modal_multiplexer/` existed before this). 4 nodes × 24
+   ranks, up to 5h — the most expensive single job run this session, per
+   "most demanding hybrid device" above. Exercises the item-8 `T`-column
+   scan against this device's real four interfaces for the first time;
+   watch `reports/11578026_0.out` for `warn_on_transfer_duplicate` firing on
+   either solver.
 
 ## Order
 
@@ -297,8 +365,23 @@ example with closely-spaced higher-order bands (the coupler, both MMIs) could
 be silently affected too, just not yet checked there. **6 is now done**
 (2026-07-30) for the audit-only entry points, confirmed by re-running this
 device's own reproduction with the fix applied — see gap 6. `solve_section()`
-itself is deliberately deferred (also gap 6) and should be treated as a
+itself is deliberately deferred (also gap 6) — its own post-hoc `T`-column
+duplicate scan is now implemented (`fdtd_vs_EME_mode_validation.md` item 8)
+but not yet exercised against this device's real interfaces, so treat it as a
 still-open risk for **2** through **5** below, though a lower-probability one
-now that the mechanism is understood and a post-hoc diagnostic is scoped.
-Next up: **2**. Then **4**, to stop the numbers drifting unnoticed while the
-rest is worked on. **3** and **5** last: both are real simulation campaigns.
+now that both the mechanism is understood and a detector (not yet proof) is
+wired in. ~~Next up: **2**.~~ **2 is now measured** (2026-07-30, job 11575516)
+— the EME side is converged at res 60, the FDTD side is not converged at 60 and
+needs its sweep extended, and neither is at the shipped 40. Two things follow
+for the order below:
+
+- **Do not record a golden (4) at `RESOLUTION = 40`.** That was already the
+  stated reason for sequencing 4 after 2; the measurement makes it concrete
+  rather than precautionary. Pinning values on a mesh both engines are known to
+  be short of would need a third regeneration.
+- **Extending 2 to meep res 80/100 is cheap and comes first** — same script,
+  same cross-section, one more row. Everything below it is a simulation
+  campaign; this is not.
+
+Then **4**, to stop the numbers drifting unnoticed while the rest is worked on.
+**3** and **5** last: both are real simulation campaigns.

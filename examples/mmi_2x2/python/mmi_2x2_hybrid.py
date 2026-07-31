@@ -121,7 +121,10 @@ _fdtd_common = dict(
     decay_tol=1e-11,
 )
 
-N_MODES = 15   # modes carried at the two input/output <-> body interfaces
+N_MODES = 14   # modes carried at the two input/output <-> body interfaces.
+               # Was 15: band 14 (n_eff 1.4078) sits below the 1.4443 cladding
+               # index -- a radiation mode, dropped at no cost.
+               # mmi_2x2_validation.md gap 3.
 
 # Both the input and output ports have a neighbor waveguide_offset = 1.5 µm
 # away that is drawn in the same section (all branches are always physically

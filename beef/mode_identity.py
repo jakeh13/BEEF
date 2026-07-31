@@ -2,9 +2,11 @@
 alternative to nearest-neighbour n_eff matching.
 
 ``HybridSolver`` contracts index *i* of an FDTD interface basis against
-index *i* of an EME body basis, assuming they name the same mode. The
-existing check for that (``tests/test_mode_identity.py``'s
-``assert_modes_correspond()``) compares n_eff and picks each mode's nearest
+index *i* of an EME body basis, assuming they name the same mode. The older
+check for that (``tests/test_mode_identity.py``'s
+``assert_modes_correspond()`` — re-scoped 2026-07-30 to a fast smoke check,
+superseded by this module as the authoritative mechanism; see its own
+docstring's "STATUS" note) compares n_eff and picks each mode's nearest
 neighbour in the other engine's n_eff list. That works when the modes are
 well separated, but it is fundamentally a 1-D scalar heuristic: on a wide
 multimode cross-section several higher-order modes can crowd together in
@@ -55,12 +57,20 @@ tested with synthetic data and used with either engine's output via
 """
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+import logging
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 FieldSet = Dict[str, np.ndarray]
+
+# Self-overlap classification thresholds -- see self_overlap_diagnostics().
+# _DUPLICATE_OVERLAP matches fdtd.py's _DUP_BAND_OVERLAP_THRESHOLD and
+# eme.py's _DUP_MODE_OVERLAP_THRESHOLD: one number for "these are the same
+# eigenvector" across all three call sites.
+_DUPLICATE_OVERLAP = 0.9
+_ORTHOGONALITY_TOL = 0.1
 
 
 def mesh_cell_centers(mesh) -> Tuple[np.ndarray, np.ndarray]:
@@ -125,46 +135,60 @@ def stack_meow_mode_fields(modes) -> FieldSet:
     )
 
 
-def _transverse_e_overlap(
-    Ea_y: np.ndarray, Ea_z: np.ndarray, Eb_y: np.ndarray, Eb_z: np.ndarray,
+def _transverse_overlap(
+    Ta_y: np.ndarray, Ta_z: np.ndarray, Tb_y: np.ndarray, Tb_z: np.ndarray,
     dy: float, dz: float,
 ) -> complex:
-    """kappa_ab = integral (Ea_t . Eb_t*) dA over the transverse (y, z)
-    plane — the complex inner product of the two transverse E-field
-    vectors, NOT the E-x-H reciprocity overlap (see module docstring for
-    why: it needs H from only ONE engine at a time, so it is immune to
-    meep and meow reporting E and H in mutually inconsistent absolute
-    units, which the reciprocity form is not).
+    """kappa_ab = integral (Ta_t . Tb_t*) dA over the transverse (y, z)
+    plane — the complex inner product of two transverse field-component
+    pairs (``T`` is whichever pair ``field_overlap_matrix()`` was pointed
+    at: E for the primary check, H for its independent corroboration), NOT
+    the E-x-H reciprocity overlap (see module docstring for why: crossing
+    engine A's field with engine B's field of the SAME type needs only ONE
+    engine's amplitude convention at a time, so it is immune to meep and
+    meow reporting E and H in mutually inconsistent absolute units, which
+    the reciprocity form is not — and the same argument applies verbatim to
+    H against H).
 
     Riemann sum over (dy, dz): both engines' field samples are already
     CELL-CENTER values (see ``mesh_cell_centers()``), not node values, so a
     rectangle rule is the matching quadrature — ``np.trapz`` would assume
     node samples and is the wrong rule here.
     """
-    integrand = Ea_y * np.conj(Eb_y) + Ea_z * np.conj(Eb_z)
+    integrand = Ta_y * np.conj(Tb_y) + Ta_z * np.conj(Tb_z)
     return complex(np.sum(integrand) * dy * dz)
 
 
-def field_overlap_matrix(fields_a: FieldSet, fields_b: FieldSet, dy: float, dz: float) -> np.ndarray:
+def field_overlap_matrix(
+    fields_a: FieldSet, fields_b: FieldSet, dy: float, dz: float,
+    components: Tuple[str, str] = ("Ey", "Ez"),
+) -> np.ndarray:
     """``[n_a, n_b]`` matrix of normalized overlap magnitudes eta_ij in
     ``[0, 1]`` between every mode of engine A and every mode of engine B,
     sampled on the SAME ``(y, z)`` grid (uniform spacing ``dy, dz``).
 
     ``eta_ij = |kappa_ij| / sqrt(kappa_ii * kappa_jj)``, normalized by each
-    mode's own transverse E-field power (always real and positive by
-    construction, unlike a mixed E-x-H self term) — so the result does not
-    depend on either engine's internal field-amplitude normalization
-    convention, only on Ey/Ez shape. Only Ey, Ez are used; Ex (the
-    propagation-direction component), Hx, Hy, Hz may still be present in
-    ``fields_a``/``fields_b`` (e.g. because ``section_mode_fields()``
-    always returns all six) but are not read here.
+    mode's own transverse power in the chosen field type (always real and
+    positive by construction, unlike a mixed E-x-H self term) — so the
+    result does not depend on either engine's internal field-amplitude
+    normalization convention, only on the chosen component pair's shape.
+
+    ``components`` selects which transverse pair to compare — ``("Ey",
+    "Ez")`` (the default) for the primary E-field check, or ``("Hy", "Hz")``
+    for the H-only corroboration (`fdtd_vs_EME_mode_validation.md` item 4):
+    a field-type-pure overlap is required either way (see module docstring),
+    it just need not always be E. Whichever pair is unused (Ex/Hx/Hy/Hz when
+    comparing E, or Ex/Ey/Ez when comparing H) may still be present in
+    ``fields_a``/``fields_b`` (e.g. because ``section_mode_fields()`` always
+    returns all six) but is not read here.
     """
-    na = fields_a["Ey"].shape[0]
-    nb = fields_b["Ey"].shape[0]
+    cy, cz = components
+    na = fields_a[cy].shape[0]
+    nb = fields_b[cy].shape[0]
 
     def self_overlap(fields, i):
-        return _transverse_e_overlap(
-            fields["Ey"][i], fields["Ez"][i], fields["Ey"][i], fields["Ez"][i], dy, dz)
+        return _transverse_overlap(
+            fields[cy][i], fields[cz][i], fields[cy][i], fields[cz][i], dy, dz)
 
     self_a = np.array([abs(self_overlap(fields_a, i)) for i in range(na)])
     self_b = np.array([abs(self_overlap(fields_b, j)) for j in range(nb)])
@@ -172,8 +196,8 @@ def field_overlap_matrix(fields_a: FieldSet, fields_b: FieldSet, dy: float, dz: 
     eta = np.zeros((na, nb))
     for i in range(na):
         for j in range(nb):
-            kappa = _transverse_e_overlap(
-                fields_a["Ey"][i], fields_a["Ez"][i], fields_b["Ey"][j], fields_b["Ez"][j], dy, dz)
+            kappa = _transverse_overlap(
+                fields_a[cy][i], fields_a[cz][i], fields_b[cy][j], fields_b[cz][j], dy, dz)
             denom = np.sqrt(self_a[i] * self_b[j])
             eta[i, j] = abs(kappa) / denom if denom > 0 else 0.0
     return eta
@@ -208,3 +232,264 @@ def best_correspondence(eta: np.ndarray) -> Tuple[List[int], np.ndarray]:
         second = row.max() if eta.shape[1] > 1 else 0.0
         margin[i] = best - second
     return correspondence, margin
+
+
+def overlap_diagnostics(eta: np.ndarray) -> Dict[str, Any]:
+    """Matrix-level statistics for an overlap matrix — the whole matrix, not
+    just its diagonal.
+
+    If two bases span the same subspace and correspond mode-for-mode, ``eta``
+    is close to a **permutation matrix**. Testing only the matched diagonal
+    (the original check) tests a strict subset of that statement and is blind
+    to the failure that matters most for an arbitrary geometry: a mode present
+    in one engine's basis and *absent* from the other's.
+
+    The row-completeness sum is what closes that gap, and it is free — the
+    same matrix, one more reduction. For an orthonormal basis ``{b_j}`` and a
+    unit vector ``a_i``, ``sum_j |<a_i, b_j>|^2 == 1`` **iff** ``a_i`` lies in
+    ``span{b_j}``. Since ``eta_ij`` is exactly that normalized inner product
+    (see ``field_overlap_matrix()``), ``row_completeness[i]`` measures how
+    much of engine A's mode *i* engine B's retained basis can represent at
+    all. Noticeably below 1 means truncation or a genuine basis mismatch, not
+    a mis-ordering — a distinction the diagonal cannot draw. ``col_completeness``
+    is the same test in reverse, catching a mode B found that A missed.
+
+    Caveat on interpretation: the identity relies on each engine's own modes
+    being mutually orthogonal. Guided eigenmodes of one operator are, to
+    discretization error; radiation modes are not, which is one more reason to
+    filter them out before calling this (see this module's callers).
+
+    Returns a dict with ``correspondence``/``margin`` (as
+    ``best_correspondence()``), plus ``diagonal``, ``row_completeness``,
+    ``col_completeness``, ``off_diagonal_max``, and the scalar summaries
+    ``worst_diagonal``/``worst_row_completeness``/``worst_col_completeness``.
+    Report the arrays, not only the scalars: a failure's *shape* across modes
+    is what distinguishes under-resolution (high modes degrade, low ones
+    fine) from a basis mismatch (one row collapses) from a mis-ordering (every
+    row high, on the wrong column).
+    """
+    eta = np.asarray(eta, dtype=float)
+    n_a, n_b = eta.shape
+    correspondence, margin = best_correspondence(eta)
+
+    diagonal = np.full(n_a, np.nan)
+    off_diagonal_max = np.full(n_a, np.nan)
+    for i in range(n_a):
+        j = correspondence[i]
+        if j < 0:
+            continue
+        diagonal[i] = eta[i, j]
+        row = eta[i].copy()
+        row[j] = -np.inf
+        off_diagonal_max[i] = row.max() if n_b > 1 else 0.0
+
+    row_completeness = np.sum(eta ** 2, axis=1)
+    col_completeness = np.sum(eta ** 2, axis=0)
+
+    def _worst(arr):
+        finite = arr[np.isfinite(arr)]
+        return float(finite.min()) if finite.size else float("nan")
+
+    return dict(
+        correspondence=correspondence,
+        margin=margin,
+        diagonal=diagonal,
+        row_completeness=row_completeness,
+        col_completeness=col_completeness,
+        off_diagonal_max=off_diagonal_max,
+        worst_diagonal=_worst(diagonal),
+        worst_row_completeness=_worst(row_completeness),
+        worst_col_completeness=_worst(col_completeness),
+        order_preserved=correspondence == list(range(n_a)),
+    )
+
+
+def self_overlap_diagnostics(
+    fields: FieldSet, dy: float, dz: float,
+    components: Tuple[str, str] = ("Ey", "Ez"),
+) -> Dict[str, Any]:
+    """Same-engine control: one engine's mode set compared against ITSELF.
+
+    The result must be the identity — unit diagonal, ~zero off-diagonal — by
+    construction, because these are eigenmodes of a single operator sampled on
+    a single grid. Anything else is a fault in the *measurement*, not a
+    finding about the device: too coarse a comparison grid, a bad axis remap,
+    a duplicate eigenvector, or non-orthogonal radiation modes in the set.
+
+    Worth running as a standing control alongside every cross-engine
+    comparison. This session produced two confident-looking cross-engine
+    "correspondence failures" that were both artifacts of the checker; either
+    would have been caught immediately by this, and an ad-hoc attempt to run
+    it after the fact was what finally localized them. Cheap: it reuses the
+    modes already solved for the real comparison, adding no eigensolve.
+    """
+    eta = field_overlap_matrix(fields, fields, dy=dy, dz=dz, components=components)
+    diag = overlap_diagnostics(eta)
+    n = eta.shape[0]
+    off = eta - np.diag(np.diag(eta))
+    max_off = 0.0 if n == 1 else float(np.max(np.abs(off)))
+
+    # Two DIFFERENT failures, and conflating them was a real bug: an early
+    # version failed the control on any off-diagonal above 0.1, which turned
+    # out to reject bases that are perfectly usable. Measured at the modal
+    # multiplexer's interface 0 (16 modes, res 40): meep's own basis shows a
+    # max off-diagonal of 0.1257 and meow's 0.1886, from genuinely
+    # near-degenerate mode PAIRS -- physically expected on a symmetric
+    # multimode cross-section -- while rows 0-8 of the cross-engine
+    # comparison matched at diagonal 1.0000 regardless. Treating that as a
+    # control failure would disable the check on exactly the devices it
+    # exists for.
+    #
+    #   has_duplicate  off-diagonal near 1 -> two entries ARE one mode. The
+    #                  basis is rank-deficient; nothing downstream of it is
+    #                  meaningful. Hard fail.
+    #   is_orthogonal  off-diagonal small -> textbook-clean basis. Its
+    #                  absence WITHOUT a duplicate is worth reporting but not
+    #                  disqualifying.
+    diag["max_off_diagonal"] = max_off
+    diag["has_duplicate"] = bool(max_off > _DUPLICATE_OVERLAP)
+    diag["is_orthogonal"] = bool(max_off < _ORTHOGONALITY_TOL)
+    diag["diagonal_is_unit"] = bool(np.allclose(np.diag(eta), 1.0, atol=1e-6))
+    # Retained for callers that just want "textbook clean", but note it is the
+    # STRICT reading: use has_duplicate to gate, not this.
+    diag["is_identity"] = bool(diag["diagonal_is_unit"] and diag["is_orthogonal"])
+    return diag
+
+
+def excited_mode_axis(n_modes_out: int, n_modes_in: int) -> int:
+    """Which axis of a ``solve_section()``-shaped transfer matrix (``[n_wl,
+    n_out, n_in]``) indexes the side ``solve_section()`` actually EXCITES
+    from: axis 2 (input) if ``n_in <= n_out``, else axis 1 (output).
+
+    Mirrors ``solve_section()``'s own reciprocity rule verbatim (excite
+    whichever boundary has FEWER modes, then use reciprocity for the rest —
+    see its docstring): a duplicate eigenvector can only arise among modes
+    that were actually excited via ``get_eigenmode_coefficients()``/meow's
+    own decomposition, not the side that was merely measured by reciprocity.
+    """
+    return 2 if n_modes_in <= n_modes_out else 1
+
+
+def transfer_matrix_duplicate_scan(T: np.ndarray, threshold: float = _DUPLICATE_OVERLAP) -> Dict[str, Any]:
+    """Post-hoc duplicate-mode scan of a ``solve_section()``-shaped transfer
+    matrix — ``fdtd_vs_EME_mode_validation.md`` item 8's "(a) and (c)" gap.
+
+    Every other mechanism in this module compares bases from
+    ``section_mode_fields()``/``section_modes()``: cheap, separate
+    eigensolves run purely for diagnosis. The basis ``HybridSolver`` actually
+    CONTRACTS comes from a different code path entirely
+    (``get_eigenmode_coefficients()`` on DFT-decayed flux for
+    ``FDTDSolver``, meow's own mode decomposition for ``EMESolver``) and was
+    never checked — a duplicate could exist in the transfer matrix actually
+    used even when the side-channel diagnostic reports a clean basis.
+
+    This is the "cheapest first step" the item calls for: `T` is already
+    computed by the time ``solve_section()`` returns, so the scan costs no
+    extra eigensolve or simulation, only ``O(n_excited^2)`` vector arithmetic
+    on an array already in memory.
+
+    ``solve_section()`` excites from whichever side has FEWER modes (see its
+    own docstring), so a duplicate excited mode shows up as two nearly
+    PARALLEL vectors along that side's axis (``excited_mode_axis()``), each
+    vector spanning the wavelength-resolved response measured on the OTHER
+    side — two "different" excited modes producing indistinguishable
+    responses is the transfer-matrix analogue of
+    ``_iter_distinct_bands()``/``EMESolver.compute_modes()``'s duplicate-
+    eigenvector guard, but observed on the matrix ``HybridSolver`` actually
+    contracts rather than a side-channel eigensolve.
+
+    Similarity is complex cosine similarity (normalized inner product
+    magnitude, in ``[0, 1]``) between two excited-side vectors, maxed over
+    wavelength — the same normalization ``field_overlap_matrix()`` uses, so
+    `threshold` defaults to this module's own ``_DUPLICATE_OVERLAP`` (also
+    ``fdtd.py``'s ``_DUP_BAND_OVERLAP_THRESHOLD`` / ``eme.py``'s
+    ``_DUP_MODE_OVERLAP_THRESHOLD``): one number for "these are the same
+    mode" everywhere it is asked.
+
+    **This is a symptom, not proof — unlike the same-engine field-shape
+    controls (``self_overlap_diagnostics()``), a high similarity here is not
+    a hard failure.** Two excited modes could in principle produce
+    correlated measured responses for a reason other than being the same
+    eigenvector (e.g. strong coupling through a shared radiation channel);
+    report and investigate `has_duplicate`, don't gate on it automatically
+    the way the field-based guards do.
+
+    Args:
+        T: complex ndarray ``[n_wavelengths, n_modes_out, n_modes_in]`` —
+            ``solve_section()``'s own return shape.
+        threshold: similarity above which two excited-side columns are
+            flagged as a likely duplicate.
+
+    Returns:
+        dict with ``excited_axis`` (1 or 2), ``n_excited``, ``similarity``
+        (``[n_excited, n_excited]`` symmetric, wavelength-maxed, unit
+        diagonal), ``worst_pair`` (``(i, j)``, or None if ``n_excited < 2``),
+        ``max_similarity``, and ``has_duplicate``.
+    """
+    T = np.asarray(T, dtype=complex)
+    if T.ndim != 3:
+        raise ValueError(
+            f"transfer_matrix_duplicate_scan: expected a 3-D "
+            f"[n_wavelengths, n_modes_out, n_modes_in] array, got shape {T.shape}."
+        )
+    n_out, n_in = T.shape[1], T.shape[2]
+    axis = excited_mode_axis(n_out, n_in)
+    vectors = np.moveaxis(T, axis, 0)  # [n_excited, n_wl, n_other]
+    n_excited = vectors.shape[0]
+
+    similarity = np.eye(n_excited)
+    worst_pair = None
+    worst = 0.0
+    norms = np.sqrt(np.sum(np.abs(vectors) ** 2, axis=2))  # [n_excited, n_wl]
+    for i in range(n_excited):
+        for j in range(i + 1, n_excited):
+            num = np.abs(np.sum(vectors[i] * np.conj(vectors[j]), axis=1))  # [n_wl]
+            denom = norms[i] * norms[j]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                sim_per_wl = np.where(denom > 0, num / denom, 0.0)
+            sim = float(np.max(sim_per_wl)) if sim_per_wl.size else 0.0
+            similarity[i, j] = similarity[j, i] = sim
+            if sim > worst:
+                worst, worst_pair = sim, (i, j)
+
+    return dict(
+        excited_axis=axis,
+        n_excited=n_excited,
+        similarity=similarity,
+        worst_pair=worst_pair,
+        max_similarity=worst,
+        has_duplicate=bool(worst > threshold),
+    )
+
+
+def warn_on_transfer_duplicate(
+    T: np.ndarray, logger: logging.Logger, x0: float, x1: float,
+    threshold: float = _DUPLICATE_OVERLAP,
+) -> Dict[str, Any]:
+    """Run ``transfer_matrix_duplicate_scan()`` on a just-computed
+    ``solve_section()`` transfer matrix and log a WARNING (never raise) if it
+    flags a likely duplicate excited mode.
+
+    Shared by ``FDTDSolver.solve_section()`` and ``EMESolver.solve_section()``
+    (``fdtd_vs_EME_mode_validation.md`` item 8) so the message and threshold
+    cannot drift between the two engines' call sites. See
+    ``transfer_matrix_duplicate_scan()``'s docstring for what the scan
+    measures and why this is reported rather than gated on.
+
+    Returns the scan dict (see ``transfer_matrix_duplicate_scan()``), so a
+    caller — e.g. a test — can inspect it without re-running the scan.
+    """
+    scan = transfer_matrix_duplicate_scan(T, threshold=threshold)
+    if scan["has_duplicate"]:
+        i, j = scan["worst_pair"]
+        logger.warning(
+            "solve_section: possible duplicate excited mode in the transfer "
+            "matrix at x=[%.4g, %.4g] -- excited-side modes %d and %d produced "
+            "near-parallel measured responses (similarity %.4f). This is a "
+            "symptom, not a confirmed duplicate (see "
+            "transfer_matrix_duplicate_scan()'s docstring); investigate before "
+            "trusting this section's basis. See fdtd_vs_EME_mode_validation.md "
+            "item 8.",
+            x0, x1, i, j, scan["max_similarity"],
+        )
+    return scan

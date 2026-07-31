@@ -237,3 +237,19 @@ class DeviceGeometry(ABC):
     def bbox(self) -> Tuple[float, float]:
         """(width, height) bounding box of the device body only (µm)."""
         return self.total_length, 0.0
+
+    @property
+    def frame_offset(self) -> float:
+        """Device-frame x-offset from this geometry's bbox midpoint to its
+        own local-frame origin (x=0 in polygons()/width_at()/etc.).
+
+        0.0 (the default) means the two coincide, i.e. this geometry's local
+        frame spans exactly [-total_length/2, +total_length/2] — true for
+        every geometry in this package except MMI. CompoundGeometry reads
+        this to correctly place a segment placed at device-frame
+        [seg_lo, seg_hi] whose own frame isn't centered on that bbox: the
+        segment's local-frame origin sits at device x =
+        (seg_lo + seg_hi) / 2 + frame_offset, not at the bbox midpoint
+        itself.
+        """
+        return 0.0

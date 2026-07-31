@@ -300,6 +300,59 @@ class TestCompoundGeometryStubIsAppliedExactlyOnce:
         assert lo_x == pytest.approx(0.0)
 
 
+class TestCompoundGeometryMMIFrameOffset:
+    """Regression guard for notes.md Geometry item 7: CompoundGeometry assumed
+    every segment's local frame is centered on its own bbox
+    (`(seg_lo + seg_hi) / 2`), but MMI's frame is centered on the MM body
+    instead -- the two only coincide when
+    max(input taper lengths) == max(output taper lengths). Reproduction from
+    the notes: mm_length=5 with one input taper of 3.0 and one output taper
+    of 1.0 (asymmetric). MMI.total_length is 9 either way, but MMI's own
+    frame spans [-5.5, 3.5] (bbox-centered would be [-4.5, 4.5]), a genuine
+    `frame_offset` of (3.0 - 1.0) / 2 = 1.0. Before the fix, `compound.
+    polygons()` hung 1 um past its own declared left edge and `width_at()` at
+    that edge returned a mid-taper width instead of the true access-waveguide
+    width.
+    """
+
+    def _compound(self):
+        mmi = MMI(
+            n_inputs=1, n_outputs=1, mm_length=5.0, mm_width=2.0,
+            inputs=[MMIPort(y=0.0, waveguide_width=0.35, taper_length=3.0, taper_width=0.8)],
+            outputs=[MMIPort(y=0.0, waveguide_width=0.35, taper_length=1.0, taper_width=0.8)],
+        )
+        run = WaveguideRun(length=2.0, ports=[(0.0, 0.35)])
+        return CompoundGeometry([mmi, run]), mmi
+
+    def test_mmi_frame_offset_is_half_the_taper_asymmetry(self):
+        _, mmi = self._compound()
+        assert mmi.total_length == pytest.approx(9.0)
+        assert mmi.frame_offset == pytest.approx((3.0 - 1.0) / 2)
+
+    def test_polygons_stay_within_declared_bbox(self):
+        g, _ = self._compound()
+        half = g.total_length / 2  # 5.5
+        polys = g.polygons()[(2, 0)]
+        xs = [v[0] for poly in polys for v in poly]
+        assert min(xs) == pytest.approx(-half)
+        assert max(xs) == pytest.approx(half)
+
+    def test_width_at_left_edge_is_the_access_waveguide_not_mid_taper(self):
+        g, _ = self._compound()
+        half = g.total_length / 2  # 5.5
+        # True left edge of the MMI's own frame: its input access-waveguide
+        # width (0.35), not a mid-taper value (0.467) from a bbox-mis-centered
+        # lookup.
+        assert g.width_at(-half) == pytest.approx(0.35)
+
+    def test_section_gds_stays_within_declared_bbox(self):
+        g, _ = self._compound()
+        half = g.total_length / 2
+        d = g.section_gds(-half, half, oxide_width=3.0)
+        xs = [v[0] for poly in d[(2, 0)] for v in poly]
+        assert max(xs) - min(xs) == pytest.approx(2 * half)
+
+
 # ---------------------------------------------------------------------------
 # arc_polygon
 # ---------------------------------------------------------------------------

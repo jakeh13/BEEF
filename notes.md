@@ -713,14 +713,21 @@ lives in "Current library reference" above, not here.
     section boundary, giving the bend's near field zero relaxation length —
     is legal and silent). Three concrete pieces: (a) a geometry-level
     `discontinuities()` (or recommended-stub hint) so `HybridSolver` can warn
-    when a boundary coincides with a cross-section change; (b) promote the
-    empirical procedure — `directional_coupler_hybrid_stub_sweep.py` (in
-    `examples/directional_coupler/python/`) sweeps the stub 0:0.25:2 µm on
-    one fixed device and plots the 50:50 split length against it, which is the
-    convergence check that justifies a value — into something reusable beyond
-    the directional coupler (pairs naturally with the sweep harness in Misc #5);
-    (c) once each geometry family has a defensible number, keep it in one place
-    instead of four example-local constants.
+    when a boundary coincides with a cross-section change; (b) **done
+    2026-07-30** — the *comparison* half of the empirical procedure
+    (`directional_coupler_hybrid_stub_sweep.py` sweeps the stub 0:0.25:2 µm
+    on one fixed device and plots the 50:50 split length against it) is now
+    reusable: `beef.cut_position_invariance.cut_position_invariance()` takes
+    one already-solved `SMatrix` per stub value and fits transmission drift
+    vs. stub for every `(port, in_mode, out_mode)` key, reporting the fitted
+    slope. The device-specific half — building each stub's boundaries/
+    geometry/kwargs, and picking a scalar observable like the coupler's 50:50
+    length — deliberately stays with the caller, since that bookkeeping
+    really is per-device. No example has been migrated onto it yet (needs a
+    real meep/meow run to confirm it reproduces the coupler's known 167x
+    drift-collapse, not just a code change); (c) once each geometry family has
+    a defensible number, keep it in one place instead of four example-local
+    constants.
 11. **Bigger lift, only if scope grows toward design automation:** adjoint/
     inverse-design support, periodic/grating structures via an RCWA backend
     (S4/Meent/FMMAX-style) for problems where FDTD/EME are the wrong tool,
@@ -776,11 +783,18 @@ lives in "Current library reference" above, not here.
     either needs an extra eigensolve per band on a different code path than
     the one actually producing the basis (easy to get subtly wrong), or a
     real time-domain run to verify it, and `solve_section()` is too heavily
-    used and delicately tuned to risk on an under-verified change. Concrete
-    follow-up for whoever picks this up: a post-hoc diagnostic that checks
-    `solve_section()`'s already-computed `T` coefficient columns for
-    near-duplicate values after the run completes — zero extra simulation
-    cost, since it only reads data already produced.
+    used and delicately tuned to risk on an under-verified change.
+
+    **Follow-up done, same day** (`fdtd_vs_EME_mode_validation.md` item 8):
+    `beef.mode_identity.transfer_matrix_duplicate_scan()`/
+    `warn_on_transfer_duplicate()` — a post-hoc scan of `solve_section()`'s
+    already-computed `T` for near-parallel excited-side columns, wired into
+    both `FDTDSolver.solve_section()` and `EMESolver.solve_section()` right
+    before they return. Zero extra simulation cost (`T` is already computed);
+    logs a WARNING, does not raise — a high similarity is a symptom, not
+    proof, unlike the field-shape same-engine controls. Not yet exercised
+    against a real device's own duplicate-band reproduction (that needs an
+    actual meep/meow run, not a code change).
 
     Not modal-multiplexer-specific: any device with closely-spaced
     higher-order bands (the coupler, either MMI) could hit this too via
@@ -839,11 +853,18 @@ lives in "Current library reference" above, not here.
     runs its real 16-mode comparison. The comparison path was separately
     confirmed to run and pass cleanly on a real meep/meow FDTD<->EME
     interface via a synthetic uniform `WaveguideRun` section. **Remaining
-    limitation**: the coupler and both MMI examples still can't run this
-    check at all, purely because their 0.25 µm `body_stub` is thinner than
-    `FDTDSolver`'s automatic `dpml=0.5` query padding — widening those
-    example constants (and re-recording the affected goldens) is what would
-    make this a routine gate across the whole example set. Not done here.
+    limitation, fixed 2026-07-30 (`fdtd_vs_EME_mode_validation.md` item 5)**:
+    the coupler and both MMI examples couldn't run this check at all, purely
+    because their 0.25 µm `body_stub` is thinner than `FDTDSolver`'s automatic
+    `dpml=0.5` query padding. Rather than widening those example constants
+    (which would have meant re-recording every affected golden for no physics
+    reason), `HybridSolver` gained `mode_correspondence_pad`, threaded to
+    `section_mode_fields()` for solvers whose signature declares a `pad`
+    parameter — safe because the mode-field query never time-steps, so a
+    smaller clearance than a real PML footprint is exactly as valid, just
+    thinner. A value like 0.1 fits inside `body_stub = 0.25`. Does not itself
+    turn `check_mode_correspondence=True` on for these three examples — that
+    is a separate decision needing real-device verification, not done here.
     13 new meep/meow-free unit tests in `tests/test_hybrid_mode_correspondence.py`
     (mocked `sys.modules["meow"]`, synthetic sine-mode `FieldSet`s) plus 2 new
     real-`tidy3d` tests for `EMESolver.section_modes()` in
@@ -907,7 +928,8 @@ lives in "Current library reference" above, not here.
     statistic hides. A validation tool that has never been run against a
     known-good reference is an untested tool.
 15. **New, 2026-07-30 — `section_mode_beta()` clamps for `solve_section()`'s
-    `±dpml` draw padding in its seed path but not in its fit path.**
+    `±dpml` draw padding in its seed path but not in its fit path. FIXED
+    2026-07-30.**
     `fdtd.py`'s `seed_span = min(2.0, span - 2.0*self.dpml)` exists
     *specifically* because the mode solve pads its query by `dpml` on each
     side (its own comment says so). But the fit lengths a few lines below —
@@ -928,8 +950,126 @@ lives in "Current library reference" above, not here.
     at that β) that is flanked by a bend/taper. Not reachable today:
     `calibrate_body_neff` defaults False, and both live callers use a ~29.5 µm
     body. Reachable by any user with a short uniform body, or
-    `calibrate_body_neff=True` on a compact device. Fix is to apply the same
-    `- 2*dpml` clearance to the fit lengths that the seed span already gets.
+    `calibrate_body_neff=True` on a compact device.
+
+    **Fix**: the default `spacing` computation now uses
+    `usable_span = span - 2.0*self.dpml` in place of the raw `span`, mirroring
+    `seed_span` exactly — `usable_span`'s own `<= 0` case needs no separate
+    raise, since `seed_span`'s existing check above it already guards the
+    identical `span - 2*dpml <= 0` condition and fires first. On the
+    `coupling_length=3.0` repro this now gives `lengths=[0.5, 1.0, 1.5]`, a
+    drawn half-window of exactly 1.250 — flush with, not past, the uniform
+    half. 4 new tests in
+    `tests/test_beta_calibration.py::TestSectionModeBetaDpmlClearance`
+    exercise the real `section_mode_beta()` code path (`section_mode_neff()`/
+    `solve_section()` swapped for numpy-only fakes, no meep needed): one
+    documents the pre-fix overrun arithmetic, one confirms every default fit
+    length now stays within the uniform span, one confirms the fit still
+    recovers the seeded β, one confirms the pre-existing (unchanged)
+    zero-clearance raise. Confirmed to fail on the unfixed code before the
+    change (caught the exact 1.3333-vs-1.2500 overrun) and pass after.
+    `TestTheSpacingPrecondition.test_the_actual_default_is_span_independent`
+    (same file) updated to check the `dpml`-aware invariant instead of the
+    old span-only one.
+16. **New, 2026-07-30 — `tests/test_mode_identity.py::assert_modes_correspond()`
+    re-scoped to a fast smoke check. DONE 2026-07-30.**
+    (`fdtd_vs_EME_mode_validation.md` item 10.) Now that item 13's
+    field-overlap machinery is the trusted mechanism, this older n_eff
+    nearest-neighbour helper is strictly weaker (1-D scalar, resolution-
+    locked, shape-blind — see its own module docstring's already-recorded
+    caveats) and was never retired. Re-scoped rather than deleted: its fast
+    logic-only tests and its two `@pytest.mark.slow` real-device smoke tests
+    are still cheap and useful as a first line of defense, so kept, but its
+    module docstring, its own docstring, and both real-device call sites now
+    say plainly it is a smoke check, superseded by `beef.mode_identity`/
+    `HybridSolver(check_mode_correspondence=True)` for anything needing an
+    authoritative answer. `beef/mode_identity.py`'s own module docstring
+    updated to point back the same way. Docs/docstrings only — no behavior
+    change, existing fast suite (`tests/test_mode_identity.py -m "not
+    slow"`) unchanged (5 passed, 2 deselected).
+17. **New, 2026-07-30 — `_iter_distinct_bands()`'s duplicate check runs on a
+    grid that cannot resolve the modes it judges. CHECKED 2026-07-30, NOT
+    LIVE at res 20.** (`fdtd_vs_EME_mode_validation.md` item 11.) The guard
+    decides "same eigenvector or not" from a fixed `_DUP_BAND_DIAG_NY = 16` ×
+    `_DUP_BAND_DIAG_NZ = 8` sample spanning the whole **monitor** width. On the
+    modal multiplexer's interface that monitor is 5.0 µm wide, so the
+    transverse pitch is 0.3125 µm and only 8 of the 16 points land inside the
+    2.8 µm core — against a ~0.19 µm lobe pitch for the 15th mode. The
+    constant's justifying comment ("only needs to distinguish 0.9999 from
+    ≤ 0.1257") was measured on the **6-mode** coupler and does not carry to 16
+    by construction: idealized slab profiles `sin(mπy/W)` on that exact grid
+    alias mode *m* onto mode *18−m* at η ≈ 0.9988, well past the 0.9
+    threshold.
+
+    **Measured directly on real fields**, `examples/verification/python/
+    diagnose_dup_band_grid.py`: solved band_num 1–20 unguarded at the mux's
+    interface, res 20 (a resolution job 11575516 confirmed the shipped guard
+    fires at), then replayed the guard's accept/skip logic on the shipped
+    grid and three finer ones (32×8, 64×16, 128×16 — up to 72/128 points
+    inside the core vs the shipped 8/16). All four grids skip the identical
+    two bands (11, 16), both independently confirmed as genuine duplicates by
+    an exact n_eff tie (`|Δn_eff| < 1e-9`, no field sampling needed), and the
+    worst overlap among accepted bands tops out at 0.34 (shipped grid) —
+    comfortably under the 0.9 threshold, not approaching it. The idealized
+    aliasing estimate does not transfer: real fields extend into the
+    cladding rather than vanishing at the core edge.
+
+    **Not re-checked at res 40** (the shipped `RESOLUTION`, where job
+    11575516 also confirmed firings, at band_num 11/15) — a finer mesh packs
+    more oscillation into the same core width, so this is worth one more data
+    point before closing the item, but the res-20 result already moves it
+    from "latent risk" to "checked and clear so far."
+18. **New, 2026-07-30 — every band's eigensolve starts from the same k guess,
+    and it is the likely root cause of item 12. TESTED 2026-07-30 — net
+    positive, not a clean fix.** (`fdtd_vs_EME_mode_validation.md` item 12.)
+    `_iter_distinct_bands()` calls `sim.get_eigenmode(..., band_num,
+    mp.Vector3(f * _KPOINT_SEED_NEFF, 0, 0))` with `_KPOINT_SEED_NEFF = 2.5` —
+    the same starting vector for band 1 and band 18 alike, *N* independent
+    targeted solves from one seed. Two neighbouring targeted solves launched
+    from an identical guess converging to the same eigenpair is the textbook
+    shape of the duplicate item 12 works around, and it explains the engine
+    asymmetry: `EMESolver.compute_modes()` goes through
+    `compute_modes_meep(cross_section, num_modes=N+8)`, **one simultaneous
+    solve** for the lowest N+8 bands.
+
+    That asymmetry is measurable, not just structural. Job 11575516 found that
+    at the mux's interface 0 the simultaneous side finds both members of a
+    near-degenerate pair at every resolution 20–80 while the targeted ladder
+    finds one — the single disagreement a finer mesh does not close
+    (`fdtd_vs_EME_mode_validation.md` item 1).
+
+    **Tested**, `examples/verification/python/diagnose_kpoint_ladder.py`: 20
+    bands unguarded at the mux's interface, res 40, fixed seed (today's code)
+    vs. laddered (band *k* seeded from band *k−1*'s own converged n_eff).
+    Fixed seed: 3 exact ties, 17/20 distinct. Laddered: 1 exact tie, 19/20
+    distinct — laddering **recovers 2 genuinely distinct modes** the fixed
+    seed silently drops entirely (not just reorders). But it also reproduces
+    the anticipated failure mode: seeding band *k* directly at band
+    *(k−1)*'s answer can make it **re-find** band *(k−1)*'s own eigenvector,
+    and did — a new duplicate appears at bands 9/10 that the fixed run did not
+    have there. Net win, not a closed fix.
+
+    Unplanned side finding: this run (20 bands, one more than earlier work's
+    18) turned up a **third** raw duplicate at band_num 19/20 (n_eff
+    1.349097) beyond the two `modal_multiplexer_validation.md` gap 6 already
+    documents — within both guards' extra-attempt headroom, so not an
+    exhaustion risk, but the guards are doing more work on this device than
+    previously measured.
+
+    Not yet tried: seed band *k* from *(k−1)*'s neff **minus a small step**
+    (the basis is monotonically descending, so this searches past the
+    previous band instead of landing on it) or from the last **accepted**
+    band rather than the raw previous solve — either is a plausible fix for
+    the self-reconvergence failure just demonstrated. (b), one simultaneous
+    `compute_modes_meep()` call as a count reference, not yet run.
+
+    Related, smaller: `guard_duplicate_modes=True` makes
+    `EMESolver.compute_modes()` over-request `num_modes + 8` in a single call,
+    so guarded and unguarded hand MPB **different eigenproblems** — "guard on
+    vs off" is not a clean A/B, and inertness was only checked at 3 modes/res
+    12. At the production end (16 modes → 24 on a res-80 mesh) neither the
+    inertness nor the cost is measured, and job 11575516's 3h36m was dominated
+    by exactly that (`fdtd_vs_EME_mode_validation.md` item 13).
 
 ### Geometry
 
@@ -1030,7 +1170,8 @@ lives in "Current library reference" above, not here.
    multiplexer's correspondence check now gets past the geometry error and
    runs its actual 16-mode comparison.
 7. **New, 2026-07-30 — `CompoundGeometry` assumes every segment's local
-   frame is centred on its own bbox; `MMI`'s is not.** `_placements()` allots
+   frame is centred on its own bbox; `MMI`'s is not. FIXED 2026-07-30.**
+   `_placements()` allots
    each segment a slot `[seg_lo, seg_hi]` and every consumer maps device→local
    as `x - center` with `center = (seg_lo+seg_hi)/2` (`polygons()`,
    `section_prisms()`, `section_gds()`, `width_at()`, `center_at()`,
@@ -1054,10 +1195,24 @@ lives in "Current library reference" above, not here.
    `DirectionalCoupler`/`GdsGeometry` are all genuinely bbox-centred — but
    per-port `taper_length` is a supported, documented `MMIPort` field that
    `MMI` itself handles correctly, so this is a valid device
-   `CompoundGeometry` silently mis-composes. Fix is either to have
-   `_placements()` carry each segment's true local origin offset rather than
-   assuming the midpoint, or to give `DeviceGeometry` an explicit
-   local-frame-origin accessor the composer reads.
+   `CompoundGeometry` silently mis-composes.
+
+   **Fix**: `DeviceGeometry` gained a `frame_offset` property (default
+   `0.0` — bbox-centred, correct for every existing geometry except `MMI`)
+   giving the device-frame offset from a segment's bbox midpoint to its own
+   local-frame origin. `MMI.frame_offset` returns `(in_max - out_max) / 2`.
+   Every `CompoundGeometry` device→local conversion (`polygons()`,
+   `section_prisms()`, `section_gds()`, `width_at()`, `center_at()`,
+   `source_aperture_at()`, `_end_ports()`) now adds `seg.frame_offset` to the
+   bbox-midpoint `center` it already computed, instead of assuming the
+   midpoint is the origin. `to_gds_eme()` needed no change (already correct,
+   per above). 4 new tests in
+   `tests/test_geometry.py::TestCompoundGeometryMMIFrameOffset`, reproducing
+   this entry's own repro case: confirm `MMI.frame_offset == 1.0` for the
+   `mm_length=5`/taper `3.0`/`1.0` device, and that `polygons()`/
+   `section_gds()` stay within the declared bbox and `width_at()` at the true
+   left edge returns the access-waveguide width (0.35) rather than the old
+   mid-taper value (0.467).
 
 ### Plotting
 

@@ -38,7 +38,9 @@ class CompoundGeometry(DeviceGeometry):
     """Concatenates `segments` (DeviceGeometry and/or WaveguideRun instances)
     end-to-end along x, left to right, into a single DeviceGeometry.
 
-    Each segment keeps its own local frame (x=0 at its longitudinal center);
+    Each segment keeps its own local frame (x=0 at its longitudinal center,
+    offset by the segment's own `frame_offset` from its bbox midpoint —
+    0.0 for every geometry except MMI, see DeviceGeometry.frame_offset);
     CompoundGeometry places them back-to-back and translates every query
     (width_at/center_at/section_prisms/section_gds/...) into whichever
     segment's local frame owns that x.
@@ -126,7 +128,7 @@ class CompoundGeometry(DeviceGeometry):
                 for (y, w) in seg.ports:
                     wg.append([(seg_lo, y-w/2), (seg_hi, y-w/2), (seg_hi, y+w/2), (seg_lo, y+w/2)])
             else:
-                center = (seg_lo + seg_hi) / 2
+                center = (seg_lo + seg_hi) / 2 + seg.frame_offset
                 wg.extend(shift_polys(seg.polygons(stub_length=0.0)[_WG_LAYER], center))
         return {_WG_LAYER: wg}
 
@@ -137,17 +139,20 @@ class CompoundGeometry(DeviceGeometry):
         if isinstance(seg, WaveguideRun):
             return list(seg.ports)
         half = seg.total_length / 2
+        offset = seg.frame_offset
         eps = 1e-6
         if side == "input":
+            x_in = -half - offset + eps
             ys = getattr(seg, "input_ys", None)
             if ys is None:
-                return [(seg.center_at(-half + eps, input_idx=0), seg.width_at(-half + eps, input_idx=0))]
-            return [(y, seg.width_at(-half + eps, input_idx=j)) for j, y in enumerate(ys)]
+                return [(seg.center_at(x_in, input_idx=0), seg.width_at(x_in, input_idx=0))]
+            return [(y, seg.width_at(x_in, input_idx=j)) for j, y in enumerate(ys)]
+        x_out = half - offset - eps
         ys = getattr(seg, "output_ys", None)
         if ys is None:
-            ys = [seg.center_at(half - eps, output_idx=0)]
+            ys = [seg.center_at(x_out, output_idx=0)]
         idxs = range(len(ys)) if output_idx is None else [output_idx]
-        return [(ys[j], seg.width_at(half - eps, output_idx=j)) for j in idxs]
+        return [(ys[j], seg.width_at(x_out, output_idx=j)) for j in idxs]
 
     def to_gds_eme(
         self, straight_length: float, oxide_width: float,
@@ -208,7 +213,7 @@ class CompoundGeometry(DeviceGeometry):
                         [[(a, y-w/2), (b, y-w/2), (b, y+w/2), (a, y+w/2)]],
                         si_medium, wg_height=wg_height))
             else:
-                center = (seg_lo + seg_hi) / 2
+                center = (seg_lo + seg_hi) / 2 + seg.frame_offset
                 sub = seg.section_prisms(ov_lo - center, ov_hi - center, si_medium,
                                           stub_left=sl, stub_right=sr, wg_height=wg_height, **kwargs)
                 prisms.extend(shift_prisms(sub, center))
@@ -225,7 +230,7 @@ class CompoundGeometry(DeviceGeometry):
                 for (y, w) in seg.ports:
                     wg_polys.append([(a, y-w/2), (b, y-w/2), (b, y+w/2), (a, y+w/2)])
             else:
-                center = (seg_lo + seg_hi) / 2
+                center = (seg_lo + seg_hi) / 2 + seg.frame_offset
                 sub_dict = seg.section_gds(ov_lo - center, ov_hi - center, oxide_width,
                                             stub_left=sl, stub_right=sr, **kwargs)
                 offset = (ov_lo - sl) - lo
@@ -238,7 +243,7 @@ class CompoundGeometry(DeviceGeometry):
         if isinstance(seg, WaveguideRun):
             idx = kwargs.get("output_idx", kwargs.get("input_idx", 0))
             return seg.ports[idx][1]
-        center = (lo + hi) / 2
+        center = (lo + hi) / 2 + seg.frame_offset
         return seg.width_at(x - center, **kwargs)
 
     def center_at(self, x: float, **kwargs) -> float:
@@ -246,14 +251,14 @@ class CompoundGeometry(DeviceGeometry):
         if isinstance(seg, WaveguideRun):
             idx = kwargs.get("output_idx", kwargs.get("input_idx", 0))
             return seg.ports[idx][0]
-        center = (lo + hi) / 2
+        center = (lo + hi) / 2 + seg.frame_offset
         return seg.center_at(x - center, **kwargs)
 
     def source_aperture_at(self, x: float, **kwargs) -> Optional[float]:
         seg, lo, hi = self._locate(x)
         if isinstance(seg, WaveguideRun):
             return None
-        center = (lo + hi) / 2
+        center = (lo + hi) / 2 + seg.frame_offset
         return seg.source_aperture_at(x - center, **kwargs)
 
     def eme_lengths(self, straight_length: float) -> List[float]:

@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from beef.mode_identity import (
+    overlap_diagnostics, self_overlap_diagnostics,
     best_correspondence, field_overlap_matrix, mesh_cell_centers, stack_meow_mode_fields,
 )
 
@@ -147,6 +148,120 @@ class TestBestCorrespondence:
         matched = [c for c in correspondence if c != -1]
         assert sorted(matched) == [0, 1, 2]  # every B column used exactly once
         assert correspondence.count(-1) == 1  # exactly one A row has no B counterpart
+
+
+class TestOverlapDiagnostics:
+    """The layer-1 upgrade from "test the diagonal" to "test the matrix"
+    (validation_markdown/fdtd_vs_EME_mode_validation.md). If two bases span
+    the same subspace and correspond, eta is close to a PERMUTATION matrix;
+    the matched diagonal alone tests a strict subset of that and is blind to
+    a mode present in one basis and missing from the other."""
+
+    def test_identical_bases_are_a_clean_permutation(self, y_grid):
+        fields = _toy_field_set(4, y_grid)
+        eta = field_overlap_matrix(fields, fields, dy=1.0 / N_Y, dz=1.0)
+        d = overlap_diagnostics(eta)
+        assert d["order_preserved"] is True
+        assert d["worst_diagonal"] > 0.999
+        assert d["worst_row_completeness"] > 0.999
+        assert d["worst_col_completeness"] > 0.999
+        assert np.nanmax(d["off_diagonal_max"]) < 1e-3
+
+    def test_a_pure_shuffle_keeps_completeness_at_one(self, y_grid):
+        """A mis-ORDERING is not a basis deficiency: every mode is still
+        present and representable, so completeness must stay ~1 even though
+        the correspondence is not the identity. This is the distinction the
+        diagonal alone cannot draw."""
+        n = 4
+        fields_a = _toy_field_set(n, y_grid)
+        perm = [2, 0, 3, 1]
+        fields_b = {name: arr[perm] for name, arr in fields_a.items()}
+        d = overlap_diagnostics(field_overlap_matrix(fields_a, fields_b, dy=1.0 / N_Y, dz=1.0))
+        assert d["order_preserved"] is False           # ordering is wrong ...
+        assert d["worst_diagonal"] > 0.999             # ... but every mode found a partner
+        assert d["worst_row_completeness"] > 0.999     # ... and nothing is missing
+        assert d["worst_col_completeness"] > 0.999
+
+    def test_a_missing_mode_collapses_row_completeness(self, y_grid):
+        """The failure the diagonal-only check cannot see. Engine B's basis is
+        missing engine A's mode 2 entirely (it carries a duplicate of mode 0
+        in its place). A's row 2 then has no partner anywhere in B's span, so
+        its completeness collapses toward 0 while OTHER rows still look
+        perfect -- exactly the signature of truncation / basis mismatch, as
+        opposed to a mis-ordering."""
+        n = 4
+        fields_a = _toy_field_set(n, y_grid)
+        fields_b = {name: arr.copy() for name, arr in fields_a.items()}
+        for name in fields_b:
+            fields_b[name][2] = fields_a[name][0]  # mode 2 replaced by a copy of mode 0
+        d = overlap_diagnostics(field_overlap_matrix(fields_a, fields_b, dy=1.0 / N_Y, dz=1.0))
+        assert d["row_completeness"][2] < 0.05   # A's mode 2 is unrepresentable in B
+        assert d["row_completeness"][1] > 0.99   # while its neighbours are fine
+        assert d["row_completeness"][3] > 0.99
+        assert d["worst_row_completeness"] < 0.05
+
+    def test_rectangular_eta_flags_the_unmatched_row(self, y_grid):
+        fields_a = _toy_field_set(4, y_grid)
+        fields_b = {name: arr[:3] for name, arr in fields_a.items()}
+        d = overlap_diagnostics(field_overlap_matrix(fields_a, fields_b, dy=1.0 / N_Y, dz=1.0))
+        assert d["correspondence"].count(-1) == 1
+        # The dropped mode has no column to be represented by at all.
+        assert d["worst_row_completeness"] < 0.05
+
+
+class TestSelfOverlapDiagnostics:
+    """Layer 4 -- the same-engine control. One engine's modes against
+    themselves MUST be the identity by construction; anything else is a fault
+    in the measurement, not a finding about the device."""
+
+    def test_a_well_resolved_set_is_the_identity(self, y_grid):
+        fields = _toy_field_set(5, y_grid)
+        d = self_overlap_diagnostics(fields, dy=1.0 / N_Y, dz=1.0)
+        assert d["is_identity"] is True
+        assert d["max_off_diagonal"] < 0.1
+
+    def test_a_duplicated_mode_breaks_the_control(self, y_grid):
+        """A duplicate eigenvector in one engine's own set -- the real
+        FDTDSolver failure _iter_distinct_bands() guards -- must show up here
+        as a non-identity self-overlap, before any cross-engine comparison
+        gets a chance to blame the other engine."""
+        fields = _toy_field_set(3, y_grid)
+        for name in fields:
+            fields[name][1] = fields[name][0]
+        d = self_overlap_diagnostics(fields, dy=1.0 / N_Y, dz=1.0)
+        assert d["is_identity"] is False
+        assert d["max_off_diagonal"] > 0.9  # modes 0 and 1 are the same vector
+
+    def test_a_non_orthogonal_mode_set_breaks_the_control(self, y_grid):
+        """The other real failure mode, stated precisely. An under-resolved
+        EME *solve* does not return coarsely-sampled eigenmodes -- it returns
+        vectors that are not eigenmodes at all, and therefore not mutually
+        orthogonal. Mode 1 here is a superposition rather than a pure order,
+        mimicking that, and the control catches it.
+
+        Note what this test deliberately does NOT claim: coarse *sampling* of
+        an already-orthogonal set is not itself enough to fail. Verified while
+        writing this -- three midpoint samples of sin(k*pi*y) preserve the
+        orthogonality integral exactly (a quadrature coincidence), so
+        `is_identity` still passes there. So the control's power against the
+        fixed-pixel-count mesh bug comes from the solver's output degrading,
+        not from the comparison grid being coarse per se.
+        """
+        fields = _toy_field_set(3, y_grid)
+        for name in ("Ey",):
+            fields[name][1] = fields[name][1] + 0.8 * fields[name][0]
+        d = self_overlap_diagnostics(fields, dy=1.0 / N_Y, dz=1.0)
+        assert d["is_identity"] is False
+        assert d["max_off_diagonal"] > 0.1
+
+    def test_coarse_sampling_of_orthogonal_modes_still_passes(self):
+        """Pins the negative result above so the control's guarantee is not
+        overstated in future: this grid is far too coarse to resolve anything,
+        yet the control passes, because the *set* is still orthogonal."""
+        edges = np.linspace(0.0, 1.0, 4)
+        coarse = 0.5 * (edges[:-1] + edges[1:])
+        d = self_overlap_diagnostics(_toy_field_set(3, coarse), dy=1.0 / 3, dz=1.0)
+        assert d["is_identity"] is True
 
 
 class TestMeshCellCenters:

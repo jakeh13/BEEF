@@ -216,6 +216,18 @@ the only device with all three golden fixtures (`mmi_1x2_eme.json`,
    `## Order` below; they must not be regenerated again until gap 2's
    resolution question is also settled, per the existing sequencing.
 
+   *One thing this record does not say, noted 2026-07-30 so it is not assumed
+   later:* whether the re-audit above ran with the duplicate-mode guards on.
+   `FDTDSolver._iter_distinct_bands()` and `EMESolver.compute_modes()`'s
+   `guard_duplicate_modes` both landed the **same day** as this re-audit, and
+   the log evidence quoted here (a clean identity permutation, no skipped
+   bands mentioned) is consistent with either. It matters less here than on the
+   2×2 (`mmi_2x2_validation.md` gap 6) because 8 modes on a 2.8 µm body is well
+   inside where the meep-side guard's diagnostic grid still discriminates
+   (`fdtd_vs_EME_mode_validation.md` item 11), and because no guard warning
+   appears in this device's audit output. Re-confirm opportunistically — with
+   the next run of this audit, not as a job of its own.
+
 4. **Engine agreement has not been measured.** The coupler's test uses even/odd
    supermode phase, which has no direct analogue in a 1×2 MMI. The transferable
    form is: solve a uniform stretch of the MMI body at two lengths, and check
@@ -229,6 +241,21 @@ the only device with all three golden fixtures (`mmi_1x2_eme.json`,
    the same device. That is check 4 and it is the only one that tests the cascade
    as a whole. Cheapest real validation available here, since neither run has to
    be built first.
+
+   **In progress 2026-07-30** — `examples/verification/python/
+   verify_mmi_1x2_hybrid_vs_fdtd.py` added, ported directly from the 2×2's
+   version (`mmi_2x2_validation.md` gap 5): loads both scripts' saved
+   `SMatrix` pickles, reconciles `mmi_1x2_fdtd.py`'s `out_0`/`out_1` against
+   `mmi_1x2_hybrid.py`'s `out_top`/`out_bot`, reports per-wavelength ΔT with
+   provenance, no pass/fail threshold (same reasoning as the 2×2: gap 4 not
+   measured yet). SLURM job 11578018 (array indices 1-2) generates the two
+   SMatrix files; job 11578019 (`--dependency=afterany:11578018`) runs the
+   comparison once they land. Also run *before* gap 2 here, same as the
+   2×2 — this device's basis is already fixed (gap 3, `N_MODES` 12→8) so the
+   ordering concern the `## Order` section raises below (comparing a
+   mismatched basis against a reference with "no such notion") no longer
+   applies; only the resolution question (gap 2) is still open underneath
+   this first pass.
 
 ## Order
 

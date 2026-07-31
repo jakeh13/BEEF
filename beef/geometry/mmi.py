@@ -90,6 +90,16 @@ class MMI(DeviceGeometry):
         out_max = max((p.taper_length for p in self.outputs), default=0.0)
         return self.mm_length + in_max + out_max
 
+    @property
+    def frame_offset(self) -> float:
+        """MMI's frame is centered on the MM body (x=0 at the body's own
+        center), not on its bbox — its span is
+        [-mm_length/2 - in_max, +mm_length/2 + out_max], which is only
+        bbox-centered when in_max == out_max. See DeviceGeometry.frame_offset."""
+        in_max = max((p.taper_length for p in self.inputs), default=0.0)
+        out_max = max((p.taper_length for p in self.outputs), default=0.0)
+        return (in_max - out_max) / 2
+
     def polygons(
         self, stub_length: float = 0.0, output_indices: List[int] = None,
         input_indices: List[int] = None,

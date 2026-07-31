@@ -36,6 +36,22 @@ TWO THINGS THIS TURNED UP
    pairs band 0 with band 1 and looks exactly like a reordering. It is not. Only
    same-resolution comparison is valid, and `assert_modes_correspond()` below
    takes both arrays from one resolution for that reason.
+
+STATUS, 2026-07-30 (`validation_markdown/fdtd_vs_EME_mode_validation.md` item
+10) -- **`assert_modes_correspond()` below is re-scoped, not retired.** It
+predates `beef.mode_identity`'s transverse-E field-overlap machinery
+(`field_overlap_matrix()`/`best_correspondence()`/`overlap_diagnostics()`,
+also reachable at runtime via `HybridSolver(check_mode_correspondence=True)`),
+which is the trusted, device- and resolution-agnostic mechanism now -- see
+that module's own docstring for why a 1-D n_eff heuristic is fundamentally
+weaker (point 2 above is one symptom; it also cannot tell "these are
+different physical modes that happen to have close n_eff" from a genuine
+reordering, which only comparing *shape* can). Kept here only as a fast
+smoke check (no field solve, no shared diagnostic mesh) for the two
+mismatches it CAN still catch cheaply -- a gross swap or a missing mode --
+not as proof of correspondence. Do not add new call sites; use
+`beef.mode_identity`'s field-overlap machinery for anything that needs an
+authoritative answer.
 """
 from __future__ import annotations
 
@@ -71,6 +87,17 @@ def assert_modes_correspond(neff_a, neff_b, tol=NEFF_TOL, label=("a", "b")):
     Checks the three things that have to hold for HybridSolver's index-i-to-
     index-i contraction to be valid: both engines order modes the same way,
     index i names the same mode in both, and their n_eff agree.
+
+    **Fast smoke check, not the authoritative one -- see this module's
+    docstring, "STATUS, 2026-07-30".** This is a 1-D scalar (n_eff) heuristic:
+    it requires matched resolution (a resolution mismatch fakes a reorder,
+    see this module's docstring point 2) and cannot distinguish two
+    genuinely different mode shapes that happen to land at close n_eff from
+    an actual index swap -- only comparing field *shape*
+    (`beef.mode_identity.field_overlap_matrix()`/`best_correspondence()`, or
+    `HybridSolver(check_mode_correspondence=True)` at runtime) can. Use this
+    only for a cheap same-resolution sanity check; it does not substitute
+    for the field-overlap mechanism anywhere correctness actually matters.
     """
     a, b = np.asarray(neff_a, float), np.asarray(neff_b, float)
     assert a.shape == b.shape, f"mode counts differ: {a.shape} vs {b.shape}"
@@ -178,9 +205,13 @@ def _neff_both_engines(n_modes=N_MODES):
 
 @pytest.mark.slow
 def test_engines_agree_on_mode_identity_for_guided_modes():
-    """The real check. Scoped to guided modes: a band below the cladding index
-    is a radiation mode, and requiring two different grids to agree on one is
-    not a meaningful demand."""
+    """A fast n_eff smoke check on the coupler's own coupled-pair
+    cross-section -- NOT the authoritative correspondence check (see this
+    module's "STATUS, 2026-07-30" docstring note); that is
+    `beef.mode_identity`'s field-overlap machinery /
+    `HybridSolver(check_mode_correspondence=True)`. Scoped to guided modes: a
+    band below the cladding index is a radiation mode, and requiring two
+    different grids to agree on one is not a meaningful demand."""
     meep_neff, meow_neff = _neff_both_engines()
     guided = meep_neff > N_CLADDING
     assert guided.sum() >= 2, (

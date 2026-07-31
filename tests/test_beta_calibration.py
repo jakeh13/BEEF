@@ -180,18 +180,113 @@ class TestTheSpacingPrecondition:
 
     def test_the_actual_default_is_span_independent(self):
         """Spacing is capped by β, not by how big the body happens to be, and
-        all three lengths must still fit inside the body."""
+        all three lengths must still fit inside the body once each length's
+        own dpml-padded solve_section() window is accounted for (notes.md
+        Solvers item 15 — see TestSectionModeBetaDpmlClearance below)."""
         cap = self._max_safe_spacing(BETA_FDTD[0]) / 2.0
+        dpml = 0.5
         for span in (4.0, 30.0, 300.0):
-            spacing = min(span / 3.0, cap)
+            usable_span = span - 2.0 * dpml
+            spacing = min(usable_span / 3.0, cap)
             assert spacing <= self._max_safe_spacing(BETA_FDTD[0])
-            assert 3.0 * spacing <= span, "all three lengths must fit"
+            assert 3.0 * spacing <= usable_span, "all three lengths must fit"
+            assert 3.0 * spacing + 2.0 * dpml <= span, (
+                "each length's own dpml-padded window must fit inside the span"
+            )
 
     def test_a_safe_spacing_leaves_an_order_of_magnitude(self):
         """25% of β against a ~2% measured disagreement."""
         branch = 2 * np.pi / self._max_safe_spacing(BETA_FDTD[0])
         measured = abs(BETA_FDTD[0] - BETA_MPB[0])
         assert branch / measured > 10
+
+
+class TestSectionModeBetaDpmlClearance:
+    """Regression guard for notes.md Solvers item 15: the default fit-length
+    spacing carried no ``-2*dpml`` clearance, unlike ``seed_span`` two lines
+    above it in ``section_mode_beta()`` — so for a short uniform body the
+    longest fit length's own dpml-padded ``solve_section()`` window overran
+    the region, pushing the drawn cut into whatever taper/bend flanks it.
+
+    Reproduced directly against a ``DirectionalCoupler(coupling_length=3.0)``:
+    body span 2.50 µm, dpml 0.5 µm, β≈9.6 (this file's own measured value) —
+    the old ``spacing = span/3.0`` gave lengths ``[0.833, 1.667, 2.500]``, a
+    drawn half-window of 1.75 µm against a uniform half of 1.25 µm, i.e.
+    dpml (0.5 µm) past each end.
+
+    These exercise the real ``FDTDSolver.section_mode_beta()`` code path —
+    not a reimplementation of its arithmetic — with ``section_mode_neff()``/
+    ``solve_section()`` swapped for fakes that need no meep, only numpy.
+    """
+
+    SPAN = 2.50   # DirectionalCoupler(coupling_length=3.0)'s body span
+    DPML = 0.5
+    BETA = 9.6    # this file's own measured β, close enough to seed cleanly
+
+    def _solver(self):
+        from beef.solvers.fdtd import FDTDSolver
+        return FDTDSolver(res=40, sim_width=5.0, dpml=self.DPML)
+
+    def _wire_fakes(self, solver):
+        """section_mode_neff() seeds β; solve_section() reports back exactly
+        the phase a mode of that β would accumulate over the requested
+        length, so beta_from_phases() recovers self.BETA to fitting
+        precision — real orchestration, fake physics."""
+        neff_seed = self.BETA * WL / (2 * np.pi)
+        solver.section_mode_neff = lambda *a, **k: np.full((1, 1), neff_seed)
+        calls = []
+
+        def fake_solve_section(geometry, wavelengths, x0, x1, **kw):
+            calls.append((x0, x1))
+            phase = self.BETA * (x1 - x0)
+            return np.array([[[np.exp(1j * phase)]]])
+
+        solver.solve_section = fake_solve_section
+        return calls
+
+    def test_naive_formula_would_overrun_this_body(self):
+        """Documents the bug: span/3.0 with no dpml term draws past the
+        uniform region on exactly this device."""
+        spacing = self.SPAN / 3.0
+        longest = 3.0 * spacing
+        assert longest / 2.0 + self.DPML > self.SPAN / 2.0
+
+    def test_fit_lengths_stay_within_the_uniform_span(self):
+        solver = self._solver()
+        calls = self._wire_fakes(solver)
+        solver.section_mode_beta(
+            geometry=None, wavelengths=np.array([WL]),
+            x0=-self.SPAN / 2.0, x1=self.SPAN / 2.0, n_modes=1,
+        )
+        assert len(calls) == 3, "default is three fit lengths"
+        for x0, x1 in calls:
+            half_drawn = (x1 - x0) / 2.0 + solver.dpml
+            assert half_drawn <= self.SPAN / 2.0 + 1e-9, (
+                f"call {(x0, x1)} draws a {half_drawn:.4f} half-window past "
+                f"the {self.SPAN/2:.4f} uniform half"
+            )
+
+    def test_recovers_the_seeded_beta(self):
+        """Not just legal lengths — the fit still has to work."""
+        solver = self._solver()
+        self._wire_fakes(solver)
+        beta = solver.section_mode_beta(
+            geometry=None, wavelengths=np.array([WL]),
+            x0=-self.SPAN / 2.0, x1=self.SPAN / 2.0, n_modes=1,
+        )
+        assert beta[0, 0] == pytest.approx(self.BETA, rel=1e-6)
+
+    def test_a_body_too_short_for_any_dpml_clearance_raises(self):
+        """span - 2*dpml <= 0 is refused before the fit-length spacing is
+        even computed — seed_span's own preceding check (unchanged by this
+        fix) already covers it, since it guards the identical condition."""
+        solver = self._solver()
+        self._wire_fakes(solver)
+        with pytest.raises(ValueError, match="leaving no room"):
+            solver.section_mode_beta(
+                geometry=None, wavelengths=np.array([WL]),
+                x0=-solver.dpml, x1=solver.dpml, n_modes=1,
+            )
 
 
 class TestAgreesWithTheDifferenceFit:

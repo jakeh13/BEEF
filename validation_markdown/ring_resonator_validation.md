@@ -168,11 +168,15 @@ raw-polygon `meow` call, matching how `solve_body_supermodes()` already
 works in the reference scripts.
 
 **(c) `HybridSolver` must express feedback.** This was the substantive one. The
-solver still contracts a straight cascade — `np.einsum("mij,mjk->mik", ...)` at
-`hybrid.py:360` and `:458` (line numbers drifted from this doc's original
-318/:416, code unchanged) — threading light through the sections once. A ring
-is a **closed loop**: light re-enters the coupling region every round trip, which
-is a closed-form all-pass sum, not a matrix product. Two ways out were scoped:
+solver still contracts a straight cascade — threading light through the
+sections once, not a loop. Two call sites, both unchanged in substance since
+this item opened, only their line numbers have drifted again (checked
+2026-07-30): `solve()`'s `np.einsum("mij,mjk->mik", mat, full)` at
+`hybrid.py:874`, and `solve_length_sweep()`'s batched counterpart —
+`np.einsum("Lmij,Lmjk->Lmik", mat, full)`, an extra leading length axis, same
+cascade — at `hybrid.py:973`. A ring is a **closed loop**: light re-enters
+the coupling region every round trip, which is a closed-form all-pass sum,
+not a matrix product. Two ways out were scoped:
 
 - *Narrow:* keep the cascade for the open path (coupler section + bends +
   straights) and add an explicit loop-closure step that applies the resonator sum

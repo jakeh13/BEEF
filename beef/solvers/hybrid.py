@@ -60,7 +60,10 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 
-from ..mode_identity import best_correspondence, field_overlap_matrix, mesh_cell_centers, stack_meow_mode_fields
+from ..mode_identity import (
+    best_correspondence, field_overlap_matrix, mesh_cell_centers, overlap_diagnostics,
+    self_overlap_diagnostics, stack_meow_mode_fields,
+)
 from ..results.smatrix import SMatrix
 from .._log import get_logger
 
@@ -87,6 +90,10 @@ def _supports_cache_only(method) -> bool:
 
 def _supports_neff_override(method) -> bool:
     return "neff_override" in inspect.signature(method).parameters
+
+
+def _supports_pad(method) -> bool:
+    return "pad" in inspect.signature(method).parameters
 
 
 class HybridSolver:
@@ -182,7 +189,9 @@ class HybridSolver:
             double-application defect the same way (verified: the modal
             multiplexer's real chain hits this). Neither is a correspondence
             finding — always treat the WARNING log as "could not check here,"
-            distinct from "checked and found a mismatch." Confirmed the
+            distinct from "checked and found a mismatch." Pass
+            `mode_correspondence_pad` (below) to unblock the `body_stub` <
+            `dpml` case specifically. Confirmed the
             actual comparison passes cleanly on a real meep/meow FDTD<->EME
             interface where it CAN run (a uniform `WaveguideRun` section).
             Found two real bugs this way on the modal multiplexer
@@ -206,6 +215,27 @@ class HybridSolver:
             overlap (in [0, 1]) required on the diagonal of the best
             correspondence found; below this, or a non-identity
             correspondence, is treated as a failure.
+        mode_correspondence_pad: straight-material clearance (µm) requested
+            from each adjoining solver's mode-field query, overriding that
+            solver's own default (e.g. `FDTDSolver.dpml`). None (default)
+            asks nothing special — each solver pads its query however it
+            always has, so an interior interface whose straight run-out is
+            thinner than that padding still raises the geometry `ValueError`
+            documented above and gets skipped-with-a-WARNING as before.
+            Set this to fix that specifically: `FDTDSolver.section_mode_fields()`
+            only needs enough clearance to keep `geometry.section_prisms()`
+            inside uniform material at the query window (`2 * _CORR_HALF_SPAN`
+            = 0.1 µm wide) — it does not need a real PML footprint, since
+            `get_eigenmode()` never time-steps (see
+            `FDTDSolver._build_section_mode_sim()`'s docstring) — so a value
+            well under the device's actual `body_stub`/similar interior
+            clearance (e.g. 0.1 for the `body_stub=0.25` the coupler and both
+            MMI hybrid examples use) fits where `dpml` alone would not.
+            Forwarded only to solvers whose `section_mode_fields()` accepts a
+            `pad` parameter (duck-typed like `neff_override`); a solver that
+            doesn't (e.g. `EMESolver.section_modes()`, which needs no such
+            padding at all — its stubs default to 0.0) is called exactly as
+            if this were unset.
     """
 
     def __init__(
@@ -223,6 +253,7 @@ class HybridSolver:
         mode_correspondence_action: Literal["raise", "warn"] = "raise",
         mode_correspondence_min_overlap: float = 0.9,
         mode_correspondence_res: Optional[float] = None,
+        mode_correspondence_pad: Optional[float] = None,
     ):
         if len(solvers) < 2:
             raise ValueError("HybridSolver needs at least 2 solvers.")
@@ -259,6 +290,9 @@ class HybridSolver:
         self.mode_correspondence_min_overlap = float(mode_correspondence_min_overlap)
         self.mode_correspondence_res = (
             None if mode_correspondence_res is None else float(mode_correspondence_res)
+        )
+        self.mode_correspondence_pad = (
+            None if mode_correspondence_pad is None else float(mode_correspondence_pad)
         )
 
         K = len(solvers)
@@ -465,6 +499,8 @@ class HybridSolver:
         implements neither (see check_mode_correspondence's docstring)."""
         if hasattr(solver, "section_mode_fields"):
             y_grid, z_grid = mesh_cell_centers(mesh)
+            if self.mode_correspondence_pad is not None and _supports_pad(solver.section_mode_fields):
+                geometry_kwargs = dict(geometry_kwargs, pad=self.mode_correspondence_pad)
             result = solver.section_mode_fields(
                 geometry, wavelength, x0, x1, n_modes, y_grid, z_grid, **geometry_kwargs)
             fields = {name: result[name] for name in ("Ex", "Ey", "Ez", "Hx", "Hy", "Hz")}
@@ -600,31 +636,148 @@ class HybridSolver:
         dy = float(mesh.x[1] - mesh.x[0])
         dz = float(mesh.y[1] - mesh.y[0])
         eta = field_overlap_matrix(fields_a, fields_b, dy=dy, dz=dz)
-        correspondence, margin = best_correspondence(eta)
 
-        # Compare over the modes both sides actually have. The two engines
-        # can resolve a different number of guided modes near cutoff, which
-        # is itself worth knowing but is not by itself a correspondence
-        # failure.
+        # Same-engine controls first. Each side against itself MUST be the
+        # identity -- these are eigenmodes of one operator on one grid. If
+        # either fails, the fault is in the MEASUREMENT (comparison grid too
+        # coarse for the solve, bad axis remap, a duplicate eigenvector,
+        # non-orthogonal radiation modes left in) and any cross-engine number
+        # from the same data is meaningless. Reported and bailed on rather
+        # than allowed to masquerade as a device finding -- 2026-07-30
+        # produced two such false alarms, and this control is what localized
+        # both. Free: reuses the modes already solved.
+        for side, fields, solver in ((k, fields_a, solver_a), (k + 1, fields_b, solver_b)):
+            control = self_overlap_diagnostics(fields, dy=dy, dz=dz)
+            if not control["is_orthogonal"] and not control["has_duplicate"]:
+                # Mild non-orthogonality WITHOUT a duplicate: real and benign
+                # on a symmetric multimode cross-section, where near-degenerate
+                # pairs mix. Measured at the modal multiplexer's interface 0 --
+                # meep 0.1257, meow 0.1886 -- while the cross-engine comparison
+                # matched at diagonal 1.0000 across every mode that had a
+                # partner. Report it; do NOT disqualify the basis, or the check
+                # switches itself off on exactly the devices it exists for.
+                logger.info(
+                    "check_mode_correspondence: solvers[%d] (%s) at interface %d "
+                    "has mildly non-orthogonal modes (max self-off-diagonal "
+                    "%.4f) -- expected where near-degenerate pairs mix, not a "
+                    "duplicate. Proceeding with the comparison.",
+                    side, type(solver).__name__, k, control["max_off_diagonal"],
+                )
+            if control["has_duplicate"] or not control["diagonal_is_unit"]:
+                logger.warning(
+                    "check_mode_correspondence: SELF-OVERLAP CONTROL FAILED for "
+                    "solvers[%d] (%s) at interface %d -- its own modes are not "
+                    "mutually orthogonal (worst self-diagonal %.4f, max "
+                    "off-diagonal %.4f). This is a measurement fault, not a "
+                    "device finding: suspect the comparison mesh resolution "
+                    "(mode_correspondence_res=%s), a duplicate eigenmode, or "
+                    "unfiltered radiation modes. Skipping the cross-engine "
+                    "comparison at this interface, whose result would be "
+                    "meaningless.",
+                    side, type(solver).__name__, k, control["worst_diagonal"],
+                    control["max_off_diagonal"], self.mode_correspondence_res,
+                )
+                return
+
+        # Full-matrix diagnostics, not just the matched diagonal: row
+        # completeness is what separates "a mode is MISSING from the other
+        # basis" (truncation -- eta has no partner for it at all) from "the
+        # modes are all present but mis-ordered". The diagonal alone cannot
+        # draw that distinction, and the two have completely different fixes.
+        # See beef.mode_identity.overlap_diagnostics() and
+        # validation_markdown/fdtd_vs_EME_mode_validation.md layer 1.
+        diag = overlap_diagnostics(eta)
         identity = list(range(n_modes))
-        checked = correspondence[:n_modes]
-        worst_diag = min((eta[i, checked[i]] for i in range(n_modes) if checked[i] >= 0),
-                         default=1.0)
-        bad = checked != identity or worst_diag < self.mode_correspondence_min_overlap
+        checked = diag["correspondence"][:n_modes]
+        rows = slice(0, n_modes)
+        worst_diag = float(np.nanmin(diag["diagonal"][rows])) if n_modes else 1.0
+        worst_complete = float(np.nanmin(diag["row_completeness"][rows])) if n_modes else 1.0
+        min_ok = self.mode_correspondence_min_overlap
 
-        if bad:
+        # H-only overlap, as an independent corroboration of the E-only
+        # result above (fdtd_vs_EME_mode_validation.md item 4). Both fields
+        # are already sampled -- section_mode_fields()/stack_meow_mode_fields()
+        # always return all six components -- so this is free: no extra
+        # eigensolve, just field_overlap_matrix() pointed at Hy/Hz instead of
+        # Ey/Ez. Reported alongside the E-only verdict, not gated on: unlike
+        # the same-engine self-overlap control above, a disagreement here is
+        # not by itself proof of anything (see the module's open question on
+        # per-engine E:H calibration), so it does not raise and does not
+        # affect mode_correspondence_action -- only the E-only comparison
+        # does that, as validated on real devices to date.
+        eta_h = field_overlap_matrix(fields_a, fields_b, dy=dy, dz=dz, components=("Hy", "Hz"))
+        diag_h = overlap_diagnostics(eta_h)
+        checked_h = diag_h["correspondence"][:n_modes]
+        worst_diag_h = float(np.nanmin(diag_h["diagonal"][rows])) if n_modes else 1.0
+        worst_complete_h = float(np.nanmin(diag_h["row_completeness"][rows])) if n_modes else 1.0
+        h_agrees = checked_h == checked
+        logger.info(
+            "check_mode_correspondence: interface %d — H-only corroboration: "
+            "worst diagonal %.4f (E-only %.4f), worst row completeness %.4f "
+            "(E-only %.4f), correspondence %s (%s the E-only assignment).",
+            k, worst_diag_h, worst_diag, worst_complete_h, worst_complete,
+            checked_h, "matches" if h_agrees else "DISAGREES WITH",
+        )
+        if not h_agrees:
+            logger.warning(
+                "check_mode_correspondence: interface %d — H-only overlap "
+                "disagrees with the E-only assignment (H-only %s vs E-only "
+                "%s). Not gated on (see fdtd_vs_EME_mode_validation.md item "
+                "4), but worth investigating: either the E-only result above "
+                "is not as clean as it looks, or this interface's H-field "
+                "sampling has its own fault (comparison mesh resolution, axis "
+                "remap, radiation-mode contamination).",
+                k, checked_h, checked,
+            )
+
+        mis_ordered = checked != identity
+        incomplete = worst_complete < min_ok
+        low_overlap = worst_diag < min_ok
+
+        if mis_ordered or incomplete or low_overlap:
+            # Name the dominant symptom, because the remedies differ: an
+            # incomplete row means one side's basis does not span the other's
+            # (raise the mode count / align the band windows); a mis-ordering
+            # with complete rows means every mode is present but indexed
+            # differently (the contraction is mixing channels).
+            if incomplete:
+                worst_row = int(np.nanargmin(diag["row_completeness"][rows]))
+                verdict = (
+                    f"BASIS INCOMPLETE -- solvers[{k}]'s mode {worst_row} is only "
+                    f"{worst_complete:.4f} representable in solvers[{k + 1}]'s basis "
+                    f"(row completeness, 1.0 = fully spanned). One side carries a "
+                    f"mode the other does not span at all, so this is a truncation / "
+                    f"band-window mismatch rather than a re-ordering: the two sides "
+                    f"are not describing the same set of modes."
+                )
+            elif mis_ordered:
+                verdict = (
+                    f"MIS-ORDERED -- every mode is present and well matched "
+                    f"(worst row completeness {worst_complete:.4f}) but the pairing "
+                    f"is not the identity, so solve()'s index-i-to-index-i "
+                    f"contraction is mixing channels."
+                )
+            else:
+                verdict = (
+                    f"LOW OVERLAP -- ordering is the identity but the worst matched "
+                    f"pair only reaches {worst_diag:.4f}; the bases correspond but "
+                    f"the mode shapes disagree."
+                )
             message = (
                 f"HybridSolver: mode-correspondence check failed at interface {k} "
                 f"(x={x_iface:.4g} µm, between solvers[{k}]={type(solver_a).__name__} "
-                f"and solvers[{k + 1}]={type(solver_b).__name__}): "
-                f"correspondence={checked} (expected identity {identity}), "
-                f"worst diagonal overlap={worst_diag:.4f} "
-                f"(min required={self.mode_correspondence_min_overlap:.2f}). "
-                f"solvers[{k}]'s output basis and solvers[{k + 1}]'s input basis "
-                f"do not name the same modes in the same order -- solve()'s "
-                f"matrix-chain contraction will silently mix/drop channels here. "
-                f"See examples/verification/python/audit_interface_modes.py to "
-                f"investigate further."
+                f"and solvers[{k + 1}]={type(solver_b).__name__}). {verdict} "
+                f"correspondence={checked} (expected identity {identity}); "
+                f"worst diagonal={worst_diag:.4f}, worst row completeness="
+                f"{worst_complete:.4f} (min required={min_ok:.2f}). "
+                f"Per-mode diagonal={np.round(diag['diagonal'][rows], 4).tolist()}, "
+                f"row completeness={np.round(diag['row_completeness'][rows], 4).tolist()}, "
+                f"margin={np.round(diag['margin'][rows], 4).tolist()}. "
+                f"The per-mode SHAPE of this failure is the diagnostic -- high "
+                f"modes degrading means under-resolution, one row collapsing means "
+                f"a missing mode, all rows high on wrong columns means a pure "
+                f"re-ordering. See validation_markdown/"
+                f"fdtd_vs_EME_mode_validation.md."
             )
             if self.mode_correspondence_action == "raise":
                 raise RuntimeError(message)

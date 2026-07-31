@@ -816,6 +816,7 @@ class FDTDSolver:
         n_modes: int,
         monitor_center: Optional[float] = None,
         monitor_size: Optional[float] = None,
+        pad: Optional[float] = None,
         **geometry_kwargs,
     ) -> np.ndarray:
         """Effective indices of the first `n_modes` modes at this section's
@@ -853,6 +854,8 @@ class FDTDSolver:
                 is the interface convention a coupled pair needs — the
                 geometry-driven default would inherit one arm's centreline and
                 make "even/odd" meaningless.
+            pad: see `_build_section_mode_sim()`. None (default) is `self.dpml`,
+                unchanged from before this parameter existed.
 
         Returns:
             Real ndarray ``[len(wavelengths), n_modes]`` of effective indices,
@@ -861,7 +864,7 @@ class FDTDSolver:
         wavelengths = np.asarray(wavelengths, dtype=float)
         wl_center = float(np.mean(wavelengths))
         sim, where, mea_c, mea_w = self._build_section_mode_sim(
-            geometry, wl_center, x0, x1, monitor_center, monitor_size, **geometry_kwargs)
+            geometry, wl_center, x0, x1, monitor_center, monitor_size, pad=pad, **geometry_kwargs)
 
         neff = np.zeros((len(wavelengths), n_modes))
         for i, wl in enumerate(wavelengths):
@@ -885,6 +888,7 @@ class FDTDSolver:
     def _build_section_mode_sim(
         self, geometry, wl_center: float, x0: float, x1: float,
         monitor_center: Optional[float], monitor_size: Optional[float],
+        pad: Optional[float] = None,
         **geometry_kwargs,
     ):
         """Shared preamble for section_mode_neff()/section_mode_fields(): the
@@ -895,31 +899,56 @@ class FDTDSolver:
         Split out of section_mode_neff() verbatim (no behavior change) so
         section_mode_fields() can reuse the identical sim setup rather than
         duplicating it.
+
+        `pad` (µm, default None -> `self.dpml`): straight-material clearance
+        drawn past x0/x1 on each side, and the `mp.PML()` thickness of the
+        cell built around it. Only `self.dpml` was ever used here before this
+        parameter existed, so the default is behavior-preserving.
+
+        Why this can safely be smaller than `self.dpml` for a mode-field
+        query (unlike everywhere else `self.dpml` appears in this file):
+        `get_eigenmode()` runs MPB on the initialized structure and returns
+        without any time-stepping (see `section_mode_neff()`'s docstring), so
+        the PML absorbing boundary is never actually exercised for this call
+        — it exists only so `mp.Simulation`'s cell/boundary_layers construct
+        without raising. The clearance's real job is purely geometric: giving
+        `geometry.section_prisms()` enough straight run past x0/x1 that the
+        cut sits inside uniform material, not into a taper/bend. `self.dpml`
+        is simply the value already in hand for that; it is not a physical
+        requirement of the mode solve itself. This is what lets
+        `HybridSolver(check_mode_correspondence=True)`'s diagnostic query
+        (`mode_correspondence_pad`, threaded through `section_mode_fields()`
+        below) fit inside a device's real straight run-out, which can be
+        thinner than `self.dpml` — confirmed the actual blocker: the coupler
+        and both MMI hybrid examples use `body_stub = 0.25` against
+        `dpml = 0.5` (`fdtd_vs_EME_mode_validation.md` item 5).
         """
         import meep as mp
+
+        clearance = self.dpml if pad is None else float(pad)
 
         si_med = self.material_stack.si_medium(wl_center)
         sio2_med = self.material_stack.sio2_medium(wl_center)
 
         prisms = geometry.section_prisms(
             x0, x1, si_med,
-            stub_left=self.dpml, stub_right=self.dpml,
+            stub_left=clearance, stub_right=clearance,
             wg_height=self._wg_height,
             **geometry_kwargs,
         )
         span = x1 - x0
-        Sx = span + 2 * self.dpml
-        Sy = self.sim_width + 2 * self.dpml
-        lo, hi = x0 - self.dpml, x1 + self.dpml
+        Sx = span + 2 * clearance
+        Sy = self.sim_width + 2 * clearance
+        lo, hi = x0 - clearance, x1 + clearance
         x_center = (lo + hi) / 2.0
         # Same vertex-wise shift into meep's origin-centred cell that
         # solve_section() does — prisms carry vertices, not a centre.
         shifted = [
             mp.Prism(
-                vertices=[mp.Vector3(v.x - x_center, v.y, v.z) for v in p.vertices],
-                height=p.height, material=p.material,
+                vertices=[mp.Vector3(v.x - x_center, v.y, v.z) for v in prism.vertices],
+                height=prism.height, material=prism.material,
             )
-            for p in prisms
+            for prism in prisms
         ]
 
         mea_c = 0.0 if monitor_center is None else float(monitor_center)
@@ -928,7 +957,7 @@ class FDTDSolver:
         sim = mp.Simulation(
             resolution=self.res,
             cell_size=mp.Vector3(Sx, Sy, self._cell_sz),
-            boundary_layers=[mp.PML(self.dpml)],
+            boundary_layers=[mp.PML(clearance)],
             geometry=shifted,
             default_material=sio2_med,
             eps_averaging=self.eps_averaging,
@@ -1034,6 +1063,7 @@ class FDTDSolver:
         z_grid: np.ndarray,
         monitor_center: Optional[float] = None,
         monitor_size: Optional[float] = None,
+        pad: Optional[float] = None,
         **geometry_kwargs,
     ) -> Dict[str, np.ndarray]:
         """Effective indices AND transverse field profiles of the first
@@ -1068,6 +1098,14 @@ class FDTDSolver:
                 monitor plane's y (in-plane transverse) and z (vertical) axes.
             x0, x1, n_modes, monitor_center, monitor_size, geometry_kwargs: same
                 meaning as ``section_mode_neff()``.
+            pad: see ``_build_section_mode_sim()``. None (default) is
+                ``self.dpml``, unchanged from before this parameter existed.
+                ``HybridSolver``'s ``mode_correspondence_pad`` is the intended
+                caller of a non-default value: the correspondence check's own
+                query window is only ``2 * _CORR_HALF_SPAN`` wide (0.1 µm),
+                so it needs far less clearance than a real PML footprint to
+                stay inside a thin interior stub — see this method's calling
+                context in ``fdtd_vs_EME_mode_validation.md`` item 5.
 
         Returns:
             dict with ``'neff'`` (real, shape ``[n_modes]``) and
@@ -1079,7 +1117,7 @@ class FDTDSolver:
 
         wl_center = float(wavelength)
         sim, where, mea_c, mea_w = self._build_section_mode_sim(
-            geometry, wl_center, x0, x1, monitor_center, monitor_size, **geometry_kwargs)
+            geometry, wl_center, x0, x1, monitor_center, monitor_size, pad=pad, **geometry_kwargs)
 
         y_grid = np.asarray(y_grid, dtype=float)
         z_grid = np.asarray(z_grid, dtype=float)
@@ -1221,7 +1259,18 @@ class FDTDSolver:
             # guard 1 below can never fire. A third point is what gives it
             # something to disagree with, and these sections are short (~1.3 µm
             # at the coupler) so the extra solve is cheap.
-            spacing = min(span / 3.0, max_safe_spacing / 2.0)
+            #
+            # -2*dpml, mirroring seed_span above: solve_section() below draws
+            # each length's own window padded by dpml on each side, so the
+            # longest length (3*spacing) must leave that much clearance inside
+            # the uniform span or it pushes the drawn cut into whatever flanks
+            # this section (a taper/bend). usable_span > 0 is already
+            # guaranteed here — seed_span's check above raises first on the
+            # identical span - 2*dpml <= 0 condition. Bites short bodies
+            # first: unreachable at the ~29.5 µm bodies both live callers use,
+            # but reproduced directly on a DirectionalCoupler(coupling_length=3.0).
+            usable_span = span - 2.0 * self.dpml
+            spacing = min(usable_span / 3.0, max_safe_spacing / 2.0)
             lengths = [spacing, 2.0 * spacing, 3.0 * spacing]
         lengths = [float(L) for L in lengths]
         if len(lengths) < 2:
@@ -1723,6 +1772,17 @@ class FDTDSolver:
                     T[:, m - 1, k - 1] = coeff  # excited=in(k), measured=out(m)
 
             sim.reset_meep()
+
+        # Post-hoc duplicate-mode scan of the transfer matrix just computed —
+        # fdtd_vs_EME_mode_validation.md item 8. Every other correspondence
+        # mechanism in this codebase checks section_mode_fields()'s own
+        # separate eigensolve; T here comes from get_eigenmode_coefficients()
+        # on DFT-decayed flux, a different code path, never checked before
+        # this. Free: T is already computed, this is O(n_excited^2) vector
+        # arithmetic on it.
+        from ..mode_identity import warn_on_transfer_duplicate
+
+        warn_on_transfer_duplicate(T, logger, x0, x1)
 
         if save_dir:
             folder = save_run(save_dir, config, T)

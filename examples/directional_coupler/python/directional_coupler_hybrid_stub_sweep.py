@@ -122,7 +122,8 @@ WL_MIN = 1.50       # wavelength sweep start (µm)
 WL_MAX = 1.60       # wavelength sweep end (µm)
 N_WL = 11           # number of wavelength points
 
-N_MODES = 6   # even + odd supermodes carried at the two body interfaces — hybrid.py's default, pinned here
+N_MODES = 5   # even + odd supermodes carried at the two body interfaces — hybrid.py's default, pinned here.
+              # Was 6: band 5 is a radiation mode, dropped at no cost (resolved/directional_coupler_validation.md check 2).
 
 STUB_SWEEP = np.arange(0.0, 2.0 + 1e-9, 0.25)   # µm — 0:0.25:2, 9 values — the swept knob
 

@@ -44,6 +44,12 @@ Core public API:
                                       FDTDSolver.section_mode_fields() (meep) and
                                       EMESolver.compute_modes() (meow) together
 
+    Cut-position invariance (device-agnostic — see beef.cut_position_invariance):
+        cut_position_invariance    — drift/slope of a solve()'d SMatrix across a
+                                      sequence of FDTD/EME cut positions; the
+                                      authoritative correspondence check
+                                      (fdtd_vs_EME_mode_validation.md layer 3)
+
     Utilities:
         extrude_polygons           — {layer: [polygons]} dict -> meow Structure3D list
         atomic_replace_write       — write-to-tmp-then-os.replace, for files a
@@ -72,6 +78,7 @@ __version__ = "0.1.0"
 # a child. See beef/_log.py.
 
 from ._utils import atomic_replace_write, extrude_polygons
+from .cut_position_invariance import cut_position_invariance
 from .geometry import (
     MMI, MMIPort, BendGeometry, DirectionalCoupler, Taper, SBend,
     CompoundGeometry, WaveguideRun, GdsGeometry, load_gds_polygons,
@@ -80,6 +87,7 @@ from .geometry import (
 from .materials import MaterialStack, SOI_160, SOI_220
 from .mode_identity import (
     field_overlap_matrix, best_correspondence, mesh_cell_centers, stack_meow_mode_fields,
+    overlap_diagnostics, self_overlap_diagnostics,
 )
 from .network import (
     SMatrixBlock, connect, close_loop, Circuit,
@@ -109,6 +117,9 @@ __all__ = [
     "from_transfer_matrix", "from_smatrix", "to_smatrix",
     # mode identity
     "field_overlap_matrix", "best_correspondence", "mesh_cell_centers", "stack_meow_mode_fields",
+    "overlap_diagnostics", "self_overlap_diagnostics",
+    # cut-position invariance
+    "cut_position_invariance",
     # results
     "SMatrix",
     # solvers

@@ -80,7 +80,8 @@ WL_MIN = 1.50       # wavelength sweep start (µm)
 WL_MAX = 1.60       # wavelength sweep end (µm)
 N_WL = 11           # number of wavelength points
 
-N_MODES = 6   # even + odd supermodes carried at the two body interfaces — hybrid.py's default, pinned here
+N_MODES = 5   # even + odd supermodes carried at the two body interfaces — hybrid.py's default, pinned here.
+              # Was 6: band 5 is a radiation mode, dropped at no cost (resolved/directional_coupler_validation.md check 2).
 
 # Same 3 dB length as directional_coupler_fdtd_resolution_sweep.py — see
 # directional_coupler_fdtd.py for the provenance (full-device FDTD ground truth

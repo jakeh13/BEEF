@@ -235,6 +235,97 @@ class TestGuidedModeFilter:
         assert HybridSolver._cladding_index(a, b, 1.31) == pytest.approx(1.4468)
 
 
+class TestSelfOverlapControlGatesTheComparison:
+    """Layer 4 wired in: each side's modes must be mutually orthogonal before
+    any cross-engine number is believed. A failing control means the
+    MEASUREMENT is broken, so the cross-engine comparison is skipped rather
+    than reported -- 2026-07-30 produced two false alarms that this gate
+    would have caught at the source."""
+
+    def test_a_duplicate_on_one_side_skips_the_comparison_instead_of_failing_it(self, caplog):
+        """A duplicate makes that side's basis rank-deficient, so nothing
+        computed from it is meaningful -- skip, don't report a number."""
+        import logging
+        a = FakeFieldSolver(np.eye(3), orders=[0, 1, 2])
+        b = FakeFieldSolver(np.eye(3), orders=[0, 0, 1])  # modes 0,1 identical
+        solver = _chain(a, b, n_interface=3)  # action="raise" by default
+        with caplog.at_level(logging.WARNING, logger="beef.solvers.hybrid"):
+            solver.solve(FakeGeometry(), WAVELENGTHS, in_modes=1, out_modes=1)  # must NOT raise
+        assert any("SELF-OVERLAP CONTROL FAILED" in r.message for r in caplog.records)
+
+    def test_mild_non_orthogonality_proceeds_rather_than_disqualifying(self, caplog):
+        """Regression guard for a real over-correction. An early version failed
+        the control on ANY off-diagonal above 0.1 -- but meep's own basis at the
+        modal multiplexer's interface 0 shows 0.1257 and meow's 0.1886, from
+        genuinely near-degenerate pairs mixing, while the cross-engine diagonal
+        was 1.0000 for every mode that had a partner. Rejecting those bases
+        switches the check off on exactly the devices it exists for. Here side
+        b's mode 1 is contaminated to ~0.67 off-diagonal: not a duplicate, so
+        the comparison must still RUN (and here legitimately report the
+        resulting incompleteness) rather than be skipped."""
+        import logging
+        a = FakeFieldSolver(np.eye(3), orders=[0, 1, 2])
+        b = FakeFieldSolver(np.eye(3), orders=[0, 1, 2])
+        orig = FakeFieldSolver.section_mode_fields
+
+        def contaminated(self, geometry, wavelength, x0, x1, n_modes, y_grid, z_grid, **kw):
+            r = orig(self, geometry, wavelength, x0, x1, n_modes, y_grid, z_grid, **kw)
+            r["Ey"][1] = r["Ey"][1] + 0.9 * r["Ey"][0]
+            return r
+
+        b.section_mode_fields = contaminated.__get__(b, FakeFieldSolver)
+        solver = _chain(a, b, n_interface=3)
+        with caplog.at_level(logging.INFO, logger="beef.solvers.hybrid"):
+            with pytest.raises(RuntimeError):   # comparison RAN and judged it
+                solver.solve(FakeGeometry(), WAVELENGTHS, in_modes=1, out_modes=1)
+        assert not any("SELF-OVERLAP CONTROL FAILED" in r.message for r in caplog.records)
+        assert any("mildly non-orthogonal" in r.message for r in caplog.records)
+
+
+class TestTruncationVsMisordering:
+    """The layer-1 matrix upgrade: a failure must name which of two
+    different-remedy problems it is. Row completeness is what draws the
+    distinction; the matched diagonal alone cannot."""
+
+    def test_a_pure_shuffle_is_reported_as_mis_ordered(self):
+        a = FakeFieldSolver(np.eye(3), orders=[0, 1, 2])
+        b = FakeFieldSolver(np.eye(3), orders=[1, 0, 2])  # all present, wrong order
+        solver = _chain(a, b, n_interface=3)
+        with pytest.raises(RuntimeError, match="MIS-ORDERED"):
+            solver.solve(FakeGeometry(), WAVELENGTHS, in_modes=1, out_modes=1)
+
+    def test_a_missing_mode_is_reported_as_basis_incomplete(self):
+        """Side b lacks side a's mode 2 (it carries a duplicate of mode 0
+        instead), so a's mode 2 is unspanned. That is a truncation / band-window
+        mismatch, NOT a re-ordering -- and it is the case the old diagonal-only
+        check could not distinguish. This is the shape the modal multiplexer's
+        duplicate-band-guard band-window mismatch is expected to take."""
+        # b's modes are mutually ORTHOGONAL (so the self-overlap control
+        # passes and we reach the cross-engine test) but its third mode is a
+        # different order entirely, so a's mode 2 is unspanned by b's basis.
+        # NB: building this with a duplicate instead -- orders=[0, 1, 0] --
+        # trips the self-overlap control first, correctly: a duplicate inside
+        # one engine's own set is a measurement fault, not a basis mismatch.
+        a = FakeFieldSolver(np.eye(3), orders=[0, 1, 2])
+        b = FakeFieldSolver(np.eye(3), orders=[0, 1, 5])
+        solver = _chain(a, b, n_interface=3)
+        with pytest.raises(RuntimeError, match="BASIS INCOMPLETE"):
+            solver.solve(FakeGeometry(), WAVELENGTHS, in_modes=1, out_modes=1)
+
+    def test_the_message_carries_per_mode_arrays_not_just_scalars(self):
+        """Both false alarms this session were diagnosed from the per-mode
+        shape of the failure, which a single worst-case scalar hides."""
+        a = FakeFieldSolver(np.eye(3), orders=[0, 1, 2])
+        b = FakeFieldSolver(np.eye(3), orders=[1, 0, 2])
+        solver = _chain(a, b, n_interface=3)
+        with pytest.raises(RuntimeError) as exc:
+            solver.solve(FakeGeometry(), WAVELENGTHS, in_modes=1, out_modes=1)
+        msg = str(exc.value)
+        assert "Per-mode diagonal=" in msg
+        assert "row completeness=" in msg
+        assert "margin=" in msg
+
+
 class TestDiagnosticMeshResolution:
     """Regression guards for a real bug: the diagnostic mesh was originally a
     fixed 24-pixel-wide grid, which works out to only ~4.8 px/um on a 5 um
@@ -303,3 +394,56 @@ class TestModeCountMismatch:
         solver = _chain(a, b, n_interface=3)
         with pytest.raises(RuntimeError, match="needed 3 comparable modes"):
             solver.solve(FakeGeometry(), WAVELENGTHS, in_modes=1, out_modes=1)
+
+
+class FakeFieldSolverWithPad(FakeFieldSolver):
+    """Declares an explicit `pad` parameter (unlike FakeFieldSolver's plain
+    **kwargs), so _supports_pad() recognizes it -- mirroring
+    FDTDSolver.section_mode_fields() after item 5's fix. Records whatever
+    pad value it was actually called with."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.received_pad = "UNSET"
+
+    def section_mode_fields(self, geometry, wavelength, x0, x1, n_modes,
+                             y_grid, z_grid, pad=None, **kwargs):
+        self.received_pad = pad
+        return super().section_mode_fields(
+            geometry, wavelength, x0, x1, n_modes, y_grid, z_grid, **kwargs)
+
+
+class TestModeCorrespondencePad:
+    """fdtd_vs_EME_mode_validation.md item 5: mode_correspondence_pad must
+    reach a solver's section_mode_fields() only when that solver's own
+    signature declares a `pad` parameter -- the same opt-in-per-solver
+    pattern _supports_neff_override()/_supports_save_dir() already use, so a
+    solver that needs no such override (e.g. EMESolver.section_modes(), or
+    any FakeFieldSolver in this file's other tests) is called exactly as if
+    mode_correspondence_pad were unset."""
+
+    def test_pad_is_forwarded_to_a_solver_that_declares_it(self):
+        a = FakeFieldSolverWithPad(np.eye(2))
+        b = FakeFieldSolverWithPad(np.eye(2))
+        solver = _chain(a, b, n_interface=2, mode_correspondence_pad=0.1)
+        solver.solve(FakeGeometry(), WAVELENGTHS, in_modes=1, out_modes=1)
+        assert a.received_pad == pytest.approx(0.1)
+        assert b.received_pad == pytest.approx(0.1)
+
+    def test_pad_is_not_forwarded_when_unset(self):
+        a = FakeFieldSolverWithPad(np.eye(2))
+        b = FakeFieldSolverWithPad(np.eye(2))
+        solver = _chain(a, b, n_interface=2)  # mode_correspondence_pad defaults to None
+        solver.solve(FakeGeometry(), WAVELENGTHS, in_modes=1, out_modes=1)
+        assert a.received_pad is None
+        assert b.received_pad is None
+
+    def test_pad_is_ignored_by_a_solver_that_does_not_declare_it(self):
+        """A plain FakeFieldSolver (no `pad` parameter, only **kwargs) must
+        not receive `pad` as a stray keyword -- it would raise a TypeError
+        the moment the fake tried to pass it through unexpectedly, so simply
+        not raising here is the regression guard."""
+        a = FakeFieldSolver(np.eye(2))
+        b = FakeFieldSolver(np.eye(2))
+        solver = _chain(a, b, n_interface=2, mode_correspondence_pad=0.1)
+        solver.solve(FakeGeometry(), WAVELENGTHS, in_modes=1, out_modes=1)  # must not raise

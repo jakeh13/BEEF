@@ -19,6 +19,15 @@ from .._log import get_logger
 
 logger = get_logger(__name__)
 
+# Duplicate-mode guard for compute_modes(). Mirrors fdtd.py's
+# _DUP_BAND_OVERLAP_THRESHOLD / _DUP_BAND_MAX_EXTRA -- same failure, other
+# engine. Threshold is deliberately well above the 0.10-0.19 self-overlap
+# genuinely near-degenerate mode PAIRS show on a symmetric cross-section
+# (measured on the modal multiplexer): those are real, distinct modes and must
+# not be discarded. Only a near-exact 1.0 is a duplicate.
+_DUP_MODE_OVERLAP_THRESHOLD = 0.9
+_DUP_MODE_MAX_EXTRA = 8
+
 
 def _neff_fingerprint(neff_override: Optional[np.ndarray]):
     """JSON-safe cache-key form of a `neff_override` array, or None.
@@ -62,6 +71,13 @@ class EMESolver:
             sections to stay consistent with) is free to use "tidy3d"
             instead. Does not affect solve_sweep(), which always uses
             tidy3d's batched mode solver regardless of this setting.
+        guard_duplicate_modes: reject duplicate eigenvectors from meow, so an
+            `n`-mode basis really carries `n` independent modes. **Default
+            True** — this is a correctness guard against a measured bug, not a
+            tuning knob (see `compute_modes()`), but it does change results
+            wherever it fires, so it is switchable for before/after
+            comparison. Costs one over-requested mode solve; the duplicate
+            check itself is a cheap self-overlap on already-solved fields.
     """
 
     def __init__(
@@ -75,6 +91,7 @@ class EMESolver:
         material_stack: MaterialStack = SOI_160,
         temperature: float = 25.0,
         mode_solver: str = "meep",
+        guard_duplicate_modes: bool = True,
     ):
         if len(num_modes) != len(num_cells):
             raise ValueError(
@@ -86,6 +103,7 @@ class EMESolver:
             )
         if mode_solver not in ("meep", "tidy3d"):
             raise ValueError(f"unknown mode_solver {mode_solver!r}, expected 'meep' or 'tidy3d'")
+        self.guard_duplicate_modes = bool(guard_duplicate_modes)
         self.num_modes = num_modes
         self.num_cells = num_cells
         self.lengths = lengths
@@ -183,6 +201,14 @@ class EMESolver:
         return [m.model_copy(update={"neff": complex(n)})
                 for m, n in zip(modes, neff_row)]
 
+    def _solve_modes_raw(self, cross_section, num_modes: int) -> list:
+        """Unguarded dispatch to meow's mode solver — see compute_modes()."""
+        if self.mode_solver == "meep":
+            from meow import compute_modes_meep
+            return compute_modes_meep(cross_section, num_modes=num_modes)
+        from meow import compute_modes_tidy3d
+        return compute_modes_tidy3d(cross_section, num_modes=num_modes)
+
     def compute_modes(self, cross_section, num_modes: int) -> list:
         """Compute modes for a single cross-section (exposed for caching).
 
@@ -191,12 +217,66 @@ class EMESolver:
         same underlying eigenmode solver/conventions as FDTDSolver's own
         get_eigenmode_coefficients() calls in HybridSolver chains, avoiding
         basis mismatches between EME and FDTD sections.
+
+        **Guards against meow returning the same eigenvector twice**, when
+        `guard_duplicate_modes` is on (the default). This is a real, measured
+        failure and not a hypothetical: at the modal multiplexer's interface 0,
+        16 modes at res 40, meow's own modes 10 and 11 came back as the
+        identical eigenvector (self-overlap 1.0000 exactly, row completeness
+        2.0003 — that one mode counted twice). It is the same failure class
+        `FDTDSolver._iter_distinct_bands()` was built for
+        (`validation_markdown/modal_multiplexer_validation.md` gap 6), on the
+        other engine, where nothing was checking for it. The cost is a
+        rank-deficient basis: one of the `num_modes` channels is a copy of
+        another, and whatever mode the duplicate displaced is missing from the
+        basis entirely — strictly worse than a re-ordering, and silent.
+
+        Found by `beef.mode_identity.self_overlap_diagnostics()`, the
+        same-engine control this now reuses to detect it. See
+        `validation_markdown/fdtd_vs_EME_mode_validation.md` item 0.
         """
-        if self.mode_solver == "meep":
-            from meow import compute_modes_meep
-            return compute_modes_meep(cross_section, num_modes=num_modes)
-        from meow import compute_modes_tidy3d
-        return compute_modes_tidy3d(cross_section, num_modes=num_modes)
+        if not self.guard_duplicate_modes:
+            return self._solve_modes_raw(cross_section, num_modes)
+
+        from ..mode_identity import field_overlap_matrix, stack_meow_mode_fields
+
+        # Over-request, then keep the first `num_modes` DISTINCT ones. Same
+        # policy as the meep-side guard: a duplicate means the solver
+        # converged onto an already-found eigenvector, so reach further up the
+        # spectrum rather than accepting a rank-deficient basis. dy/dz cancel
+        # exactly in the normalized ratio, so 1.0/1.0 is not an approximation.
+        raw = self._solve_modes_raw(
+            cross_section, num_modes + _DUP_MODE_MAX_EXTRA)
+        fields = stack_meow_mode_fields(raw)
+        eta = field_overlap_matrix(fields, fields, dy=1.0, dz=1.0)
+
+        kept: List[int] = []
+        for j in range(len(raw)):
+            if len(kept) == num_modes:
+                break
+            dup_of = next((i for i in kept if eta[i, j] > _DUP_MODE_OVERLAP_THRESHOLD), None)
+            if dup_of is not None:
+                logger.warning(
+                    "EMESolver.compute_modes: meow mode %d duplicates already-"
+                    "accepted mode %d (self-overlap %.6f > %.2f) -- skipping it "
+                    "and reaching further up the spectrum. A rank-deficient "
+                    "basis would silently drop one channel of the %d requested. "
+                    "See validation_markdown/fdtd_vs_EME_mode_validation.md "
+                    "item 0.",
+                    j, dup_of, eta[dup_of, j], _DUP_MODE_OVERLAP_THRESHOLD, num_modes,
+                )
+                continue
+            kept.append(j)
+
+        if len(kept) < num_modes:
+            raise RuntimeError(
+                f"EMESolver.compute_modes: could not find {num_modes} distinct "
+                f"modes within {num_modes + _DUP_MODE_MAX_EXTRA} solved modes at "
+                f"this cross-section -- meow returned more duplicates than this "
+                f"guard tolerates (kept {len(kept)}). See validation_markdown/"
+                f"fdtd_vs_EME_mode_validation.md item 0."
+            )
+        return [raw[j] for j in kept]
 
     def section_modes(
         self,
@@ -371,6 +451,17 @@ class EMESolver:
                     i_out = port_map[f"right@{i}"]
                     j_in = port_map[f"left@{j}"]
                     T[wl_idx, i, j] = S[i_out, j_in]
+
+        # Post-hoc duplicate-mode scan of the transfer matrix just computed —
+        # fdtd_vs_EME_mode_validation.md item 8. `compute_modes()`'s own
+        # guard_duplicate_modes already rejects a duplicate WITHIN the mode
+        # basis this section solves on (see its docstring); this instead
+        # checks the transfer matrix HybridSolver actually contracts, which
+        # is a different (if related) object -- free, since T is already
+        # computed.
+        from ..mode_identity import warn_on_transfer_duplicate
+
+        warn_on_transfer_duplicate(T, logger, x0, x1)
 
         if save_dir:
             folder = save_run(save_dir, config, T)

@@ -72,6 +72,14 @@ class SMatrix:
         """All port labels present in this SMatrix."""
         return sorted({k[0] for k in self._data})
 
+    def keys(self) -> list:
+        """All ``(port, in_mode, out_mode)`` keys present in this SMatrix,
+        each retrievable via ``coeff()``/``transmission()``. Unlike ``ports()``
+        (port labels only), this is every full key a caller comparing two
+        SMatrix instances entry-by-entry needs — see
+        ``beef.cut_position_invariance.cut_position_invariance()``."""
+        return list(self._data.keys())
+
     # ------------------------------------------------------------------
     # Sanity checks
     # ------------------------------------------------------------------

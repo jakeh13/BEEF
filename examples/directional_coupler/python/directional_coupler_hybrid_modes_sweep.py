@@ -332,7 +332,7 @@ def aggregate() -> None:
     if os.path.exists(_HYBRID_SWEEP_NPZ):
         h = np.load(_HYBRID_SWEEP_NPZ)
         ax.plot(h["coupling_lengths"], h["T_cross"].mean(axis=1), color="gray",
-                lw=1.2, linestyle=":", label="Hybrid tutorial (N_MODES=6, mean)")
+                lw=1.2, linestyle=":", label="Hybrid tutorial (N_MODES=5, mean)")
 
     ax.axvline(L_ref, color="gray", linestyle="--", lw=0.8,
                label=f"Reference L ({L_ref:.1f} µm, from N={N_ref})")

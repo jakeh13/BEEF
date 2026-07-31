@@ -204,7 +204,10 @@ print(f"Coupling length sweep: {coupling_lengths[0]:.1f} – {coupling_lengths[-
 #    output section : the mirror image of the input section, one instance
 #                      per output port ("through" / "cross")
 # ---------------------------------------------------------------------------
-N_MODES = 6   # even + odd supermodes carried at the two body interfaces
+N_MODES = 5   # even + odd supermodes carried at the two body interfaces.
+              # Was 6: band 5 (n_eff 1.4367) sits below the 1.4443 cladding
+              # index -- a radiation mode, dropped at no cost.
+              # resolved/directional_coupler_validation.md check 2 caveat.
 
 _fdtd_common = dict(
     res=FDTD_RESOLUTION,
