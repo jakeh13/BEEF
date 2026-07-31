@@ -1,7 +1,7 @@
 # Active SLURM jobs — snapshot
 
-**Snapshot taken 2026-07-31, 08:22 EDT** (updated from the 2026-07-30 21:46
-snapshot — see re-queue note below). This is a point-in-time list, not a
+**Snapshot taken 2026-07-31, 08:46 EDT** (third snapshot of the day: 07-30
+21:46 → 07-31 08:22 re-queue → now). This is a point-in-time list, not a
 live view — job states, elapsed times and queue positions all move. Check
 `squeue -u jhiesener3` (or `sacct -j <id>` once finished) for current status;
 this file exists so the *purpose* of each job is recorded somewhere durable,
@@ -19,16 +19,21 @@ of billing minutes; `gts-sr108-gedc_main` had headroom). Cancelled all five
 | job | name | state (at snapshot) | for |
 |---|---|---|---|
 | 11575516 | `beef_mode_spec_converge` | ✅ **COMPLETED** 21:17, 3:36:13 — results folded in, entry retained for provenance | [fdtd_vs_EME_mode_validation.md](fdtd_vs_EME_mode_validation.md) item 1 + [modal_multiplexer_validation.md](modal_multiplexer_validation.md) gap 2 |
-| ~~11577985~~ → **11585844** `[1-2]` | `beef_mmi_2x2_examples` | 🟢 **RUNNING** (task `_1` started 08:24; `gedc_main`) | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 5 (data) |
+| ~~11577985~~ → **11585844** `[1-2]` | `beef_mmi_2x2_examples` | 🟢 **RUNNING** — both tasks (`_1` 08:24, `_2` 08:30) | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 5 (data) |
 | ~~11577986~~ → **11585849** | `beef_mmi_2x2_gap5` | PENDING (dep on 11585844) | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 5 (comparison) |
-| ~~11578018~~ → **11585845** `[1-2]` | `beef_mmi_1x2_examples` | PENDING (`gedc_main`; `ReqNodeNotAvail`, not a billing block) | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 (data) |
+| ~~11578018~~ → **11585845** `[1-2]` | `beef_mmi_1x2_examples` | `_1` ✅ **COMPLETED** 08:50 (8:57, FDTD SMatrix landed); `_2` 🟢 **RUNNING** (hybrid SMatrix not yet written) | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 (data) |
 | ~~11578019~~ → **11585850** | `beef_mmi_1x2_gap5` | PENDING (dep on 11585845) | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 (comparison) |
-| ~~11578026~~ → **11585847** `[0]` | `beef_modal_mux_examples` | PENDING (`gedc_main`; `ReqNodeNotAvail`, not a billing block) | [modal_multiplexer_validation.md](modal_multiplexer_validation.md) gap 6 (exercise run) |
+| ~~11578026~~ → **11585847** `[0]` | `beef_modal_mux_examples` | 🟢 **RUNNING** (08:38, 4 nodes) | [modal_multiplexer_validation.md](modal_multiplexer_validation.md) gap 6 (exercise run) |
+| **11586046** | `beef_diagnose_items_11_12` | 🟢 **RUNNING** (08:42) — new, submitted 2026-07-31 | [fdtd_vs_EME_mode_validation.md](fdtd_vs_EME_mode_validation.md) items 11 + 12 |
+| **11586098** | `beef_diagnose_item_13` | 🟢 **RUNNING** (08:56) — new, submitted 2026-07-31 | [fdtd_vs_EME_mode_validation.md](fdtd_vs_EME_mode_validation.md) item 13 |
 
-As of 08:24 EDT, `11585844_1` (2×2 MMI) has **started running**; the other
-four are still queued. The detail sections below carry the current job IDs —
-only the ID and billing account changed in the re-queue, so each entry's
-script, resources and rationale are unchanged from the 07-30 submission.
+**All of the re-queued work is now running** — the billing block cleared and
+the whole backlog started within ~20 min of resubmission. The two `gap5`
+comparison jobs are the only things still pending, and only on their own
+dependencies, which is correct. The detail sections below carry the current
+job IDs — for the five re-queued jobs only the ID and billing account changed,
+so each entry's script, resources and rationale are unchanged from the 07-30
+submission.
 
 ## Details
 
@@ -119,6 +124,66 @@ script, resources and rationale are unchanged from the 07-30 submission.
   exercised... needs an actual meep/meow run." Watch
   `reports/11585847_0.out` for `warn_on_transfer_duplicate` firing on
   either solver.
+
+### 11586046 — `beef_diagnose_items_11_12`
+- **Script:** `batch/verification/run_diagnose_items_11_12.batch` → two python
+  scripts in sequence, `examples/verification/python/`:
+  `diagnose_kpoint_ladder_v2.py` then `diagnose_dup_band_grid.py`.
+- **Resources:** 1 node, 8 cpus, serial (no MPI), 240 min budget. Eigensolve
+  only — `get_eigenmode()`, no time-stepping, same affordability argument as
+  `run_diagnose_mode_correspondence.batch`.
+- **Output:** `reports/11586046.out`.
+- **Why one job for two items:** both solve the *same* cross-section (modal
+  multiplexer interface 0, res 40), so they share setup cost.
+- **Item 12 runs first, deliberately** — it is the root-cause item and the
+  more expensive of the two, so a wall-clock overrun loses the cheaper result,
+  not the more valuable one. Runs a **real** guarded accept/skip/retry search
+  (not v1's flat 20-solve sweep) under four seeding policies: A fixed
+  (today's code), B naive ladder (raw previous solve — what v1 tested), C step
+  ladder (previous − 0.005, aimed *past* the previous band), D accepted ladder
+  (last accepted band, so a skip cannot poison the next seed). C and D are
+  exactly the two follow-ups item 12 lists as "not yet tried". Reports attempts
+  needed, whether any policy gets stuck re-finding one duplicate, and whether
+  all four converge on the same final physical mode set.
+- **Item 12's open risk it is testing:** v1 showed naive laddering *moves* the
+  duplicate rather than removing it (recovers 2 real modes, but re-finds the
+  previous band at a new position). C and D are the two candidate fixes.
+- **Item 11 second:** replays the duplicate-guard grid comparison at **res 40**
+  — the single data point item 11 names as missing before it can close, since
+  its clear result so far was measured only at res 20 and a finer mesh packs
+  more oscillation into the same core width. `diagnose_dup_band_grid.py`'s
+  `RES` is env-overridable (`BEEF_DIAG_RES`, default 20.0) so the res-20 result
+  on record stays reproducible as the script's default.
+
+### 11586098 — `beef_diagnose_item_13`
+- **Script:** `batch/verification/run_diagnose_guard_over_request.batch` →
+  `examples/verification/python/diagnose_guard_over_request.py`.
+- **Resources:** 1 node, 8 cpus, serial (no MPI), 360 min budget. meow/MPB
+  cross-section solves only — no propagation, no time-stepping.
+- **Output:** `reports/11586098.out`.
+- **Cross-section:** modal multiplexer interface 0 again — same as 11586046 and
+  the item-0 duplicate — but at **res 60**, per item 13: above the shipped 40,
+  and where 11575516 found meow converged (16/16 guided, plateau 60→80), so a
+  difference seen here is not an unconverged mesh talking.
+- **Why three arms, not "guard on vs off":** item 13's own point is that
+  flipping the flag is *not* a clean A/B — with the guard on,
+  `compute_modes()` over-requests `num_modes + _DUP_MODE_MAX_EXTRA` (16 → 24)
+  in one `compute_modes_meep()` call, so the flag changes both the
+  eigenproblem and whether filtering happens. The arms separate them:
+  **A** guard off / 16 (baseline), **B** guard on / 16 (production default),
+  **C** guard off / 24 (B's eigenproblem, unfiltered).
+- **What each comparison answers:**
+  - **C vs A** — does over-requesting *alone* move the low bands? This is the
+    artifact question. Non-zero ⇒ every guarded EME number in the repo carries
+    an over-request artifact, whether or not a duplicate was ever filtered.
+    Inert ⇒ the guard is a pure filter and `_DUP_MODE_MAX_EXTRA` becomes a free
+    cost knob.
+  - **B vs C** — what the filter actually drops: which of C's 24 the guard
+    rejected as duplicates, and what it reached further up the spectrum to get.
+- **Cost is half the point:** wall time is recorded per arm, so if C vs A comes
+  back inert the `C/A` ratio is the whole argument for tuning
+  `_DUP_MODE_MAX_EXTRA` down — pure cost, no effect on the answer. Item 13
+  notes job 11575516's 3h36m was dominated by exactly this over-request.
 
 ## Not listed here
 

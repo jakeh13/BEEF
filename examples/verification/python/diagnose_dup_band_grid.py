@@ -50,6 +50,8 @@ list is kept short. Minutes, not hours: a login-node smoke run, not a batch job.
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from beef import (
@@ -61,7 +63,13 @@ from beef.solvers.fdtd import _DUP_BAND_OVERLAP_THRESHOLD, _KPOINT_SEED_NEFF
 WL = 1.31
 N_MODES = 16          # what the device requests
 N_BANDS = 20          # solve past it, so a skip has somewhere to go
-RES = 20.0
+# Default 20.0 -- the resolution the 2026-07-30 result on record was measured
+# at (item 11: all four grids agree, worst accepted overlap 0.34). Override
+# with BEEF_DIAG_RES=40 for the res-40 re-check item 11 names as the one data
+# point still missing before it can close: a finer mesh packs more oscillation
+# into the same core width, which is exactly the regime the shipped 16x8 grid
+# might stop resolving.
+RES = float(os.environ.get("BEEF_DIAG_RES", "20.0"))
 BODY_STUB = 0.75
 SIM_W, SIM_H = 5.0, 1.5
 DPML = 0.5
