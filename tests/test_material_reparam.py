@@ -167,8 +167,25 @@ class TestSmoothableContrastIsRestored:
 
 
 class TestOptInIsInert:
-    def test_default_stack_is_not_dispersive_even_given_a_band(self):
+    """Renamed in spirit 2026-08-01: dispersion is no longer opt-in. What these
+    still pin is that the flag reaches exactly what it should and nothing
+    else — in particular that a scalar wavelength stays frozen either way."""
+
+    def test_the_default_stack_is_dispersive_over_a_band(self):
+        """THE DEFAULT, pinned. Flipped 2026-08-01 (was
+        `test_default_stack_is_not_dispersive_even_given_a_band`) once the
+        strip-test gate passed on all four stack/band combinations. This is the
+        one test that should fail if someone flips it back without meaning to."""
         stack = MaterialStack(wg_height=0.22)
+        assert stack.dispersive is True
+        med = stack.si_medium(C_BAND)
+        assert len(med.E_susceptibilities) == 1
+        assert med.epsilon_diag.x > 10.0, "eps_inf must still carry the contrast"
+
+    def test_an_explicitly_frozen_stack_is_still_available(self):
+        """The A/B path has to survive the default flip, or the frozen arm of
+        every comparison in material_model_validation.md becomes unreachable."""
+        stack = MaterialStack(wg_height=0.22, dispersive=False)
         med = stack.si_medium(C_BAND)
         assert not med.E_susceptibilities
         assert abs(med.epsilon_diag.x - stack.si_index(float(np.mean(C_BAND))) ** 2) < 1e-9
@@ -192,7 +209,8 @@ class TestCacheFingerprint:
     and every stale entry would keep matching."""
 
     def test_flipping_dispersion_moves_the_key(self):
-        off = resolved_material_config(MaterialStack(wg_height=0.22), C_BAND)
+        off = resolved_material_config(
+            MaterialStack(wg_height=0.22, dispersive=False), C_BAND)
         on = resolved_material_config(
             MaterialStack(wg_height=0.22, dispersive=True), C_BAND)
         assert off != on, (
@@ -216,10 +234,28 @@ class TestCacheFingerprint:
                 != resolved_material_config(stack, O_BAND))
 
     def test_non_dispersive_key_is_unchanged_by_this_work(self):
-        """Everything already cached must keep matching while the flag is off."""
-        cfg = resolved_material_config(MaterialStack(wg_height=0.22), C_BAND)
+        """A frozen run's key must stay exactly what it always was, so entries
+        cached before any of this work keep matching when frozen is asked for
+        explicitly. (Before 2026-08-01 this was also the default; it is not any
+        more, hence the explicit flag.)"""
+        cfg = resolved_material_config(
+            MaterialStack(wg_height=0.22, dispersive=False), C_BAND)
         assert set(cfg) == {
             "resolved_probe_wl", "resolved_si_index", "resolved_sio2_index"}
+
+    def test_a_solver_override_moves_the_key_not_just_the_stack_flag(self):
+        """REGRESSION, 2026-08-01. `resolved_material_config` read the stack's
+        own flag, so a per-solver override never reached the fingerprint:
+        `FDTDSolver(material_stack=<frozen>, dispersive=True)` built a medium
+        with a real Lorentzian susceptibility and produced a byte-identical key,
+        colliding with frozen-physics entries. Same defect the class docstring
+        above describes, one level up."""
+        frozen = MaterialStack(wg_height=0.22, dispersive=False)
+        as_stack_says = resolved_material_config(frozen, C_BAND)
+        as_solver_resolved = resolved_material_config(
+            frozen, C_BAND, frozen.resolve_dispersive(True))
+        assert as_stack_says != as_solver_resolved
+        assert "resolved_dispersive" in as_solver_resolved
 
 
 class TestSolverFlags:
@@ -229,18 +265,26 @@ class TestSolverFlags:
     def test_fdtd_none_inherits_the_stack(self):
         from beef import FDTDSolver
 
-        off = FDTDSolver(res=10, material_stack=MaterialStack(wg_height=0.22))
+        off = FDTDSolver(res=10, material_stack=MaterialStack(wg_height=0.22,
+                                                             dispersive=False))
         on = FDTDSolver(res=10, material_stack=MaterialStack(wg_height=0.22,
                                                             dispersive=True))
         assert not off._media(C_BAND)[0].E_susceptibilities
         assert on._media(C_BAND)[0].E_susceptibilities
+
+    def test_fdtd_default_stack_gives_a_dispersive_solver(self):
+        """The deployment, end to end: build an FDTDSolver the way the examples
+        do and get dispersive media without asking for them."""
+        from beef import FDTDSolver
+
+        assert FDTDSolver(res=10)._media(C_BAND)[0].E_susceptibilities
 
     def test_fdtd_flag_overrides_the_stack_without_mutating_it(self):
         """The SOI_* stacks are process-wide singletons; a solver-level
         override must not leak into other solvers sharing one."""
         from beef import FDTDSolver
 
-        stack = MaterialStack(wg_height=0.22)          # dispersive=False
+        stack = MaterialStack(wg_height=0.22, dispersive=False)
         solver = FDTDSolver(res=10, material_stack=stack, dispersive=True)
         assert solver._media(C_BAND)[0].E_susceptibilities
         assert stack.dispersive is False
@@ -248,15 +292,18 @@ class TestSolverFlags:
             C_BAND)[0].E_susceptibilities
 
     def test_eme_defaults_to_dispersive_even_on_a_non_dispersive_stack(self):
-        """The regression this asymmetry exists to prevent: EME has always been
-        exact per wavelength, so inheriting an off-by-default stack would
-        silently downgrade every existing EME run."""
+        """The regression the EME's non-inheritance exists to prevent: EME has
+        always been exact per wavelength, so inheriting a frozen stack would
+        silently downgrade every existing EME run. Still explicitly a *frozen*
+        stack here — since 2026-08-01 the default stack is dispersive, so
+        leaving it implicit would stop testing anything."""
         from beef import EMESolver
 
         from beef.materials.stack import meow_material
 
         eme = EMESolver(num_modes=[2], num_cells=[1], lengths=[1.0],
-                        material_stack=MaterialStack(wg_height=0.22))
+                        material_stack=MaterialStack(wg_height=0.22,
+                                                     dispersive=False))
         assert _si_material(eme._extrusion_rules(C_BAND)) is meow_material("si")
 
     def test_eme_explicit_false_freezes(self):
@@ -288,11 +335,23 @@ class TestHybridConsistencyGuard:
         return HybridSolver(solvers=[f, e], boundaries=[0.0, 1.0, 2.0],
                             interface_modes=[2])
 
-    def test_default_configuration_is_flagged(self, caplog):
-        """Today's default really is mismatched -- frozen FDTD against an
-        exact-per-wavelength EME. The guard must say so rather than pass."""
+    def test_the_default_configuration_is_now_quiet(self, caplog):
+        """INVERTED 2026-08-01, and this inversion is the whole point of the
+        change. This test used to be `test_default_configuration_is_flagged`
+        and asserted the guard fired on the shipped default, because it did: a
+        frozen FDTD chained to an exact-per-wavelength EME, 0.00786 apart in
+        n_Si at the O-band edges. Both engines now default dispersive, so the
+        chain the examples build no longer trips its own guard."""
         with caplog.at_level("WARNING"):
             self._hybrid()._check_material_consistency(O_BAND)
+        assert "disagree on material dispersion" not in caplog.text
+
+    def test_a_deliberately_mixed_chain_is_still_flagged(self, caplog):
+        """The guard must keep working — it just needs an actually-mixed chain
+        now that the default is not one. This is the configuration that used to
+        ship, constructed explicitly."""
+        with caplog.at_level("WARNING"):
+            self._hybrid(fdtd_disp=False, eme_disp=True)._check_material_consistency(O_BAND)
         assert "disagree on material dispersion" in caplog.text
         assert "0.00786" in caplog.text
 
@@ -331,12 +390,25 @@ class TestMaterialIndexAgreement:
                             interface_modes=[2],
                             material_consistency_action=action)
 
-    def test_todays_default_really_does_disagree(self):
-        """The check would be worthless if it passed the configuration that
-        ships. A frozen FDTD against a per-wavelength EME differs by ~0.008 in
-        n_Si at the O-band edges -- this pins that as a real, measured gap."""
-        gap, wl, kind, a, b = self._hybrid()._material_disagreement(O_BAND)
+    def test_the_configuration_that_used_to_ship_really_does_disagree(self):
+        """The measured size of the gap the 2026-08-01 default flip closed. A
+        frozen FDTD against a per-wavelength EME differs by ~0.008 in n_Si at
+        the O-band edges. Constructed explicitly now — it was the default when
+        this test was written (as `test_todays_default_really_does_disagree`)
+        and is not any more."""
+        gap, wl, kind, a, b = self._hybrid(
+            fdtd_disp=False, eme_disp=True)._material_disagreement(O_BAND)
         assert gap > 5e-3, f"expected the known ~0.008 mismatch, got {gap:.2e}"
+
+    def test_the_shipped_default_now_passes_its_own_guard(self):
+        """The deployment's acceptance criterion, stated as a test. Build the
+        chain the way the examples do and the worst index gap must sit under
+        the guard's own 2e-3 tolerance — it was 0.00786, over it, before."""
+        from beef.solvers.hybrid import _MATERIAL_INDEX_TOL
+
+        gap, *_ = self._hybrid()._material_disagreement(O_BAND)
+        assert gap < _MATERIAL_INDEX_TOL, (
+            f"the shipped default still fails the material guard at {gap:.2e}")
 
     def test_enabling_dispersion_closes_it_to_the_fit_error(self):
         gap, *_ = self._hybrid(fdtd_disp=True, eme_disp=True)._material_disagreement(O_BAND)
@@ -348,8 +420,17 @@ class TestMaterialIndexAgreement:
         assert gap < 1e-12
 
     def test_raise_action_rejects_the_broken_chain(self):
+        """Explicitly mixed since 2026-08-01 — the default chain is no longer
+        broken, so `self._hybrid(action="raise")` would not raise."""
         with pytest.raises(ValueError, match="resolve different si indices"):
-            self._hybrid(action="raise")._check_material_index_agreement(O_BAND)
+            self._hybrid(fdtd_disp=False, eme_disp=True, action="raise") \
+                ._check_material_index_agreement(O_BAND)
+
+    def test_raise_action_accepts_the_shipped_default(self):
+        """Corollary worth its own name: `material_consistency_action="raise"`
+        is now a usable setting for a default-constructed chain. It could not
+        be before — that is why the default is "warn"."""
+        self._hybrid(action="raise")._check_material_index_agreement(O_BAND)
 
     def test_raise_action_accepts_the_fixed_chain(self):
         self._hybrid(fdtd_disp=True, eme_disp=True, action="raise") \

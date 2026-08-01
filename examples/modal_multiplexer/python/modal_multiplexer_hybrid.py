@@ -60,8 +60,44 @@ FDTD run count: 2 (input, one per MM-input mode) + N_MODES (transition,
 one reverse launch per body supermode) + 3 (output, one reverse launch per
 port) — plus one EME mode-solve per wavelength per MMI body.
 
-Run:
+**Reshaped 2026-07-31 after job 11590663 TIMED OUT at 5h for the SECOND
+time** (11585847 timed out first, at full 5h/4 nodes; resubmitted unchanged
+as 11590663, which reached section 4 -- all 3 per-port geometry plots exist
+-- but died mid-way through a per-port eigenmode-overlap monitor sweep,
+still not writing final output). Sections 0-3 are shared across ports and
+were already fully cached on disk (`save_dir`) by both attempts; the
+remaining, apparently-underestimated cost is section 4's per-port solve,
+run three times in the same process by the loop below. A third identical
+resubmit risks the same failure. Two changes:
+
+1. Each output port can now be run as its own SLURM array task
+   (`SLURM_ARRAY_TASK_ID` in {0,1,2} indexes `PORTS`). A task calls
+   `hybrid.solve()` for just that port (sections 0-3 still come from the
+   shared on-disk cache -- near-instant here since they're already hit --
+   section 4 is simulated fresh for that port and its result persists to
+   the same `save_dir`) and exits without assembling the combined SMatrix.
+   Caveat if this is ever resubmitted from a COLD cache (sections 0-3 not
+   yet on disk): launching all 3 array tasks at once would have each of
+   them redundantly pay for sections 0-3 rather than sharing the cost the
+   way the single-process loop does -- not a concern for this specific
+   resubmission, since that cache already exists, but worth knowing before
+   reusing this pattern on a device without a warm section 0-3 cache.
+2. Running with no `SLURM_ARRAY_TASK_ID` set (the merge/serial step) now
+   loops over all 3 ports with `cache_only=True`: it reads every port's
+   section-4 result back out of `save_dir` (raising loudly if an array task
+   hasn't completed yet) instead of re-simulating, assembles the combined
+   SMatrix exactly as before, and continues into `check_passive()`/
+   printing/plotting/saving unchanged.
+
+Run (single process, original behavior, still works but not recommended
+given the timing above):
     python /path/to/examples/modal_multiplexer/python/modal_multiplexer_hybrid.py
+
+Run (reshaped, recommended): submit the array job for the 3 ports, wait for
+all 3 to complete, then submit the merge step (same script, no array index)
+to assemble/check/save/plot from cache. See
+batch/run_modal_multiplexer_examples.batch and
+batch/run_modal_multiplexer_examples_merge.batch.
 """
 
 import os
@@ -220,21 +256,28 @@ hybrid = HybridSolver(
 #    three branches) every time, with the reverse source/norm-monitor
 #    markers shrunk to that port's launch aperture — exactly the three
 #    simulations run in step 5.
+#
+#    Skipped in per-port array-task mode (SLURM_ARRAY_TASK_ID set — see the
+#    "Reshaped 2026-07-31" module docstring): 3 concurrent array tasks would
+#    otherwise all write these same shared files at once, a plotting-only
+#    race that has no business existing when the merge/serial step (which
+#    always runs once, after every array task) can render them exactly once.
 # ---------------------------------------------------------------------------
-plot_hybrid_geometry(
-    mux, solver=hybrid,
-    in_modes=2, out_modes=1,
-    title="2-Stage MMI Modal Multiplexer — Hybrid Solver Sections",
-    output_path=os.path.join(output_dir, "geometry_hybrid.png"),
-    sub_region_dir=os.path.join(output_dir, "sections"),
-    sub_region_show_pml=True,
-    sub_region_show_eme_detail=True,
-    sub_region_configs=[
-        (f"port_{name}", {4: {"output_idx": k}}) for name, k in PORTS
-    ],
-)
-print(f"Geometry plot saved → {output_dir}/geometry_hybrid.png")
-print(f"Sub-region plots saved → {output_dir}/sections/")
+if os.environ.get("SLURM_ARRAY_TASK_ID") is None:
+    plot_hybrid_geometry(
+        mux, solver=hybrid,
+        in_modes=2, out_modes=1,
+        title="2-Stage MMI Modal Multiplexer — Hybrid Solver Sections",
+        output_path=os.path.join(output_dir, "geometry_hybrid.png"),
+        sub_region_dir=os.path.join(output_dir, "sections"),
+        sub_region_show_pml=True,
+        sub_region_show_eme_detail=True,
+        sub_region_configs=[
+            (f"port_{name}", {4: {"output_idx": k}}) for name, k in PORTS
+        ],
+    )
+    print(f"Geometry plot saved → {output_dir}/geometry_hybrid.png")
+    print(f"Sub-region plots saved → {output_dir}/sections/")
 
 # ---------------------------------------------------------------------------
 # 5. Run the hybrid simulation — once per output port. output_idx is passed
@@ -249,12 +292,35 @@ wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
 print(f"\nHybrid sweep: {wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm "
       f"({len(wavelengths)} pts, {N_MODES} interface modes)\n")
 
+_array_idx = os.environ.get("SLURM_ARRAY_TASK_ID")
+if _array_idx is not None:
+    # One array task, one output port (see the "Reshaped 2026-07-31" module
+    # docstring): simulate just this port's section 4 and let save_dir
+    # persist it (sections 0-3 come from the same on-disk cache, shared
+    # across ports/tasks). No SMatrix assembly here -- the merge run (below,
+    # no SLURM_ARRAY_TASK_ID) reads every port back out of cache for that.
+    _i = int(_array_idx)
+    _name, _k = PORTS[_i]
+    print(f"array task {_i}: port '{_name}' (output_idx={_k})", flush=True)
+    hybrid.solve(
+        mux, wavelengths, in_modes=2, out_modes=1, port=_name,
+        cache={}, save_dir=save_dir,
+        geometry_kwargs={4: {"output_idx": _k}},
+    )
+    print(f"array task {_i} done -- port '{_name}' cached under {save_dir}", flush=True)
+    raise SystemExit(0)
+
+# Merge/serial step: no SLURM_ARRAY_TASK_ID, so every port is expected to
+# already be on disk from its own array task. cache_only=True makes that
+# expectation explicit -- a CacheMissError here means an array task hasn't
+# finished (or failed) rather than silently kicking off a fresh multi-hour
+# FDTD run in what is meant to be a cheap assembly step.
 section_cache = {}
 smat = None
 for name, k in PORTS:
     smat_port = hybrid.solve(
         mux, wavelengths, in_modes=2, out_modes=1, port=name,
-        cache=section_cache, save_dir=save_dir,
+        cache=section_cache, save_dir=save_dir, cache_only=True,
         geometry_kwargs={4: {"output_idx": k}},
     )
     if smat is None:

@@ -44,6 +44,27 @@ deferred — see gap 6) and the fix is confirmed to resolve this device's own
 reproduction: no more exact neff ties, no more catastrophic η mismatches.
 Details and evidence are in gaps 1 and 6.
 
+**Update, 2026-07-31 18:58:** gap 6's exercise run **timed out a second time**
+(11590663, resubmitted from 11585847's first timeout). It got further —
+reached section 4 (all 3 per-port geometry plots exist on disk) and was deep
+inside a per-port eigenmode-overlap monitor computation when killed — but
+still did not finish, and `warn_on_transfer_duplicate` still has not fired
+either way. After two full 5h/4-node attempts (10h of compute total), gap 6's
+original question remains open. See gap 6 below and `running_jobs.md`'s
+11590663 entry.
+
+**Update, 2026-08-01 03:01: gap 6's exercise run timed out a THIRD time**
+(11597177 `[0-2]`, the reshaped array), and this time the cause is known —
+**the reshape's batch script dropped `srun --mpi=pmi2`**, so all three tasks
+ran meep on **1 rank instead of 96** (~42× slower per timestep) while holding
+4 nodes idle each. A second flaw compounds it: the "sections 0-3 come from the
+warm cache" premise the reshape rested on is **false in practice** — every
+task recomputed them. Gap 6 has now cost ~25 h of compute and is still
+unanswered. **No fourth attempt made — this device is deferred**, and the
+fix-and-resubmit recipe is recorded in gap 6's boxed entry for whenever it is
+picked back up. The orphaned merge job 11597199 can never run and should be
+cancelled.
+
 `examples/modal_multiplexer/python/modal_multiplexer_hybrid.py` — the only script
 for this device. SOI_160, not SOI_220 like the coupler and MMIs.
 
@@ -496,6 +517,97 @@ So it has the most ways to be wrong and the fewest ways to find out.
    **11590663**; the disk cache should skip straight past sections 0-3 this
    time, leaving only the 3 per-port section-4 solves as real new work. See
    `running_jobs.md` for the full accounting.
+
+   **❌ TIMEOUT AGAIN, 2026-07-31 18:58, full 5h — still open after two full
+   attempts.** The disk-cache prediction above was right (sections 0-3 hit
+   cleanly, no re-solve), and this run did reach section 4: all 3 per-port
+   geometry plots (`port_top`/`port_bot`/`port_mid`) exist on disk. But the
+   "5h should now be generous" estimate was wrong — the log's tail is deep
+   inside a per-port eigenmode-overlap monitor sweep (many `MPB solved for
+   frequency_13(...)` lines across k-points, into band 14) when SLURM killed
+   it, well short of writing a final S-matrix. No new
+   `example_sim_cache/` entries attributable to this device appear during the
+   run's own window, so unlike sections 0-3, section 4's per-port monitor
+   work does not appear to checkpoint — a third blind resubmit would very
+   likely restart section 4 from nothing rather than resume. **Gap 6's
+   original ask is unanswered after 10h of 4-node compute across two
+   attempts.** Worth reshaping before trying a third time: either a
+   substantially longer wall-clock limit, or splitting the 3 per-port
+   section-4 solves into their own array job so a future timeout only loses
+   one port's progress. Not resubmitted as of this writing. Full accounting
+   in `running_jobs.md`'s 11590663 entry.
+
+   **Reshaped and resubmitted, 2026-07-31 ~21:20.**
+   `modal_multiplexer_hybrid.py` now supports running one output port per
+   SLURM array task (`SLURM_ARRAY_TASK_ID` 0-2 → top/mid/bot) plus a
+   separate merge step that assembles the combined SMatrix from the on-disk
+   cache (`cache_only=True` on every section, raises loudly if a port's task
+   hasn't finished). Resubmitted as 11596846 (array) / 11596852 (merge) —
+   that first attempt **failed instantly on both**, a wrong relative path in
+   the new batch script (`running_jobs.md` has the correction). Fixed and
+   resubmitted as **11597177** (array, 5h/task — sections 0-3 come from the
+   already-warm cache, so the real new work per task is just its one port's
+   section-4 solve) with merge job **11597199** dependent on it. See
+   `running_jobs.md`'s reshape note and the script's own docstring for the
+   mechanics.
+
+   ---
+
+   > **❌ THIRD TIMEOUT, 2026-08-01 02:44–03:01 — the reshape made it WORSE,
+   > and the cause is understood. No further attempt made: this device is
+   > deferred.** All three array tasks (11597177 `_0`/`_1`/`_2`) hit the full
+   > 5 h wall on 4 nodes each — 15 node-hours spent, gap 6 still unanswered
+   > after **25 h of cumulative compute** across three attempts.
+   >
+   > **Root cause — the reshape silently dropped MPI.** The new batch script
+   > runs `python modal_multiplexer/python/modal_multiplexer_hybrid.py`
+   > directly, deliberately bypassing `make` "which would run the whole script
+   > — all 3 ports — in one process." But the Makefile's `modal_multiplexer_
+   > hybrid` target is `$(runner) $(my_python) ...` and on Phoenix `runner` is
+   > **`srun --mpi=pmi2`** (`BEEF/examples/Makefile:5`). Bypassing `make` threw
+   > away the launcher along with the target. The logs are unambiguous:
+   >
+   > | job | launcher | meep ranks | s/step |
+   > |---|---|---|---|
+   > | 11585847_0, 11590663_0 (via `make`) | `srun --mpi=pmi2` | **96 processes** | 0.0064 |
+   > | 11597177_0/_1/_2 (reshaped, direct) | none | **1 process** | 0.27–0.36 |
+   >
+   > `Using MPI version 4.1, 1 processes` in all three new logs vs
+   > `96 processes` in both old ones — a **~42× per-timestep slowdown**, while
+   > still holding 4 nodes × 24 ranks idle (SLURM accounting confirms the
+   > waste: `cput=20-00:35:12` against `walltime=05:00:22` on 96 cpus). The
+   > per-port split was real but was swamped many times over by losing 96-way
+   > domain decomposition.
+   >
+   > **Second, independent flaw: the "sections 0-3 come from the already-warm
+   > cache" premise is false.** Each task re-ran the *same* three
+   > `Initializing structure` + MPB-band + time-stepping blocks at nearly
+   > identical log offsets (lines 18/2189/4528, 18/2184/4523, 18/2224/…) —
+   > i.e. every task redid the shared work from scratch rather than reading it
+   > back. Whether the earlier timeouts never actually persisted those
+   > sections, or the cache key differs between the 96-rank and 1-rank runs,
+   > is **not established** — and is the thing to check first if this is ever
+   > picked back up. The tasks died at wildly different points (`_0` at
+   > timestep 289, `_1` at 2945, `_2` still inside MPB band 10), which is
+   > consistent with all three grinding through that duplicated prefix.
+   >
+   > **If resumed later, in this order:** (1) put `srun --mpi=pmi2` back in
+   > front of the direct `python` call — the array-per-port shape itself is
+   > fine and worth keeping, it was only ever the launcher that broke; (2)
+   > verify sections 0-3 actually hit the cache (a task that skips them should
+   > start time-stepping within a minute or two, not after an hour); only then
+   > (3) resubmit. Do **not** just raise the wall clock — at 1 rank, no
+   > affordable limit finishes this.
+   >
+   > Merge job **11597199** was left `PENDING` /
+   > `DependencyNeverSatisfied` and can never run; it is inert (holds no
+   > resources) but should be cancelled as queue hygiene.
+   >
+   > Note the contrast with the 2×2 MMI's reshape submitted in the same window
+   > and to the same design — that one worked exactly as predicted (see
+   > `mmi_2x2_validation.md` gap 4). The array-plus-`cache_only`-merge pattern
+   > is sound; this device's instance of it broke on the launcher, not the
+   > pattern.
 
 ## Order
 

@@ -310,8 +310,13 @@ class TestMaterialIndicesAreFingerprinted:
         from beef.materials import SOI_220
 
         cfg = resolved_material_config(SOI_220, np.linspace(1.5, 1.6, 11))
-        assert set(cfg) == {"resolved_probe_wl", "resolved_si_index",
-                            "resolved_sio2_index"}
+        # SOI_220 is dispersive by default since 2026-08-01, so the key also
+        # carries the fitted re-parameterisation. The three index probes below
+        # are what this test is actually about and are unchanged by that.
+        assert {"resolved_probe_wl", "resolved_si_index",
+                "resolved_sio2_index"} <= set(cfg)
+        assert cfg["resolved_dispersive"] is True
+        assert len(cfg["resolved_si_reparam"]) == 3
         # Band edges and centre, so the fingerprint sees dispersion (both media
         # are dispersive since item 8 step 2), not just one midband number.
         assert cfg["resolved_probe_wl"] == [1.5, 1.55, 1.6]

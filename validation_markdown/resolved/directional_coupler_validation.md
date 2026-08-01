@@ -11,6 +11,38 @@ Status, open work, and outstanding verification. **Everything already closed —
 > preserved in the archive above, so those citations still resolve in one hop. Item
 > numbers are stable IDs and are never reused.
 
+> ## ⚠ Update 2026-08-01 — closed item 6/14's shared code path was changed under it
+>
+> `beta_from_phases` (`beef/solvers/fdtd.py`), which item 6's engine agreement
+> and item 14's calibrated L₅₀ both run through, had a **2π turn-count bug**:
+> it rounded the wrap count independently per length against one seed slope, so
+> a ~2% seed error could drift with L until a length straddled a rounding
+> boundary. Found and fixed while working the 1×2 MMI, where it was blowing
+> `calibrate_body_neff` outright (`../mmi_1x2_validation.md` gap 5). Replaced
+> by `beta_fit_from_phases`, which decides **one** integer against the seed —
+> the branch — and derives every later turn from a slope refit on the shorter
+> lengths.
+>
+> **This coupler's numbers are expected to be untouched, and the offline
+> evidence says so:** at its own production seed the fix changes **0 of 66**
+> cached cells (`turns_shifted` zero everywhere), so L₅₀ 0.11% off 15.13 µm
+> should stand. But that check used a *proxy* seed rather than the run's own
+> MPB output, which is an argument, not a measurement. **Job 11608703
+> (`beef_dc_hybrid_item14`) is re-deriving the calibrated 50:50 length through
+> the real path** and this note will be closed with its number when it lands.
+> Deliberately run as `run_dc_hybrid_item14.batch` and **not** the golden
+> generator — the latter would overwrite `tests/golden/directional_coupler_hybrid.json`,
+> destroying the pre-fix reference the comparison needs.
+>
+> **Separately: material dispersion defaulted to True the same day**
+> (`material_model_validation.md`), which stales this device's goldens along
+> with everyone else's. That is `README.md` parity item **P7** — the coupler's
+> cold regeneration pass (11592462_0 TIMEOUT, still undiagnosed) gates goldens
+> on **both** MMIs as well as this device, and is the top of the critical path.
+> This does not reopen items 6/14: they are per-wavelength quantities, and
+> job 11608940 measured the dispersion flip to be byte-identical on exactly
+> that class of number.
+
 ## Status — 2026-07-28
 
 **The hybrid chain converges, and the coupler's hybrid results are trustworthy.**
@@ -262,9 +294,29 @@ means it is one pass rather than three.
 
 ### Outstanding
 
-**Regenerating the example outputs — not yet run.** `directional_coupler_fdtd.py`, both
-resolution sweeps and both notebooks still carry results computed at 13.5 µm. Fresh
-full-device 3-D FDTD at 15.13 µm, so nothing hits the cache.
+**Regenerating the example outputs — partially done, launched 2026-07-31.** Two
+jobs: `beef_dc_examples` (11592462, array 0-2) for the example outputs
+themselves, and `beef_golden_dc_hybrid` (11592463) for the golden.
+**11592463 completed** 17:42 (1:09:17). Of 11592462's three array tasks: `_1`
+(mode) and `_2` (fdtd) both completed 16:33–16:37 (`_2`'s 17s runtime is
+flagged — likely a cache hit on the ground-truth length-sweep's own 15.13 µm
+point rather than a fresh compute; not yet cross-checked, see
+`running_jobs.md`). **`_0` (hybrid) TIMED OUT at 21:34, full 5h — partially diagnosed, root cause
+still open.** The log's two `Initializing structure` blocks match
+`section_mode_beta()`'s seed step and a separate single-wavelength diagnostic
+call (both `section_mode_neff()`), not the script's own "2 FDTD solves."
+**Benchmarked directly (job 11597622): this refutes the "cheap eigensolve is
+secretly expensive" theory** — the same call costs ~44 s/wavelength under the
+production MPI shape, ~8 min extrapolated to all 11, nowhere near hours. The
+15 real `solve_section()` calibration runs left zero trace either (likely all
+cache hits). **So the accounted-for workload should finish in well under 15
+minutes, yet the job ran 5 hours with no log signature explaining the gap** —
+root cause unknown. See `running_jobs.md`'s 11592462 `[0]` entry.
+**Recommendation: resubmit with a shorter time limit and watch it live**
+(squeue/log tail) rather than diagnose from a dead job's log again. `directional_coupler_fdtd.py`, both
+resolution sweeps and both notebooks still carried results computed at
+13.5 µm before this pass; fresh full-device 3-D FDTD at 15.13 µm, so nothing
+hit the cache except where flagged above.
 
 **Item 13 — not scheduled.** A bare 450×220 nm Si strip: one guided mode, no even/odd
 splitting, so none of the `β/Δβ ≈ 99` amplification that makes the coupler hypersensitive

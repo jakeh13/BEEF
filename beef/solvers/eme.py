@@ -117,6 +117,19 @@ class EMESolver:
         self.temperature = temperature
         self.mode_solver = mode_solver
 
+    def _resolved_dispersive(self) -> bool:
+        """Whether this solver will actually track the band.
+
+        `None` means **dispersive** here — see `_extrusion_rules`' own
+        "asymmetric on purpose" note for why this does not defer to the stack.
+        Split out 2026-08-01 so the cache fingerprint and the extrusion rules
+        cannot disagree about it: passing the stack's flag to
+        `resolved_material_config()` instead of this used to let an explicit
+        `EMESolver(dispersive=False)` build frozen materials under a key that
+        still said dispersive.
+        """
+        return True if self.dispersive is None else bool(self.dispersive)
+
     def _extrusion_rules(self, wavelengths):
         """meow extrusion rules for this run, dispersive unless frozen off.
 
@@ -133,16 +146,22 @@ class EMESolver:
         to 0.008 in n_Si across the O-band
         (`validation_markdown/material_model_validation.md`).
 
-        **Asymmetric with `FDTDSolver.dispersive` on purpose.** There, `None`
-        inherits the stack, whose default is False. Here `None` means
-        **dispersive**, and only an explicit `False` freezes: inheriting the
-        stack would silently downgrade every existing EME run the moment a
-        shared stack was left at its default, turning an exact model into a
-        frozen one with no caller asking for it. The flag reads the same on
-        both solvers ("True = track the band"); only the default differs,
-        because the two engines start from opposite places.
+        **The two engines' defaults now agree, as of 2026-08-01.** They did
+        not before: the stack defaulted to False, so `FDTDSolver`'s `None`
+        inherited frozen while this solver's `None` meant dispersive. That
+        asymmetry *was* the material-model gap — a hybrid chain contracted an
+        FDTD section frozen at band centre against an EME body solved exactly
+        per wavelength, 0.00786 apart in n_Si at the O-band edges. The stack
+        default is now True, so both `None`s resolve to dispersive.
+
+        This solver still does not defer to the stack, deliberately: `None`
+        means **dispersive** here regardless, and only an explicit `False`
+        freezes. Inheriting would mean a future stack default flipping back
+        silently downgrades every EME run from an exact model to a frozen one
+        with no caller asking for it — the EME side has never had the FDTD's
+        frozen-band problem and should not acquire it by inheritance.
         """
-        dispersive = True if self.dispersive is None else bool(self.dispersive)
+        dispersive = self._resolved_dispersive()
         if dispersive or wavelengths is None:
             # wavelengths=None means a caller that never had a band to freeze
             # at; the dispersive rules are correct there and are also what it
@@ -436,7 +455,9 @@ class EMESolver:
                      stub_left=stub_left, stub_right=stub_right,
                      geometry_kwargs=geometry_kwargs,
                      neff_override=_neff_fingerprint(neff_override),
-                     **resolved_material_config(self.material_stack, wavelengths)),
+                     **resolved_material_config(
+                         self.material_stack, wavelengths,
+                         self._resolved_dispersive())),
                 geometry,
             )
             config = build_run_config(
@@ -446,7 +467,9 @@ class EMESolver:
                      stub_left=stub_left, stub_right=stub_right,
                      geometry_kwargs=geometry_kwargs,
                      neff_override=_neff_fingerprint(neff_override),
-                     **resolved_material_config(self.material_stack, wavelengths)),
+                     **resolved_material_config(
+                         self.material_stack, wavelengths,
+                         self._resolved_dispersive())),
                 geometry,
             )
             hit = lookup(save_dir, config)
@@ -586,7 +609,9 @@ class EMESolver:
                      stub_left=stub_left, stub_right=stub_right,
                      geometry_kwargs=geometry_kwargs,
                      neff_override=_neff_fingerprint(neff_override),
-                     **resolved_material_config(self.material_stack, wavelengths)),
+                     **resolved_material_config(
+                         self.material_stack, wavelengths,
+                         self._resolved_dispersive())),
                 geometry,
             )
             config = build_run_config(
@@ -596,7 +621,9 @@ class EMESolver:
                      stub_left=stub_left, stub_right=stub_right,
                      geometry_kwargs=geometry_kwargs,
                      neff_override=_neff_fingerprint(neff_override),
-                     **resolved_material_config(self.material_stack, wavelengths)),
+                     **resolved_material_config(
+                         self.material_stack, wavelengths,
+                         self._resolved_dispersive())),
                 geometry,
             )
             hit = lookup(save_dir, config)

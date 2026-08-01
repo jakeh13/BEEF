@@ -14,7 +14,66 @@ whether they agree, and whether either is right.
 |---|---|---|
 | 0 | resolved indices reach the cache fingerprint | ✅ done |
 | 1 | one shared analytic model, both engines | ✅ done — agree to 4e-16 |
-| 2 | FDTD medium actually dispersive across the band | ✅ **done 2026-07-31** — implemented, gate PASSED on all 4 stack/band combinations (worst Δn_eff −0.00141 on SOI_160/O-band, tol 0.002); item 4's resolution sweeps closed the same day (job 11588997 — the pin holds at the tolerance production uses). **Opt-in** (`dispersive=True`, default off) is a deliberate design choice now, not a pending blocker — turning it on for any example is separate, unstarted work |
+| 2 | FDTD medium actually dispersive across the band | ✅ **done 2026-07-31** — implemented, gate PASSED on all 4 stack/band combinations (worst Δn_eff −0.00141 on SOI_160/O-band, tol 0.002); item 4's resolution sweeps closed the same day (job 11588997 — the pin holds at the tolerance production uses) |
+| 3 | **deployed — `dispersive` defaults ON** | ✅ **done 2026-08-01.** `MaterialStack(dispersive=True)` is the default, so `SOI_160`/`SOI_220` and therefore every example and both solvers now track the band. **The engine asymmetry is closed: the hybrid chain's worst n_Si gap over the O-band drops 0.007862 → 0.001349**, from over the 2e-3 guard tolerance to comfortably under it |
+
+### ✅ DEPLOYED 2026-08-01 — and a cache-fingerprint bug had to be fixed first
+
+**A blocker nobody had recorded.** `resolved_material_config()` keyed off
+`material_stack.dispersive`, and all seven call sites passed the *stack* — so a
+**per-solver override never reached the fingerprint**. Measured before fixing:
+`FDTDSolver(material_stack=SOI_220, dispersive=True)` built a genuinely
+different medium (one Lorentzian susceptibility against a flat ε = 12.096) and
+produced a **byte-identical cache key**. A dispersive run would have collided
+with frozen-physics entries and been served the old physics — exactly the defect
+that function's own docstring says it exists to kill, recurring one level up.
+Deploying without fixing this would have silently poisoned the cache.
+
+Fixed: the function takes the caller's *resolved* setting as a third argument;
+`FDTDSolver` passes `material_stack.resolve_dispersive(self.dispersive)` and
+`EMESolver` passes its new `_resolved_dispersive()` (its `None` means dispersive,
+which the old code also got wrong in the other direction — an explicit
+`EMESolver(dispersive=False)` built frozen materials under a key that still said
+dispersive).
+
+**What the flip changed:**
+
+| | before | after |
+|---|---|---|
+| `MaterialStack.dispersive` default | `False` | **`True`** |
+| `FDTDSolver()` media over a band | frozen at band centre | **dispersive** |
+| `EMESolver()` | already dispersive (`None` → True) | unchanged |
+| hybrid worst n_Si gap, O-band | **0.007862** (over the 2e-3 guard) | **0.001349** (under it) |
+| `material_consistency_action="raise"` on a default chain | would raise | **now passes** |
+
+The remaining 0.001349 is the fit error, not a modelling disagreement: the FDTD
+runs the re-parameterised single-Lorentzian fit while the EME stays exact
+Sellmeier. That is why work item 5's guard needed a tolerance rather than
+equality, and why 2e-3 sits where it does.
+
+**Cost, and it is not small.** The fingerprint now carries `resolved_dispersive`
+plus the fitted `resolved_{si,sio2}_reparam`, so **every existing cache entry
+misses and every golden is stale again** (third invalidation: Sellmeier n_Si,
+then λ₀, now this). The 1×2 engine-agreement array measured earlier the same day
+(11608448, 2 h 04 across four lengths) was invalidated by this and re-submitted
+as 11608875/11608876 to measure gap 4 under the configuration that actually
+ships. Note the EME half was invalidated by the *correctness* fix alone,
+independent of the default flip — those entries were dispersive all along while
+keyed as frozen.
+
+Tests: 508 → **514 passed**, 15 skipped. Nine tests encoded the old default and
+were rewritten rather than relaxed — most tellingly
+`test_default_configuration_is_flagged`, which asserted the guard fires on the
+shipped chain, is now `test_the_default_configuration_is_now_quiet`. Its
+inversion is the deployment's acceptance criterion.
+
+**Not deployed: the ring.** `ring_resonator_hybrid{,_cascaded}.py` hand-roll raw
+meep and pass a *scalar* `wl_center` to `si_medium()`, which correctly stays
+frozen — so those two scripts are now the only devices left on frozen media,
+while their meow half is already dispersive. They therefore inherit the exact
+asymmetry this flip closed everywhere else, and their hand-rolled cache config
+records no material fingerprint at all. Four itemised to-dos (M1–M4) are in
+`ring_resonator_validation.md`.
 
 **Steps 0 and 1 are closed.** Both engines evaluate one Sellmeier model
 (`beef/materials/stack.py::_SELLMEIER` — Salzberg 1957 Si, Malitson 1965 fused silica,

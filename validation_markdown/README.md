@@ -5,7 +5,6 @@ One file per example device, recording what has to hold before that device's
 
     mmi_1x2_validation.md              1×2 MMI
     mmi_2x2_validation.md              2×2 MMI
-    modal_multiplexer_validation.md    modal multiplexer
     ring_resonator_validation.md       ring resonator
 
     fdtd_vs_EME_mode_validation.md     cross-device — the mode-correspondence MECHANISM itself
@@ -14,6 +13,8 @@ One file per example device, recording what has to hold before that device's
     resolved/                          whole docs sufficiently addressed (open to-dos may remain)
     resolved/directional_coupler_validation.md  directional coupler — the worked example
     resolved/material_model_validation.md       cross-device — shared Si/SiO2 model, both engines
+    deferred/                          work intentionally postponed, not blocked or closed
+    deferred/modal_multiplexer_validation.md    modal multiplexer — postponed until the others are verified
 
 Check 2 below (mode identity) has grown its own cross-device file:
 `fdtd_vs_EME_mode_validation.md` covers the *mechanism* — what must hold for any
@@ -46,6 +47,21 @@ backticked prose references rather than markdown links (no link in this
 directory is broken — checked), so they resolve by name; read a bare citation as
 `resolved/directional_coupler_validation.md`.
 
+**`modal_multiplexer_validation.md` moved into the new `deferred/` on
+2026-07-31**, at the user's direction: verify the other devices first, come
+back to the mux after. Unlike `resolved/`, this is not a claim that its work
+is addressed — check 4 is flat-out blocked (`CompoundGeometry` can't back
+`FDTDSolver.solve()`, `notes.md` Geometry item 8), check 3 is the worst of
+any device (shipped res 40 can't even supply the requested 16-mode basis),
+and the item-12/14 library fix means its own hybrid script will now raise on
+its next run until `N_MODES`/`RESOLUTION` are decided jointly. `deferred/`
+exists so that's legible at a glance — "not started/blocked" reads
+differently from "postponed by choice," and this device is genuinely the
+latter as of today, not just the least-finished one. Same citation
+convention as both moves below: the 3 actual markdown-link references (all
+in `running_jobs.md`) were repointed, bare-backtick citations elsewhere are
+left as-is.
+
 **`material_model_validation.md` moved into `resolved/` on 2026-07-31**, once
 its five work items (`beef.materials.stack.reparam_lorentz()` committed, the
 per-band media, the fingerprint, `HybridSolver`'s index-agreement guard, and
@@ -53,8 +69,16 @@ the resolution-sensitivity sweep) all closed and its strip-test gate passed on
 every stack/band combination. Same convention as the coupler's own move: the
 handful of bare-backtick citations across these docs are left as-is (they
 resolve by name), and the three actual markdown-link references were
-repointed. `dispersive=True` remains opt-in, default off, for every solver —
-that is a design choice now, not an open gap.
+repointed. ~~`dispersive=True` remains opt-in, default off, for every solver —
+that is a design choice now, not an open gap.~~ **Superseded 2026-08-01:
+`dispersive` now defaults to True**, so every example and both solvers track
+the band. That closes the engine asymmetry — the hybrid chain's worst n_Si gap
+over the O-band drops **0.007862 → 0.001349**, from over `HybridSolver`'s 2e-3
+material guard to under it. A cache-fingerprint bug had to be fixed first (a
+per-solver override never reached the key); see `material_model_validation.md`
+step 3 and `notes.md` Solvers item 21. **Consequence for everything below:
+every cache entry and all four goldens are stale again**, and the ring is the
+one device not carried over (`ring_resonator_validation.md` M1–M4).
 
 ## The four checks
 
@@ -171,7 +195,22 @@ reversed wavelength axis. It rules out gross errors, not wrong physics.
 
 ## Status
 
-Updated 2026-07-31 after jobs 11585850 (1×2 MMI hybrid vs full-device FDTD,
+Updated **2026-08-01** after the material-dispersion default flip (`dispersive`
+now True — `resolved/material_model_validation.md`), which adds
+`resolved_dispersive` plus the fitted Lorentz reparameterisation to the cache
+fingerprint. **Every cache entry and every golden is stale across that break.**
+Not everything moves, though, and that is measured rather than assumed: job
+11608940 re-ran the 1×2's gap 3 dispersive and got **byte-identical** numbers,
+because a dispersive medium only differs from a frozen one *across a band* and
+the per-wavelength mode solves are scalar. Only the genuinely broadband gaps (4
+and 5) move. Same day: the 1×2's `beta_from_phases` turn-count bug found and
+fixed (P2), gap 4 submitted for the first time on that device (P1), golden
+provenance shipped (P6), 2×2 golden runners written (P5 half), and P4's
+candidate mechanism identified with its decisive test in flight. **Ten jobs are
+live** — see `running_jobs.md`'s fourteenth snapshot; several table cells below
+are marked *in flight* and will move when they land.
+
+Previously updated 2026-07-31 after jobs 11585850 (1×2 MMI hybrid vs full-device FDTD,
 9.11%, uniform sign), 11585849 (2×2 MMI hybrid vs full-device FDTD, 0.82%, sign
 FLIPS across the band — a different mechanism from the 1×2's), 11586098
 (`fdtd_vs_EME_mode_validation.md` item 13 — the EME duplicate guard's
@@ -179,8 +218,10 @@ over-request measured inert at 16 modes/res 60, at a 3.2× cost), 11588309
 (items 11 and 12 — the guard's diagnostic grid cleared at res 40 as well, and
 k-seed laddering recovers a guided mode the shipped fixed seed loses) and
 11588569 (2×2 MMI gap 6 — the "cleanest device audited" result re-confirmed
-under both duplicate guards). A `calibrate_body_neff` test for the 1×2 is in
-flight (11589770/11589779); writing the mux's first full-device FDTD reference
+under both duplicate guards). A `calibrate_body_neff` test for the 1×2 was in
+flight then as 11589770/11589779 — it **failed**, and the failure turned out to
+be a library bug rather than a device limit; fixed 2026-08-01, see P2. Writing
+the mux's first full-device FDTD reference
 hit a real library gap — `CompoundGeometry` cannot back `FDTDSolver.solve()`'s
 single-domain path (`notes.md` Geometry item 8) — blocked, not run.
 2026-07-30
@@ -195,13 +236,50 @@ audit).
 | device | 1 engine agreement | 2 mode identity | 3 convergence | 4 FDTD reference |
 |---|---|---|---|---|
 | directional coupler | ✅ **closed** — β-calibrated, L₅₀ 0.11% off reference | ✅ identity, worst 0.0023 | done, engines split | done, with provenance |
-| 1×2 MMI | not run | ✅ **fixed** — `N_MODES` 12→8, identity, worst 0.0003 | measured, worst of the three | ✅ **measured 2026-07-31** — hybrid 9.11% under full-device FDTD, uniform sign, uncalibrated (11585850); calibration test in flight (11589770/11589779) |
-| 2×2 MMI | not run | ✅ identity, worst 0.0007 — **re-confirmed 2026-07-31 at `N_MODES` 14 with both guards live, neither fired** (11588569, gap 6) | measured, not converged | ✅ **measured 2026-07-31** — hybrid 0.82% under full-device FDTD, sign FLIPS across band (11585849) |
+| 1×2 MMI | 🟢 **in flight 2026-08-01** — first run ever (11608875 `[0-3]` + 11608876), dispersive | ✅ **fixed** — `N_MODES` 12→8, identity, worst 0.0003 | measured, worst of the three | ✅ **measured 2026-07-31** — hybrid 9.11% under full-device FDTD, uniform sign, uncalibrated (11585850), **frozen-material era**; dispersive re-measure in flight (11609215 `[1-2]` + 11609216). Calibration attempt FAILED (11589770); root cause **fixed 2026-08-01** — a 2π turn-count bug in `beta_from_phases`, **not** the π sign flip this cell previously asserted (that reading is withdrawn — see `mmi_1x2_validation.md` gap 5 for the degeneracy that made it look confirmed). Calibrated rerun ✅ **succeeded 2026-08-01** (11608690) — **7.30%**, only ~20% better than uncalibrated, so the residual here is structural rather than calibratable |
+| 2×2 MMI | ✅ **closed 2026-08-01** — Δβ_FDTD/Δβ_EME = **0.9953** (0.47%, monotone across band), T diagonal to 1.2e-05, fit residual 4e-06 rad; **21× tighter than the coupler's ~10%, so `calibrate_body_neff` is NOT indicated here** (11596845 `[0-3]` + 11596851, gap 4). Measured at res 40, which gap 2 says is not converged in absolute n_eff — both engines read at the same mesh, so the ratio partially cancels it | ✅ identity, worst 0.0007 — **re-confirmed 2026-07-31 at `N_MODES` 14 with both guards live, neither fired** (11588569, gap 6) | ✅ **closed 2026-07-31** — absolute n_eff still moves at res 100, but Δβ_01 (the quantity the self-imaging length actually depends on) converges to 0.05% by res 120 (11590785, gap 2) | ✅ **measured 2026-07-31** — hybrid 0.82% under full-device FDTD, sign FLIPS across band (11585849), **frozen-material era**. The flip is P4's open question and its decisive test is in flight (11609211 `[1-2]` + 11609212) |
 | modal multiplexer | not run | run, failed, root cause fixed — **one pair-member disagreement open**; guard confirmed firing on the *production* path 2026-07-31 (11585847) | **measured** — EME converged res 60, FDTD not at 60, and as of 2026-07-31 shipped res 40 **cannot supply** the requested 16-mode basis — at most 14 distinct guided modes are reachable there, and today's fixed k-seed finds only 13 (gap 2) | ⚠️ **BLOCKED 2026-07-31** — script written, cannot run: `CompoundGeometry` can't back `FDTDSolver.solve()` (`notes.md` Geometry item 8) |
 | ring resonator | not applicable | not applicable | shared knob | **no FDTD script** |
 
-Three entries need their qualifier read, not just their tick:
+## Parity backlog — what the MMIs still lack versus the coupler
 
+Opened 2026-08-01, from an audit asking what remains to bring both MMIs to
+the coupler's level. **Every item here was untracked before that audit** —
+the four-check table above can go all-ticks while these stay open, which is
+exactly why they are listed separately. Ticking all four checks is necessary,
+not sufficient.
+
+Read the bar honestly: the coupler itself is not pristine. Its own items 8
+(step 2), 13 and 15 are open, its cold regeneration pass is unfinished, and
+**all four of its goldens are stale.** "Coupler level" means the four checks
+are closed *and the gaps are written down*, not that nothing is left.
+
+| # | device | item | state |
+|---|---|---|---|
+| **P1** | 1×2 | **Check 1 never run.** The script existed (`verify_mmi_1x2_engine_agreement.py`) but had never been submitted. | 🟢 **in flight 2026-08-01** — reshaped to the 2×2's array+merge pattern. First pass (11608448 `[0-3]`) completed in ~2 h but landed **frozen-material era**; its merge 11608450 was cancelled deliberately rather than let it raise `CacheMissError` under the new fingerprint. Re-submitted cache-cold as **11608875 `[0-3]` + 11608876** |
+| **P2** | 1×2 | **`calibrate_body_neff` blocked.** The coupler ships `CALIBRATE_BODY = True`; the 1×2 defaults it *off* (`MMI1X2_CALIBRATE_BODY`) and the one attempt to enable it failed (11589770). | ✅ **CLOSED 2026-08-01.** Root cause was a 2π turn-count bug in `beta_from_phases`, *not* the π sign flip previously recorded. Fixed, and **job 11608690 ran `calibrate_body_neff=True` to completion on the real device** (1:28:14, no guard fire) — the first time it has ever succeeded here. **But calibration does not close this device's gap:** 9.11% → **7.30%**, ~20% relative, against the coupler's 5% → 0.11%. So the 1×2's residual is mostly **structural**, not the Δβ discretization error calibration corrects. Gap 5's standing "obvious next step" is now tried and answered. See `mmi_1x2_validation.md` gap 5 |
+| **P3** | both | **Resolution knob still shared.** Both MMIs ship one `RESOLUTION = 40` for EME *and* FDTD. The coupler splits it — `FDTD_RESOLUTION = 40` / `EME_RESOLUTION = 80` — with the comment *"shared RESOLUTION was how a 7% error hid for months"*. Measured need: **res 120** (1×2), **res 100** (2×2). | ⚠️ **open decision, not a bug.** Both docs record the gap as a known caveat and keep 40 on cost grounds. Defensible, but it means neither MMI meets check 3 *as the coupler defines it*. Worth re-deciding explicitly |
+| **P4** | 2×2 | **Checks 1 and 4 do not reconcile.** Check 1: 0.47% Δβ error, **monotone** across the band. Check 4: 0.82% ΔT, **sign-flipping** across the same band. A monotone bias cannot produce a sign-flipping error, so check 1 does not account for check 4. On the coupler the two *did* reconcile (item 7's ratio 0.9457 against 0.9536 predicted from item 6, agreeing to 0.82%) — and that mutual confirmation is much of why the coupler is trusted. | 🟢 **candidate mechanism, decisive test in flight 2026-08-01 (11609211 `[1-2]` + 11609212).** Gap 5's ΔT zero crossing sits at **band centre** (1.5440–1.5475 against centre 1.5475). A medium frozen at band centre has error exactly zero there and antisymmetric about it — so the sign flip may be the frozen material model, not the device. Check 1 stays monotone because Δβ is a mode *difference* where the frozen error largely cancels; check 4 depends on *absolute* accumulated phase where it does not. **Falsification-tested against the 1×2**, which should not show it: confirmed, no crossing and ~10× the magnitude. Prediction recorded before the result — see `mmi_2x2_validation.md` gap 5. If the flip survives dispersion, refuted and P4 stands |
+| **P5** | 2×2 | **No goldens at all** — and there was no *runner* to generate one from, so this was never merely "not run". | 🟡 **half done 2026-08-01.** `run_mmi_2x2_{eme,fdtd,hybrid}` written and registered in `TARGETS` (7 golden targets now, up from 4), each mirroring its example's own port convention — top input excited (`input_idx=1`), bar = `output_idx=1`, cross = `output_idx=0`. Writing them needed no compute and did **not** wait on P7, so the outstanding regeneration pass now covers all three devices in one round instead of needing a second for this one. **Generating** the files still waits on P7 |
+| **P6** | both | ~~**Goldens carry no provenance.**~~ ✅ **DONE 2026-08-01.** `scripts/generate_golden_values.py` now writes a `provenance` block: `beef_git`, `generated_utc`, `dispersive_default`, and the Sellmeier `si`/`sio2` indices at the run's own band edges and centre. Records the *material model* rather than a version tag, so any change underneath moves it with nothing to remember to bump — same reasoning as `resolved_material_config()`. Descriptive only: `test_golden_examples.py` still compares `transmission` alone, and a test pins that it stays that way (the git sha changes every commit). 5 new tests in `tests/test_golden_provenance.py`, meep-free. **Needed no compute and did not wait on P7** — the next regeneration will simply carry it. Existing four files stay bare until then |
+| **P7** | both | **The coupler's cold regeneration pass is unfinished** — 11592462_0 TIMEOUT, still undiagnosed. Both MMIs' Order step 0 says wait for it before touching goldens, so this one job gates goldens on **both** devices. | ⏸ deferred, but it is the cheapest item on this list and the top of the critical path |
+
+Ordering, if picked up cold: **P7 → P2 → P1 → P3 → P5/P6.** P4 now has a
+first step and it is already taken — read 11609212 before doing anything else
+on it.
+
+Four entries need their qualifier read, not just their tick:
+
+- **2×2 MMI, checks 1 and 4 together** — both are ticked, and read together
+  they leave a real question open. Check 1 (2026-08-01) says the body's phase
+  accumulation agrees between engines to 0.47%, biased **monotonically** across
+  the band. Check 4 says the hybrid sits 0.82% under full-device FDTD with a
+  ΔT that **flips sign** across that same band. A monotone Δβ bias cannot
+  produce a sign-flipping ΔT, so check 1 does **not** account for check 4's
+  residual — the cause is somewhere the two checks between them do not cover
+  (taper transitions, or the cascade). Neither has been isolated. This is the
+  one device where all four checks pass and the passes still do not add up;
+  see `mmi_2x2_validation.md` gap 4's boxed result.
 - **1×2 MMI, check 2** — the `❌ FAILS — bands 8/9` this table carried until
   2026-07-30 is closed: dropping `N_MODES` 12→8 removed the near-cutoff bands
   that were the whole problem region (`mmi_1x2_validation.md` gap 3). Finding 1
@@ -345,6 +423,12 @@ agree to 4e-16. Two consequences that reach every device here:
   **2026-07-31 — the re-parameterised fix landed, passed its strip-test gate on
   every stack/band combination, and (job 11588997) its resolution sensitivity
   on the coupler's own body cross-section matches what production already
-  ships at.** It is opt-in (`dispersive=True`, default off) for every solver —
-  turning it on by default anywhere is a separate, unstarted decision. Full
-  record in `material_model_validation.md`.
+  ships at.** ~~It is opt-in (`dispersive=True`, default off) for every solver —
+  turning it on by default anywhere is a separate, unstarted decision.~~
+  **Deployed 2026-08-01: `dispersive` defaults to True everywhere**, closing the
+  frozen-FDTD-vs-exact-EME asymmetry (worst n_Si gap over the O-band 0.007862 →
+  0.001349, i.e. from over `HybridSolver`'s 2e-3 guard to under it). The
+  remaining 0.001349 is fit error, not disagreement — the FDTD runs the
+  single-Lorentzian re-parameterisation while the EME stays exact Sellmeier,
+  which is why that guard needed a tolerance rather than equality. Full record
+  in `material_model_validation.md`.

@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -46,35 +46,112 @@ _DUP_BAND_MAX_EXTRA = 8
 
 # --- section_mode_beta() safety thresholds ---------------------------------
 #
-# Two INDEPENDENT failure modes, because neither guard catches the other:
+# REWRITTEN 2026-08-01. This block used to describe "failure mode 1" as the
+# residual guard's job: a seed near a branch boundary made the per-length wrap
+# counts inconsistent, so the points stopped lying on a line and the residual
+# blew up. That was an accurate description of a REAL BUG IN THIS MODULE, not
+# of a hazard callers had to live with. `beta_from_phases` rounded the wrap
+# count independently at every length against one seed slope, with no
+# cross-length consistency constraint, so a seed error ε produced a
+# fractional-turn offset ε·L/(2π) that GREW with L until some length straddled
+# a .5 boundary and got a turn count inconsistent with its neighbours.
 #
-#   1. Seed lands near a branch boundary -> the per-length wrap counts come out
-#      inconsistent, the points stop lying on a line, and the RESIDUAL blows up
-#      (2.5 rad in testing). Caught by _BETA_FIT_RESIDUAL_MAX.
-#   2. Seed is a WHOLE branch off -> every length agrees on that wrong branch,
+# It bit for real: job 11589770 (mmi_1x2, calibrate_body_neff=True) died on a
+# 2.101 rad residual, and the failure was recorded for a day as "a π sign flip
+# in T_ii" -- a reading that fits the same residual pattern exactly, because
+# for three equally spaced points "middle point displaced by −π" and "points 2
+# and 3 each displaced by −2π" are algebraically indistinguishable (both give
+# δ·(+1/3, −2/3, +1/3)). The turn-count reading is the true one: it returns
+# n_eff 2.783, +1.96% over MPB and in family with the +2.233%/+2.361% measured
+# on the coupler, where the sign-flip reading returned 2.101, −23% off, wrong
+# in sign as well as size. Every one of that job's 88 (wavelength, mode) cells
+# is a clean linear ramp once whole turns are assigned consistently: the second
+# difference (φ₃ − 2φ₂ + φ₁)/2π is within 0.0031 of an exact integer in all 88.
+#
+# The sting: ε there was 1.96% -- the very MPB-vs-time-stepper gap that
+# `calibrate_body_neff` exists to measure. **The unwrapping was broken by
+# exactly the quantity it was built to measure.** Measured failure rate over
+# seed ±3%: 550/4025 (13.7%) on that device's cached data, and 104/2475 (4.2%)
+# on the coupler's -- so the coupler's success was luck, not margin. At
+# LENGTHS=[2,4,6,8] the old code's tolerable seed error was 0.000 for an
+# adverse intercept.
+#
+# `beta_fit_from_phases` now decides ONE integer against the seed -- the branch
+# -- and derives every later turn from a slope refit on the shorter lengths, so
+# the ε·L drift cannot accumulate. That NARROWS the seed's authority from n
+# decisions to 1, and 1 is exactly what guard 2 below already licenses.
+#
+# What remains are two INDEPENDENT failure modes, neither catching the other:
+#
+#   1. Seed is a WHOLE branch off -> every length agrees on that wrong branch,
 #      so the fit is perfectly clean (residual 1e-14) at a β 33% wrong, and the
 #      margin-to-seed is 0.000. Nothing in the fitted numbers can detect this.
 #      The only defence is a precondition on the LENGTHS: keep the branch
 #      spacing 2π/ΔL large compared with any physically possible FDTD-vs-MPB
 #      disagreement, so a whole-branch error cannot happen in the first place.
+#      Guard: _BETA_MIN_BRANCH_FRACTION.
+#   2. Seed lands within a hair of a branch BOUNDARY -> the one seed-dependent
+#      decision is a coin flip, and no arithmetic can rescue it because the
+#      seed genuinely carries no information there. The residual is now CLEAN
+#      in this case (the fit is self-consistent on whichever branch it lands),
+#      so the residual cannot be the tell any more. Guard:
+#      _BETA_BRANCH_MARGIN_RAISE.
 #
-# Minimum branch spacing as a fraction of β, for guard 2. The measured
+# Minimum branch spacing as a fraction of β, for guard 1. The measured
 # disagreement is ~2%; requiring the branches to be >=25% of β apart leaves an
 # order of magnitude. At the coupler's β = 9.6 rad/µm this caps the length
 # spacing at 2.6 µm, which the item 6 measurement's 2.0 µm satisfies.
 _BETA_MIN_BRANCH_FRACTION = 0.25
 
-# Max phase-fit residual (rad) for guard 1. Clean fits give 1e-14 synthetically
-# and 1.4e-5 on the real res-40 data; a boundary-straddling seed gives 2.5. Also
-# catches a section that is not actually uniform, where the phase is genuinely
-# not linear in L.
+# Max phase-fit residual (rad). Post-2026-08-01 this means exactly ONE thing:
+# the phase is not linear in L -- a non-uniform cut, a near field that has not
+# settled, mode mixing, or band contamination. Turn-count ambiguity no longer
+# contributes, so this no longer double-duties as a seed-quality check.
+#
+# Clean values measured: 1e-14 synthetic, 1.4e-5 on the 2-mode item-6 data,
+# 6.45e-3 worst of 88 cells on mmi_1x2's res-40 data, and 2.2e-2 worst of 66
+# cells on the REAL 6-mode coupler production cache. That last one is only
+# 4.5x under the threshold -- thinner than the "1.4e-5" this comment used to
+# quote, which was the 2-mode configuration only. Kept at 0.1 deliberately:
+# tightening it toward the observed worst clean value would start failing real
+# runs.
 _BETA_FIT_RESIDUAL_MAX = 0.1
 
-# Reported diagnostic only (see beta_from_phases): how far the answer moved from
-# the seed, as a fraction of the half-distance to the next branch. The coupler
-# sits at 0.13. Logged rather than enforced, because guard 2 above is what makes
-# the branch choice sound.
+# How far the answer moved from the seed, as a fraction of the half-distance to
+# the neighbouring branch (see beta_fit_from_phases). Two levels:
+#
+#   MAX (warn)   the coupler sits at 0.13, mmi_1x2 at 0.078. Above this,
+#                say so in the log -- worth a human look, not wrong per se.
+#   RAISE (hard) the seed sat within 10% of a branch boundary, so the single
+#                seed-dependent decision was near-arbitrary. This makes
+#                section_mode_beta's own docstring (">= 1.0 means the seed
+#                could not distinguish the branches") enforced for the first
+#                time -- it claimed a ValueError it never raised. 0.9 rather
+#                than 1.0 to catch the case just before it degenerates, and
+#                rather than 0.5 because promoting a heuristic look-at-this
+#                level to a hard failure would break live callers for no
+#                physics reason. Note that for equally spaced lengths the new
+#                algorithm guarantees margin <= 1 by construction, so this
+#                fires only for a genuinely near-boundary seed or for unequal
+#                spacing whose extrapolation is bad -- both real caller errors.
 _BETA_BRANCH_MARGIN_MAX = 0.5
+_BETA_BRANCH_MARGIN_RAISE = 0.9
+
+# Warn if FDTD's β exceeds the MPB seed by more than this fraction. The whole
+# point of the calibration is that this excess is nonzero and physical:
+# +2.233%/+2.361% on the coupler, +1.96% on mmi_1x2. An excess past 10% is out
+# of family and means something other than discretization is going on. Warn
+# only -- there is no principled hard limit, and this quantity is the
+# measurement, not an error.
+_BETA_SEED_EXCESS_WARN = 0.10
+
+# Cap on beta_fit_from_phases' fixed-point polish iterations. The sequential
+# pass is already self-consistent in every case measured (~7000 trials
+# converged in 0 extra iterations); the loop exists only so a noisy two-point
+# bootstrap cannot leave a stale turn vector behind. Exhausting it RAISES
+# rather than returning the last iterate -- silently returning an unconverged
+# turn vector is precisely the class of bug this rewrite removes.
+_BETA_TURN_POLISH_MAX = 8
 
 
 def monitor_freq_grid(wavelengths: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -157,7 +234,31 @@ def dbeta_from_phases(lengths, dphi) -> Tuple[float, float, float]:
     return float(slope), float(intercept), resid
 
 
-def beta_from_phases(lengths, phases, seed_beta) -> Tuple[float, float, float]:
+class BetaFit(NamedTuple):
+    """Everything `beta_fit_from_phases` learned, not just the answer.
+
+    `beta`/`resid`/`margin` are the historical 3-tuple, in order, so
+    ``beta_from_phases`` can stay a thin facade over this.
+    """
+
+    beta: float             # fitted phase rate, rad/µm
+    resid: float            # max |deviation| from the fitted line, rad
+    margin: float           # |beta - seed| / half-distance to next branch
+    seed_excess: float      # beta/seed_beta - 1. THE PHYSICS: what calibration measures.
+    turns: np.ndarray       # chosen wrap counts, gauge-normalised to turns[0] == 0
+    seed_turns: np.ndarray  # what per-length rounding would have given, same gauge
+    turns_shifted: bool     # turns != seed_turns, i.e. the old code would have differed
+    branch_ambiguity: float # |x - round(x)| of the ONE seed-dependent decision, [0, 0.5]
+    turn_ambiguity: float   # worst of the DATA-determined decisions, [0, 0.5]
+
+
+def _fit_line(lengths, values) -> Tuple[float, float]:
+    A = np.vstack([lengths, np.ones_like(lengths)]).T
+    (slope, intercept), *_ = np.linalg.lstsq(A, values, rcond=None)
+    return float(slope), float(intercept)
+
+
+def beta_fit_from_phases(lengths, phases, seed_beta) -> BetaFit:
     """Absolute phase rate (rad/µm) for ONE mode, from ``arg(T_ii)`` vs length.
 
     Unlike `dbeta_from_phases()` this is a *large* rate — β ≈ 9.4 rad/µm for a
@@ -167,44 +268,124 @@ def beta_from_phases(lengths, phases, seed_beta) -> Tuple[float, float, float]:
     wrong is not subtle but it is silent — a naive fit here returned Δβ = −0.331
     against a true 0.08525 during the item 6 analysis.
 
-    So the branch is chosen against `seed_beta`, normally MPB's answer from
-    `FDTDSolver.section_mode_neff()`. That is safe rather than circular: with
+    **The seed decides exactly one integer, and it is the branch.** Everything
+    else is read off the data. Concretely: the first gap's wrap increment is
+    rounded against `seed_beta`; every later length's increment is rounded
+    against a slope *refit from all shorter lengths*. That refit is the whole
+    point — see the block comment above `_BETA_MIN_BRANCH_FRACTION`. Until
+    2026-08-01 this function rounded every length independently against the one
+    seed slope, so a seed error ε drifted by ε·L/(2π) and eventually straddled a
+    .5 boundary. A 1.96% seed error — the FDTD-vs-MPB gap that
+    `calibrate_body_neff` exists to *measure* — was enough to do it, which is
+    how job 11589770 died on a 2.101 rad residual.
+
+    Choosing the branch against the seed is safe rather than circular: with
     equally spaced lengths the candidate slopes are ``2π/ΔL`` apart — 3.14 rad/µm
-    at ΔL = 2 µm, a 33% step — while the FDTD/MPB disagreement being measured is
-    of order 2%. The seed picks which turn; it does not set the answer within
-    that turn, and `margin` below reports how much room was left.
+    at ΔL = 2 µm, a 33% step — while the disagreement being measured is of order
+    2%. `_BETA_MIN_BRANCH_FRACTION` is the precondition that keeps that true.
 
     Args:
-        lengths: section lengths (µm). Need not be equally spaced, but the
-            wrap-safety margin is governed by the largest gap.
+        lengths: section lengths (µm). Need not be equally spaced or sorted;
+            sorted internally, but `turns`/`seed_turns` come back in the order
+            given. The wrap-safety margin is governed by the largest gap.
         phases: ``arg(T_ii)`` at each length, each wrapped into (−π, π].
-        seed_beta: prior for branch selection (rad/µm).
+        seed_beta: prior for branch selection (rad/µm), normally MPB's answer
+            from `FDTDSolver.section_mode_neff()`.
 
     Returns:
-        ``(beta, resid, margin)``. `resid` is the max absolute deviation from
-        the fitted line, in radians — small only if the branch is right AND the
-        section is uniform. `margin` is ``|beta - seed_beta|`` as a fraction of
-        the half-distance to the neighbouring branch: ≪1 is safe, ≥1 means the
-        seed could not distinguish the branches and the result is not
-        trustworthy.
-    """
-    lengths = np.asarray(lengths, dtype=float)
-    phases = np.asarray(phases, dtype=float)
-    seed_beta = float(seed_beta)
+        `BetaFit`. Read `resid` as "is this a straight line" and
+        `branch_ambiguity`/`margin` as "was the seed good enough to pick the
+        branch" — post-2026-08-01 those are separate questions, and the residual
+        answers only the first.
 
-    turns = np.round((seed_beta * lengths - phases) / (2.0 * np.pi))
-    unwrapped = phases + 2.0 * np.pi * turns
-    A = np.vstack([lengths, np.ones_like(lengths)]).T
-    (slope, intercept), *_ = np.linalg.lstsq(A, unwrapped, rcond=None)
-    resid = float(np.max(np.abs(unwrapped - (slope * lengths + intercept))))
+    Raises:
+        ValueError: if fewer than two lengths are given, or if the turn vector
+            fails to reach a fixed point within `_BETA_TURN_POLISH_MAX`.
+    """
+    lengths_in = np.asarray(lengths, dtype=float)
+    phases_in = np.asarray(phases, dtype=float)
+    seed_beta = float(seed_beta)
+    n = lengths_in.size
+    if n < 2:
+        raise ValueError(
+            f"beta_from_phases: need at least 2 lengths to fit a rate, got {n}"
+        )
+
+    order = np.argsort(lengths_in)          # work ascending; report as given
+    L = lengths_in[order]
+    phi = phases_in[order]
+    two_pi = 2.0 * np.pi
+
+    # What the pre-2026-08-01 code would have done, kept for the record. Gauge
+    # both this and the chosen vector to [0] == 0: only DIFFERENCES of turns are
+    # physical (a constant is absorbed by the fitted intercept), so comparing
+    # them un-normalised would report spurious shifts.
+    seed_turns = np.round((seed_beta * L - phi) / two_pi)
+    seed_turns = seed_turns - seed_turns[0]
+
+    turns = np.zeros(n)
+    # THE one seed-dependent integer: the first gap's increment, i.e. the branch.
+    x = (seed_beta * (L[1] - L[0]) - (phi[1] - phi[0])) / two_pi
+    turns[1] = np.round(x)
+    branch_ambiguity = float(abs(x - turns[1]))
+
+    # Every later turn is decided against a slope REFIT from the shorter
+    # lengths, so the seed's error never gets multiplied by a longer L.
+    turn_ambiguity = 0.0
+    for j in range(2, n):
+        slope, intercept = _fit_line(L[:j], phi[:j] + two_pi * turns[:j])
+        y = (slope * L[j] + intercept - phi[j]) / two_pi
+        turns[j] = np.round(y)
+        turn_ambiguity = max(turn_ambiguity, float(abs(y - turns[j])))
+
+    # Safety net against a noisy two-point bootstrap: re-round every turn
+    # against the full-set slope until nothing moves. Converged immediately in
+    # every case measured; exhausting the cap is a bug, not a soft outcome.
+    for _ in range(_BETA_TURN_POLISH_MAX):
+        slope, intercept = _fit_line(L, phi + two_pi * turns)
+        polished = np.round((slope * L + intercept - phi) / two_pi)
+        polished = polished - polished[0]
+        if np.array_equal(polished, turns):
+            break
+        turns = polished
+    else:
+        raise ValueError(
+            "beta_from_phases: wrap counts did not reach a fixed point in "
+            f"{_BETA_TURN_POLISH_MAX} iterations at lengths {L.tolist()} — "
+            "refusing to return an unconverged turn vector"
+        )
+
+    slope, intercept = _fit_line(L, phi + two_pi * turns)
+    resid = float(np.max(np.abs((phi + two_pi * turns) - (slope * L + intercept))))
 
     # Neighbouring branches differ by 2π/ΔL in slope, so the seed is decisive
     # only within ±π/ΔL of the truth. Use the largest gap: it is the one that
     # wraps first.
-    max_gap = float(np.max(np.diff(np.sort(lengths)))) if lengths.size > 1 else np.inf
+    max_gap = float(np.max(np.diff(L))) if n > 1 else np.inf
     half_branch = np.pi / max_gap if np.isfinite(max_gap) and max_gap > 0 else np.inf
     margin = float(abs(slope - seed_beta) / half_branch) if np.isfinite(half_branch) else 0.0
-    return float(slope), resid, margin
+    seed_excess = float(slope / seed_beta - 1.0) if seed_beta != 0.0 else float("nan")
+
+    # Back to the caller's ordering before anyone compares these to `lengths`.
+    unsort = np.argsort(order)
+    return BetaFit(
+        beta=float(slope), resid=resid, margin=margin, seed_excess=seed_excess,
+        turns=turns[unsort], seed_turns=seed_turns[unsort],
+        turns_shifted=not np.array_equal(turns, seed_turns),
+        branch_ambiguity=branch_ambiguity, turn_ambiguity=turn_ambiguity,
+    )
+
+
+def beta_from_phases(lengths, phases, seed_beta) -> Tuple[float, float, float]:
+    """``(beta, resid, margin)`` — the first three fields of `beta_fit_from_phases`.
+
+    Kept as-is so the dozen existing 3-tuple unpack sites (tests, the mmi_1x2
+    diagnostic script) do not have to change. New callers that want to know
+    *why* a fit came out the way it did should call `beta_fit_from_phases` and
+    read `seed_excess` / `turns_shifted` / `branch_ambiguity`.
+    """
+    fit = beta_fit_from_phases(lengths, phases, seed_beta)
+    return fit.beta, fit.resid, fit.margin
 
 
 def _resolved_spectral_config(wavelengths: np.ndarray, factor: float) -> Dict[str, Any]:
@@ -526,9 +707,16 @@ class FDTDSolver:
             A broadband run gets one Medium for its whole span, so the frozen
             index is wrong at the band edges by up to 0.008 in n_Si on the
             O-band, while the EME side re-solves per wavelength. Turning this
-            on cuts that mismatch ~16×. **Off by default** until the strip-test
-            gate in `validation_markdown/material_model_validation.md` runs.
-            Single-wavelength calls (mode solves) are unaffected either way.
+            on cuts that mismatch ~16×.
+
+            **On by default as of 2026-08-01**, via the stack: `SOI_160` and
+            `SOI_220` now carry `dispersive=True`, so `None` inherits True. The
+            strip-test gate that gated it has passed on all four stack/band
+            combinations. Pass `False` here to freeze this solver alone without
+            mutating the shared stack singletons.
+            Single-wavelength calls (mode solves) are unaffected either way —
+            a scalar wavelength has no band to fit, so the frozen index at that
+            exact wavelength is already the correct medium.
         decay_tol: DFT field decay tolerance for early-stop criterion.
             Lower = more accurate but slower; 1e-9 is faster, 1e-11 is tight.
         source_bandwidth_factor: Gaussian pulse width as a multiple of the
@@ -704,7 +892,9 @@ class FDTDSolver:
                 self, "solve",
                 dict(port=port, input_mode=input_mode, wavelengths=wavelengths, kwargs=kwargs,
                      **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor),
-                     **resolved_material_config(self.material_stack, wavelengths)),
+                     **resolved_material_config(
+                         self.material_stack, wavelengths,
+                         self.material_stack.resolve_dispersive(self.dispersive))),
                 geometry, geometry.polygons(stub_length=stub_length),
             )
             hit = lookup(save_dir, config)
@@ -1337,10 +1527,19 @@ class FDTDSolver:
             Real ndarray ``[len(wavelengths), n_modes]`` of β in rad/µm.
 
         Raises:
-            ValueError: if the branch-selection margin is not comfortably below
-                1 for some mode, i.e. the lengths are spaced too widely for
-                MPB's seed to identify which wrap the FDTD phase is on. Fix by
-                passing closer-spaced `lengths`.
+            ValueError: if the phase-fit residual exceeds
+                `_BETA_FIT_RESIDUAL_MAX` for some cell — the phase is not linear
+                in L, so the cut is probably not uniform; or if the
+                branch-selection margin exceeds `_BETA_BRANCH_MARGIN_RAISE`,
+                i.e. the lengths are spaced too widely for MPB's seed to
+                identify which wrap the FDTD phase is on (fix by passing
+                closer-spaced `lengths`). Both messages name the offending
+                (wavelength, mode) cell.
+
+                Until 2026-08-01 this block promised the margin raise and did
+                not implement it, while the residual raise it did not mention
+                was firing for a reason that was really a bug here — see the
+                comment above `_BETA_MIN_BRANCH_FRACTION`.
         """
         span = float(x1 - x0)
         wavelengths = np.asarray(wavelengths, dtype=float)
@@ -1435,34 +1634,84 @@ class FDTDSolver:
             )
             phases[j] = np.angle(np.diagonal(T, axis1=1, axis2=2))
 
+        # Full grids, not running scalar maxima. The old code kept only
+        # max()-so-far, so when job 11589770 blew the residual guard the message
+        # could say "2.101 rad" but not WHICH (wavelength, mode) cell — and the
+        # answer (4 of 88 cells, all at the short-wavelength end) turned out to be
+        # the most informative fact about the failure. Keeping the grid costs
+        # n_wl*n_modes floats.
         beta = np.zeros((len(wavelengths), n_modes))
-        worst_margin = 0.0
-        worst_resid = 0.0
+        grid_resid = np.zeros((len(wavelengths), n_modes))
+        grid_margin = np.zeros((len(wavelengths), n_modes))
+        grid_excess = np.zeros((len(wavelengths), n_modes))
+        grid_turn_amb = np.zeros((len(wavelengths), n_modes))
+        n_shifted = 0
         for i in range(len(wavelengths)):
             for m in range(n_modes):
-                b, resid, margin = beta_from_phases(
+                fit = beta_fit_from_phases(
                     lengths, phases[:, i, m], seed_beta[i, m])
-                beta[i, m] = b
-                worst_margin = max(worst_margin, margin)
-                worst_resid = max(worst_resid, resid)
+                beta[i, m] = fit.beta
+                grid_resid[i, m] = fit.resid
+                grid_margin[i, m] = fit.margin
+                grid_excess[i, m] = fit.seed_excess
+                grid_turn_amb[i, m] = fit.turn_ambiguity
+                n_shifted += int(fit.turns_shifted)
 
-        # Guard 1: the phases must actually lie on a line. Fails if the seed
-        # straddled a branch boundary (wrap counts inconsistent between
-        # lengths) or if the section is not uniform after all.
+        def _cell(grid):
+            """(worst value, 'λ=… mode=…') for the largest entry of `grid`."""
+            i, m = np.unravel_index(int(np.argmax(np.abs(grid))), grid.shape)
+            return float(grid[i, m]), f"λ={wavelengths[i]:.4f} µm mode {m}"
+
+        worst_resid, at_resid = _cell(grid_resid)
+        worst_margin, at_margin = _cell(grid_margin)
+        worst_excess, at_excess = _cell(grid_excess)
+        worst_turn_amb, at_turn_amb = _cell(grid_turn_amb)
+
+        # Guard: the phases must actually lie on a line. Since 2026-08-01 this
+        # means exactly one thing — the section is not uniform, the near field
+        # has not settled, or the modes are mixing. Inconsistent wrap counts used
+        # to land here too and no longer do (see beta_fit_from_phases), so
+        # turn_ambiguity is reported alongside to separate "an integer turn was
+        # genuinely undecidable" from "the phase is smoothly curved".
         if worst_resid > _BETA_FIT_RESIDUAL_MAX:
             raise ValueError(
                 f"section_mode_beta: phase-fit residual {worst_resid:.3f} rad "
-                f"exceeds {_BETA_FIT_RESIDUAL_MAX} at lengths {lengths}. The "
-                f"measured phase is not linear in length, so either the wrap "
-                f"counts are inconsistent between lengths or [{x0}, {x1}] is "
-                f"not a uniform cross-section."
+                f"exceeds {_BETA_FIT_RESIDUAL_MAX} at {at_resid} (worst of "
+                f"{grid_resid.size} cells; {int((grid_resid > _BETA_FIT_RESIDUAL_MAX).sum())} "
+                f"over threshold) with lengths {lengths}. The measured phase is "
+                f"not linear in length, so [{x0}, {x1}] is most likely not a "
+                f"uniform cross-section. Worst turn ambiguity {worst_turn_amb:.4f} "
+                f"({at_turn_amb}) — near 0 means smooth curvature rather than an "
+                f"undecidable wrap count."
+            )
+        # Guard: the seed has to be able to pick the branch. This is the raise
+        # section_mode_beta's own docstring has always promised and never made.
+        if worst_margin > _BETA_BRANCH_MARGIN_RAISE:
+            raise ValueError(
+                f"section_mode_beta: branch margin {worst_margin:.3f} exceeds "
+                f"{_BETA_BRANCH_MARGIN_RAISE} at {at_margin} with lengths "
+                f"{lengths} — the MPB seed sat too close to a branch boundary to "
+                f"identify which one, so the returned β would be a coin flip. "
+                f"Use more closely spaced lengths (the branches are 2π/ΔL apart, "
+                f"so shorter gaps spread them further)."
+            )
+        if abs(worst_excess) > _BETA_SEED_EXCESS_WARN:
+            logger.warning(
+                "section_mode_beta: FDTD β exceeds the MPB seed by %+.2f%% at %s — "
+                "out of family with the +2%%-ish discretization gap this "
+                "calibration exists to measure; check the seed and the cut.",
+                100.0 * worst_excess, at_excess,
             )
         logger.info(
-            "section_mode_beta: %d lengths %s, worst phase-fit residual %.2e rad, "
-            "worst branch margin %.3f%s",
-            len(lengths), lengths, worst_resid, worst_margin,
+            "section_mode_beta: %d lengths %s | worst residual %.2e rad (%s) | "
+            "worst margin %.3f (%s)%s | worst seed excess %+.2f%% (%s) | "
+            "worst turn ambiguity %.4f | wrap counts moved off the seed's own "
+            "rounding in %d of %d cells",
+            len(lengths), lengths, worst_resid, at_resid, worst_margin, at_margin,
             "" if worst_margin < _BETA_BRANCH_MARGIN_MAX
             else "  <-- moved far from MPB's seed; check this is real",
+            100.0 * worst_excess, at_excess, worst_turn_amb,
+            n_shifted, grid_resid.size,
         )
         return beta
 
@@ -1672,7 +1921,9 @@ class FDTDSolver:
                      measure_port=_port_key(measure_port),
                      geometry_kwargs=geometry_kwargs, reverse=reverse,
                      **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor),
-                     **resolved_material_config(self.material_stack, wavelengths)),
+                     **resolved_material_config(
+                         self.material_stack, wavelengths,
+                         self.material_stack.resolve_dispersive(self.dispersive))),
                 geometry,
             )
 
@@ -1688,7 +1939,9 @@ class FDTDSolver:
                      geometry_kwargs=geometry_kwargs,
                      resolved_layout=(asdict(layout) if layout is not None else None),
                      **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor),
-                     **resolved_material_config(self.material_stack, wavelengths)),
+                     **resolved_material_config(
+                         self.material_stack, wavelengths,
+                         self.material_stack.resolve_dispersive(self.dispersive))),
                 geometry,
             )
             hit = lookup(save_dir, config)

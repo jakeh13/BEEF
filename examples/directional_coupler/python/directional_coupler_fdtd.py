@@ -103,6 +103,24 @@ COUPLING_LENGTH = 15.13   # µm, hard-coded — the 3 dB length; see above.
                           # this to 15.15 with no mention of it; restored
                           # 2026-07-31.
 
+# DC_COUPLING_LENGTH overrides it without editing this file. Added 2026-08-01
+# so a hybrid run can hand its own measured 50:50 length straight to this
+# script: directional_coupler_hybrid.py writes coupling_length_50.txt, and
+# run_dc_fdtd_at_hybrid_l50.batch reads it into this variable.
+#
+# Why that chaining exists rather than a second hardcoded constant: every
+# number in the comment above (15.13, 15.129, 15.150754) was measured on the
+# FROZEN material model. Material dispersion defaulted on 2026-08-01, and L50
+# is exactly the kind of quantity it can move — the split ratio integrates
+# Δβ over the band. Re-using a frozen constant for a dispersive run would
+# assume the answer. Leave the constant alone as the documented frozen-era
+# reference; override it per-run.
+_env_CL = os.environ.get("DC_COUPLING_LENGTH")
+if _env_CL is not None:
+    COUPLING_LENGTH = float(_env_CL)
+    print(f"DC_COUPLING_LENGTH -> COUPLING_LENGTH = {COUPLING_LENGTH:.6f} µm "
+          f"(file default 15.13 µm, frozen-era)")
+
 # ---------------------------------------------------------------------------
 # 1. Geometry — identical to directional_coupler_hybrid.py except that
 #    coupling_length is pinned instead of swept.

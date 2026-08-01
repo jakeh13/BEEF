@@ -122,6 +122,17 @@ PLOT_COUPLING_LENGTH = 15.15   # µm — measured 50:50 split point (job 1154465
 # hardcoded rather than left on auto so this script and directional_coupler_fdtd.py's
 # COUPLING_LENGTH stay pinned to the identical number instead of two independent
 # auto-picks that could drift apart.
+#
+# DC_PLOT_COUPLING_LENGTH overrides it without editing this file: a number pins
+# that length, the literal "auto" re-derives it from this run's own sweep.
+# Added 2026-08-01 for the dispersive re-measure — the pinned 15.15 was measured
+# on the *frozen* material model (job 11544656), so re-using it would have
+# assumed the very thing the re-run exists to check. Same override idiom as
+# MMI1X2_CALIBRATE_BODY / DC_CALIBRATE_BODY.
+_env_L = os.environ.get("DC_PLOT_COUPLING_LENGTH")
+if _env_L is not None:
+    PLOT_COUPLING_LENGTH = None if _env_L.strip().lower() == "auto" else float(_env_L)
+    print(f"DC_PLOT_COUPLING_LENGTH={_env_L!r} -> PLOT_COUPLING_LENGTH={PLOT_COUPLING_LENGTH}")
 
 # µm of the straight coupling region folded into each FDTD section, past the
 # S-bend/coupling-region discontinuity — same convention (and same value) as
@@ -407,21 +418,46 @@ T_total_grid = T_through_grid + T_cross_grid
 #     length); left as None, auto-pick the shortest length whose mean-over-
 #     wavelength cross/through ratio crosses 0.5 (the "3 dB coupler length").
 # ---------------------------------------------------------------------------
+ratio_mean = T_cross_grid.mean(axis=1) / np.clip(T_total_grid.mean(axis=1), 1e-20, None)
+sign_changes = np.flatnonzero(np.diff(np.sign(ratio_mean - 0.5)))
+if sign_changes.size:
+    _i = sign_changes[0]
+    L50_idx = _i if abs(ratio_mean[_i] - 0.5) <= abs(ratio_mean[_i + 1] - 0.5) else _i + 1
+else:
+    L50_idx = int(np.argmin(np.abs(ratio_mean - 0.5)))
+L50 = float(coupling_lengths[L50_idx])
+
+# Sub-grid refinement: the sweep grid is ~0.3 µm coarse, so the snapped L50
+# above is grid-limited rather than measurement-limited. Linearly interpolate
+# the 0.5 crossing between the bracketing samples when there is one. This is
+# the number worth handing to a full-device FDTD run, which is not on any grid.
+if sign_changes.size:
+    _a, _b = sign_changes[0], sign_changes[0] + 1
+    _r0, _r1 = ratio_mean[_a], ratio_mean[_b]
+    if _r1 != _r0:
+        L50 = float(coupling_lengths[_a]
+                    + (0.5 - _r0) * (coupling_lengths[_b] - coupling_lengths[_a]) / (_r1 - _r0))
+
 if PLOT_COUPLING_LENGTH is not None:
     L_plot_idx = int(np.argmin(np.abs(coupling_lengths - PLOT_COUPLING_LENGTH)))
     print(f"Plot length: user-set {PLOT_COUPLING_LENGTH:.2f} µm -> "
           f"nearest sampled length {coupling_lengths[L_plot_idx]:.2f} µm")
 else:
-    ratio_mean = T_cross_grid.mean(axis=1) / np.clip(T_total_grid.mean(axis=1), 1e-20, None)
-    sign_changes = np.flatnonzero(np.diff(np.sign(ratio_mean - 0.5)))
-    if sign_changes.size:
-        i = sign_changes[0]
-        L_plot_idx = i if abs(ratio_mean[i] - 0.5) <= abs(ratio_mean[i + 1] - 0.5) else i + 1
-    else:
-        L_plot_idx = int(np.argmin(np.abs(ratio_mean - 0.5)))
+    L_plot_idx = L50_idx
     print(f"Plot length: auto-picked {coupling_lengths[L_plot_idx]:.2f} µm "
           f"(50:50 split, ratio = {ratio_mean[L_plot_idx]:.3f})")
 L_plot = coupling_lengths[L_plot_idx]
+
+# Always emit the measured 50:50 length, pinned or not — it is this script's
+# headline physical result and was previously only reachable by parsing stdout
+# or redoing this argmin by hand downstream. directional_coupler_fdtd.py reads
+# it via DC_COUPLING_LENGTH so the two examples cannot drift apart.
+print(f"Measured 50:50 length: {L50:.6f} µm "
+      f"(grid-snapped {coupling_lengths[L50_idx]:.6f} µm, "
+      f"ratio {ratio_mean[L50_idx]:.4f}; "
+      f"{'interpolated between samples' if sign_changes.size else 'NO 0.5 CROSSING in sweep — nearest point only'})")
+with open(os.path.join(output_dir, "coupling_length_50.txt"), "w") as _fh:
+    _fh.write(f"{L50:.6f}\n")
 
 # Slice at the chosen coupling_length for the wavelength-domain view — keep
 # the complex coefficients (not just power) for this slice so the saved
@@ -456,6 +492,7 @@ np.savez(
     os.path.join(output_dir, "length_sweep.npz"),
     coupling_lengths=coupling_lengths, wavelengths=wavelengths,
     T_through=T_through_grid, T_cross=T_cross_grid,
+    L50=L50, L50_idx=L50_idx, ratio_mean=ratio_mean, L_plot=L_plot,
 )
 print(f"Length-sweep grid saved → {output_dir}/length_sweep.npz")
 

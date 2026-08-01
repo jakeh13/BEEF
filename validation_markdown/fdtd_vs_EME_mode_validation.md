@@ -5,6 +5,24 @@ about the *mechanism* by which BEEF establishes that an FDTD interface basis
 and an EME body basis name the same modes, not about any one device's status
 (those live in the per-device files).
 
+> **Note 2026-08-01 — the material-dispersion default flip does NOT invalidate
+> this document's numbers, and that is measured.** `dispersive` defaulted to
+> True on 2026-08-01 (`resolved/material_model_validation.md`), changing the
+> cache fingerprint and staling every cached entry and golden. The reflex is to
+> mark every recorded number here frozen-era; that reflex is **wrong here**.
+> Job **11608940** re-ran the 1×2's interface-mode audit under dispersion and
+> returned **byte-identical** overlaps and n_eff. Reason: everything in this
+> file is a *per-wavelength* mode solve. `section_mode_neff()` builds its
+> medium at a scalar wavelength deliberately, and meow's `Environment(wl=…)`
+> evaluates exact Sellmeier either way — a dispersive medium only differs from
+> a frozen one *across a band*. Only genuinely broadband quantities (per-device
+> gap 4 and gap 5) move. Re-audits are cheap and worth running per device
+> (`AUDIT_ARGS` on `run_audit_interface_modes.batch` exists for exactly that),
+> but expect them to confirm, not overturn. **Caveat:** do not launch the
+> all-device default — the modal multiplexer requests 16 modes where ~14 are
+> reachable at res 40 and will now RAISE on the guided-spectrum stop (item 14).
+> Name the device.
+
 ## The requirement
 
 BEEF must work for **any device geometry that supports a mode**, at **any
@@ -1099,7 +1117,7 @@ the three properties they need has been checked.
       item 12 rather than an assumption, and that the res-40 firings are the
       regime that needs the fix.
 
-- [ ] **14. NEW 2026-07-31 — `_iter_distinct_bands()` can hang a production run
+- [x] **14. NEW 2026-07-31, FIXED 2026-07-31 — `_iter_distinct_bands()` can hang a production run
       indefinitely, with no exception and no timeout.** Found by job 11586046
       hanging (item 12): when `sim.get_eigenmode()` is asked for a `band_num`
       that has no solution at the target frequency, MPB's k-search does not

@@ -40,8 +40,9 @@ import numpy as np
 import pytest
 
 from beef.solvers.fdtd import (
-    _BETA_BRANCH_MARGIN_MAX, _BETA_FIT_RESIDUAL_MAX, _BETA_MIN_BRANCH_FRACTION,
-    beta_from_phases, dbeta_from_phases,
+    _BETA_BRANCH_MARGIN_MAX, _BETA_BRANCH_MARGIN_RAISE, _BETA_FIT_RESIDUAL_MAX,
+    _BETA_MIN_BRANCH_FRACTION, beta_fit_from_phases, beta_from_phases,
+    dbeta_from_phases,
 )
 
 # res 40, coupler at 1.55 µm, from example_output/verification/.
@@ -102,18 +103,43 @@ class TestBetaFromPhases:
         measured = abs(BETA_FDTD[0] - BETA_MPB[0])
         assert measured < 0.1 * branch_spacing
 
-    def test_a_boundary_seed_shows_up_as_a_broken_fit(self):
-        """FAILURE MODE 1. A seed half a branch away makes the per-length wrap
-        counts disagree, so the points stop lying on a line. The residual is
-        what catches this — the margin does not (it reads only 0.4)."""
+    def test_a_boundary_seed_is_undecidable_and_the_margin_is_what_says_so(self):
+        """REWRITTEN 2026-08-01. This test used to be
+        `test_a_boundary_seed_shows_up_as_a_broken_fit` and asserted
+        `resid > _BETA_FIT_RESIDUAL_MAX`.
+
+        That tell is gone, deliberately. It was never a property of the physics
+        — it was this module rounding wrap counts independently per length, so a
+        seed half a branch off made them mutually inconsistent and the points
+        stopped lying on a line. The fit now chooses a self-consistent turn
+        vector, so the residual is clean on whichever branch it lands.
+
+        At EXACTLY half a branch there is no right branch: the seed carries
+        literally no information, and `|beta - seed|` ties too, so no
+        tie-breaking rule can help. What catches it is `branch_ambiguity` (and
+        its scaled twin `margin`), which is the honest report that the one
+        seed-dependent decision was a coin flip."""
         beta = BETA_FDTD[0]
         bad_seed = beta + np.pi / float(np.min(np.diff(LENGTHS)))   # half a branch
-        _, resid, margin = beta_from_phases(
-            LENGTHS, _wrapped(beta, LENGTHS), seed_beta=bad_seed)
-        assert resid > _BETA_FIT_RESIDUAL_MAX, "residual must catch it"
-        assert margin < _BETA_BRANCH_MARGIN_MAX, (
-            "documents that the margin alone would NOT have caught this"
-        )
+        f = beta_fit_from_phases(LENGTHS, _wrapped(beta, LENGTHS), seed_beta=bad_seed)
+        assert f.resid < 1e-9, "the residual can no longer be the guard for this"
+        assert f.branch_ambiguity == pytest.approx(0.5), "a genuine coin flip"
+        assert f.margin == pytest.approx(1.0)
+        assert f.margin > _BETA_BRANCH_MARGIN_RAISE, "and THIS is what raises now"
+        assert f.turn_ambiguity < 1e-9, "the data-determined turns were never in doubt"
+        assert f.turns_shifted, "the fix did move off the seed's own per-length rounding"
+
+    def test_a_near_boundary_seed_is_now_recovered(self):
+        """The point of the 2026-08-01 change. At 0.35 of a branch — 17x the
+        ~2% real FDTD-vs-MPB gap, and far past where the old code broke (it
+        tolerated 0.000 relative seed error at these lengths for an adverse
+        intercept) — the right answer comes back exactly."""
+        beta = BETA_FDTD[0]
+        seed = beta + 0.7 * np.pi / float(np.min(np.diff(LENGTHS)))
+        f = beta_fit_from_phases(LENGTHS, _wrapped(beta, LENGTHS), seed_beta=seed)
+        assert f.beta == pytest.approx(beta, rel=1e-9)
+        assert f.resid < 1e-9
+        assert f.branch_ambiguity < 0.45, "decidable, unlike the exactly-half case"
 
     def test_a_whole_branch_error_is_invisible_in_the_fit(self):
         """FAILURE MODE 2, and the reason section_mode_beta() constrains the
@@ -125,12 +151,18 @@ class TestBetaFromPhases:
         which is why the guard has to be a precondition on the spacing."""
         beta = BETA_FDTD[0]
         one_branch = 2 * np.pi / float(np.min(np.diff(LENGTHS)))
-        got, resid, margin = beta_from_phases(
+        f = beta_fit_from_phases(
             LENGTHS, _wrapped(beta, LENGTHS), seed_beta=beta + one_branch)
-        assert got == pytest.approx(beta + one_branch, rel=1e-9), "lands a branch off"
-        assert resid < 1e-9, "and the fit looks perfect"
-        assert margin < 1e-6, "and the margin sees nothing"
-        assert abs(got / beta - 1) > 0.3, "while being 33% wrong"
+        assert f.beta == pytest.approx(beta + one_branch, rel=1e-9), "lands a branch off"
+        assert f.resid < 1e-9, "and the fit looks perfect"
+        assert f.margin < 1e-6, "and the margin sees nothing"
+        assert abs(f.beta / beta - 1) > 0.3, "while being 33% wrong"
+        # The 2026-08-01 turn-consistency fix cannot see this either, and that is
+        # the whole reason _BETA_MIN_BRANCH_FRACTION has to stay a precondition:
+        # a whole-branch error is turn-CONSISTENT, so there is nothing to repair.
+        assert not f.turns_shifted, "consistent turns, so the fix has no purchase"
+        assert f.turn_ambiguity < 1e-9
+        assert f.branch_ambiguity < 1e-9
 
     def test_needs_at_least_two_lengths(self):
         beta = BETA_FDTD[0]
@@ -143,18 +175,29 @@ class TestBetaFromPhases:
         detect. Deliberately fed a badly non-linear phase set here."""
         two = np.array([2.0, 4.0])
         nonsense = np.array([0.3, -2.9])
-        _, resid, _ = beta_from_phases(two, nonsense, BETA_MPB[0])
-        assert resid < 1e-12, "two points can never show a residual"
+        f_two = beta_fit_from_phases(two, nonsense, BETA_MPB[0])
+        assert f_two.resid < 1e-12, "two points can never show a residual"
+        # With two points the BRANCH choice is near-arbitrary here too, not just
+        # the residual blind — so the same configuration is doubly unsafe, and
+        # branch_ambiguity is the thing that says so. Asserted because the
+        # returned slope changed with the 2026-08-01 fix (the single turn is now
+        # picked nearest the seed) and this test did not pin it.
+        assert f_two.branch_ambiguity > 0.45
 
         three = np.array([2.0, 4.0, 6.0])
         beta = BETA_FDTD[0]
         good = _wrapped(beta, three)
         bent = good.copy()
         bent[1] += 0.5                                  # break linearity
-        _, resid_ok, _ = beta_from_phases(three, good, BETA_MPB[0])
-        _, resid_bent, _ = beta_from_phases(three, bent, BETA_MPB[0])
-        assert resid_ok < 1e-9
-        assert resid_bent > _BETA_FIT_RESIDUAL_MAX, "three points can"
+        f_ok = beta_fit_from_phases(three, good, BETA_MPB[0])
+        f_bent = beta_fit_from_phases(three, bent, BETA_MPB[0])
+        assert f_ok.resid < 1e-9
+        assert f_bent.resid > _BETA_FIT_RESIDUAL_MAX, "three points can"
+        # And the residual guard now means ONE thing, so it needs a companion
+        # that separates "genuinely curved" from "an integer turn was
+        # undecidable". A 0.5 rad bend is curvature: the turns were never in
+        # doubt, so turn_ambiguity stays low while the residual fires.
+        assert f_bent.turn_ambiguity < 0.25, "curvature, not an undecidable turn"
 
 
 class TestTheSpacingPrecondition:
@@ -227,19 +270,44 @@ class TestSectionModeBetaDpmlClearance:
         from beef.solvers.fdtd import FDTDSolver
         return FDTDSolver(res=40, sim_width=5.0, dpml=self.DPML)
 
-    def _wire_fakes(self, solver):
+    def _wire_fakes(self, solver, betas=None, offset=0.0, seed_scale=1.0):
         """section_mode_neff() seeds β; solve_section() reports back exactly
         the phase a mode of that β would accumulate over the requested
         length, so beta_from_phases() recovers self.BETA to fitting
-        precision — real orchestration, fake physics."""
-        neff_seed = self.BETA * WL / (2 * np.pi)
-        solver.section_mode_neff = lambda *a, **k: np.full((1, 1), neff_seed)
+        precision — real orchestration, fake physics.
+
+        Widened 2026-08-01 (defaults reproduce the original 1×1 behaviour, so
+        the three callers above are unaffected):
+
+        `betas`      one β per mode, so `T` comes back diagonal `(n_wl, n, n)`
+                     instead of `(1, 1, 1)`. Needed to test that a raise names
+                     the offending (wavelength, mode) cell at all.
+        `offset`     the constant mode-matching / monitor-plane phase. Not
+                     cosmetic: it sets where the true wrap counts fall relative
+                     to a .5 rounding boundary, which is what decides whether
+                     the pre-2026-08-01 per-length rounding broke.
+        `seed_scale` multiplies the seed, i.e. injects a deliberate seed error.
+                     The real FDTD-vs-MPB gap is ~2%, so `seed_scale=0.98` is
+                     the production condition, not a stress test.
+        """
+        betas = np.atleast_1d(np.asarray(
+            self.BETA if betas is None else betas, dtype=float))
+        n = betas.size
+
+        def fake_section_mode_neff(geometry, wavelengths, a, b, n_modes, **kw):
+            wl = np.atleast_1d(np.asarray(wavelengths, dtype=float))
+            return seed_scale * betas[None, :n_modes] * wl[:, None] / (2 * np.pi)
+
+        solver.section_mode_neff = fake_section_mode_neff
         calls = []
 
         def fake_solve_section(geometry, wavelengths, x0, x1, **kw):
             calls.append((x0, x1))
-            phase = self.BETA * (x1 - x0)
-            return np.array([[[np.exp(1j * phase)]]])
+            wl = np.atleast_1d(np.asarray(wavelengths, dtype=float))
+            T = np.zeros((wl.size, n, n), dtype=complex)
+            T[:, np.arange(n), np.arange(n)] = np.exp(
+                1j * (betas[None, :] * (x1 - x0) + offset))
+            return T
 
         solver.solve_section = fake_solve_section
         return calls
@@ -276,6 +344,96 @@ class TestSectionModeBetaDpmlClearance:
         )
         assert beta[0, 0] == pytest.approx(self.BETA, rel=1e-6)
 
+    # --- the 2026-08-01 turn-consistency fix, end to end -------------------
+
+    #: Reproduces job 11589770's failure through the real `section_mode_beta`
+    #: with no meep. seed_scale 0.98 is the ~2% FDTD-vs-MPB gap; the offset is
+    #: what puts the true wrap counts near a .5 boundary. PINNED, not tuned:
+    #: only ~4 of 260 (seed_scale, offset) combinations tripped the old code at
+    #: these short lengths, so the premise assertion below is load-bearing.
+    KNIFE_EDGE_OFFSET = -2 * np.pi * 0.525
+    KNIFE_EDGE_SEED_SCALE = 0.98
+
+    def _beta_at(self, betas=None, offset=0.0, seed_scale=1.0, wavelengths=None):
+        solver = self._solver()
+        calls = self._wire_fakes(
+            solver, betas=betas, offset=offset, seed_scale=seed_scale)
+        wl = np.array([WL]) if wavelengths is None else np.asarray(wavelengths)
+        n = 1 if betas is None else np.atleast_1d(betas).size
+        beta = solver.section_mode_beta(
+            geometry=None, wavelengths=wl,
+            x0=-self.SPAN / 2.0, x1=self.SPAN / 2.0, n_modes=n,
+        )
+        return beta, np.array([x1 - x0 for x0, x1 in calls])
+
+    def test_a_two_percent_seed_error_no_longer_breaks_the_wrap_counts(self):
+        """The bug that killed job 11589770, end to end and meep-free.
+
+        Before 2026-08-01 this configuration raised
+        ``phase-fit residual 2.094 rad exceeds 0.1`` — against production's
+        2.101 on the real device. The premise assertion pins WHY: the old
+        per-length rounding produced turn increments that disagree with each
+        other, and a 2% seed error is all it took."""
+        beta, lengths = self._beta_at(
+            offset=self.KNIFE_EDGE_OFFSET, seed_scale=self.KNIFE_EDGE_SEED_SCALE)
+
+        # Premise. Without this the test goes vacuous the moment anyone changes
+        # section_mode_beta's default length selection.
+        phi = np.angle(np.exp(1j * (self.BETA * lengths + self.KNIFE_EDGE_OFFSET)))
+        seed = self.KNIFE_EDGE_SEED_SCALE * self.BETA
+        naive = np.round((seed * lengths - phi) / (2 * np.pi))
+        naive -= naive[0]
+        chosen = beta_fit_from_phases(lengths, phi, seed).turns
+        assert not np.array_equal(naive, chosen), (
+            f"premise: at lengths {lengths.tolist()} the old per-length rounding "
+            f"must be inconsistent, got naive={naive.tolist()} == chosen"
+        )
+        assert beta[0, 0] == pytest.approx(self.BETA, rel=1e-9)
+
+    @pytest.mark.parametrize("seed_scale", [0.90, 0.95, 1.05, 1.10])
+    def test_seed_error_is_tolerated_at_any_offset(self, seed_scale):
+        """The non-knife-edge companion. The test above pins one adverse
+        offset; this sweeps the offset out of the picture entirely, so it cannot
+        pass by luck. 5-10% seed error is several times the real gap."""
+        for offset in np.linspace(-np.pi, np.pi, 20):
+            beta, _ = self._beta_at(offset=float(offset), seed_scale=seed_scale)
+            assert beta[0, 0] == pytest.approx(self.BETA, rel=1e-6), (
+                f"offset={offset:.4f} seed_scale={seed_scale}"
+            )
+
+    def test_a_non_uniform_cut_still_raises_and_names_the_cell(self):
+        """The residual guard survives the fix — it just means one thing now.
+
+        Also the reason `_wire_fakes` was widened past 1×1: job 11589770's
+        message could report "2.101 rad" but not which of its 88 (wavelength,
+        mode) cells, and that turned out to be the most informative fact about
+        the failure."""
+        solver = self._solver()
+        betas = np.array([9.6, 9.5, 9.4])
+        self._wire_fakes(solver, betas=betas)
+        # Bend mode 1's phase at the middle length only: curvature, not a wrap.
+        inner = solver.solve_section
+
+        def bent(geometry, wavelengths, x0, x1, **kw):
+            T = inner(geometry, wavelengths, x0, x1, **kw)
+            if 0.9 < (x1 - x0) < 1.1:
+                T[:, 1, 1] *= np.exp(1j * 0.5)
+            return T
+
+        solver.solve_section = bent
+        with pytest.raises(ValueError, match=r"phase-fit residual") as excinfo:
+            solver.section_mode_beta(
+                geometry=None, wavelengths=np.array([1.50, WL, 1.60]),
+                x0=-self.SPAN / 2.0, x1=self.SPAN / 2.0, n_modes=3,
+            )
+        assert "mode 1" in str(excinfo.value), (
+            f"message must name the offending mode, got: {excinfo.value}"
+        )
+        assert "turn ambiguity" in str(excinfo.value), (
+            "and must report turn ambiguity so curvature is distinguishable "
+            "from an undecidable wrap count"
+        )
+
     def test_a_body_too_short_for_any_dpml_clearance_raises(self):
         """span - 2*dpml <= 0 is refused before the fit-length spacing is
         even computed — seed_span's own preceding check (unchanged by this
@@ -287,6 +445,90 @@ class TestSectionModeBetaDpmlClearance:
                 geometry=None, wavelengths=np.array([WL]),
                 x0=-solver.dpml, x1=solver.dpml, n_modes=1,
             )
+
+
+class TestTheMmi1x2TurnCountRegression:
+    """mmi_1x2_validation.md gap 5 / job 11589770, as real numbers.
+
+    ``arg(T_ii)`` read straight out of that job's own on-disk cache
+    (``example_sim_cache/FDTDSolver_solve_section_MMI_{477592018d806434,
+    7d8ebb646ca823d9,767b169eaa31dd8b}``), at λ=1.26 µm, mode 0 — the worst of
+    its 88 (wavelength, mode) cells. Literals are 4 dp; the full-precision
+    cache values give 13.877999 / 0.006445 / +1.9616%, so these are good to
+    1e-4.
+
+    This is the cell that was recorded for a day as a π sign flip in ``T_ii``.
+    It is not one — see `test_the_answer_is_the_documented_fdtd_over_mpb_excess`.
+    """
+
+    L = [0.9232476, 1.8464952, 2.7697429]     # section_mode_beta's own [s, 2s, 3s]
+    PHI = [3.0618, -2.9846, -2.7285]          # arg(T_ii), wrapped
+    SEED = 13.611                             # MPB, via section_mode_neff
+    WL = 1.26
+
+    def test_the_consistent_turn_vector_is_chosen(self):
+        f = beta_fit_from_phases(self.L, self.PHI, self.SEED)
+        assert f.beta == pytest.approx(13.878, rel=1e-4)
+        assert f.resid < 0.01
+        assert list(f.turns) == [0, 3, 5]
+
+    def test_the_old_per_length_rounding_is_not_what_comes_back(self):
+        """Premise plus anti-regression, so this class cannot go vacuous if the
+        fit is ever reverted or re-derived."""
+        naive = np.round(
+            (self.SEED * np.asarray(self.L) - np.asarray(self.PHI)) / (2 * np.pi))
+        naive -= naive[0]
+        assert list(naive) == [0, 2, 4], "premise: the old rounding is inconsistent"
+
+        f = beta_fit_from_phases(self.L, self.PHI, self.SEED)
+        # What the old code produced here: β 10.475, residual 2.1008 — 21x its
+        # own 0.1 guard, which is how the job died.
+        assert abs(f.beta - 10.475) > 3.0
+        assert f.resid < _BETA_FIT_RESIDUAL_MAX / 10
+
+    def test_the_answer_is_the_documented_fdtd_over_mpb_excess(self):
+        """The discriminator against the withdrawn π-sign-flip reading, and the
+        only thing that separates them — the two are algebraically identical on
+        the residual (for three equally spaced points, "middle point displaced
+        by −π" and "points 2 and 3 each displaced by −2π" both give
+        δ·(+1/3, −2/3, +1/3)).
+
+        The turn-count answer lands n_eff 2.783, +1.96% over MPB's 2.7285 — in
+        family with the +2.233%/+2.361% this file's own BETA_FDTD/BETA_MPB
+        record for the coupler. The sign-flip reading gave 2.101: −23%, wrong
+        in sign as well as magnitude, and below any plausible n_eff for a
+        2.0 µm × 160 nm Si core."""
+        f = beta_fit_from_phases(self.L, self.PHI, self.SEED)
+        n_eff = f.beta * self.WL / (2 * np.pi)
+        assert n_eff == pytest.approx(2.783, abs=5e-3)
+        assert 0.015 < f.seed_excess < 0.025
+        coupler_excess = float(np.max(BETA_FDTD / BETA_MPB - 1.0))
+        assert f.seed_excess < coupler_excess, "in family, and on the same side"
+
+    def test_the_seed_error_is_reported_not_absorbed(self):
+        """The seed error IS the measurement here, so the fix must surface it
+        rather than quietly correcting for it."""
+        f = beta_fit_from_phases(self.L, self.PHI, self.SEED)
+        assert f.seed_excess == pytest.approx(0.0196, abs=1e-3)
+        assert f.turns_shifted, "and that we left the seed's own rounding is visible"
+        assert list(f.seed_turns) == [0, 2, 4]
+        assert f.branch_ambiguity == pytest.approx(0.0377, abs=1e-3)
+        # Matches the seed-free second-difference check on the same cache:
+        # (φ₃ − 2φ₂ + φ₁)/2π is 1.0031, i.e. 0.0031 off an exact integer.
+        assert f.turn_ambiguity == pytest.approx(0.0031, abs=5e-4)
+
+    def test_the_three_tuple_facade_matches_the_fit(self):
+        f = beta_fit_from_phases(self.L, self.PHI, self.SEED)
+        assert beta_from_phases(self.L, self.PHI, self.SEED) == (
+            f.beta, f.resid, f.margin)
+
+    def test_lengths_out_of_order_give_the_same_answer(self):
+        """`turns` comes back in the caller's order, so a descending-lengths
+        caller must not get a permuted or different result."""
+        f = beta_fit_from_phases(self.L, self.PHI, self.SEED)
+        rev = beta_fit_from_phases(self.L[::-1], self.PHI[::-1], self.SEED)
+        assert rev.beta == pytest.approx(f.beta, rel=1e-12)
+        assert list(rev.turns) == list(f.turns)[::-1]
 
 
 class TestAgreesWithTheDifferenceFit:

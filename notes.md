@@ -496,16 +496,31 @@ lives in "Current library reference" above, not here.
    Straightforward to add once the example itself is validated (same pattern as
    the existing 4 targets), but deliberately deferred until then — no value
    locking in a reference before trusting the example's own numbers.
+
+   **2026-07-31 — closer than when this was written.** `mmi_2x2_validation.md`'s
+   own gaps 2 (resolution — Δβ_01 converges to 0.05% by res 120, job 11590785),
+   5 (hybrid vs full-device FDTD, 0.82%) and 6 (mode identity, reconfirmed under
+   both duplicate guards) are all now closed or measured. Gap 4 (engine
+   agreement) is in flight (job 11591249). What still blocks recording a golden
+   is not this device's own validation state anymore — it's the repo-wide
+   material-model regeneration (`README.md` Finding 6): every existing golden
+   predates the 2026-07-28 Sellmeier change and none have been regenerated
+   since, so a fresh mmi_2x2 golden would need the same cold pass the other
+   four are already waiting on, not a second one later.
 2. **`modal_multiplexer_hybrid` numerical accuracy.** Excluded from the golden
    suite on the same basis as item 1, but blocked on more than just "add a
    test": the device's accuracy isn't yet trusted, so this needs an
    independent correctness check (e.g. against a known-good reference, or at
    minimum a `check_passive()`-style sanity pass plus manual inspection)
    *before* a golden test would mean anything.
-3. **Documentation.** No docs site, no changelog beyond this `README.md`/
-   `notes.md` pair — the `examples/` scripts are the only tutorials that
-   exist. At minimum a `CHANGELOG.md` tracking the still-static
-   `__version__ = "0.1.0"`.
+3. **Documentation.** No docs site — the `examples/` scripts are still the
+   only tutorials that exist. ~~No changelog beyond this `README.md`/
+   `notes.md` pair. At minimum a `CHANGELOG.md`~~ **`CHANGELOG.md` exists and
+   has been actively maintained since 2026-07-30** (1300+ lines, dated
+   entries). What this item predicted is *half* done: `__version__ = "0.1.0"`
+   in `beef/__init__.py` is still static and untracked against any of the
+   changes the log now records — worth bumping (or automating from git tags)
+   now that there's a real log to bump it against.
 4. **Type checking in CI.** Type hints are used throughout (`from __future__ import
    annotations`) but nothing enforces them — no `mypy`/`pyright` config, no `py.typed`
    marker. Cheap to add now that CI exists.
@@ -674,14 +689,16 @@ lives in "Current library reference" above, not here.
    and was *bypassing* meow's own correctly-interpolating `SampledMaterial.__call__`;
    both copies were removed.
 
-   **Still open:** the FDTD half still has no dispersion across a sweep, by
-   construction — one Medium per broadband run. See #5 for why the obvious fix
-   (a dispersive Medium) measured 0.0496 worse and was reverted. A `HybridSolver`
-   assertion that the two section types resolve the same index at the same
-   wavelength is still worth adding; it is now cheap, since both call the same
-   function. The checked re-parameterisation that would unblock both — fit
-   band, λ₀ degeneracy, strip-test gate — is in
-   `validation_markdown/material_model_validation.md`.
+   **Closed 2026-07-31.** Both halves this "still open" note asked for now
+   exist: the FDTD can be genuinely dispersive (`dispersive=True`, opt-in,
+   off by default — the re-parameterisation #5 describes, gate-passed on
+   every stack/band combination), and `HybridSolver._check_material_index_
+   agreement()` is the assertion that the two section types resolve the
+   same index at the same wavelength (`material_consistency_action`, default
+   `"warn"` since today's shipped default — frozen FDTD, exact EME — does
+   not itself satisfy a strict tolerance). Full record, including the one
+   trap found building it, is in
+   `validation_markdown/resolved/material_model_validation.md`.
 
    **Subpixel-smoothing coupling — this prediction was tested, and it held.**
    Written before the attempt, and it is exactly what happened on 2026-07-28: see
@@ -1167,6 +1184,126 @@ lives in "Current library reference" above, not here.
     the direct consequence: the modal multiplexer's own shipped `N_MODES=16`
     now raises on the next resubmission (14 reachable at res 40), which is
     the fix working as designed, not a new bug.
+20. **New, 2026-08-01 — `beta_from_phases()` chose wrap counts independently
+    per length, so the seed error it exists to measure could break it. FIXED
+    2026-08-01.**
+    (`mmi_1x2_validation.md` gap 5; job 11589770.) The core was four lines:
+    `turns = round((seed_beta*lengths - phases) / 2π)`, then a least-squares
+    line through `phases + 2π*turns`. `round()` ran **per length against one
+    seed slope, with no cross-length consistency constraint**, so a seed error
+    ε produced a fractional-turn offset `ε·L/(2π)` that **grew with L** until
+    some length straddled a `.5` boundary and took a turn count inconsistent
+    with its neighbours. The fit then had no line to sit on and the residual
+    guard fired.
+
+    **The sting: ε is the FDTD-vs-MPB gap `calibrate_body_neff` exists to
+    measure.** At the failing cell ε was 1.96%, and the middle length's
+    fractional turn came out 4.4753 against a true 4.5539 — 0.025 below the
+    boundary. The unwrapping was broken by exactly the quantity it was built
+    to measure, which is why it presented as a device problem rather than a
+    library one.
+
+    **It also cost a day to a wrong diagnosis, and that is the transferable
+    lesson.** The failure was first recorded as a **π sign flip in `T_ii`**,
+    from the residual pattern `δ·(+⅓, −⅔, +⅓)` with δ ≈ −π. That pattern is
+    **degenerate**: for three equally spaced points, "middle point displaced
+    by −π" and "points 2 and 3 each displaced by −2π" produce it identically.
+    Residual arithmetic cannot choose between them; it fits both to four
+    decimals, which is precisely why the wrong reading looked confirmed. Two
+    things separated them, neither of them a residual:
+
+    - **Physics.** Turn-count → n_eff 2.783, **+1.96%** over MPB, in family
+      with the +2.233%/+2.361% this module already records for the coupler.
+      Sign-flip → 2.101, **−23%**: wrong sign as well as size, and below any
+      plausible n_eff for a 2.0 µm × 160 nm Si core.
+    - **A seed-free invariant.** For a linear ramp on equally spaced lengths
+      the second difference `(φ₃ − 2φ₂ + φ₁)/2π` must be an exact *integer*.
+      Measured: within **0.00308 of an integer in all 88** (wavelength, mode)
+      cells, 31 needing a ±1 turn. Nothing needs a sign flip to be linear —
+      and a π displacement would sit at a *half* integer. No MPB call, no
+      branch assumption, no appeal to the fit being tested.
+
+    **Fix:** `beta_fit_from_phases` decides exactly **one** integer against
+    the seed — the branch, i.e. the first gap's increment — and rounds every
+    later turn against a slope **refit from the shorter lengths**, so ε·L
+    drift cannot accumulate. This *narrows* the seed's authority from n
+    decisions to 1, and 1 is exactly what `_BETA_MIN_BRANCH_FRACTION` already
+    licensed. O(n), no candidate enumeration.
+
+    A brute-force search over a ±1 turn window was **considered and
+    rejected**: for equally spaced lengths `t → t + a + b·j` is exactly
+    residual-invariant and `[-1,0,+1]` lies inside a ±1 window, so the window
+    contains neighbouring *branches* at residuals differing in the 9th
+    significant figure. Minimum-residual selection then picks β = 7.072 (49%
+    wrong) with a clean 0.0064 residual — converting a loud failure into a
+    silent one. Worth remembering as a general shape: a search whose objective
+    is invariant under part of what you are searching over cannot rank those
+    candidates.
+
+    **Guard semantics changed with it.** `_BETA_FIT_RESIDUAL_MAX` now means
+    exactly one thing — the phase is not linear in L — because turn ambiguity
+    no longer contributes. New `_BETA_BRANCH_MARGIN_RAISE = 0.9` makes
+    `section_mode_beta`'s docstring promise of a margin `ValueError` true for
+    the first time (it had claimed one for as long as it existed and never
+    raised it). Kept the residual at 0.1 rather than tightening: the worst
+    *clean* value on the real 6-mode coupler cache is 2.2e-2, only 4.5× under
+    — far thinner than the 1.4e-5 the old comment quoted, which was measured
+    on the 2-mode configuration only. `section_mode_beta` also keeps full
+    `(n_wl, n_modes)` grids now instead of running maxima, so raises and logs
+    **name the offending cell** — the old code could report "2.101 rad"
+    without saying where, and where turned out to be the most informative fact
+    about the failure.
+
+    **Validated offline against cached data, zero new FDTD.** Seed-free sweep
+    over every cell × every plausible branch × seed error ±3%: mmi_1x2 4025
+    trials, old wrong **550 (13.7%)**, new wrong **0**; coupler 3650 trials,
+    old wrong **197 (5.4%)**, new wrong **0**. So the coupler's working
+    calibration was luck rather than margin. At each device's *production*
+    seed the fix changes **0 of 66** coupler cells and **exactly the 4 of 88**
+    mmi_1x2 cells that blew the guard. Existing suite: 28 of 29 unchanged; the
+    single break (`test_a_boundary_seed_shows_up_as_a_broken_fit`) encoded the
+    old contract and was rewritten. Suite now 42 tests.
+    `examples/verification/python/diagnose_mmi1x2_calibration_phase_fit.py`
+    carries the whole proof and prints old-vs-new side by side.
+21. **New, 2026-08-01 — a per-solver `dispersive=` override never reached the
+    cache fingerprint. FIXED 2026-08-01, before the default was flipped on.**
+    (`material_model_validation.md` step 3.) `resolved_material_config()` read
+    `material_stack.dispersive`, and all seven call sites passed the stack, so
+    the solver-level override was invisible to the key. Measured:
+
+        FDTDSolver(material_stack=SOI_220, dispersive=True)
+          medium:     1 Lorentzian susceptibility  (vs a flat eps = 12.096)
+          cache key:  BYTE-IDENTICAL to dispersive=False
+
+    A dispersive run would therefore have collided with frozen-physics entries
+    and been served the old physics. **This is the same defect
+    `resolved_material_config()` was written to kill, one level up** — the
+    stack-level hole was plugged in work item 3, the solver-override hole was
+    not, and its own docstring's warning ("flipping `dispersive` on would leave
+    this key byte-identical and every existing cache entry would keep matching")
+    described the surviving case exactly.
+
+    It bit in both directions: `EMESolver`'s `None` means *dispersive* (it does
+    not inherit the stack, deliberately), so an explicit
+    `EMESolver(dispersive=False)` built frozen materials under a key that still
+    said dispersive.
+
+    Fix: the function takes the caller's resolved value as a third argument.
+    `FDTDSolver` passes `material_stack.resolve_dispersive(self.dispersive)`;
+    `EMESolver` passes a new `_resolved_dispersive()` helper, split out so the
+    fingerprint and the extrusion rules cannot disagree about what `None` means.
+
+    **Generalisable shape, and the third instance of it in this codebase:** a
+    resolved-at-use-time setting must reach the fingerprint *as resolved*, never
+    as the raw field it was derived from. Same failure as
+    `_resolved_spectral_config()` (monitor grid derived from `wavelengths`) and
+    as the original item-8 index lookup. Any future `solver.foo` that overrides
+    a `stack.foo` needs the same treatment — and the ring's hand-rolled
+    `_sim_params()` does **not** have it yet
+    (`ring_resonator_validation.md` M3/M4).
+
+    Fixing this was a hard prerequisite for flipping the default: deploying
+    first would have poisoned the cache silently rather than loudly.
 
 ### Geometry
 

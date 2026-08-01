@@ -284,18 +284,30 @@ class MaterialStack:
         sz: total vertical simulation span for meow cross-sections (µm).
         dispersive: build the FDTD media from the re-parameterised
             single-Lorentzian fit (`reparam_lorentz`) over the run's own band
-            instead of freezing one index at band centre. **Default False**,
-            deliberately: the re-parameterisation is verified as a *model*
-            (`verify_item_8_reparameterisation.py`) but has not yet passed its
-            strip-test gate on a real meep solve
-            (`validation_markdown/material_model_validation.md`, Verification),
-            and turning it on changes every FDTD number. Switchable so the gate
-            can be measured as a clean A/B, the same pattern as
-            `guard_duplicate_modes` and `calibrate_body_neff`.
+            instead of freezing one index at band centre.
+
+            **Default True as of 2026-08-01.** It was False while the
+            re-parameterisation was verified only as a *model*; the strip-test
+            gate has since passed on real meep solves across all four
+            stack/band combinations (worst Δn_eff −0.00141 on SOI_160/O-band
+            against a 0.002 tolerance), and the resolution question is answered
+            — under dispersion the 1e-3 threshold wants res 80 at the band
+            edge, which is what production already ships.
+
+            Turning it on is what closes the engine-asymmetry gap: a broadband
+            FDTD run froze one index at band centre while the EME re-solved per
+            wavelength, so a hybrid chain contracted modes solved in two
+            different materials — **0.00786 apart in n_Si at the O-band edges**,
+            against a 2e-3 tolerance. Both-dispersive drops that to 0.001349.
+            `HybridSolver`'s material-consistency guard was warn-only precisely
+            because the old default failed it.
+
+            Still switchable, and `False` on both engines remains the way to
+            run a frozen A/B — see `EMESolver._extrusion_rules`.
     """
 
     def __init__(self, wg_height: float = 0.16, sz: float = 2.0,
-                 dispersive: bool = False):
+                 dispersive: bool = True):
         self.wg_height = wg_height
         self.sz = sz
         self.dispersive = bool(dispersive)
@@ -447,8 +459,23 @@ class MaterialStack:
         return mp.Medium(index=index_of(float(np.mean(wl_arr))))
 
 
-def resolved_material_config(material_stack, wavelengths: np.ndarray) -> Dict[str, Any]:
+def resolved_material_config(material_stack, wavelengths: np.ndarray,
+                             dispersive: Optional[bool] = None) -> Dict[str, Any]:
     """The *resolved* refractive indices this run will actually simulate with.
+
+    `dispersive` is the CALLER's resolved setting — pass
+    `stack.resolve_dispersive(solver.dispersive)`, not the stack's own flag.
+    Omitting it falls back to the stack, which is correct only when the caller
+    has no override.
+
+    **Why that parameter exists (added 2026-08-01, measured):** every call site
+    used to pass only the stack, so a per-solver override never reached the
+    fingerprint. `FDTDSolver(material_stack=SOI_220, dispersive=True)` built a
+    genuinely different medium — one Lorentzian susceptibility against a flat
+    ε = 12.096 — and produced a **byte-identical cache key**, so a dispersive
+    run collided with frozen-physics entries and was served the old physics.
+    That is exactly the defect described below, recurring one level up: the
+    stack-level hole was plugged, the solver-override hole was not.
 
     Same reasoning as `beef/solvers/fdtd.py::_resolved_spectral_config()`,
     applied to the material half — and here the gap it closes is real rather
@@ -496,7 +523,9 @@ def resolved_material_config(material_stack, wavelengths: np.ndarray) -> Dict[st
     # model-version tag, so any change to the fit -- band, pinned lam0, sample
     # count, or the Sellmeier coefficients underneath it -- moves the key on
     # its own, with nothing to remember to bump.
-    if getattr(material_stack, "dispersive", False) and wl.min() < wl.max():
+    resolved = (getattr(material_stack, "dispersive", False) if dispersive is None
+                else bool(dispersive))
+    if resolved and wl.min() < wl.max():
         config["resolved_dispersive"] = True
         for kind in ("si", "sio2"):
             eps_inf, sigma, _ = reparam_lorentz(kind, wl)

@@ -7,6 +7,210 @@ fuller write-up, it points there rather than repeating it.
 
 ---
 
+## 2026-08-01
+
+Two library bugs, both found by disbelieving something already written down as
+settled, plus the material-dispersion deployment.
+
+### Material dispersion is ON by default
+
+`MaterialStack(dispersive=True)` is now the default, so `SOI_160`/`SOI_220` —
+and therefore every example and both solvers — track the band instead of
+freezing one index at band centre. The gate that blocked this passed 2026-07-31
+on all four stack/band combinations (worst Δn_eff −0.00141 vs a 0.002
+tolerance).
+
+**This closes the engine asymmetry, which was the actual gap.** A broadband
+`FDTDSolver` froze its index while an `EMESolver` re-solved per wavelength, so
+every hybrid chain contracted modes solved in two different materials:
+
+| | worst n_Si gap, O-band |
+|---|---|
+| before (frozen FDTD + exact EME) | **0.007862** — over the 2e-3 guard |
+| after (both dispersive) | **0.001349** — under it |
+
+`HybridSolver`'s material-consistency guard was warn-only *because the shipped
+default failed it*; `material_consistency_action="raise"` is now usable on a
+default-constructed chain. The residual 0.001349 is fit error, not disagreement
+— the FDTD runs the re-parameterised single-Lorentzian fit, the EME stays exact
+Sellmeier.
+
+**A cache-fingerprint bug had to be fixed first, or this would have poisoned the
+cache silently.** `resolved_material_config()` keyed off
+`material_stack.dispersive` while all seven call sites passed the stack, so a
+per-solver override never reached the key. Measured:
+`FDTDSolver(material_stack=SOI_220, dispersive=True)` built a medium with a real
+Lorentzian susceptibility against a flat ε = 12.096 and produced a
+**byte-identical cache key** — a dispersive run colliding with frozen-physics
+entries. Same defect that function exists to kill, one level up; it bit in both
+directions (an explicit `EMESolver(dispersive=False)` built frozen materials
+under a key that said dispersive). The function now takes the caller's resolved
+value; `EMESolver` gained `_resolved_dispersive()` so the fingerprint and the
+extrusion rules cannot disagree about what `None` means. `notes.md` Solvers
+item 21.
+
+**Cost: every cache entry misses and every golden is stale again** (third
+invalidation — Sellmeier n_Si, then λ₀, now this). The EME half was invalidated
+by the correctness fix alone, independent of the default flip: those entries
+were dispersive all along while keyed as frozen.
+
+**Not deployed to the ring.** `ring_resonator_hybrid{,_cascaded}.py` hand-roll
+raw meep and pass a scalar `wl_center` to `si_medium()`, which correctly stays
+frozen — leaving them the only devices on frozen media while their meow half is
+already dispersive, i.e. carrying the exact asymmetry this flip closed
+everywhere else. Their hand-rolled `_sim_params()` also records no material
+fingerprint at all, so neither the Sellmeier change nor this one would move a
+ring cache key. Itemised as M1–M4 in `ring_resonator_validation.md`.
+
+Tests **508 → 514 passed**, 15 skipped. Nine encoded the old default and were
+rewritten rather than relaxed; the clearest is
+`test_default_configuration_is_flagged` → `test_the_default_configuration_is_now_quiet`,
+whose inversion is the deployment's acceptance criterion.
+
+### `beta_from_phases()`: wrap counts were chosen per length, not consistently
+
+`beef/solvers/fdtd.py`. `turns = round((seed_beta*lengths - phases) / 2π)` ran
+**independently at every length against one seed slope**, so a seed error ε
+drifted by `ε·L/(2π)` and eventually straddled a `.5` boundary, giving one
+length a turn count inconsistent with its neighbours. ε is the FDTD-vs-MPB gap
+that `calibrate_body_neff` exists to measure (~2%), so **the unwrapping was
+broken by exactly the quantity it was built to measure.** It killed job
+11589770 (mmi_1x2 calibrated hybrid) with a 2.101 rad residual against its own
+0.1 guard.
+
+That failure had been recorded on 2026-07-31 as a **π sign flip in `T_ii`**.
+It is not one. The residual pattern `δ·(+⅓, −⅔, +⅓)` is **degenerate** — for
+three equally spaced points, "middle point off by −π" and "points 2 and 3 each
+off by −2π" give it identically — so the arithmetic that looked like
+confirmation fits both readings. Physics separates them: turn-count gives
+n_eff **2.783** (+1.96% over MPB, in family with the coupler's +2.233%/+2.361%),
+sign-flip gives **2.101** (−23%, wrong sign *and* size). A seed-free invariant
+settles it without any fit at all: the second difference
+`(φ₃ − 2φ₂ + φ₁)/2π` must be an exact integer for a linear ramp, and it is —
+within **0.00308 in all 88** (wavelength, mode) cells, 31 needing a ±1 turn.
+Nothing needs a sign flip.
+
+- **Added `beta_fit_from_phases()`** returning a `BetaFit` namedtuple
+  (`beta, resid, margin, seed_excess, turns, seed_turns, turns_shifted,
+  branch_ambiguity, turn_ambiguity`). It decides exactly **one** integer
+  against the seed — the branch — and rounds every later turn against a slope
+  **refit from the shorter lengths**, so drift cannot accumulate. O(n).
+  `beta_from_phases()` stays as a 3-tuple facade, so no existing unpack site
+  changed.
+- **Rejected** a ±1 brute-force turn search: it is residual-degenerate between
+  neighbouring branches (differing in the 9th significant figure) and
+  min-residual picks β = 7.072, 49% wrong, with a *clean* residual — trading a
+  loud failure for a silent one.
+- **`_BETA_FIT_RESIDUAL_MAX` (0.1, unchanged) now means one thing** — the phase
+  is not linear in L. Its comment's "clean fits give 1.4e-5" was the 2-mode
+  configuration only; the real 6-mode coupler cache reaches **2.2e-2**, 4.5×
+  under, so the threshold was deliberately *not* tightened.
+- **New `_BETA_BRANCH_MARGIN_RAISE = 0.9`** makes `section_mode_beta`'s
+  long-standing docstring promise of a margin `ValueError` true for the first
+  time. New `_BETA_SEED_EXCESS_WARN = 0.10` (warn only — the excess is the
+  measurement, not an error) and `_BETA_TURN_POLISH_MAX = 8` (raises rather
+  than returning an unconverged turn vector).
+- **`section_mode_beta()` keeps full `(n_wl, n_modes)` grids** instead of
+  running maxima, so raises and logs **name the offending cell**. The old code
+  could report "2.101 rad" without saying where — and where (modes 0–1, the
+  *shortest* wavelengths, i.e. largest β and tightest branch spacing) was the
+  most informative fact about the failure.
+
+**Backward compatibility, measured on cached production data.** At the
+coupler's own seed the fix changes **0 of 66 cells**, so its L₅₀ 0.11% result
+is untouched. On mmi_1x2 it changes **exactly the 4 of 88 cells** that blew the
+guard. Seed-free sweep over ±3% seed error: mmi_1x2 4025 trials, old wrong
+**13.7%**, new **0%**; coupler 3650 trials, old **5.4%**, new **0%** — the
+coupler's working calibration was luck, not margin.
+
+**Tests: 29 → 42** in `tests/test_beta_calibration.py`. Exactly one existing
+test broke — `test_a_boundary_seed_shows_up_as_a_broken_fit`, which encoded the
+*old* contract (a boundary seed no longer shows up as a blown residual, and
+never should have been the tell) — rewritten as
+`test_a_boundary_seed_is_undecidable_and_the_margin_is_what_says_so`. Widened
+`_wire_fakes` to multi-mode/multi-wavelength with `offset`/`seed_scale`, which
+buys a meep-free end-to-end reproduction of the production failure. Added
+`TestTheMmi1x2TurnCountRegression`, pinned to the real cached numbers.
+Fast suite **508 passed, 15 skipped**.
+
+`examples/verification/python/diagnose_mmi1x2_calibration_phase_fit.py`
+rewritten to carry the whole proof: old-vs-new grids side by side, the
+seed-free second-difference check, the robustness sweep, and a printed seed
+literal so re-validation needs no MPB call. Full write-up in `notes.md`
+Solvers item 20 and `validation_markdown/mmi_1x2_validation.md` gap 5.
+
+### The 2×2 MMI has golden runners for the first time
+
+`run_mmi_2x2_{eme,fdtd,hybrid}` added to `tests/test_golden_examples.py` and
+registered in `TARGETS` — 4 golden targets → 7. That device had no golden of any
+kind and, more to the point, **no runner to generate one from**, so
+`mmi_2x2_validation.md` gap 1 was never merely "not generated". The runner half
+is code rather than compute and did not have to wait on the outstanding cold
+regeneration pass; doing it now means that pass covers all three devices in one
+round.
+
+Each replica follows its own example's conventions — C-band 1.530–1.565, top
+input excited (`input_idx=1`), bar = `output_idx=1`, cross = `output_idx=0`, and
+`half_domain_aperture` on both end sections (this device has two ports 1.5 µm
+apart at *each* end, unlike the 1×2). Two deliberate departures, both commented
+in place: `n_modes = 6` against production's 14, chosen conservatively because
+`_iter_distinct_bands()` now *raises* on an unsatisfiable mode request rather
+than padding; and the hybrid replica simulates every section instead of reusing
+the example's mirror-symmetry transpose, since a golden pins
+`HybridSolver.solve()` on its defaults.
+
+### Goldens now record what they were generated against
+
+`scripts/generate_golden_values.py` writes a `provenance` block: `beef_git`,
+`generated_utc`, `dispersive_default`, and the Sellmeier si/sio2 indices at the
+run's own band edges and centre.
+
+Until now a golden held `wavelengths` + `transmission` and nothing else, so
+**staleness could not be read off the file** — only inferred from the validation
+docs. These four fixtures have been invalidated four separate times (Sellmeier
+n_Si shift; `N_MODES` 12→8 on the 1×2; the λ₀ re-parameterisation; today's
+dispersion flip) and on none of those occasions did anything in the file change
+to say so. Same lesson `README.md` check 4 already recorded for the full-device
+FDTD reference, never applied to the `.json` fixtures.
+
+Records the resolved material model rather than a version tag, so a change
+underneath moves it on its own — the reasoning `resolved_material_config()`
+already uses, and the same three probe points. Descriptive only:
+`test_golden_examples.py` still compares `transmission` alone, and one of the
+new tests pins that it stays that way (the git sha changes every commit, so
+asserting on provenance would fail every golden immediately).
+
+5 new tests, `tests/test_golden_provenance.py`, meep-free. Needed no compute and
+did not wait on the outstanding cold regeneration pass; the existing four files
+stay bare until they are next regenerated.
+
+### Examples
+
+- `verify_mmi_1x2_engine_agreement.py` reshaped to the array+merge shape the
+  2×2's sibling proved (`SLURM_ARRAY_TASK_ID` picks one section length; the
+  merge step re-reads all four under `cache_only=True`). The script already
+  existed, fully ported to this device, and had simply never been submitted —
+  this is `mmi_1x2_validation.md` gap 4 / README check 1, the device's last
+  unrun check. Batch pair `run_mmi_1x2_engine_agreement{,_merge}.batch`;
+  deliberately launched with bare `python`, not `srun`, since the script has no
+  rank guards.
+- `run_audit_interface_modes.batch` honours an `AUDIT_ARGS` override instead of
+  hardcoding `--convergence` across all devices, so a single device can be
+  re-audited without editing the file. Added because the dispersion flip makes
+  every recorded identity number frozen-era and worth refreshing per device —
+  and because an all-device run is not currently safe: the modal multiplexer
+  requests 16 modes where ~14 are reachable at res 40 and now raises on the
+  guided-spectrum stop.
+
+  **Correction, later the same day.** The first use of that override (the 1×2)
+  came back **byte-identical**, so "frozen-era" overstates it for this class of
+  number: these are per-wavelength mode solves, and a dispersive medium only
+  differs from a frozen one *across a band*. Only genuinely broadband
+  quantities move. The override is still worth having — that was measured, not
+  assumed — but expect re-audits to confirm rather than overturn.
+
+---
+
 ## 2026-07-31
 
 Started as infrastructure (a billing-account fix and a re-queue), then became a
@@ -90,6 +294,22 @@ corrected — both had the job recorded as still `RUNNING`, and one line in
 gap 3 read "has run fine (job 11585847) the whole time," which was true of
 `solve_section()` never hitting the `CompoundGeometry.polygons()` bug but
 overstated the job's own outcome.
+
+### Measured — mmi_2x2_validation.md gap 2 closed at res 100 (job 11590785)
+
+Δβ_01 (beat length between the MMI body's two lowest guided modes — the
+quantity `mm_length=28.0` was actually chosen against, not either mode's own
+n_eff) converges to 0.05% relative step by res 120, closing at res 100 with
+generous headroom. Corrected an imprecise comparison in this session's own
+earlier partial reading of this job: Δβ_01's raw step size (~0.16 scale) was
+compared directly against absolute n_eff's raw step (~2.8 scale) and called
+"an order of magnitude tighter" — a mixed-units comparison. Read relative to
+each quantity's own value, the two converge at a similar rate; what actually
+settles gap 2 is that Δβ_01 itself is small enough to trust by res 100, not
+a dramatic difference in convergence rate. `mmi_2x2_validation.md`'s own
+`## Order` updated — the goldens (gap 1) are now blocked only on the
+repo-wide material-model regeneration, not this device's own resolution
+question.
 
 ### Fixed — `FDTDSolver._iter_distinct_bands()`: k-seed laddering (item 12) and the guided-edge stop (item 14)
 
