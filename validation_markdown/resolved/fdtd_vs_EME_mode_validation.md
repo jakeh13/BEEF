@@ -7,7 +7,7 @@ and an EME body basis name the same modes, not about any one device's status
 
 > **Note 2026-08-01 — the material-dispersion default flip does NOT invalidate
 > this document's numbers, and that is measured.** `dispersive` defaulted to
-> True on 2026-08-01 (`resolved/material_model_validation.md`), changing the
+> True on 2026-08-01 (`material_model_validation.md`), changing the
 > cache fingerprint and staling every cached entry and golden. The reflex is to
 > mark every recorded number here frozen-era; that reflex is **wrong here**.
 > Job **11608940** re-ran the 1×2's interface-mode audit under dispersion and
@@ -620,7 +620,7 @@ unachievable at res 40 in the first place.
 
       Dropped where the measurement is current and the doc already names it
       free: coupler `N_MODES` 6→5 (band 5, n_eff 1.4367, below the 1.4443
-      cladding — `resolved/directional_coupler_validation.md` check 2) across
+      cladding — `directional_coupler_validation.md` check 2) across
       `directional_coupler_hybrid.py`, `_stub_sweep.py`, `_resolution_sweep.py`
       (plus the stale `N_MODES=6` label in `_modes_sweep.py`'s plot legend);
       2×2 MMI `N_MODES` 15→14 (band 14, n_eff 1.4078 — `mmi_2x2_validation.md`

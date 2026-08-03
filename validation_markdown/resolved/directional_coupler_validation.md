@@ -48,7 +48,7 @@ Status, open work, and outstanding verification. **Everything already closed —
 **The hybrid chain converges, and the coupler's hybrid results are trustworthy.**
 
 Item 6, the last obstacle and the reason the original document existed, is closed.
-(Naming collision: `fdtd_vs_EME_mode_validation.md` has its own, unrelated, still-open
+(Naming collision: `resolved/fdtd_vs_EME_mode_validation.md` has its own, unrelated, still-open
 item 6 — `interface_modes` convergence. `verify_item_6_engine_agreement.py` and
 `run_item_6_res_sweep.batch` are THIS item 6, closed, not that one.) The
 two engines disagreed by ~10% on Δβ through an identical uniform cross-section, which made
@@ -280,7 +280,7 @@ means it is one pass rather than three.
   closed. It has. Deserves its own commit.
 - ~~**Drop `N_MODES` 6 → 5** on the coupler — one of the six interface modes is a radiation
   mode (check 2 above).~~ **DONE 2026-07-30** as part of
-  `fdtd_vs_EME_mode_validation.md` item 9's cross-device pass (band 5, n_eff
+  `resolved/fdtd_vs_EME_mode_validation.md` item 9's cross-device pass (band 5, n_eff
   1.4367, below the 1.4443 cladding), across `directional_coupler_hybrid.py`,
   `_stub_sweep.py` and `_resolution_sweep.py`. This entry was left standing on
   this list until 2026-07-31; the code had already moved.

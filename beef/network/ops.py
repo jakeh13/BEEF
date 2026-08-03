@@ -31,9 +31,17 @@ entirely; Branch B starts from two independent free variables (a_p, a_q)
 and removes only one of them (a_q, forced by the loop), leaving a_p and its
 own port still live. Naively taking the p->q limit of a Branch-B-shaped
 formula does not reduce to Branch A's, so this isn't a single formula with
-a degenerate case — it's two different formulas. Branch B has no required
-caller in this pass (deferred; see the implementation plan) and raises
+a degenerate case — it's two different formulas. Branch B raises
 NotImplementedError with this same explanation.
+
+Branch B DOES now have a required caller, identified 2026-08-01: the ring
+resonator's physical 4-port form. Its loop runs ring_R -> around the outer
+ring -> ring_L, i.e. port_out != port_in, so the composable/add-drop/cascaded
+route is blocked on this function. See validation_markdown/
+ring_resonator_validation.md's "Wiring to-do" item 1. That doc's decision is
+to ship the 2-port aggregate form (Branch A) first as a numerical
+cross-check, then implement Branch B -- so this is scheduled work with a
+named dependent, no longer an open-ended deferral.
 """
 from __future__ import annotations
 

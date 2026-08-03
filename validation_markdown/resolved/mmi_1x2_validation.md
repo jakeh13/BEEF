@@ -11,7 +11,7 @@
 
 
 
-Opened 2026-07-26. Gap list against the four checks in [README.md](README.md).
+Opened 2026-07-26. Gap list against the four checks in [README.md](../README.md).
 
 **Status 2026-07-26:** gap 1 (stale goldens) is **closed** — both were
 regenerated and independently confirmed (jobs 11500524, 11500663). Gap 3 (mode
@@ -48,7 +48,7 @@ as 11608690/11608692.
 results than it first appears, and that is now measured rather than assumed.**
 
 The initial reading of today's material-dispersion default flip
-(`resolved/material_model_validation.md` step 3) was that every number on this
+(`material_model_validation.md` step 3) was that every number on this
 device had gone stale. **That was wrong for half of them**, and the reason is
 worth stating because it applies to every device:
 
@@ -65,8 +65,8 @@ worth stating because it applies to every device:
 |---|---|---|
 | 2 (resolution) | EME `compute_modes()` at a single `WL = 1.31` | **No** |
 | 3 (mode identity) | `section_mode_neff()` / `compute_modes()` at 1.31 µm | **No — confirmed by measurement, below** |
-| 4 (engine agreement) | `solve_section()` over an 11-point band | **Yes** — 🟢 re-running as 11608875/11608876 |
-| 5 (hybrid vs FDTD) | full-device broadband FDTD + cascade | **Yes** — not yet re-run |
+| 4 (engine agreement) | `solve_section()` over an 11-point band | **Yes** — ✅ measured dispersive, 11608875 + 11609686 |
+| 5 (hybrid vs FDTD) | full-device broadband FDTD + cascade | **Yes** — ✅ re-measured dispersive, 11609215 + 11609687 |
 
 **Gap 3 re-audited under dispersion — job 11608940 (7:13), and every number is
 byte-identical to the 2026-07-30 frozen-era table**: bands 0–7 at 2.696912 …
@@ -84,11 +84,27 @@ Job 11608941 re-runs gap 2 the same way. On the reasoning above it should also
 come back unchanged; it is cheap and left running so that is measured rather
 than inferred by analogy from gap 3.
 
+**✅ It did — 11608941 completed 1:03:21 and reproduced all five Δβ values to
+every printed digit.** Both gaps are now measured. The general rule, stated
+from evidence rather than argument: **a quantity evaluated at a scalar
+wavelength is invariant across the dispersion break; only genuinely broadband
+quantities move.** That is gaps 4 and 5, and nothing else on this device.
+
 **What this does *not* excuse.** Gaps 4 and 5 genuinely are broadband and do
 move. Gap 5's calibrated re-run in flight (11608690/11608692) started **before**
 the flip, so it lands frozen-era: valid as a test of the `beta_from_phases` fix,
 which is what it exists for, but **gap 5 still needs re-measuring dispersive
 afterwards.** Say which side of the flip a broadband number came from.
+
+**✅ Both broadband gaps have now been measured dispersive, 2026-08-01
+(evening).** Gap 4 landed for the **first time on this device** (11608875 +
+11609686): mean Δβ ratio **0.9946**, a 0.54% monotone bias — all four checks
+are now ticked on the 1×2. Gap 5 re-measured (11609215 + 11609687):
+**9.11% → 10.18%**, i.e. it got marginally *worse* under the more correct
+material model, with the mean offset essentially unmoved (−0.025304 →
+−0.025413). The one number still owed on the frozen side of the break is the
+**calibrated** gap 5 (7.30%, frozen, offline-derived). Full results in gaps 4
+and 5 below.
 
 **That dispersive re-measure is submitted — jobs 11609215 `[1-2]` +
 11609216**, the 1×2's half of the pair whose 2×2 twin (11609211/11609212) is
@@ -103,10 +119,12 @@ before/after pair would not exist.
 one tier above the 2×2's res 100, non-monotone unlike the 2×2's clean decay.
 Decision: shipped `RESOLUTION` stays **40**; the gap is carried as a known
 mesh-convergence caveat rather than closed by a config bump (real cost jump,
-existing budgets sized for 40 — see gap 2 for the reasoning). **Only gap 4
+existing budgets sized for 40 — see gap 2 for the reasoning). ~~**Only gap 4
 (check 1, engine agreement) is now fully unstarted** for this device — unlike
 the 2×2, which at least has it in flight (`mmi_2x2_validation.md` gap 4,
-job 11591249). Goldens (gap 1) stay blocked behind gap 4 plus the coupler's
+job 11591249).~~ **Superseded 2026-08-01: gap 4 is measured and closed
+(11608875 + 11609686, mean ratio 0.9946). No check is unstarted on this device
+any more.** Goldens (gap 1) stay blocked behind gap 4 plus the coupler's
 own cold regeneration pass, launched today as 11592462/11592463 — see
 `running_jobs.md`.
 
@@ -237,6 +255,32 @@ the only device with all three golden fixtures (`mmi_1x2_eme.json`,
    | 100 | 0.27998 | −0.00097 | 0.345% |
    | 120 | 0.27987 | −0.00011 | 0.039% |
 
+   > ✅ **Re-measured dispersive 2026-08-01, job 11608941 (1:03:21): every
+   > value above is reproduced to all five printed digits.** 0.28396 / 0.28149
+   > / 0.28095 / 0.27998 / 0.27987, and both n_eff columns match too. The
+   > res-120 closure stands unchanged across the material break.
+   >
+   > **This was predicted before the job ran, and the reason is visible in its
+   > own log header:** `[gap2] mmi_1x2 body, section=(-1.0, 1.0), wl=1.31,
+   > N_MODES=2` — a **single scalar wavelength**. `resolved_material_config()`
+   > only sets `resolved_dispersive` when `wl.min() < wl.max()`, and a medium
+   > built at one wavelength is exact Sellmeier whether or not the dispersive
+   > flag is on. Same mechanism as gap 3's byte-identical re-audit (11608940).
+   >
+   > **Gaps 2 and 3 are now both measured rather than one measured and one
+   > inferred by analogy** — which was the point of spending an hour of compute
+   > on a result expected to be unchanged. The rule can now be stated from
+   > evidence: **a quantity evaluated at a scalar wavelength is invariant
+   > across the dispersion break; only genuinely broadband quantities (gaps 4
+   > and 5) move.**
+   >
+   > ⚠ **The ε log test does not apply to this job.** `run_mmi_1x2_gap2_dbeta`
+   > goes through meow/MPB, which never prints meep's `dielectric constant
+   > epsilon diagonal` line — grepping for it returns nothing, which is not
+   > evidence of anything. Here the discriminator is the `wl=` field in the
+   > header. Check the mechanism that actually applies to the code path rather
+   > than reaching for the same grep every time.
+
    **Non-monotone, unlike the 2×2's clean decay.** The 80→100 relative step
    (0.345%) is larger than 60→80's (0.192%) — the same wobble already noted
    in this device's raw n_eff[0], now showing up in the physically-relevant
@@ -346,17 +390,67 @@ the only device with all three golden fixtures (`mmi_1x2_eme.json`,
    bands mentioned) is consistent with either. It matters less here than on the
    2×2 (`mmi_2x2_validation.md` gap 6) because 8 modes on a 2.8 µm body is well
    inside where the meep-side guard's diagnostic grid still discriminates
-   (`fdtd_vs_EME_mode_validation.md` item 11), and because no guard warning
+   (`resolved/fdtd_vs_EME_mode_validation.md` item 11), and because no guard warning
    appears in this device's audit output. Re-confirm opportunistically — with
    the next run of this audit, not as a job of its own.
 
-4. **Engine agreement has not been measured.** The coupler's test uses even/odd
-   supermode phase, which has no direct analogue in a 1×2 MMI. The transferable
-   form is: solve a uniform stretch of the MMI body at two lengths, and check
-   that FDTD and EME agree on each mode's accumulated phase. Adapt
-   `verify_item_6_engine_agreement.py` — the extraction helper
+4. ~~**Engine agreement has not been measured.**~~ **✅ MEASURED AND CLOSED
+   2026-08-01 — jobs 11608875 `[0-3]` + merge 11609686.** The coupler's test
+   uses even/odd supermode phase, which has no direct analogue in a 1×2 MMI.
+   The transferable form is: solve a uniform stretch of the MMI body at two
+   lengths, and check that FDTD and EME agree on each mode's accumulated phase.
+   Adapted from `verify_item_6_engine_agreement.py` — the extraction helper
    (`tests/test_engine_agreement.py::dbeta_from_phases`) is device-independent
    and already tested.
+
+   ### ✅ Check 1 result — the last of the four checks to land on this device
+
+   Measured **dispersive** (`SECTION_LENGTHS = [0.5, 1.0, 1.5, 2.0]`,
+   `N_MODES = 2`, `RESOLUTION = 40`, fully cache-cold). Costs 55:15 / 41:22 /
+   49:33 / 2:23:09 plus a 25:45 merge. **All four checks are now ticked on the
+   1×2**, matching the 2×2.
+
+   | λ (µm) | Δβ FDTD | Δβ EME | ratio FDTD/EME |
+   |---|---|---|---|
+   | 1.26 | 0.26836 | 0.26937 | 0.99627 |
+   | 1.30 | 0.27949 | 0.28103 | 0.99453 |
+   | 1.31 | 0.28233 | 0.28396 | 0.99424 |
+   | 1.35 | 0.29394 | 0.29579 | **0.99375** |
+   | 1.36 | 0.29692 | 0.29877 | 0.99382 |
+
+   **Mean ratio 0.9946 — a 0.54% bias, monotone across ten of the eleven
+   points** (shallow minimum at 1.35, a +0.00007 tick back at the band edge).
+   **No sign change.** Fit quality is excellent: worst FDTD phase-fit residual
+   **3.01e-06 rad** and worst |off-diagonal| **1.12e-05**, so the two-mode
+   basis is clean and the ratio is a real physical disagreement, not fit noise.
+
+   > ⚠ **Both of those diagnostics print as `0.0000` in the job log** — the
+   > `:.4f` trap that already burned the 2×2's merge. The values above come
+   > from `engine_agreement.npz`. **Read the `.npz`, not the log.**
+
+   **This lands almost exactly on the 2×2's number** (0.9962 → 0.9945, mean
+   bias 0.47%), same direction — EME over-predicts Δβ relative to FDTD — and
+   the same near-monotone shape. Two independent MMI geometries in different
+   bands agreeing to within 0.07 points is a much stronger statement about the
+   *engines* than either device made alone: this is an engine-level bias, not a
+   device artifact.
+
+   **Does it account for gap 5's 10.18%? No, and that is now settled from two
+   directions.** The sign is consistent — a systematic Δβ under-prediction by
+   FDTD is the pattern that produces gap 5's uniform-negative ΔT — but the
+   magnitude is not: `calibrate_body_neff` corrects exactly this class of
+   constant body-phase bias, and the P2 experiment above measured it buying
+   only ~20% of the discrepancy (9.11% → 7.30%). So gap 4 is **consistent with
+   but insufficient for** gap 5.
+
+   Note this check does **not** depend on the `beta_from_phases` bug fixed the
+   same day: it uses `dbeta_from_phases`, which is seed-free (Δβ ≈ 0.284
+   rad/µm gives 0.142 rad per 0.5 µm step, nowhere near a wrap) and so has
+   never had a branch to choose.
+
+   ⚠ **Inherits the res-40 caveat** (see *Parity with the coupler* / P3): both
+   engines are read at the same unconverged mesh, so a shared bias partially
+   cancels in the ratio. The number is not certified mesh-independent.
 
 5. **No hybrid-vs-full-device comparison on record.** Both scripts exist and both
    have goldens, but nothing asserts the hybrid reproduces `mmi_1x2_fdtd.py` on
@@ -383,8 +477,53 @@ the only device with all three golden fixtures (`mmi_1x2_eme.json`,
    > ⚠ **Frozen-material era.** Every number in this subsection was measured
    > before `dispersive` defaulted to True (2026-08-01). Gap 5 is broadband,
    > so it is one of the two gaps that genuinely moves across that break.
-   > Preserved as `comparison_FROZEN_pre20260801.npz`; dispersive re-measure
-   > in flight as **11609215 `[1-2]` + 11609216**.
+   > Preserved as `comparison_FROZEN_pre20260801.npz`; **the dispersive
+   > re-measure has now landed — see the boxed result immediately below, which
+   > is the current number.**
+
+   > ### ✅ GAP 5 RE-MEASURED DISPERSIVE — 2026-08-01, jobs 11609215 `[1-2]` + 11609687
+   >
+   > **This is the number the shipped configuration produces.** Both sides
+   > dispersive and mtime-verified in `provenance.json` (`fdtd_pkl` 17:34 UTC
+   > from 11609215_1, `hybrid_pkl` 19:26 UTC from 11609215_2, beef
+   > `f8b0d47+dirty` against the frozen baseline's `1cc8edc`) — no repeat of
+   > the 11608692 pickle race. Comparison job 11609687, 0:12.
+   >
+   > | | frozen | **dispersive** |
+   > |---|---|---|
+   > | max \|ΔT\| (`out_0`) | 0.03588 | **0.04006** |
+   > | mean \|ΔT\| | 0.02530 | **0.02541** |
+   > | rel to mean T | 9.11% | **10.18%** |
+   > | worst λ | 1.33 µm | **1.36 µm** (band edge) |
+   > | all ΔT negative | yes | **yes** |
+   >
+   > **The gap got slightly worse, not better — 9.11% → 10.18%.** Say this
+   > plainly: turning on the more physically correct material model moved this
+   > device's check-4 discrepancy in the wrong direction. It is not a
+   > regression in the material work (the O-band n_Si gap it fixed is real and
+   > measured, `material_model_validation.md`), but it does mean the
+   > material model was never what stood between this device and agreement.
+   >
+   > **What actually moved is only the band edge.** The mean offset is
+   > essentially untouched — **−0.025304 → −0.025413, a 0.4% change** — while
+   > the worst point migrated from 1.33 µm to the 1.36 µm edge, where the FDTD
+   > reference itself shifted most (−0.0065 at 1.34, +0.0040 at 1.36). The
+   > large uniform negative offset that *is* this device's gap 5 result is
+   > **material-model-independent**, which is the strongest evidence yet that
+   > it is structural.
+   >
+   > Splitter symmetry survives: `out_1` tracks `out_0` to five decimals
+   > throughout (0.040060 vs 0.040076), as it did frozen.
+   >
+   > **Combined with the calibration result above, both cheap explanations for
+   > this device's ~9–10% are now eliminated by measurement** — calibration
+   > buys ~20% relative and leaves the sign structure intact; dispersion buys
+   > nothing and costs 1 point. What remains is the tapers or the cascade, the
+   > same conclusion the 2×2's P4 test reached independently on the same day.
+   >
+   > ⚠ **The calibrated number is still frozen-era.** The 7.30% in the P2 box
+   > above has not been re-measured dispersive; a calibrated+dispersive run is
+   > still owed before the two can be quoted side by side.
 
    ### ✅ P2 CLOSED, and calibration does NOT close this device's gap — 2026-08-01, jobs 11608690 + 11608692
 
@@ -437,6 +576,13 @@ the only device with all three golden fixtures (`mmi_1x2_eme.json`,
    not yet a gap 5 number.** But the reference's own movement across the
    dispersion break is now measured directly against the preserved baseline:
 
+   > **⚠ Superseded — the complete gap 5 result is the box above (10.18%).**
+   > This subsection is kept because it isolates the *reference's* own
+   > movement, which the finished comparison folds together with the hybrid's.
+   > Its closing P4 argument was **written before the 2×2's test landed and is
+   > now refuted** — see the correction at the end of it. (The comparison
+   > actually ran as **11609687**, not 11609216.)
+
    | λ (µm) | T frozen | T dispersive | Δ |
    |---|---|---|---|
    | 1.260 | 0.44678 | 0.44716 | +0.00037 |
@@ -474,6 +620,25 @@ the only device with all three golden fixtures (`mmi_1x2_eme.json`,
    rather than hide. That is the quantitative version of the P4 prediction, and
    it was written down before 11609212 landed.
 
+   > ### ❌ That scale argument was wrong, and the 2×2's own measurement is why
+   >
+   > It assumed a material term of **this device's** size would appear on the
+   > 2×2. When the 2×2 was measured (11609680/11609681), its FDTD reference
+   > moved by at most **0.00033** — not the 0.0065 seen here, but **~20×
+   > less**, and only 8.6% of its ΔT swing. The term did not dominate there
+   > because it is not that size there.
+   >
+   > **The unstated assumption was that material sensitivity transfers between
+   > devices.** It does not: this device spans 1.26–1.36 µm (±3.8% about
+   > centre) against the 2×2's ±1.13%, a 3.4× narrower relative band, and the
+   > cost of freezing an index grows with distance from the freeze point. The
+   > paragraph above extrapolated from the device with the *largest* material
+   > sensitivity in the repo to the one with the smallest.
+   >
+   > The two-crossing shape flagged just above — the half that weakened the
+   > hypothesis — was the better signal of the two and should have carried more
+   > weight. Full refutation in `mmi_2x2_validation.md`'s P4 box.
+
    | | `out_0`/`out_top` | `out_1`/`out_bot` |
    |---|---|---|
    | max \|ΔT\| | **0.03588** | 0.03590 |
@@ -490,7 +655,7 @@ the only device with all three golden fixtures (`mmi_1x2_eme.json`,
    hybrid under-predicts transmission at all 11 wavelengths, by a margin that
    grows from 0.021 at 1.26 µm to 0.036 at 1.33 µm. A random basis or meshing
    error would not sign itself so consistently. That is the signature of the Δβ
-   discretization gap `resolved/directional_coupler_validation.md` items 6/14
+   discretization gap `directional_coupler_validation.md` items 6/14
    diagnosed: MPB's index and the phase meep's time-stepper accumulates differ
    ~2.3% per mode, which the `β/Δβ` lever amplifies.
 
@@ -830,6 +995,14 @@ guided. See gap 3.
    lengths — roughly 2 h of serial work against the 2×2's 13.4 h, as the
    6.2×-shorter body predicted.
 
+   **✅ CLOSED 2026-08-01.** The 11608448 pass was frozen-era and its merge
+   (11608450) was deliberately cancelled rather than run against a cache it
+   could no longer reach. Re-run cache-cold and dispersive as **11608875
+   `[0-3]`** + merge **11609686**: mean Δβ ratio **0.9946**, 0.54% monotone
+   bias, worst fit residual 3.01e-06 rad. Full table in gap 4. Dispersive
+   costs ran 55:15 / 41:22 / 49:33 / 2:23:09 — roughly 2.4× the frozen-era
+   pass, consistent with the 1.53× seen on 11609215_1.
+
    Note this check does **not** depend on the `beta_from_phases` bug fixed the
    same day: it uses `dbeta_from_phases`, which is seed-free (Δβ ≈ 0.284
    rad/µm gives 0.142 rad per 0.5 µm step, nowhere near a wrap) and so has
@@ -837,7 +1010,7 @@ guided. See gap 3.
 
 ## Parity with the coupler — one item beyond the four checks
 
-Added 2026-08-01, tracked as **P3** in [README.md](README.md)'s parity
+Added 2026-08-01, tracked as **P3** in [README.md](../README.md)'s parity
 backlog and recorded here because gap 2 owns it.
 
 **The resolution knob is still shared.** `mmi_1x2_hybrid.py` ships one
@@ -853,6 +1026,7 @@ That decision is defensible and is not being reopened here. What was *not*
 recorded is its consequence: **check 3 is not closed on this device the way it
 is on the coupler**, because the coupler's closure was the knob split, not a
 convergence measurement. Anything measured at res 40 on this device — gap 5's
-9.11%, gap 4's forthcoming ratio — inherits that caveat. Worth re-deciding
+9.11% (now 10.18% dispersive), gap 4's **measured 0.9946 ratio** — inherits
+that caveat. Worth re-deciding
 explicitly rather than leaving implicit, especially now that gap 4 gives a
 second res-40 number to interpret.

@@ -77,16 +77,28 @@ WL_MIN = 1.50       # wavelength sweep start (µm)
 WL_MAX = 1.60       # wavelength sweep end (µm)
 N_WL = 11           # number of wavelength points
 
-# The 3 dB length for this cross-section — the β-calibrated hybrid's own
-# auto-picked 50:50 split point (directional_coupler_hybrid.py,
-# PLOT_COUPLING_LENGTH, job 11544656): 15.150754 µm, its nearest sampled
-# length on a 200-point sweep grid. Hard-coded here to the same value so this
-# script's plot title and the hybrid's agree to the decimal instead of two
-# independent numbers that happen to be close. (The full-device FDTD ground
-# truth — example_output/verification/ground_truth_sweep/length_sweep.npz,
-# directional_coupler_validation.md item 5 — crosses 0.5 at 15.129 µm
-# independently, 0.14% away; that was this constant's source from
-# 2026-07-28 until this change moved it to the hybrid's own number instead.)
+# The 3 dB length for this cross-section, taken from THIS engine's own
+# reference: the full-device FDTD ground-truth length sweep
+# (verify_item_5_ground_truth.py, array 11480725 / job 11482062, frozen
+# material model, 40 lengths × 11 λ). Its band-mean cross/(cross+through)
+# crosses 0.5 at 15.129 µm, bracketed by L=15.0 (0.494617) and L=15.5
+# (0.515476) — hence 15.13. That is a *band-mean*; at λ=1.55 alone the same
+# sweep crosses at 15.313 µm.
+#
+# Deliberately NOT pinned to the hybrid's 15.15. The hybrid's auto-picked
+# 50:50 point (directional_coupler_hybrid.py, PLOT_COUPLING_LENGTH, job
+# 11544656) is 15.150754 µm — its nearest sample on a 200-point, 0.299 µm
+# sweep grid. These are two engines' independent crossings of the same
+# physical quantity, 0.14% apart, and that difference is a *result* this
+# device exists to measure, not a drift to be reconciled. Collapsing them to
+# one number hides it. Commit e85b350 (a ring-resonator CACHE cleanup) did
+# exactly that with no mention; reverted 2026-07-31. The prose here claimed
+# the pinning for two days after the value went back — corrected 2026-08-02.
+#
+# NB the live sweep file is gone: clear.sh cleared example_output/verification/,
+# so the npz survives only at archive/example_output_20260728/verification/
+# ground_truth_sweep/length_sweep.npz. Regenerate via
+# batch/verification/run_verify_item_5_ground_truth.batch.
 #
 # WAS 13.5 µm until 2026-07-28, and that was wrong: the reference gives
 # cross/(cross+through) = 0.4318 there, i.e. a 43:57 splitter, not 3 dB. It came
@@ -115,6 +127,23 @@ COUPLING_LENGTH = 15.13   # µm, hard-coded — the 3 dB length; see above.
 # Δβ over the band. Re-using a frozen constant for a dispersive run would
 # assume the answer. Leave the constant alone as the documented frozen-era
 # reference; override it per-run.
+#
+# It moved, and the override earned itself. Measured 2026-08-02, jobs
+# 11609658 (hybrid, DC_PLOT_COUPLING_LENGTH=auto) → 11609659 (this script at
+# that length): the hybrid's band-mean L50 goes 15.150754 → **15.089958** µm
+# under dispersion. Running this script there gives band-mean ratio
+# **0.500675** across 1.50–1.60 µm — 0.13% off a true 50:50, i.e. the
+# dispersive FDTD crossing is ~15.074 µm (0.000675 / 0.0418 per µm, the
+# hybrid's local slope). So dispersion moves BOTH engines down by ~0.05 µm
+# and they still agree to ~0.1%: 15.129/15.151 frozen, 15.074/15.090
+# dispersive. The engine gap survives the material model — it is not a
+# dispersion artifact.
+#
+# The file default stays 15.13 anyway. 15.074 rests on one length plus the
+# *hybrid's* slope; there is no dispersive full-device FDTD length sweep, and
+# adopting the hybrid-derived number here would re-commit e85b350's error of
+# pinning this engine to the other one's answer. Regenerate the item-5 sweep
+# dispersively before touching the constant.
 _env_CL = os.environ.get("DC_COUPLING_LENGTH")
 if _env_CL is not None:
     COUPLING_LENGTH = float(_env_CL)

@@ -12,7 +12,7 @@
 
 
 Opened 2026-07-26. Nothing is known to be wrong; this is the gap list against the
-four checks in [README.md](README.md).
+four checks in [README.md](../README.md).
 
 **Status 2026-07-26:** check 2 (mode identity) is **done and passed** — job
 11500536, see below. It was expected to be the riskiest device in the repo and
@@ -46,7 +46,7 @@ killed — roughly halfway through the job's total FDTD work, per-length. **Gap
 same status as the 1×2. See gap 4 below and `running_jobs.md`'s own 11591249
 entry for the full timing breakdown. Goldens (gap 1) are still blocked behind
 gap 4 plus the coupler's own cold regeneration pass
-(`resolved/directional_coupler_validation.md` Verification → Outstanding),
+(`directional_coupler_validation.md` Verification → Outstanding),
 launched today as 11592462/11592463 (11592463 completed 17:42; 11592462
 still running as of this update) — see `running_jobs.md`.
 
@@ -63,6 +63,22 @@ it. Numbers, diagonality check and the argument against gap 5 in gap 4 below.
 **Only gap 1 (goldens — never existed) remains open on this device**, and it
 is blocked on the repo-wide material-model regeneration, not on anything
 2×2-specific.
+
+**Status 2026-08-01 (evening) — gap 5 re-measured dispersive, and P4's
+candidate mechanism is REFUTED** (jobs 11609211_1 + 11609680 + 11609681).
+Gap 5 is now **0.76% / 0.59%** max|ΔT| (frozen-era: 0.82% / 0.62%), and **the
+sign flip survives in the same grid interval** — the material model was not
+producing it. The FDTD reference moved by at most 0.00033 under the flip,
+~20× less than the 1×2's 0.0065, so the scale argument that had looked like
+support was measuring the 1×2's much larger material sensitivity rather than
+this device's. **P4 stays open and structural — tapers or the cascade.** Full
+analysis in the P4 box under *Parity with the coupler*.
+
+Same evening, the 1×2's check 1 landed for the first time at **0.9946**
+against this device's **0.9953** — 0.07 points apart, different geometry,
+different band, same direction. **The 0.47% Δβ bias is an engine-level
+property, not a 2×2 artifact**, which strengthens gap 4's negative result
+about `calibrate_body_neff` rather than weakening it.
 
 `examples/mmi_2x2/python/` — `mmi_2x2_eme.py`, `mmi_2x2_fdtd.py`,
 `mmi_2x2_hybrid.py`.
@@ -209,7 +225,7 @@ the 1×2's problem is *stale* references, which at least fail loudly under
    guided band here. `N_MODES = 14` would drop it at no cost.
 
    **DONE 2026-07-30** — `mmi_2x2_hybrid.py:124` now reads `N_MODES = 14`,
-   applied as part of `fdtd_vs_EME_mode_validation.md` item 9 (the cross-device
+   applied as part of `resolved/fdtd_vs_EME_mode_validation.md` item 9 (the cross-device
    pass that drops each device's one unguided column). The configuration
    change this gap asked for has therefore already happened, which moves the
    goldens question in gap 1 / `## Order` forward one step — see there.
@@ -282,7 +298,7 @@ the 1×2's problem is *stale* references, which at least fail loudly under
    > mechanism is absent): 0.47% against the coupler's ~10% is **21× tighter**,
    > and it is consistent with the coupler doc's own prediction — the coupler's
    > figure is `β/Δβ ≈ 99` amplification of a ~2.3% per-mode n_eff error
-   > between two near-degenerate supermodes (`resolved/directional_coupler_
+   > between two near-degenerate supermodes (`directional_coupler_
    > validation.md` item 6 / item 13 note), and this device's two modes are
    > split far more strongly, so there is no comparable lever here.
    >
@@ -323,7 +339,7 @@ the 1×2's problem is *stale* references, which at least fail loudly under
    `README.md`). Reports the numbers only, no pass/fail threshold: gap 4
    (engine agreement) is not measured for this device yet, so there is no
    basis to say how much of any observed gap is calibratable
-   (`resolved/directional_coupler_validation.md` items 6/14 precedent: ~5%
+   (`directional_coupler_validation.md` items 6/14 precedent: ~5%
    uncalibrated, 0.11% after `calibrate_body_neff`) vs. structural.
    SLURM job 11585844 (array indices 1-2, `mmi_2x2_fdtd`/`mmi_2x2_hybrid`)
    generates the two SMatrix files; job 11585849
@@ -340,6 +356,28 @@ the 1×2's problem is *stale* references, which at least fail loudly under
    |---|---|---|---|---|
    | bar | 0.0028 | 0.0012 | 0.62% | 1.5615 µm |
    | cross | 0.0043 | 0.0017 | 0.82% | 1.5650 µm |
+
+   > ### ✅ RE-MEASURED DISPERSIVE 2026-08-01 — jobs 11609211_1 + 11609680 + 11609681
+   >
+   > **This is the number the shipped configuration produces**, and it
+   > supersedes the frozen-era table above as the current gap 5 result. The
+   > frozen numbers are kept because they are the other half of the P4 test.
+   >
+   > | port | max\|ΔT\| frozen | max\|ΔT\| **dispersive** | % of mean T_fdtd |
+   > |---|---|---|---|
+   > | bar | 0.002803 | **0.002689** | 0.62% → **0.59%** |
+   > | cross | 0.004279 | **0.003951** | 0.82% → **0.76%** |
+   >
+   > **Everything qualitative in the paragraphs below survives the flip
+   > unchanged** — still under 1% on both ports, still one sign change per port
+   > in the same grid interval, still an order of magnitude tighter than the
+   > 1×2. The material change moved the FDTD reference by at most 0.00033 and
+   > the hybrid by at most 0.00011.
+   >
+   > It also **answers the "not yet tried" note two paragraphs down, in the
+   > negative**: the sign-changing slope is *not* a dispersion-sensitive phase
+   > term. Full analysis, and the refutation of the P4 mechanism it was the
+   > decisive test for, in the **P4** box under *Parity with the coupler*.
 
    Under 1% on both ports — an order of magnitude tighter than the 1×2's 9.11%
    — but **the sign is not uniform**: both ports start positive (hybrid over
@@ -372,7 +410,7 @@ the 1×2's problem is *stale* references, which at least fail loudly under
      guards on, a duplicate at any band makes the solver reach past it, so the
      15 (now 14) modes returned need not be the 15 that were audited.
    - **This is the repo's highest-mode-count SOI_220 device**, and
-     `fdtd_vs_EME_mode_validation.md` item 11 shows the meep-side guard's
+     `resolved/fdtd_vs_EME_mode_validation.md` item 11 shows the meep-side guard's
      duplicate check has no discriminating margin left at these mode counts on
      a 2.8 µm body — which is exactly this device's body width. If that guard
      mis-fires anywhere, here is a likely place.
@@ -405,7 +443,7 @@ the 1×2's problem is *stale* references, which at least fail loudly under
      `README.md` Findings 1 and 2 and the three other files that quote 0.0007 can
      be read at face value.
    - **Neither guard fired — zero firings in the log.** That is the specific risk
-     this gap raised: `fdtd_vs_EME_mode_validation.md` item 11 identifies a 2.8 µm
+     this gap raised: `resolved/fdtd_vs_EME_mode_validation.md` item 11 identifies a 2.8 µm
      body at high mode count as exactly where the meep-side guard has the least
      discriminating margin, and this device is the repo's highest-mode-count
      SOI_220 geometry on precisely that body width. It had nothing to fire on.
@@ -458,10 +496,15 @@ on account of calibration, because calibration is not indicated here.
 
 Added 2026-08-01. All four checks are ticked on this device and it is still
 not at coupler level. Both items are tracked as **P3** and **P4** in
-[README.md](README.md)'s parity backlog; recorded here because this doc owns
+[README.md](../README.md)'s parity backlog; recorded here because this doc owns
 them.
 
 > ### 🔬 P4 — a candidate mechanism, 2026-08-01, with a decisive test in flight
+>
+> **⚠ READ FIRST: this block is the pre-test prediction, preserved unedited.
+> The test has since run and REFUTED the mechanism — see the ❌ section
+> immediately following.** Kept in full because a prediction written before
+> the result is the only kind that can be checked afterwards.
 >
 > Recorded **before** the test lands, so the prediction is on record rather
 > than fitted afterwards.
@@ -538,6 +581,82 @@ them.
 >
 > Recorded before 11609212 landed, and deliberately including the half that
 > weakens the hypothesis.
+
+### ❌ P4's candidate mechanism is REFUTED — 2026-08-01, jobs 11609680 + 11609681
+
+**The test ran and the prediction table's second row is what happened: the
+sign flip survives.** Read the table above before this paragraph — it was
+written before the job landed and it is unedited.
+
+Jobs 11609211_1 (dispersive full-device FDTD, 1:51:57) + **11609680**
+(dispersive hybrid, 3:50:41, the `-t 720` resubmission of the cancelled
+11609211_2) + **11609681** (comparison, 0:15). Both sides dispersive and
+mtime-verified against `provenance.json` — `fdtd_pkl` 19:13 UTC, `hybrid_pkl`
+21:59 UTC, beef `f8b0d47+dirty`, against the frozen baseline's `28d65f8+dirty`.
+No repeat of the 11608692 pickle race.
+
+Per-wavelength ΔT, read from the `.npz` (not the `:.4f` log lines):
+
+| λ (µm) | ΔT bar frozen | ΔT bar disp. | ΔT cross frozen | ΔT cross disp. |
+|---|---|---|---|---|
+| 1.5300 | +0.000686 | +0.001011 | +0.002492 | +0.002659 |
+| 1.5405 | +0.000658 | +0.000743 | +0.001025 | +0.001058 |
+| 1.5440 | **−0.000008** | **+0.000029** | +0.000527 | +0.000549 |
+| 1.5475 | −0.000662 | −0.000646 | **−0.000479** | **−0.000491** |
+| 1.5650 | −0.002105 | −0.001942 | −0.004279 | −0.003951 |
+
+**Exactly one sign change per port, before and after, in the same grid
+interval.** The mechanism required the crossing to *vanish*; it did not move.
+
+| | max \|ΔT\| frozen | max \|ΔT\| dispersive | rel to mean T |
+|---|---|---|---|
+| bar (`out_0`) | 0.002803 | **0.002689** | 0.616% → **0.591%** |
+| cross (`out_1`) | 0.004279 | **0.003951** | 0.824% → **0.761%** |
+
+|ΔT| shrank by 4% and 8% — a rounding-level improvement, not the collapse a
+dominant material term would have produced.
+
+**The decisive number is how little the material change moved either side.**
+Differencing the dispersive and frozen runs directly:
+
+| | max shift, FDTD reference | max shift, hybrid | max change in ΔT | as fraction of the ΔT swing |
+|---|---|---|---|---|
+| bar | 0.000329 | 0.000114 | 0.000325 | **8.6%** |
+| cross | 0.000298 | 0.000030 | 0.000328 | **4.8%** |
+
+**This also resolves the "cuts both ways" tension recorded above, against the
+hypothesis.** The 1×2 evidence said the reference moves 0.0065 — *2× this
+device's entire ΔT swing* — so a term of that class had to either dominate here
+or the devices had to differ. **They differ, by a factor of ~20:** the 2×2's
+reference moves at most **0.00033**. So the scale argument never applied to
+this device, and the one measurement that looked like support for P4 was in
+fact measuring the 1×2's much larger material sensitivity.
+
+That difference is not mysterious — the 1×2 spans 1.26–1.36 µm (±3.8% about
+centre) against the 2×2's 1.53–1.565 µm (±1.13%), a 3.4× narrower relative
+band, and freezing an index costs roughly in proportion to how far the band
+runs from the freeze point. Offered as the plausible reading, not a measured
+decomposition.
+
+**And the frozen term's *shape* was wrong too.** The mechanism's premise was
+that the reference's frozen error is zero at centre and antisymmetric about
+it. Measured, `d(FDTD ref)` on bar is negative at **every** wavelength
+(−0.00033 … −0.00009, no crossing at all), and on cross it wanders sign
+several times with no structure about 1.5475. It is a small noisy offset, not
+an antisymmetric term. The 1×2's two-crossing shape, already flagged above as
+weakening the hypothesis, was the first sign of this.
+
+**Conclusion: the residual is structural — tapers or the cascade — exactly as
+P4 stood before the hypothesis was raised.** P4 does **not** close. What the
+test bought is the elimination of the cheapest candidate, and it cost one
+already-required re-measurement, since gap 5 needed its dispersive number
+regardless. The hypothesis was worth recording and worth testing; it was
+wrong, and the prediction being on record beforehand is what makes that
+readable now.
+
+> **Corrected in the text above:** the pre-test note "*Scale supports the
+> mechanism*" should be read as refuted — it extrapolated the 1×2's material
+> sensitivity to this device, and that extrapolation is what failed.
 
 **P4 — checks 1 and 4 do not reconcile, and this is the substantive one.**
 Gap 4 (check 1) measures a **monotone** 0.47% Δβ bias, 0.9962 → 0.9945 across

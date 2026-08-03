@@ -36,6 +36,39 @@ from beef.materials import SOI_220
 from beef.solvers.fdtd import FDTDSolver, PortSpec
 
 
+def test_port_aperture_crossing_pml_raises():
+    """An explicit PortSpec aperture that runs past the PML inner edge must
+    RAISE, not be silently clipped by meep.
+
+    Regression for the defect found 2026-08-01
+    (ring_resonator_validation.md's blocker-0 investigation): this exact
+    geometry — the one the slow test below used to ship with — puts BOTH
+    ports' apertures partly inside PML. meep clips them, the missing power
+    reads as bend loss, and |T| came back 0.711 where the correct answer is
+    0.978. A 27% error that looked physically plausible and passed a
+    `> 0.3` assertion.
+
+    Fast (no meep run): the guard fires while the domain is being set up,
+    before any time stepping.
+    """
+    geometry = RingResonatorBendSection(waveguide_width=0.45, bend_radius=5.0, output_margin=0.5)
+    port = geometry.out_port()
+    solver = FDTDSolver(
+        res=15.0, sim_width=3.0, sim_height=1.5, dpml=0.5, source_margin=0.0,
+        monitor_margin=0.25, three_d=False, material_stack=SOI_220, decay_tol=1e-9,
+    )
+    with pytest.raises(ValueError, match="crosses the PML"):
+        solver.solve_section(
+            geometry, np.array([1.55]), 0.0, geometry.bend_radius,
+            n_modes_in=1, n_modes_out=1,
+            stub_left=1.0,               # no stub_right -> y port sits AT the PML edge
+            y0=-1.0, y1=port.y_boundary,  # too tight -> x port aperture also overruns
+            excite_port=PortSpec(axis="x", sign=1, center=0.0, width=3.0),
+            measure_port=PortSpec(axis="y", sign=1, center=geometry.bend_radius, width=3.0),
+            y_pml=solver.dpml,
+        )
+
+
 @pytest.mark.slow
 def test_bend_y_normal_measure_port_gives_sane_transmission():
     """x-normal excite -> y-normal measure through a 90-degree bend.
@@ -44,6 +77,13 @@ def test_bend_y_normal_measure_port_gives_sane_transmission():
     and the forced reverse=False fix (n_modes_in == n_modes_out == 1 is
     exactly the tie-break-picks-the-wrong-side case verified against
     section_fdtd_layout()'s `reverse = n_out <= n_in` formula).
+
+    RE-BASELINED 2026-08-01. The original version of this test ran with
+    stub_right=0 and y0=-1.0, which put both port apertures inside PML (see
+    test_port_aperture_crossing_pml_raises above) and measured 0.711 — 27%
+    low — while asserting only `> 0.3`, a range far too loose to notice. The
+    domain now gives both ports clearance and the assertion is tight enough
+    to fail if that regresses.
     """
     geometry = RingResonatorBendSection(waveguide_width=0.45, bend_radius=5.0, output_margin=0.5)
     port = geometry.out_port()
@@ -54,7 +94,7 @@ def test_bend_y_normal_measure_port_gives_sane_transmission():
         sim_height=1.5,
         dpml=0.5,
         source_margin=0.0,
-        monitor_margin=0.25,
+        monitor_margin=0.75,  # clear of the source near field (blocker-0 finding 1)
         three_d=False,       # 2-D planar — production is 3-D
         material_stack=SOI_220,
         decay_tol=1e-9,       # loosened — production is 1e-11
@@ -62,13 +102,17 @@ def test_bend_y_normal_measure_port_gives_sane_transmission():
 
     wavelengths = np.array([1.53, 1.55, 1.57])
     aperture = 3.0
-    y0 = -1.0
+    # stub_right adds x headroom past the y-normal port. For this geometry it
+    # draws NO extra polygons (_section_polygons emits nothing past x=R), so
+    # it is pure domain padding. y0 is lowered so the x port's own aperture
+    # also clears PML.
+    y0 = -2.0
     y1 = port.y_boundary  # 5.5
 
     T = solver.solve_section(
         geometry, wavelengths, 0.0, geometry.bend_radius,
         n_modes_in=1, n_modes_out=1,
-        stub_left=1.0,
+        stub_left=1.0, stub_right=2.0,
         y0=y0, y1=y1,
         excite_port=PortSpec(axis="x", sign=1, center=0.0, width=aperture),
         measure_port=PortSpec(axis="y", sign=1, center=geometry.bend_radius, width=aperture),
@@ -77,14 +121,14 @@ def test_bend_y_normal_measure_port_gives_sane_transmission():
 
     transmission = np.abs(T[:, 0, 0]) ** 2
     assert np.all(np.isfinite(transmission)), f"non-finite transmission: {transmission}"
-    # A 5 um radius 90-degree bend in 450x220 SOI is low-loss; at reduced
-    # (2-D, res 15) resolution this is a sanity range, not a tight physical
-    # prediction — see module docstring for why a tighter match isn't
-    # attempted here.
-    assert np.all(transmission > 0.3), (
-        f"bend transmission implausibly low: {transmission} — likely a sign/"
-        "orientation bug in the y-normal measure port, not just discretization "
-        "error (a genuine 5 um bend does not lose this much power)"
+    # A 5 um radius 90-degree bend in 450x220 SOI is genuinely near-lossless.
+    # Measured 0.9773 in amplitude (0.955 in power) at this configuration, so
+    # this bound is tight enough to catch a clipped aperture (which cost 27%)
+    # while still allowing 2-D/res-15 discretization slack.
+    assert np.all(transmission > 0.90), (
+        f"bend transmission implausibly low: {transmission} — a 5 um bend is "
+        "near-lossless, so this points at a clipped port aperture or a sign/"
+        "orientation bug, not discretization error"
     )
     assert np.all(transmission < 1.05), f"bend transmission > 1 (non-physical): {transmission}"
 
@@ -96,7 +140,11 @@ def _bend_setup():
         waveguide_width=0.45, bend_radius=5.0, output_margin=0.5)
     solver = FDTDSolver(
         res=15.0, sim_width=3.0, sim_height=1.5, dpml=0.5,
-        source_margin=0.0, monitor_margin=0.25, three_d=False,
+        # monitor_margin 0.75, not 0.25: at 0.25 the norm plane sits in the
+        # y-source's near field, where |alpha| and sqrt(flux) disagree by
+        # ~1.54x. Moving it out changes |T| by only 0.3%, so this is NOT the
+        # reciprocity violation -- it just removes a confound from it.
+        source_margin=0.0, monitor_margin=0.75, three_d=False,
         material_stack=SOI_220, decay_tol=1e-9,
     )
     return geometry, solver
@@ -105,14 +153,21 @@ def _bend_setup():
 @pytest.mark.slow
 @pytest.mark.xfail(
     strict=True,
-    reason="KNOWN BUG, found by this test 2026-07-31: the y-normal excite "
-           "path's flux-calibrated normalization violates reciprocity by a "
-           "geometry-invariant factor ~0.73. Localized to that path (not the "
-           "sign=-1 conventions) by two controls -- see "
-           "validation_markdown/ring_resonator_validation.md's boxed blocker "
-           "under prerequisite (a). strict=True so this starts FAILING the "
-           "moment the normalization is fixed, which is the signal to drop "
-           "this marker and let the assertions stand.",
+    reason="NOT A BUG -- this configuration is 2-D at res 15, where the "
+           "reciprocity ratio is ~0.75 from DISCRETIZATION alone. Resolved "
+           "2026-08-01: in 3-D on clean geometry the ratio converges as h^2 "
+           "(res 15 -> 0.8553, res 25 -> 0.9476; fitted order p=1.988 against "
+           "meep's formal 2nd order, agreeing to 0.6%), extrapolating to 0.979 "
+           "at res 40. A normalization or orientation bug would be "
+           "resolution-INDEPENDENT, so the y-normal excite path and its "
+           "flux calibration are correct. The earlier claim in this marker -- "
+           "that the flux-calibrated normalization was mis-scaled -- is "
+           "WITHDRAWN. This case stays xfail because 2-D/res-15 genuinely "
+           "cannot show reciprocity here, not because anything is broken; the "
+           "real check is examples/verification/python/"
+           "verify_ring_bend_reciprocity_3d.py. strict=True so that if this "
+           "ever passes, the tolerance or the physics changed and someone "
+           "should look. See validation_markdown/ring_resonator_validation.md.",
 )
 def test_bend_y_normal_excite_matches_reciprocity():
     """y-normal EXCITE (+ flux-calibrated normalization) against the x-normal
@@ -147,9 +202,14 @@ def test_bend_y_normal_excite_matches_reciprocity():
     port = geometry.out_port()
     wavelengths = np.array([1.53, 1.55, 1.57])
     aperture = 3.0
-    y0, y1 = -1.0, port.y_boundary
+    # Clean apertures on BOTH ports (blocker-0 finding 3) — the original
+    # y0=-1.0/stub_right=0 domain put both inside PML and would now raise.
+    # The reciprocity violation this test asserts on SURVIVES this fix
+    # (measured 0.751 with clean apertures), which is exactly why the
+    # xfail below still stands and why the clipping was never the cause.
+    y0, y1 = -2.0, port.y_boundary
     common = dict(
-        n_modes_in=1, n_modes_out=1, stub_left=1.0,
+        n_modes_in=1, n_modes_out=1, stub_left=1.0, stub_right=2.0,
         y0=y0, y1=y1, y_pml=solver.dpml,
     )
 

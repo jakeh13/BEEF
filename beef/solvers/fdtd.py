@@ -2057,8 +2057,10 @@ class FDTDSolver:
             ex_transverse = p.center - transverse_shift
             ex_kpoint = (float(p.sign), 0.0, 0.0) if ex_axis == "x" else (0.0, float(p.sign), 0.0)
             ex_alpha_idx = p.alpha_idx
+            ex_sign_dbg = p.sign
         else:
             ex_axis = "x"
+            ex_sign_dbg = 0
             ex_width = layout.src_width
             ex_transverse = layout.src_c - y_center
             ex_along_src = layout.src_x + lo - x_center
@@ -2096,6 +2098,38 @@ class FDTDSolver:
             mea_transverse = layout.mea_c - y_center
             mea_along = layout.mea_x + lo - x_center
             mea_alpha_idx = layout.alpha_idx
+
+        # --- Aperture-vs-PML guard -------------------------------------
+        # A port's aperture spans the axis TRANSVERSE to its own normal, and
+        # nothing clamps an explicit PortSpec width the way
+        # section_fdtd_layout() clamps its geometry-derived one
+        # (`min(src_aperture, sim_width - 2*abs(src_c))`). meep silently
+        # clips a monitor that runs past the cell, so an overrunning aperture
+        # reads as loss: ring_resonator_validation.md's blocker-0 work found
+        # a y-normal port sitting exactly at the PML inner edge with a
+        # width=3.0 aperture, which cost 27% of the transmitted power
+        # (|T| 0.711 vs the correct 0.978) while still looking physically
+        # plausible, and passed a `> 0.3` sanity assertion for days. Raise
+        # instead -- an aperture in PML is always a caller error.
+        def _check_aperture(kind: str, axis: str, transverse: float, width: float) -> None:
+            span = Sy if axis == "x" else Sx      # aperture runs along the OTHER axis
+            inner = span / 2.0 - self.dpml        # PML inner edge, meep-centred frame
+            reach = abs(transverse) + width / 2.0
+            if reach > inner + 1e-9:
+                other = "y" if axis == "x" else "x"
+                raise ValueError(
+                    f"{kind} aperture crosses the PML: axis={axis!r} port spans "
+                    f"{other}=[{transverse - width/2:.4f}, {transverse + width/2:.4f}] "
+                    f"(centre {transverse:.4f}, width {width:.4f}) but the PML inner "
+                    f"edge is at {other}=+/-{inner:.4f} (cell {span:.4f}, dpml "
+                    f"{self.dpml}). meep would silently CLIP it and the missing "
+                    f"power would read as loss. Widen the domain along {other} "
+                    f"(stub_left/stub_right for x, y0/y1 for y) or narrow the "
+                    f"aperture to <= {2 * (inner - abs(transverse)):.4f}."
+                )
+
+        _check_aperture("excite_port", ex_axis, ex_transverse, ex_width)
+        _check_aperture("measure_port", mea_axis, mea_transverse, mea_width)
 
         for k in range(1, n_excite + 1):
             src = mp.EigenModeSource(
@@ -2143,6 +2177,21 @@ class FDTDSolver:
                 src_alpha = np.sqrt(flux) * np.exp(1j * np.angle(norm_coeff.alpha[0, :, ex_alpha_idx]))
             else:
                 src_alpha = norm_coeff.alpha[0, :, ex_alpha_idx]
+
+
+            if os.environ.get("BEEF_DEBUG_NORM"):
+                # Diagnostic for ring_resonator_validation.md's blocker 0: the
+                # y-excite path normalizes by sqrt(|get_fluxes|) while every
+                # measure side divides by a bare |alpha|. Print both at the
+                # SAME plane so the two conventions can be compared directly.
+                _f = np.abs(np.asarray(mp.get_fluxes(norm_flux)))
+                _a = np.abs(norm_coeff.alpha[0, :, ex_alpha_idx])
+                print(f"[norm] ex_axis={ex_axis} sign={ex_sign_dbg} band={k} "
+                      f"alpha_idx={ex_alpha_idx}", flush=True)
+                for _i in range(len(_a)):
+                    print(f"[norm]   f{_i}: |alpha|={_a[_i]:.6g}  sqrt(flux)={np.sqrt(_f[_i]):.6g}  "
+                          f"flux={_f[_i]:.6g}  sqrt(flux)/|alpha|={np.sqrt(_f[_i])/_a[_i]:.6g}  "
+                          f"flux/|alpha|^2={_f[_i]/_a[_i]**2:.6g}", flush=True)
 
             for m in range(1, n_measure + 1):
                 c = sim.get_eigenmode_coefficients(mea_flux, [m], eig_parity=mp.NO_PARITY)

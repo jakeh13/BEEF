@@ -190,9 +190,25 @@ class RingResonatorCouplerSection(DeviceGeometry):
         self._check_cut(lo)
         self._check_cut(hi)
 
-        outer_lo, outer_hi = sorted((self.outer_x, self.iface_x))
         bend_lo, bend_hi = sorted((self.stub_x, self.hc))
-        sliver_lo, sliver_hi = sorted((self.hc, self.iface_x))
+
+        # The caller's stub_left/stub_right padding continues the waveguide
+        # OUTWARD past this class's own [outer_x, iface_x] range, exactly as
+        # DirectionalCoupler._section_polygons() draws its access arms out to
+        # lo/hi and ring_bend.RingBendSection draws its input straight from lo.
+        # Both ends are legitimately uniform: past outer_x is bare access bus,
+        # and past iface_x is the mirrored section, where the same bus+sliver
+        # pair continues straight. Clamping to outer_x/iface_x instead (as this
+        # method did until 2026-08-02) left the padded domain filled with bare
+        # cladding, so an eigenmode source or monitor placed on the padded
+        # boundary -- which is where solve_section() puts them, at
+        # lo + source_margin and hi - monitor_margin, NOT at x0/x1 -- sat on a
+        # cross-section with no waveguide in it at all.
+        #
+        # The hc end of the sliver is the one boundary that must still clamp:
+        # past it is the bend, not more straight guide.
+        seam_out = max(self.iface_x, hi) if self.iface_x > self.hc else min(self.iface_x, lo)
+        sliver_lo, sliver_hi = sorted((self.hc, seam_out))
 
         polys: List[List[Tuple[float, float]]] = []
 
@@ -200,8 +216,8 @@ class RingResonatorCouplerSection(DeviceGeometry):
             if xb - xa > 1e-9:
                 polys.append([(xa, yc - w/2), (xb, yc - w/2), (xb, yc + w/2), (xa, yc + w/2)])
 
-        # bus (continuous the whole way, y=0)
-        _rect(max(lo, outer_lo), min(hi, outer_hi), 0.0, ww)
+        # bus (continuous the whole way, y=0, padding included)
+        _rect(lo, hi, 0.0, ww)
 
         # near-bend + stub column: all-or-nothing, same guard as _check_cut
         if lo <= bend_lo and hi >= bend_hi:

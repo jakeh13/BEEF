@@ -7,6 +7,108 @@ fuller write-up, it points there rather than repeating it.
 
 ---
 
+## 2026-08-03
+
+No library code changed. Two corrections to recorded results, both from
+measurement rather than re-reasoning.
+
+### Gap 3's resolution-convergence lever arm was 2× too large
+
+`examples/verification/python/verify_ring_gap3_neff_convergence.py:31` hardcodes
+`L_OUTER = 2 * 2.0 + 10.0` (= 14.0 µm) on a comment asserting `L_C = 10.0` is
+the shipped scale. The shipped `L_C` is **4.0**
+(`examples/ring_resonator/python/ring_resonator_hybrid.py:125`), and the device
+scripts use a reference-plane pullback the convergence script omits:
+
+```python
+L_outer = 2 * (L_SIDE - S_MON) + L_FAR    # 2*(2.0-0.5) + 4.0 = 7.0
+```
+
+Job 11634859 printed `L_outer = 7.0000 um`, confirming it directly. Every Δφ in
+gap 3's table halves. **The headline "shipped res 40 is a quarter-FSR off res
+100" becomes an eighth (12.6%).** The n_eff sweep and the res-100 convergence
+conclusion are unaffected. Corrected table and both columns in
+`validation_markdown/ring_resonator_validation.md` gap 3.
+
+The convergence script itself is **not yet fixed** — its `L_OUTER` and comment
+are still wrong in source. Fixing it is a one-line change but reruns nothing,
+since Δφ is derived in post-processing.
+
+### The ring's half-FSR route disagreement is not phase bookkeeping
+
+Both candidates named on 2026-08-02 are eliminated. `L_outer`, `phi`,
+`phi_bend_correction`, `BEND_D_IN/OUT` and every length constant are
+byte-identical between `ring_resonator_hybrid.py` and
+`ring_resonator_hybrid_cascaded.py`, the `neff` fit residual prints identically
+(7.29e-06), and `b_raw` matches to all printed digits in **both magnitude and
+phase** (`0.998828`, `−1.275855` rad). The offset is in the coupler
+coefficients' **phases** — `arg(t_ring)` differs by 0.883π, `arg(t)` by 0.404π,
+while all magnitudes agree to within ~6%. Established by post-processing the
+saved `complex128` arrays in both `ring_data.npz`; no new FDTD.
+
+Also recorded there: the reciprocity check tests `max ||k1| − |k2||`, i.e.
+magnitudes only. The monolithic run's `arg(k1)` and `arg(k2)` differ by 0.712π.
+
+**Reference planes checked.** They *do* differ between the routes. The
+monolithic's ring-excited run normalizes input at `Y_TOP − MONITOR_MARGIN`
+(arc end +1.25 µm, `ring_resonator_hybrid.py:471`) but reads output at
+`Y_RING + R + S_MON` (+0.50 µm, `:476`) — a **0.75 µm** asymmetry, by
+construction. The cascaded route uses `Y_RING + R + S_MON` both directions,
+because `M_right = M_left.T` requires it. **But converting the measured `arg`
+gaps to equivalent path lengths gives ≈0.29 / 0.20 / −0.13 µm for
+`t_ring`/`k1`/`t` — three different values, none equal to 0.75, 1.25 or 1.5, all
+drifting with wavelength.** So the asymmetry is a real defect worth fixing but is
+**refuted as the explanation** of the comb offset. Since the cascade uses
+different FDTD domains, every port plane differs — including the bus, which is
+why `arg(t)` disagrees despite never touching the ring port.
+
+## 2026-08-02
+
+### `RingResonatorCouplerSection` stub padding drew bare cladding, not waveguide
+
+`_section_polygons()` clamped the bus rect to the class's own
+`[outer_x, iface_x]` range, so a caller's `stub_left`/`stub_right` padding
+added domain but **no material**:
+
+```python
+_rect(max(lo, outer_lo), min(hi, outer_hi), 0.0, ww)      # before
+_rect(lo, hi, 0.0, ww)                                    # after
+```
+
+The seam-side end of the near-straight ring sliver now follows the padding out
+as well; its `hc` end still clamps, because past that is the bend.
+
+**Why it matters:** `solve_section()` puts the source at `lo + source_margin`
+and the monitor at `hi - monitor_margin` — off the *padded* boundary, not off
+`x0`/`x1`. For `verify_ring_network_crosscheck.py` that put the eigenmode
+source at x = −10.0 with the bus starting at −9.0: 1.0 µm out in bare cladding,
+exactly on the PML inner edge, with the seam monitor 0.25 µm past the drawn
+waveguide's end. An eigenmode source resolves the cross-section at its own
+plane, and bare cladding has no guided mode to launch.
+
+Same failure class as the ring's blocker 0 (y-port in PML, 27% of the power);
+`_check_aperture` does not catch it, since that guard tests the transverse
+aperture against the PML and never the along-axis position against material.
+
+This class was the outlier: `DirectionalCoupler._section_polygons()` draws to
+`lo`/`hi` and `RingResonatorBendSection` draws its input straight from `lo`.
+The ring coupler's own docstring already promised the same convention.
+
+It survived because no test used non-zero stubs on it —
+`test_section_polygons_full_span` passes zero, where both forms agree.
+Regression test added for both sides
+(`test_stub_padding_draws_waveguide_not_bare_cladding`).
+
+**No cache stranded:** `verify_ring_network_crosscheck.py` passes no
+`save_dir` and is the only non-test caller, so the changed polygon fingerprint
+reaches nothing on disk.
+
+Every bus-excited number in `ring_resonator_validation.md` item 2 is now
+suspect — see that file for the full write-up and for what still has to be
+re-run to turn this from argued into measured.
+
+---
+
 ## 2026-08-01
 
 Two library bugs, both found by disbelieving something already written down as

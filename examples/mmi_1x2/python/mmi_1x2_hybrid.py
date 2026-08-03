@@ -42,8 +42,20 @@ output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "exampl
 # neighbouring FDTD sections would have measured. `HybridSolver(
 # calibrate_body_neff=True)` fixes exactly this by propagating each body
 # section on the beta the FDTD-side interfaces actually see instead of its own
-# mode solver's neff. Never tried on this device. On the coupler it took the
-# same signature from ~5% to 0.11% uncalibrated->calibrated.
+# mode solver's neff. On the coupler it took the same signature from ~5% to
+# 0.11% uncalibrated->calibrated.
+#
+# TRIED ON THIS DEVICE 2026-08-01 (job 11608690) AND IT DOES NOT CLOSE THE GAP:
+# 9.11% -> 7.30%, ~20% relative, against the coupler's 98% reduction, and the
+# sign structure is untouched (every wavelength still negative). Most of this
+# device's discrepancy is therefore NOT the Delta-beta discretization error
+# this flag corrects -- it is structural. The 2x2 reached the same conclusion
+# independently the same day by refuting its own P4 material-model hypothesis.
+# See resolved/mmi_1x2_validation.md gap 5.
+#
+# (Its first attempt, 11589770, failed a phase-fit guard. That was a real
+# library bug -- a 2*pi turn-count error in beta_from_phases, fixed the same
+# day, notes.md Solvers item 20 -- not a limit of this device.)
 #
 # Off by default -- every recorded golden and the gap-5 baseline predate it,
 # same reasoning as directional_coupler_hybrid_stub_sweep.py's DC_CALIBRATE_BODY.

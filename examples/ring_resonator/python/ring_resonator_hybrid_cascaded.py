@@ -103,6 +103,7 @@ from beef import extrude_polygons
 from beef.cache import CacheMissError, load_result, lookup, save_run
 from beef.geometry.base import polygons_to_prisms
 from beef.materials import SOI_220
+from beef.materials.stack import resolved_material_config
 from beef.results import SMatrix
 from beef.solvers.fdtd import (
     check_source_coverage, monitor_freq_grid, source_fwidth,
@@ -134,7 +135,24 @@ L_C = 4.0                  # um, near (coupling) straight length — the couplin
 L_SIDE = 2.0                # um, each vertical side straight (analytic neff only)
 L_FAR = L_C                 # um, far straight (analytic neff only)
 
-RESOLUTION = 20.0 if TEST_MODE else 40.0     # pts/um
+# ring_resonator_validation.md gap 3 / the coupler's P3 knob-split precedent.
+# ONE shared RESOLUTION used to drive both the meep FDTD and the meow/MPB mode
+# solve. The coupler split its own for a reason -- "shared RESOLUTION was how a
+# 7% error hid for months (dc_validation.md item 11)" -- and this device had the
+# same defect, measured 2026-08-01 (job 11616610):
+#
+#   res    n_eff@1.55   d(round-trip phase)
+#    40     2.311706      --   (shipped)
+#   100     2.339523    +1.58 rad = 25.1% OF A FULL FSR
+#
+# The mode solve is what sets resonance position (phi = 2*pi*n_eff*L_outer/lambda),
+# it converges at 100, and it is CHEAP -- the whole six-resolution sweep ran in
+# 4:34. So it goes to 100. The FDTD side has never been measured at any
+# resolution and 3-D FDTD cost scales roughly as res^4, so it stays at 40 rather
+# than paying ~39x for an unmeasured claim. Splitting is what makes those two
+# independent statements expressible at all.
+FDTD_RESOLUTION = 20.0 if TEST_MODE else 40.0    # pts/um -- meep; NOT converged-tested
+MODE_RESOLUTION = 20.0 if TEST_MODE else 100.0   # pts/um -- meow/MPB; gap 3 converged
 THREE_D = not TEST_MODE                       # full 3-D core vs. cheap 2-D planar fallback
 WL_MIN, WL_MAX = 1.50, 1.60                    # um, C-band
 N_WL_FDTD = 21 if TEST_MODE else 101           # FDTD DFT points
@@ -283,7 +301,7 @@ BEND_D_OUT = STUB_LEN - MONITOR_MARGIN
 def make_sim(polys, wl_center, cell_size, geometry_center):
     prisms = polygons_to_prisms(polys, MATERIAL_STACK.si_medium(wl_center), wg_height=_wg_height)
     return mp.Simulation(
-        resolution=RESOLUTION,
+        resolution=FDTD_RESOLUTION,
         cell_size=mp.Vector3(cell_size[0], cell_size[1], _cell_sz),
         geometry_center=mp.Vector3(geometry_center[0], geometry_center[1], 0),
         boundary_layers=[mp.PML(DPML)],
@@ -342,7 +360,7 @@ def _sim_params(wavelengths):
         "gap": GAP,
         "R": R,
         "L_C": L_C,
-        "resolution": RESOLUTION,
+        "resolution": FDTD_RESOLUTION,
         "three_d": THREE_D,
         "sim_height": SIM_HEIGHT,
         "dpml": DPML,
@@ -354,6 +372,16 @@ def _sim_params(wavelengths):
         "stub_len": STUB_LEN,
         "s_mon": S_MON,
         "material_stack": {"wg_height": MATERIAL_STACK.wg_height, "sz": MATERIAL_STACK.sz},
+        # M3 (ring_resonator_validation.md): geometry alone is NOT a material
+        # fingerprint. Without the resolved indices, neither the 2026-07-28
+        # Sellmeier change nor the 2026-08-01 dispersion-default flip moves this
+        # key, so a stale entry keeps matching and is served with the old
+        # physics -- the same failure the resolved_* spectral fields above exist
+        # to stop, on the material axis. `dispersive=False` is the RESOLVED
+        # value (M4), not the stack's flag: this script's FDTD half still calls
+        # si_medium(wl_center) with a SCALAR, so it genuinely simulates frozen
+        # media (M1). When M1 is fixed, this argument must move with it.
+        **resolved_material_config(MATERIAL_STACK, np.asarray(wavelengths), False),
     }
 
 
@@ -525,10 +553,18 @@ def solve_neff(wl, save_dir=None, cache_only=False):
                 "1,0": _json_polys([rect_poly(0.0, -MESH_WIDTH / 2, 1.0, MESH_WIDTH / 2)]),
             },
             "waveguide_width": WAVEGUIDE_WIDTH,
-            "resolution": RESOLUTION,
+            "resolution": MODE_RESOLUTION,
             "mesh_width": MESH_WIDTH,
             "mesh_height": MESH_HEIGHT,
             "material_stack": {"wg_height": MATERIAL_STACK.wg_height, "sz": MATERIAL_STACK.sz},
+            # M3/M4: same reasoning as _sim_params(). dispersive=True here and
+            # NOT False as on the FDTD side, because this is the meow half --
+            # it builds media from MATERIAL_STACK.extrusion_rules (SampledMaterial,
+            # re-evaluated per wavelength), so it genuinely IS exact-per-lambda.
+            # That asymmetry is M2, and recording it truthfully in the key is
+            # the point: the two halves currently simulate DIFFERENT media, and
+            # a fingerprint that hid that would be the bug, not the fix.
+            **resolved_material_config(MATERIAL_STACK, np.asarray([float(wl)]), True),
             "wavelength": round(float(wl), 9),
         }
         hit = lookup(save_dir, config)
@@ -548,8 +584,8 @@ def solve_neff(wl, save_dir=None, cache_only=False):
 
     structs = extrude_polygons(gds_polys, MATERIAL_STACK.extrusion_rules)
     mesh = mw.Mesh2D(
-        x=np.linspace(-MESH_WIDTH / 2, MESH_WIDTH / 2, int(RESOLUTION * MESH_WIDTH) + 1),
-        y=np.linspace(-MESH_HEIGHT / 2, MESH_HEIGHT / 2, int(RESOLUTION * MESH_HEIGHT) + 1),
+        x=np.linspace(-MESH_WIDTH / 2, MESH_WIDTH / 2, int(MODE_RESOLUTION * MESH_WIDTH) + 1),
+        y=np.linspace(-MESH_HEIGHT / 2, MESH_HEIGHT / 2, int(MODE_RESOLUTION * MESH_HEIGHT) + 1),
     )
     cells = mw.create_cells(structures=structs, mesh=mesh, Ls=[length])
     env = mw.Environment(wl=float(wl), T=25.0)
@@ -582,9 +618,17 @@ def solve_body_supermodes(wl, save_dir=None, cache_only=False):
             "geometry_class": "CoupledPairCrossSection",
             "geometry_polygons": {"2,0": _json_polys([wg_bus, wg_ring]), "1,0": _json_polys([ox_poly])},
             "waveguide_width": WAVEGUIDE_WIDTH, "gap": GAP, "y_ring": Y_RING,
-            "resolution": RESOLUTION, "body_mesh_width": BODY_MESH_WIDTH, "mesh_height": MESH_HEIGHT,
+            "resolution": MODE_RESOLUTION, "body_mesh_width": BODY_MESH_WIDTH, "mesh_height": MESH_HEIGHT,
             "num_modes": 2,
             "material_stack": {"wg_height": MATERIAL_STACK.wg_height, "sz": MATERIAL_STACK.sz},
+            # M3/M4: same reasoning as _sim_params(). dispersive=True here and
+            # NOT False as on the FDTD side, because this is the meow half --
+            # it builds media from MATERIAL_STACK.extrusion_rules (SampledMaterial,
+            # re-evaluated per wavelength), so it genuinely IS exact-per-lambda.
+            # That asymmetry is M2, and recording it truthfully in the key is
+            # the point: the two halves currently simulate DIFFERENT media, and
+            # a fingerprint that hid that would be the bug, not the fix.
+            **resolved_material_config(MATERIAL_STACK, np.asarray([float(wl)]), True),
             "wavelength": round(float(wl), 9),
         }
         hit = lookup(save_dir, config)
@@ -602,12 +646,12 @@ def solve_body_supermodes(wl, save_dir=None, cache_only=False):
     mesh = mw.Mesh2D(
         # round(), not int() truncation: BODY_MESH_WIDTH is a derived float
         # (unlike solve_neff()'s literal MESH_WIDTH=4.0), so
-        # RESOLUTION*BODY_MESH_WIDTH can land a hair under the intended
+        # MODE_RESOLUTION*BODY_MESH_WIDTH can land a hair under the intended
         # integer (e.g. 93.999999999) — truncating would silently drop a
         # pixel and break compute_modes_meep()'s equal-dx/dy requirement.
         x=np.linspace(BODY_Y_CENTER - BODY_MESH_WIDTH / 2, BODY_Y_CENTER + BODY_MESH_WIDTH / 2,
-                      round(RESOLUTION * BODY_MESH_WIDTH) + 1),
-        y=np.linspace(-MESH_HEIGHT / 2, MESH_HEIGHT / 2, round(RESOLUTION * MESH_HEIGHT) + 1),
+                      round(MODE_RESOLUTION * BODY_MESH_WIDTH) + 1),
+        y=np.linspace(-MESH_HEIGHT / 2, MESH_HEIGHT / 2, round(MODE_RESOLUTION * MESH_HEIGHT) + 1),
     )
     cells = mw.create_cells(structures=structs, mesh=mesh, Ls=[length])
     env = mw.Environment(wl=float(wl), T=25.0)

@@ -519,6 +519,38 @@ class TestRingResonatorCouplerSection:
         polys = c._section_polygons(c.outer_x, c.iface_x, y_pml=0.5)
         assert len(polys) == 4  # bus, near-bend arc, stub column, sliver
 
+    @pytest.mark.parametrize("side", ["left", "right"])
+    def test_stub_padding_draws_waveguide_not_bare_cladding(self, side):
+        """The bus and the seam-side sliver must reach the padded boundary.
+
+        solve_section() places the source at lo=x0-stub_left and the monitor
+        near hi=x1+stub_right, NOT at x0/x1. Until 2026-08-02 this method
+        clamped the bus to [outer_x, iface_x], so both planes sat on bare
+        cladding and the eigenmode launch had no guide to couple into.
+        """
+        c = self._left() if side == "left" else self._right()
+        x0, x1 = sorted((c.outer_x, c.iface_x))
+        pad = 1.5
+        lo, hi = x0 - pad, x1 + pad
+        polys = c._section_polygons(x0, x1, stub_left=pad, stub_right=pad, y_pml=0.5)
+
+        def _spans_y(yc):
+            # 4-vertex rects only; the near-bend arc is a 128-vertex polygon
+            # that also straddles y_ring and is not what this test is about.
+            return [(min(v[0] for v in p), max(v[0] for v in p)) for p in polys
+                    if len(p) == 4 and min(v[1] for v in p) <= yc <= max(v[1] for v in p)]
+
+        bus = _spans_y(0.0)
+        assert len(bus) == 1
+        assert bus[0] == pytest.approx((lo, hi))     # bus spans the FULL padded domain
+
+        # the sliver follows the padding out through the seam (iface_x) end
+        # only; its other end stops at hc, where the bend takes over.
+        sliver = _spans_y(c.y_ring)
+        assert len(sliver) == 1
+        seam_end = hi if c.iface_x > c.hc else lo
+        assert sliver[0] == pytest.approx(tuple(sorted((c.hc, seam_end))))
+
     def test_to_gds_eme_raises(self):
         c = self._left()
         with pytest.raises(NotImplementedError):

@@ -22,7 +22,7 @@ That job also left a residue gap 1's fix did not remove: the two engines
 disagree, at *every* resolution from 20 to 60, about one member of a
 near-degenerate mode pair — meow finds both, meep's per-band ladder finds one.
 That is a driver-level defect, not a mesh one, and it is tracked as
-`fdtd_vs_EME_mode_validation.md` items 11–13 rather than here, since it is not
+`resolved/fdtd_vs_EME_mode_validation.md` items 11–13 rather than here, since it is not
 specific to this device. **Items 11, 12 and 13 all closed 2026-07-31** (jobs
 11588309, 11586098) — the guard's diagnostic grid is clear at res 40, the EME
 guard's over-request is inert, and k-seed laddering recovers one guided mode the
@@ -192,7 +192,7 @@ So it has the most ways to be wrong and the fewest ways to find out.
    n_eff-only check cannot.
 
    **Partially checked as of 2026-07-30** — see gap 6's "Recommended
-   follow-up", now implemented as `fdtd_vs_EME_mode_validation.md` item 8:
+   follow-up", now implemented as `resolved/fdtd_vs_EME_mode_validation.md` item 8:
    `FDTDSolver.solve_section()` (and `EMESolver.solve_section()`) now run a
    post-hoc scan of their own already-computed `T` for near-duplicate
    excited-side columns (`beef.mode_identity.transfer_matrix_duplicate_scan()`
@@ -255,7 +255,7 @@ So it has the most ways to be wrong and the fewest ways to find out.
      including the gap 1 audit and gap 6's before/after — was taken on an
      unconverged mesh for both engines. That does not invalidate gap 1's
      *identity* findings (mode correspondence is a shape question, and the
-     mode-8+ story is `fdtd_vs_EME_mode_validation.md` item 1), but it does
+     mode-8+ story is `resolved/fdtd_vs_EME_mode_validation.md` item 1), but it does
      mean no absolute n_eff or S-matrix number from this device is a converged
      one yet.
 
@@ -282,7 +282,7 @@ So it has the most ways to be wrong and the fewest ways to find out.
    sweep says about the other thirteen. Two consequences: the fix is a *joint*
    choice of `RESOLUTION` and `N_MODES`, not resolution alone, and the padding
    behaviour itself is a library defect
-   (`fdtd_vs_EME_mode_validation.md` **item 14**, which also covers the hang one
+   (`resolved/fdtd_vs_EME_mode_validation.md` **item 14**, which also covers the hang one
    band further up).
 
    > ⚠️ **Items 12 and 14 are now fixed in the library, 2026-07-31 — this
@@ -295,7 +295,7 @@ So it has the most ways to be wrong and the fewest ways to find out.
    > before this change and is unaffected. Any *future* resubmission of
    > `modal_multiplexer_hybrid.py` will fail immediately at whichever interface
    > it reaches first, until `N_MODES`/`RESOLUTION` are actually decided
-   > jointly — see `fdtd_vs_EME_mode_validation.md` items 12/14 for the fix
+   > jointly — see `resolved/fdtd_vs_EME_mode_validation.md` items 12/14 for the fix
    > itself, and the two bullets just above for why 14 (not 16, not the
    > unmeasured FDTD-converged count above res 60) is the number this
    > decision has to reconcile.
@@ -439,7 +439,7 @@ So it has the most ways to be wrong and the fewest ways to find out.
    under-verified was judged too risky.
 
    **Recommended follow-up — DONE 2026-07-30, see
-   `fdtd_vs_EME_mode_validation.md` item 8.** A *post-hoc* diagnostic inside
+   `resolved/fdtd_vs_EME_mode_validation.md` item 8.** A *post-hoc* diagnostic inside
    `solve_section()` that checks its already-computed `T` coefficient-array
    columns for near-duplicate values, once the flux-decayed run has already
    completed. Costs zero extra simulation time (no new eigensolves), reuses
@@ -605,7 +605,7 @@ So it has the most ways to be wrong and the fewest ways to find out.
    >
    > Note the contrast with the 2×2 MMI's reshape submitted in the same window
    > and to the same design — that one worked exactly as predicted (see
-   > `mmi_2x2_validation.md` gap 4). The array-plus-`cache_only`-merge pattern
+   > `resolved/mmi_2x2_validation.md` gap 4). The array-plus-`cache_only`-merge pattern
    > is sound; this device's instance of it broke on the launcher, not the
    > pattern.
 
@@ -622,7 +622,7 @@ be silently affected too, just not yet checked there. **6 is now done**
 (2026-07-30) for the audit-only entry points, confirmed by re-running this
 device's own reproduction with the fix applied — see gap 6. `solve_section()`
 itself is deliberately deferred (also gap 6) — its own post-hoc `T`-column
-duplicate scan is now implemented (`fdtd_vs_EME_mode_validation.md` item 8)
+duplicate scan is now implemented (`resolved/fdtd_vs_EME_mode_validation.md` item 8)
 but not yet exercised against this device's real interfaces, so treat it as a
 still-open risk for **2** through **5** below, though a lower-probability one
 now that both the mechanism is understood and a detector (not yet proof) is

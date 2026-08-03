@@ -1,7 +1,340 @@
 # Active SLURM jobs — snapshot
 
-**★ FOURTEENTH SNAPSHOT — 2026-08-01 ~13:35, verified against `squeue -u
-jhiesener3` and `sacct -X`. This is the current one.** It adds the four jobs
+**★ TWENTIETH SNAPSHOT — 2026-08-03, verified against `squeue -u jhiesener3`
+(empty) and `sacct -u jhiesener3 -S 2026-08-02`. This is the current one.**
+
+## NOTHING RUNNING. Queue is empty.
+
+| job | state | what |
+|---|---|---|
+| **11634859** | ✅ **COMPLETED 3:56:16**, exit `0:0`, ended 2026-08-02T23:10:59 | `beef_ring_xc_clampfix`. Ran to the end well inside `-t 480`. **Right section and composed cross-check both landed** — see below |
+| **11634900_0** | ✅ COMPLETED 58:06 | `ring_resonator_hybrid`, 3-D. Mean FSR **12.975 nm (0.8%)** |
+| **11634900_1** | ✅ COMPLETED 44:18 | `ring_resonator_hybrid_cascaded`, 3-D. Mean FSR 13.350 nm (3.7%) |
+
+### ✅ 11634859 finished — the whole cross-check passes, not just the left section
+
+The nineteenth snapshot recorded this job's left-section numbers while it was
+still at 1:57:04. It has since completed. New material:
+
+```
+right bus<-iface:  summed |T|^2 over seam modes = 0.9997 0.9992 0.9970 0.9953 0.9933
+right ring<-iface: summed |T|^2 over seam modes = 0.9989 0.9985 0.9989 0.9986 0.9980
+composed ports: ('bus_L', 'ring_L', 'bus_R', 'ring_R')
+bus-side power sum |t|^2+|k1|^2: min 1.0050 max 1.0067   (lossless coupler -> ~1)
+reciprocity max ||k1|-|k2||: 0.0021   (-> 0)
+physics checks PASS (power sum ~1, reciprocity holds)
+worst |E_legacy - E_network| = 1.735e-18
+L_outer = 7.0000 um
+VERDICT: routes AGREE to machine precision
+```
+
+**The right section is clean too** (0.993–1.000, no clamp pathology), so the
+fix holds on both sides at production config. Power sum and reciprocity pass on
+the *composed* 4-port. Per the standing entry, the `AGREE to machine precision`
+verdict is the weakest line here — it printed identically pre-fix with ~88% of
+the power gone.
+
+✅ **`crosscheck.npz` is restored.** This job re-wrote
+`example_output/verification/ring_network_crosscheck/crosscheck.npz` at 23:10,
+replacing the array the login-node smoke runs destroyed. Contents are now
+post-clamp-fix and valid. The `OUT`-redirect warning still stands for future
+login-node runs.
+
+⚠ **This job printed `L_outer = 7.0000 um`, which corrects gap 3.** Gap 3's
+convergence script hardcodes `L_OUTER = 2*2.0 + 10.0` = 14.0 µm on a comment
+asserting `L_C=10.0` is "the shipped scale"; the shipped `L_C` is **4.0**, and
+both device scripts compute `L_outer = 2*(L_SIDE - S_MON) + L_FAR` = **7.0 µm**.
+Gap 3's lever arm is exactly **2× too large** and its Δφ column halves. Details
+and the corrected table in `ring_resonator_validation.md` gap 3.
+
+### The half-FSR route offset — candidate space collapsed by measurement
+
+The nineteenth snapshot left this undiagnosed with two named candidates. **Both
+are now eliminated, by source comparison plus the saved arrays — no new FDTD.**
+`ring_data.npz` retains all coefficients as `complex128`, so this was
+post-processing. Full write-up in `ring_resonator_validation.md`. Short version:
+
+- `L_outer`, `phi`, `phi_bend_correction`, `BEND_D_IN/OUT`, `neff_fit` — the
+  whole analytic phase chain is **byte-identical code fed identical constants**
+  in both scripts, and `neff` fit residual prints identically (7.29e-06).
+- `b_raw` is **identical to all printed digits in magnitude AND phase**
+  (`|b|=0.998828`, `arg=-1.275855` rad, difference exactly `0.000000`).
+- So the offset enters through the **coupler coefficients**, not the ring
+  phase: `arg(t_ring)` differs by **0.883π**, `arg(t)` by 0.404π.
+
+**Measured. Not yet attributed to a defect** — see the validation doc for what
+that does and does not license.
+
+---
+
+**NINETEENTH SNAPSHOT — 2026-08-02 ~20:16, verified against `squeue -u
+jhiesener3` and `sacct -X`. Superseded; kept unedited.**
+
+| job | state | what |
+|---|---|---|
+| **11634859** | ⏳ RUNNING **1:57:04** @ 21:11 (`-t 480`) | `beef_ring_xc_clampfix`. **Left-section numbers in and they close item 2's question** — see below |
+| **11634900_0** | ✅ COMPLETED **58:06** | `ring_resonator_hybrid`, **3-D**. **Mean FSR 12.975 nm, 0.8% from the analytic 12.87.** Reciprocity `\|k1\|=0.2530 vs \|k2\|=0.2530`, independently normalized |
+| **11634900_1** | ✅ COMPLETED **44:18** @ 20:13 | `ring_resonator_hybrid_cascaded`, 3-D. Mean FSR 13.350 nm (3.7%) |
+
+**Order item 1 is CLOSED** — first trustworthy resonance positions this device
+has produced. **But the two routes disagree by ~half an FSR**, undiagnosed;
+full write-up in `ring_resonator_validation.md`'s new
+`## Order item 1 — the re-run` section. Do not quote one route's comb without
+saying which.
+
+### ✅ 11634859 — the clamp fix is confirmed at production config
+
+```
+left iface<-bus:  1.0056 1.0073 1.0084 1.0098 1.0117
+left iface<-ring: 0.9903 0.9906 0.9907 0.9916 0.9920
+left ring<-bus:   0.0000 0.0000 0.0000 0.0000 0.0000
+left TOTAL out of bus = 1.0056 1.0073 1.0084 1.0098 1.0117
+left deficit vs 1.0   = -0.0056 -0.0073 -0.0084 -0.0098 -0.0117
+```
+
+Against **11627401's +0.7065 … +0.9307**, at the same 3-D res-20 config. The
+~80% deficit that item 2 chased for two days was
+`RingResonatorCouplerSection._section_polygons()` drawing bare cladding where
+the caller's stub padding should have continued the bus. Right section and
+composition still pending.
+
+**Runtime is itself consistent with the fix:** 1:01+ against pre-fix runs of
+7:04 and 8:21. Pre-fix the source radiated straight into the PML and
+`stop_when_dft_decayed` tripped early — fast *because* the power was
+vanishing. Suggestive, not proof.
+
+### ✅ 11634900_1 — cascaded ring, 3-D, first trustworthy resonance comb
+
+```
+bus-excited path : |t|^2+|k1|^2 = 0.9998
+ring-excited path: |t_ring|^2+|k2|^2 = 0.9928
+reciprocity: max|k1-k2| = 1.78e-16   (symmetric BY CONSTRUCTION -- weak evidence)
+supermode neff fit residual: even=1.45e-05, odd=7.30e-07
+Dense-grid assembly (2001 points): 8 resonance dip(s) found.
+Measured mean FSR: 13.350 nm (predicted 12.87)
+Results at 1.5500 um: |t|=0.9713 |k1|=0.2374 |k2|=0.2374 |t_ring|=0.9677 |b|=0.9988
+```
+
+FSR is **3.7%** off prediction, against **14%** in the 2-D `RING_TEST_MODE`
+smoke — consistent with gap 3's measurement that res 20 sits ~75% of an FSR
+from res 40.
+
+⚠ **Q is grid-limited, and this run makes that visible rather than suspected.**
+Every FWHM is an exact multiple of the 2001-point grid spacing (0.05 nm):
+
+| FWHM (nm) | 0.1500 | 0.2000 | 0.2500 | 0.3000 |
+|---|---|---|---|---|
+| grid steps | 3 | 4 | 5 | 6 |
+
+So the reported Q (5322–10193) is set by **`N_WL_DENSE`**, a knob independent
+of both `FDTD_RESOLUTION` and `MODE_RESOLUTION`. In the 501-point smoke every
+FWHM was pinned at exactly 0.4000 nm. **If Q is wanted, raise `N_WL_DENSE`** —
+it is post-processing on an interpolated grid and costs no new FDTD.
+
+---
+
+**EIGHTEENTH SNAPSHOT — 2026-08-02 ~19:15, verified against `squeue -u
+jhiesener3`. Superseded; kept unedited.**
+
+| job | state | what |
+|---|---|---|
+| **11634859** | ⏳ PENDING @ 19:15 (`cpu-small`, reason `None` — not a billing hold) | `beef_ring_xc_clampfix` — `verify_ring_network_crosscheck.py` re-run after the `_section_polygons` clamp fix. 1 node × 24, `-t 480`, `--account=gts-sr108-ece` |
+
+**What it is expected to answer.** Every bus-excited number in
+`ring_resonator_validation.md` item 2 was launched from a source plane sitting
+on bare cladding (see that file's `🛠 DEFECT FOUND AND FIXED` block). A
+controlled login-node A/B at 2-D res 8 already puts `TOTAL out of bus` at
+**0.2190 → 1.0087** across the fix alone. This job is the 3-D res-20
+production confirmation of that, at the config the recorded numbers were taken
+at. Expect `iface<-bus` ≈ 1 and the +0.71…+0.93 deficit to vanish.
+
+**When it lands:** fold into `ring_resonator_validation.md` item 2, replacing
+the 11627160/11627401 numbers rather than appending to them — those runs are
+void, not merely superseded.
+
+⚠ The script `np.savez`es to
+`example_output/verification/ring_network_crosscheck/crosscheck.npz`
+unconditionally. It currently holds **pre-fix-clamp 2-D res-8 A/B data** from a
+login-node run, not a production result. This job overwrites it correctly.
+
+---
+
+**SEVENTEENTH SNAPSHOT — 2026-08-02 ~13:10, verified against `squeue -u
+jhiesener3` (empty) and `sacct -X -S 2026-08-02`. Superseded; kept unedited.**
+
+**THE QUEUE IS EMPTY. Nothing is running, nothing is pending.** Every job
+this project submitted today has terminated.
+
+| job | final state | answer |
+|---|---|---|
+| **11627401** | ✅ COMPLETED **8:21** @ 12:00 | `beef_ring_xcC_busbus` — the `bus<-bus` control. Reflection **0.1–2%**, forward **0.049–0.326**. Both surviving readings from item 2 stay alive; ~80% still unaccounted. Folded into `ring_resonator_validation.md` item 2 |
+| **11627585** | ❌ **FAILED** (exit 1) **3:21** @ 12:11 | `beef_ring_xcD_launch` — the straight-bus launch control. Died in geometry, **before any FDTD physics**: `ValueError: Cut/stub at x=-3.5000 falls strictly inside the near-bend arc` |
+| **11628207** | ❌ **FAILED** (exit 1) **3:20** @ 13:05 | `beef_ring_xcD_launch2` — same control after an attempted fix. **Failed identically**, `x=-6.5000`. The fix was wrong |
+
+### ⛔ The launch control has never run, and the script as committed will fail a third time
+
+**Measured 2026-08-02, not argued.** Both failures are the same defect, and
+the correction applied between them did not remove it.
+
+`RingResonatorCouplerSection._check_cut` (`beef/geometry/ring_coupler.py:168`)
+rejects any cut **strictly inside** the near-bend arc, which for this device
+spans `(stub_x, hc) = (-7.0, -2.0)`. The quantity it validates is not `x1`,
+and it is not `x1 + stub_right` either:
+
+```
+FDTDSolver.solve_section()  beef/solvers/fdtd.py:1978
+    prisms = geometry.section_prisms(
+        x0, x1, si_med,
+        stub_left=stub_left + self.dpml, stub_right=stub_right + self.dpml, ...)
+```
+
+**`solve_section` pads both stubs by `dpml` before the geometry ever sees
+them** — deliberately, so the drawn waveguide continues through the full PML
+instead of stopping at its inner edge. The cut actually tested is therefore
+
+```
+hi = X_STRAIGHT + stub_right + dpml = X_STRAIGHT + 1.0 + 0.5
+```
+
+Evaluated directly against the geometry class (conda `jmh`, login node, pure
+geometry — no meep, no time-stepping):
+
+| `X_STRAIGHT` | cut `hi` | guard | matches |
+|---|---|---|---|
+| −5.0 | −3.50 | ILLEGAL | job 11627585's error string exactly |
+| −7.5 | −6.00 | ILLEGAL | |
+| **−8.0 (committed default)** | **−6.50** | **ILLEGAL** | job 11628207's error string exactly |
+| −8.5 | −7.00 | LEGAL | lands on `stub_x`, the boundary the guard allows |
+| −9.0 | −7.50 | LEGAL | |
+
+The reproduction is exact in both directions — the two failed jobs' error
+strings are recovered from the geometry alone, so this is the whole mechanism
+and not a coincidence.
+
+**Why the second attempt failed.** The fix comment now standing at
+`verify_ring_network_crosscheck.py:56-67` reasons: *"section_polygons()
+validates x1 + stub_right … With common's stub_right=1.0, x1=-8.0 puts the
+stub end exactly on stub_x=-7.0 — the boundary, which the guard allows."*
+That arithmetic is right and its premise is wrong: it omits the `+ dpml`
+term, so the real cut was −6.5, not −7.0. **The comment is still in the file
+and still wrong**, and `X_STRAIGHT` still defaults to −8.0. Resubmitting the
+batch script unchanged buys a third identical 3-minute failure.
+
+**Cost so far:** 2 × ~3:20 wall on 24 cores. Cheap in absolute terms, but both
+failures are pure geometry — reachable in under a second on a login node
+without allocating a node at all.
+
+**The open design call, which is why this is not patched here.** `X_STRAIGHT
+= -8.5` is the largest legal value, and it leaves `[-9.0, -8.5]` — **0.5 µm**
+of straight bus. That may be too short to be the control item 2 asked for
+(the question is whether a clipped launch *sheds over a propagation
+distance*). Dropping `stub_right` to 0.0 for this one call instead allows
+`X_STRAIGHT ≤ -7.5` and a 1.5 µm span, but changes the port padding away from
+what every other measurement in the script used. **Pick one deliberately** —
+this is exactly the "sweep the wrong thing" trap the coupler's item 11 and the
+MMI's gap 2 both recorded.
+
+---
+
+**SIXTEENTH SNAPSHOT — 2026-08-02 ~11:40, verified against `squeue -u
+jhiesener3` and `sacct -X`.** Superseded by the seventeenth above; its two
+live jobs have both since landed and 11627160 is unchanged. The fifteenth is
+kept below it, unedited, for the two lessons it carries.
+
+**Both jobs the fifteenth snapshot listed as live have landed, successfully.**
+
+| job | final state | answer |
+|---|---|---|
+| **11609658** | ✅ COMPLETED **10:25:31** @ 01:42 (of 12 h) | `beef_dc_hybrid_dispersive`. Dispersive L₅₀ **15.089958 µm** (grid-snapped 15.150754, 0.299 µm grid). The 12 h budget was right — the 3 h that killed 11608703 was never going to be enough |
+| **11609659** | ✅ COMPLETED **1:37:19** @ 03:20 | `beef_dc_fdtd_at_hybrid_l50`, `afterok` fired normally. At L=15.089958 the **band-mean** split ratio is **0.500675** |
+| **11627160** | ✅ COMPLETED **7:04** @ 11:32 | `beef_ring_xcB_ringbus` — the ring's `ring<-bus` measurement. **Hypothesis refuted:** 0.0000–0.0004. See `ring_resonator_validation.md` item 2 |
+
+### The coupler result, because it is easy to misread
+
+The log's headline line reports **λ=1.550 only** (ratio 0.4919). The constant
+`COUPLING_LENGTH` is defined on the **band mean**, which is 0.500675 — 0.13%
+off a true 50:50. Reading the centre-λ line as the answer inverts the
+conclusion. Computed from `smatrix_fdtd.pkl` directly.
+
+| | frozen | dispersive |
+|---|---|---|
+| hybrid band-mean L₅₀ | 15.150754 | **15.089958** |
+| FDTD band-mean L₅₀ | 15.129 | **~15.074** |
+
+Dispersion moves **both** engines down ~0.05 µm and they stay ~0.1% apart.
+**The hybrid-vs-FDTD gap survives the material model** — it is not a dispersion
+artifact. This closes the `COUPLING_LENGTH` contradiction (2026-08-01 context
+item 3): **15.13 was correct all along**, and the defect was the stale comment
+block above it claiming the constant was pinned to the hybrid's 15.15.
+Corrected 2026-08-02; value untouched. The ~15.074 figure rests on one length
+plus the *hybrid's* slope, so it is **not** adopted as a constant — regenerate
+item 5's ground-truth sweep dispersively first.
+
+### ⚠ Not tracked here, and it should have been
+
+**`11609123_7` `elevator_corner_round`** — running since 2026-08-01 13:21,
+22 h+ elapsed of a 48 h limit, res=100, the last of an 8-point sweep. It lives
+in `/storage/scratch1/8/jhiesener3/esc/`, not in BEEF, which is why the
+2026-08-01 23:42 context save asserted "nothing else is running." **This file
+is titled "Active SLURM jobs", not "active BEEF jobs".** It is also on
+**`gts-sr108-gedc_main`** — the unfunded account, one of the 33 scripts still
+pointing at it.
+
+---
+
+**★ FIFTEENTH SNAPSHOT — 2026-08-01 ~18:10, verified against `squeue -u
+jhiesener3` and `sacct -X`.** Superseded by the sixteenth above.
+
+**Every BEEF job the fourteenth snapshot tracked has landed.** All results are
+folded into the owning device docs; this snapshot records the states and the
+two things worth carrying forward.
+
+| job | final state | answer |
+|---|---|---|
+| **11608875** `[0-3]` + **11609686** | ✅ all COMPLETED (55:15 / 41:22 / 49:33 / **2:23:09**), merge 25:45 @ 15:34 | **P1 CLOSED.** 1×2 gap 4, first ever: mean ratio **0.9946**, 0.54% monotone bias, worst residual 3.01e-06 rad |
+| **11609215_1 / _2** + **11609687** | ✅ 13:44 / 2:00:01, comparison 0:12 @ 15:27 | 1×2 gap 5 dispersive: **9.11% → 10.18%** — marginally *worse*, mean offset unmoved |
+| **11609211_1** + **11609680** + **11609681** | ✅ 1:51:57 / **3:50:41** / 0:15 @ 17:59 | **the P4 test → mechanism REFUTED.** 2×2 gap 5 dispersive **0.82% → 0.76%**, sign flip survives |
+| **11608690** | ✅ COMPLETED 1:28:14 | **P2 CLOSED** — first calibrated hybrid to survive since the `beta_from_phases` fix |
+| **11608692** | ✅ COMPLETED 00:07, **number contaminated** | gap 5 calibrated — valid number (7.30%) recovered offline; see the race below |
+| **11608941** / **11608940** | ✅ 1:03:21 / 07:13 | gaps 2 and 3 dispersive — **byte-identical**, as predicted |
+| **11608703** | ❌ **TIMEOUT 3:00:29** @ 15:17 | coupler L₅₀ re-verification — **did not finish**, see below |
+
+~~**Two live jobs remain**~~ — **both landed 2026-08-02, see the sixteenth
+snapshot at the top.** Left here as written:
+
+| job | state | answer |
+|---|---|---|
+| **11609658** | ~~🟢 RUNNING 2:55 of **12:00**~~ ✅ 10:25:31 | `beef_dc_hybrid_dispersive` — the 11608703 resubmission, dispersive and with 4× the wall clock |
+| **11609659** | ~~⏸ PENDING `afterok:11609658`~~ ✅ 1:37:19 | `beef_dc_fdtd_at_hybrid_l50`, 5 h |
+
+### ❌ 11608703 TIMED OUT — two separate lessons
+
+`beef_dc_hybrid_item14` hit its **3 h** limit at 15:17 with no output written.
+Two things went wrong, and only one of them was the wall clock:
+
+1. **Budget.** 3 h was sized against frozen-era coupler runs. The dispersive
+   1×2 came in at **1.53×** its frozen cost (11609215_1) and the dispersive
+   gap-4 lengths at ~2.4×; the coupler is the longest device in the repo. The
+   resubmission carries **12 h**.
+2. **⚠ It ran under `gts-sr108-gedc_main`, not `gts-sr108-ece`.** That is the
+   account whose balance problems already blocked jobs on 2026-07-30
+   (`AssocGrpBillingMinutes`). Everything submitted after it — 11609658,
+   11609659, 11609686 — is explicitly on **`gts-sr108-ece`**. Check
+   `#SBATCH -A` when reviving an older batch script; the timeout made this one
+   visible, but a script sitting on the wrong account is silent until it is not.
+
+**The P4 test was rescued from the same failure mode.** 11609211_2 was
+cancelled 46 min in on a live cost projection rather than left to time out,
+and its resubmission 11609680 took **3:50:41** — well past the original
+budget, so the cancellation was correct. Two jobs hit the same
+dispersive-cost-underestimate this session; one was caught in flight and one
+was not.
+
+---
+
+## Fourteenth snapshot — 2026-08-01 ~13:35 (superseded, kept for its reasoning)
+
+It adds the four jobs
 submitted after the thirteenth was written plus the two diagnostics it omitted;
 the thirteenth's *reasoning* about the dispersion generational break still
 stands and is not repeated.
@@ -15,10 +348,25 @@ they answer:
 | **11608690** | ✅ **COMPLETED 1:28:14** | **P2 CLOSED** — first calibrated hybrid to survive since the `beta_from_phases` fix. No guard fire |
 | **11608692** | ✅ COMPLETED 00:07, but its **number is contaminated** | gap 5 calibrated comparison — see the race below |
 | **11608703** | 🟢 running 1:08:27 | coupler L₅₀ re-verification through the shared fixed code path |
-| **11608941** | 🟢 running 28:27 | **gap 2** re-audited dispersive |
-| **11609211** `[1-2]` + **11609212** | 🟢 running 4:15; merge ⏸ | **the P4 test** — 2×2 gap 5 dispersive |
-| **11609215** `[1-2]` + **11609216** | `_1` ✅ **13:44**, `_2` 🟢 running; merge ⏸ | 1×2 gap 5 dispersive, the companion number. **`_1`'s FDTD reference already folded in** — see below |
+| **11608941** | ✅ **COMPLETED 1:03:21** @ 14:00 | **gap 2** re-audited dispersive — **byte-identical**, as predicted. Folded in |
+| **11609211_1** + ~~`_2`~~ → **11609680** + **11609681** | `_1` 🟢 running; `_2` ⛔ cancelled 46 min in, resubmitted as 11609680 (🟢, `-t 720`); comparison resubmitted as 11609681 | **the P4 test** — 2×2 gap 5 dispersive. **Rescued from a certain timeout** — see below |
+| **11609215** `[1-2]` + ~~11609216~~ → **11609687** | `_1` ✅ **13:44**, `_2` 🟢 running; comparison resubmitted `afterok` | 1×2 gap 5 dispersive. **`_1`'s FDTD reference already folded in** — see below |
+| **11608876** → **11609686** | ⏸ resubmitted `afterok:11608875` | gap 4 merge, moved to the funded account |
 | **11608940** | ✅ COMPLETED 07:13 @ 13:04 | **gap 3** re-audited dispersive — folded in |
+
+**Gaps 2 and 3 are both re-measured dispersive and both came back
+byte-identical** (11608940 @ 13:04, 11608941 @ 14:00). Two independent
+confirmations, so the rule is now evidence rather than analogy: **a quantity
+evaluated at a scalar wavelength is invariant across the dispersion break;
+only genuinely broadband quantities move** — gaps 4 and 5, and nothing else.
+Spending an hour of compute on a result expected to be unchanged was the point.
+
+**⚠ Do not reach for the ε grep on every job.** It works only where meep builds
+a broadband medium and prints `dielectric constant epsilon diagonal`.
+11608941 runs through meow/MPB and prints no such line at all — grepping
+returns nothing, which is *not* evidence of frozen material. There its log
+header carries the discriminator instead: `wl=1.31`, a single scalar
+wavelength. Match the check to the code path.
 
 **11608940's result, and the correction it forced.** Gap 3 came back
 **byte-identical** to its frozen-era numbers. I had recorded beforehand that
@@ -28,7 +376,7 @@ medium only differs from a frozen one *across a band*; `section_mode_neff()`
 builds its medium at a scalar wavelength deliberately, and meow's
 `Environment(wl=…)` is exact Sellmeier either way. Only the genuinely broadband
 gaps (4 and 5) move. 11608941 is left running to measure that for gap 2 rather
-than infer it by analogy. Full account in `mmi_1x2_validation.md`.
+than infer it by analogy. Full account in `resolved/mmi_1x2_validation.md`.
 
 **Both gap-5 pairs preserved their frozen baseline before launching** —
 `comparison_FROZEN_pre20260801.npz` in each of
@@ -36,9 +384,47 @@ than infer it by analogy. Full account in `mmi_1x2_validation.md`.
 script overwrites `comparison.npz`; without the copy the pre-flip half of the
 P4 test would have been unrecoverable.
 
-**Watch item on 11609211_2.** It runs the 2×2 hybrid at `N_MODES = 14` with
-zero margin over the guided count — a duplicate-mode guard trip there fails the
-job rather than degrading it.
+**Watch item on the 2×2 hybrid.** It runs at `N_MODES = 14` with zero margin
+over the guided count — a duplicate-mode guard trip there fails the job rather
+than degrading it.
+
+**⚠ 11609211_2 was cancelled 46 min in because it was going to time out, and
+the way that was caught generalises.** `run_mmi_2x2_examples.batch` carries one
+`-t 300` shared by all three of its examples, sized when the slowest fitted.
+The frozen-era hybrid (11585844_2) took **04:11:55** against that 300 — **48
+minutes of headroom**. Dispersion costs ~1.5× (measured: 1×2 FDTD 08:57 → 13:44,
+jobs 11585845_1 → 11609215_1), putting the dispersive hybrid near **06:25**.
+It was never going to finish. Resubmitted as **11609680** with `-t 720`.
+
+- **The limit cannot be raised in flight.** `scontrol update TimeLimit` returns
+  `Access/permission denied` for a non-admin, so the only remedy is cancel and
+  resubmit. That makes the check worth doing *at submit time*, not after.
+- **The check itself is cheap and should be routine:** before re-running
+  anything under the new material model, look up the frozen-era elapsed with
+  `sacct -X -j <old> --format=Elapsed,Timelimit` and multiply by ~1.5. A shared
+  array time limit is the usual trap, because it is sized for whichever task
+  happened to be slowest at the time.
+- **The 46 min are not lost** — `example_sim_cache` persists per solve, so
+  completed section solves are reused on the rerun.
+
+**⚠ The second hazard was worse, and it was invisible.** The gap-5 comparison
+jobs depended on their producers with **`afterany`**, which a TIMEOUT satisfies
+just as well as success. Had the hybrid timed out, the comparison would have
+fired anyway and compared the **new dispersive FDTD** against the **old frozen
+hybrid pickle still on disk** — yielding a plausible, wrong, unlabelled gap 5
+number. That is precisely what corrupted **11608692** earlier today, caught only
+because `provenance.json` happened to record an mtime.
+
+**Both comparisons are now `afterok`** — 11609681 (2×2) and 11609687 (1×2).
+Use `afterok` for any job that consumes a producer's output artifact;
+`afterany` is only correct when the dependent job's job is to *report on*
+whatever happened, not to read a result.
+
+**Account.** New submissions go to **`gts-sr108-ece`**, which has the balance;
+`gts-sr108-gedc_main` is what the older batch scripts hardcode. Applies to
+newly run jobs only — jobs already queued or running are left alone.
+`scontrol update JobId=<id> Account=...` does not work here regardless: it
+fails with a misleading `Requested time limit is invalid`.
 
 **11609215_1's number, folded in without waiting for its merge.** The
 full-device FDTD reference alone is enough to measure how far the *reference*
@@ -47,7 +433,7 @@ itself: max |ΔT| **0.00651** (1.65% of mean T), `out_0` and `out_1` agreeing to
 five decimals. Read against the P4 hypothesis it is **mixed** — the scale is
 2× the 2×2's entire ΔT swing, which supports it, but the curve crosses zero
 **twice**, which a single frozen-index term cannot do. Both halves recorded, in
-`mmi_1x2_validation.md` gap 5 (table) and `mmi_2x2_validation.md` gap 5
+`resolved/mmi_1x2_validation.md` gap 5 (table) and `resolved/mmi_2x2_validation.md` gap 5
 (P4 box), **before 11609212 lands**.
 
 **⚠ A pickle-path race corrupted 11608692, and it will recur.** The comparison
@@ -57,7 +443,7 @@ with the *dispersive* reference at 17:34:48 UTC; 11608692 ran at 17:43 and
 compared it against 11608690's *frozen* calibrated hybrid. Its printed
 `max|ΔT| = 0.0313` mixes two material eras and must not be quoted. The valid
 frozen-era number (**0.02876 / 7.30%**) was recovered offline from the
-preserved baseline at zero compute cost — see `mmi_1x2_validation.md` gap 5.
+preserved baseline at zero compute cost — see `resolved/mmi_1x2_validation.md` gap 5.
 
 Three lessons, all cheap:
 
@@ -215,7 +601,7 @@ guard that broke the 1×2's calibration). The job log prints both as `0.0000`
 at `:.4f` — they are genuinely that small; read off
 `example_output/verification/mmi_2x2_engine_agreement/engine_agreement.npz`,
 **not** defaulted or skipped, which was checked before recording this.
-Folded into `mmi_2x2_validation.md` gap 4 (boxed) and `README.md`'s table.
+Folded into `resolved/mmi_2x2_validation.md` gap 4 (boxed) and `README.md`'s table.
 Caveat carried there: measured at res 40, which gap 2 says is not converged in
 absolute n_eff; both engines read at the same mesh so the ratio partially
 cancels it, but 0.47% is not certified mesh-independent.
@@ -268,7 +654,7 @@ are both analysis work with no job in the queue.
 **Snapshot taken 2026-07-31, 16:35 EDT** (ninth snapshot of the day: 07-30
 21:46 → 07-31 08:22 re-queue → 08:46 → 10:35 → 10:53 → 12:05 → 13:05 → 13:44 →
 now). This update: mmi_1x2 gap 2 (11591224) completed and closed (res 120,
-`RESOLUTION` held at 40 by decision — see `mmi_1x2_validation.md`); the
+`RESOLUTION` held at 40 by decision — see `resolved/mmi_1x2_validation.md`); the
 coupler's cold regeneration pass launched, 11592462 (example outputs,
 array 0-2) + 11592463 (golden) — see the flagged anomaly on array task 2
 below before treating that output as a clean fresh result. This is a point-in-time list, not a
@@ -339,21 +725,21 @@ of billing minutes; `gts-sr108-gedc_main` had headroom). Cancelled all five
 
 | job | name | state (at snapshot) | for |
 |---|---|---|---|
-| 11575516 | `beef_mode_spec_converge` | ✅ **COMPLETED** 21:17, 3:36:13 — results folded in, entry retained for provenance | [fdtd_vs_EME_mode_validation.md](fdtd_vs_EME_mode_validation.md) item 1 + [modal_multiplexer_validation.md](deferred/modal_multiplexer_validation.md) gap 2 |
-| ~~11577985~~ → **11585844** `[1-2]` | `beef_mmi_2x2_examples` | ✅ **COMPLETED** — `_1` 1:16:45, `_2` 4:11:55; both SMatrix files on disk | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 5 (data) |
-| ~~11577986~~ → **11585849** | `beef_mmi_2x2_gap5` | ✅ **COMPLETED** 12:46, 0:18 — **worst max\|ΔT\| 0.0043 (0.82%), sign FLIPS across the band (not the 1×2's uniform signature); results folded in** | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 5 (comparison) |
-| ~~11578018~~ → **11585845** `[1-2]` | `beef_mmi_1x2_examples` | ✅ **COMPLETED** — `_1` 8:57, `_2` 1:46:59; both SMatrix files on disk | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 (data) |
-| ~~11578019~~ → **11585850** | `beef_mmi_1x2_gap5` | ✅ **COMPLETED** 10:28, 0:09 — **max\|ΔT\| 0.0359 (9.11%), results folded in** | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 (comparison) |
+| 11575516 | `beef_mode_spec_converge` | ✅ **COMPLETED** 21:17, 3:36:13 — results folded in, entry retained for provenance | [resolved/fdtd_vs_EME_mode_validation.md](resolved/fdtd_vs_EME_mode_validation.md) item 1 + [modal_multiplexer_validation.md](deferred/modal_multiplexer_validation.md) gap 2 |
+| ~~11577985~~ → **11585844** `[1-2]` | `beef_mmi_2x2_examples` | ✅ **COMPLETED** — `_1` 1:16:45, `_2` 4:11:55; both SMatrix files on disk | [resolved/mmi_2x2_validation.md](resolved/mmi_2x2_validation.md) gap 5 (data) |
+| ~~11577986~~ → **11585849** | `beef_mmi_2x2_gap5` | ✅ **COMPLETED** 12:46, 0:18 — **worst max\|ΔT\| 0.0043 (0.82%), sign FLIPS across the band (not the 1×2's uniform signature); results folded in** | [resolved/mmi_2x2_validation.md](resolved/mmi_2x2_validation.md) gap 5 (comparison) |
+| ~~11578018~~ → **11585845** `[1-2]` | `beef_mmi_1x2_examples` | ✅ **COMPLETED** — `_1` 8:57, `_2` 1:46:59; both SMatrix files on disk | [resolved/mmi_1x2_validation.md](resolved/mmi_1x2_validation.md) gap 5 (data) |
+| ~~11578019~~ → **11585850** | `beef_mmi_1x2_gap5` | ✅ **COMPLETED** 10:28, 0:09 — **max\|ΔT\| 0.0359 (9.11%), results folded in** | [resolved/mmi_1x2_validation.md](resolved/mmi_1x2_validation.md) gap 5 (comparison) |
 | ~~11578026~~ → ~~11585847~~ → **11590663** `[0]` | `beef_modal_mux_examples` | 11585847 ❌ **TIMEOUT** 13:42 (full 5h, 4 nodes) — sections 0-3 cached to disk before it died mid-section-4; resubmitted unchanged as 11590663 → ❌ **TIMEOUT again**, 18:58, full 5h — got further (deep into a per-port section-4 eigenmode-overlap monitor, band 13/14) but still did not finish or reach the item-8 `warn_on_transfer_duplicate` scan this run exists to exercise → reshaped as **11597177** `[0-2]` → ❌ **THIRD TIMEOUT 2026-08-01**, all 3 tasks, full 5h × 4 nodes each. **Cause found: the reshaped batch script dropped `srun --mpi=pmi2`, so meep ran on 1 rank instead of 96 (~42× slower per step) with 96 cores idle**; and the "sections 0-3 are cached" premise it rested on is false — every task recomputed them. **NOT resubmitted, device is deferred**; merge 11597199 orphaned on `DependencyNeverSatisfied`, cancel it. ~25 h of compute spent, gap 6 still unanswered | [modal_multiplexer_validation.md](deferred/modal_multiplexer_validation.md) gap 6 (exercise run) |
-| ~~**11586046**~~ → **11588309** | `beef_diagnose_items_11_12` | 11586046 ❌ **CANCELLED** 11:12 (hung, not slow); refixed → **11588309 ✅ COMPLETED 11:50, 34:55 — BOTH ITEMS RESOLVED:** item 11 closed (all four grids agree at res 40 too), item 12 decisive (laddering recovers a 14th guided mode at equal cost) | [fdtd_vs_EME_mode_validation.md](fdtd_vs_EME_mode_validation.md) items 11 + 12; it also opened item 14 |
-| **11586098** | `beef_diagnose_item_13` | ✅ **COMPLETED** 10:50, 1:54:50 — **C vs A inert (max \|Δn_eff\| 0.000e+00), cost 3.2×; results folded in** | [fdtd_vs_EME_mode_validation.md](fdtd_vs_EME_mode_validation.md) item 13 |
+| ~~**11586046**~~ → **11588309** | `beef_diagnose_items_11_12` | 11586046 ❌ **CANCELLED** 11:12 (hung, not slow); refixed → **11588309 ✅ COMPLETED 11:50, 34:55 — BOTH ITEMS RESOLVED:** item 11 closed (all four grids agree at res 40 too), item 12 decisive (laddering recovers a 14th guided mode at equal cost) | [resolved/fdtd_vs_EME_mode_validation.md](resolved/fdtd_vs_EME_mode_validation.md) items 11 + 12; it also opened item 14 |
+| **11586098** | `beef_diagnose_item_13` | ✅ **COMPLETED** 10:50, 1:54:50 — **C vs A inert (max \|Δn_eff\| 0.000e+00), cost 3.2×; results folded in** | [resolved/fdtd_vs_EME_mode_validation.md](resolved/fdtd_vs_EME_mode_validation.md) item 13 |
 | ~~11586986~~ → ~~11588997~~ | `beef_dispersive_convergence` | 11586986 ❌ **CANCELLED** 12:00 — **it was measuring nothing**, `dispersive=` never reached the mode solve (library bug, fixed); refixed → **11588997 ✅ COMPLETED** 13:56, 1:56:53 — **pin holds at centre, holds at the edge only up to the 1e-3 tolerance production actually uses (needs res 80, not 60, under dispersion — which is what's already shipped); does not fully converge at 3e-5 at the edge within res 20–120** | [material_model_validation.md](resolved/material_model_validation.md) work item 4 (cheap half) |
-| **11588569** | `beef_audit_mmi_2x2_gap6` | ✅ **COMPLETED** 11:58, 20:18 — **gap 6 closed:** identity `[0…13]`, worst \|Δn_eff\| 0.0007, 14/14 guided, **neither guard fired** | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 6 |
-| **11589770** → **11608690** | `beef_mmi_1x2_hybrid_calibrated` | ❌ **FAILED** 16:59, 4:17:26 — `section_mode_beta`'s phase-fit residual (2.101 rad) blows its own 0.1 rad sanity guard on the `[-2.0, 2.0]` section, 3 lengths. ~~DIAGNOSED 2026-07-31 as a **π sign flip in `T_ii`** at 4 of 88 cells; narrow upstream mode-extraction bug; the guard caught a real defect~~ → **that diagnosis was WRONG. ✅ REAL CAUSE FOUND AND FIXED 2026-08-01: a 2π turn-count bug in `beta_from_phases` itself.** It rounded wrap counts independently per length against one seed slope, so the ~2% MPB-vs-FDTD seed error — *the quantity `calibrate_body_neff` exists to measure* — drifted with L until a length straddled a `.5` boundary. The two readings are algebraically indistinguishable on the residual (both give `δ·(+⅓,−⅔,+⅓)`); physics separates them: turn-count → n_eff **2.783, +1.96%** over MPB, in family with the coupler's +2.233%/+2.361%; sign-flip → **2.101, −23%**, wrong sign and size. Seed-free proof: second difference `(φ₃−2φ₂+φ₁)/2π` is an exact integer to **0.00308 in all 88 cells** — nothing needs a sign flip. Not a corner case either: 4025-trial sweep, old code wrong 13.7%, new 0%. The doc's own "unresolved" branch margin 0.922 **was** the tell → now 0.0785. **The guard did catch a real defect — its own unwrapping.** Re-run in flight as **11608690** | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 (boxed, rewritten) |
-| **11589779** | `beef_mmi_1x2_gap5_calibrated` | ❌ **FAILED** 16:59, 0:00:09 — dependent on 11589770, nothing to load, expected given the above | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 5 follow-up (comparison) |
-| **11590785** | `beef_mmi_2x2_gap2_dbeta` | ✅ **COMPLETED** 1:05:48 — **gap 2 closed at res 100**, Δβ_01 converges to 0.05% by res 120 | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 2 |
-| **11591224** | `beef_mmi_1x2_gap2_dbeta` | ✅ **COMPLETED** 15:45, 1:05:15 — **gap 2 closed at res 120** (non-monotone step, unlike the 2×2's clean decay); `RESOLUTION` held at 40 by decision, gap recorded as a known mesh caveat instead | [mmi_1x2_validation.md](mmi_1x2_validation.md) gap 2 |
-| **11591249** → **11596845** `[0-3]` + **11596851** | `beef_mmi_2x2_engine_agreement` | ✅ **CLOSED 2026-08-01 by the reshape** — array all 4 COMPLETED (`_0`/`_1` 36 s cache hits, `_2` 3:35:10, `_3` 5:07:14) + merge 25:29. **Ratio 0.9953 — engines agree to 0.47%, `calibrate_body_neff` NOT indicated on this device.** T diagonal to 1.21e-05, fit residual 4.02e-06 rad (log shows both as `0.0000` at `:.4f`; real values read from the `.npz`). Gap 4 was this device's last open check. Original attempt below: ❌ **TIMEOUT** 19:46, full 5h — 4 of the 4 lengths' first run completed (2/4/6/8 µm all show a `run 0 finished` line), a 5th run (second pass, presumably for the reverse-direction or FDTD-vs-EME comparison half) was ~5,300 of a likely ~30,000 timestep run when killed — well under half done on that leg. Gap 4 (this device's last open check) did **not** close | [mmi_2x2_validation.md](mmi_2x2_validation.md) gap 4 / [README.md](README.md) check 1 — never measured for either MMI; 4 real FDTD solve_section() runs, adapted from the coupler's item 6 script |
+| **11588569** | `beef_audit_mmi_2x2_gap6` | ✅ **COMPLETED** 11:58, 20:18 — **gap 6 closed:** identity `[0…13]`, worst \|Δn_eff\| 0.0007, 14/14 guided, **neither guard fired** | [resolved/mmi_2x2_validation.md](resolved/mmi_2x2_validation.md) gap 6 |
+| **11589770** → **11608690** | `beef_mmi_1x2_hybrid_calibrated` | ❌ **FAILED** 16:59, 4:17:26 — `section_mode_beta`'s phase-fit residual (2.101 rad) blows its own 0.1 rad sanity guard on the `[-2.0, 2.0]` section, 3 lengths. ~~DIAGNOSED 2026-07-31 as a **π sign flip in `T_ii`** at 4 of 88 cells; narrow upstream mode-extraction bug; the guard caught a real defect~~ → **that diagnosis was WRONG. ✅ REAL CAUSE FOUND AND FIXED 2026-08-01: a 2π turn-count bug in `beta_from_phases` itself.** It rounded wrap counts independently per length against one seed slope, so the ~2% MPB-vs-FDTD seed error — *the quantity `calibrate_body_neff` exists to measure* — drifted with L until a length straddled a `.5` boundary. The two readings are algebraically indistinguishable on the residual (both give `δ·(+⅓,−⅔,+⅓)`); physics separates them: turn-count → n_eff **2.783, +1.96%** over MPB, in family with the coupler's +2.233%/+2.361%; sign-flip → **2.101, −23%**, wrong sign and size. Seed-free proof: second difference `(φ₃−2φ₂+φ₁)/2π` is an exact integer to **0.00308 in all 88 cells** — nothing needs a sign flip. Not a corner case either: 4025-trial sweep, old code wrong 13.7%, new 0%. The doc's own "unresolved" branch margin 0.922 **was** the tell → now 0.0785. **The guard did catch a real defect — its own unwrapping.** Re-run in flight as **11608690** | [resolved/mmi_1x2_validation.md](resolved/mmi_1x2_validation.md) gap 5 (boxed, rewritten) |
+| **11589779** | `beef_mmi_1x2_gap5_calibrated` | ❌ **FAILED** 16:59, 0:00:09 — dependent on 11589770, nothing to load, expected given the above | [resolved/mmi_1x2_validation.md](resolved/mmi_1x2_validation.md) gap 5 follow-up (comparison) |
+| **11590785** | `beef_mmi_2x2_gap2_dbeta` | ✅ **COMPLETED** 1:05:48 — **gap 2 closed at res 100**, Δβ_01 converges to 0.05% by res 120 | [resolved/mmi_2x2_validation.md](resolved/mmi_2x2_validation.md) gap 2 |
+| **11591224** | `beef_mmi_1x2_gap2_dbeta` | ✅ **COMPLETED** 15:45, 1:05:15 — **gap 2 closed at res 120** (non-monotone step, unlike the 2×2's clean decay); `RESOLUTION` held at 40 by decision, gap recorded as a known mesh caveat instead | [resolved/mmi_1x2_validation.md](resolved/mmi_1x2_validation.md) gap 2 |
+| **11591249** → **11596845** `[0-3]` + **11596851** | `beef_mmi_2x2_engine_agreement` | ✅ **CLOSED 2026-08-01 by the reshape** — array all 4 COMPLETED (`_0`/`_1` 36 s cache hits, `_2` 3:35:10, `_3` 5:07:14) + merge 25:29. **Ratio 0.9953 — engines agree to 0.47%, `calibrate_body_neff` NOT indicated on this device.** T diagonal to 1.21e-05, fit residual 4.02e-06 rad (log shows both as `0.0000` at `:.4f`; real values read from the `.npz`). Gap 4 was this device's last open check. Original attempt below: ❌ **TIMEOUT** 19:46, full 5h — 4 of the 4 lengths' first run completed (2/4/6/8 µm all show a `run 0 finished` line), a 5th run (second pass, presumably for the reverse-direction or FDTD-vs-EME comparison half) was ~5,300 of a likely ~30,000 timestep run when killed — well under half done on that leg. Gap 4 (this device's last open check) did **not** close | [resolved/mmi_2x2_validation.md](resolved/mmi_2x2_validation.md) gap 4 / [README.md](README.md) check 1 — never measured for either MMI; 4 real FDTD solve_section() runs, adapted from the coupler's item 6 script |
 | **11592462** `[0-2]` | `beef_dc_examples` | `_0` (hybrid) ❌ **TIMEOUT** 21:34, full 5h — see detail section below, not yet diagnosed; `_1` (mode) ✅ **COMPLETED 16:37, 3:49** — legit, not flagged: serial MPB even/odd supermode sweep (1 process), inherently cheap, no BEEF solver/cache involved; L_c = 32.813 µm at λ=1.55, gap sweep 0.15–0.5 µm recorded, `_2` (fdtd) ✅ **COMPLETED 16:33, 0:00:17** — **flagged, not yet trusted as a clean result:** 17s for a full 3-D broadband FDTD sweep is a cache hit, not a fresh compute. Confirmed NOT the item-8 fingerprint bug (`FDTDSolver.solve()` does splat `resolved_material_config()` into its cache key, `fdtd.py:707`, inside `solve()` itself) — so whatever it hit was already computed post-item-8, most likely the ground-truth length_sweep's own 15.13 µm grid point. Printed numbers (T=0.5061/0.4933, IL≈-3 dB) look physically sane, but this has not been cross-checked against that sweep's stored value yet — do that before citing this run's output as the "outstanding — not yet run" regeneration `resolved/directional_coupler_validation.md`'s Verification section calls for | `resolved/directional_coupler_validation.md` Verification → Outstanding (example-output regeneration) |
 | **11592463** | `beef_golden_dc_hybrid` | ✅ **COMPLETED** 17:42, 1:09:17 | `resolved/directional_coupler_validation.md` Verification → Standing (goldens stale since item 8) |
 | ~~11589771~~ ~~11589899~~ ~~11589936~~ | `beef_modal_mux_fdtd` | ❌ **BLOCKED, do not resubmit** — three cheap failures (~15 s each) converged on a real library gap: `CompoundGeometry` cannot back `FDTDSolver.solve()` at all | [modal_multiplexer_validation.md](deferred/modal_multiplexer_validation.md) gap 3 |
@@ -387,8 +773,8 @@ with a liveness check that aborts if the flag is ever inert again.
 Item 13 is closed by 11586098 (the
 guard's over-request is a pure filter, and `_DUP_MODE_MAX_EXTRA` is now a
 measured 3.2× of pure cost) — folded into
-`fdtd_vs_EME_mode_validation.md`. The 1×2 MMI's whole gap-5 chain completed end
-to end earlier and its numbers are in `mmi_1x2_validation.md`. `11585847` has
+`resolved/fdtd_vs_EME_mode_validation.md`. The 1×2 MMI's whole gap-5 chain completed end
+to end earlier and its numbers are in `resolved/mmi_1x2_validation.md`. `11585847` has
 produced a real finding before finishing: the item-0 duplicate guard fires on
 `EMESolver`'s **production** path on this device at res 40 (folded into
 `modal_multiplexer_validation.md` gap 6), though the item-8 `T`-column scan it
@@ -410,7 +796,7 @@ never the problem, and the 4-task split this file recommended at 11:03 would
 have produced four hung tasks.
 
 Two results came out of the failure, both folded into
-`fdtd_vs_EME_mode_validation.md`: item 12 gains the measured band table showing
+`resolved/fdtd_vs_EME_mode_validation.md`: item 12 gains the measured band table showing
 this device's shipped **16-mode basis is unachievable at res 40 by any seeding
 policy** — since superseded by 11588309, which found laddering recovers a 14th;
 the seeding half IS fixable, the count is 14 not 13 — and the production guard's
@@ -488,13 +874,13 @@ and rationale are unchanged from the 07-30 submission.
   term. Also measured at the shipped unconverged `RESOLUTION = 40` (gap 2), so
   part of the flip could be a mesh artifact rather than physics; the two
   cannot be separated until gap 2 is measured on this device. Folded into
-  `mmi_2x2_validation.md` gap 5. Output under
+  `resolved/mmi_2x2_validation.md` gap 5. Output under
   `example_output/verification/mmi_2x2_hybrid_vs_fdtd/`.
 
 ### 11585845 `[1-2]` — `beef_mmi_1x2_examples` (array indices 1,2 only)
 - Same shape as 11585844, for the 1×2 MMI: `make mmi_1x2_fdtd
   mmi_1x2_hybrid`.
-- **Why:** `mmi_1x2_validation.md` gap 5, same reasoning as the 2×2's. This
+- **Why:** `resolved/mmi_1x2_validation.md` gap 5, same reasoning as the 2×2's. This
   device's basis mismatch (gap 3, `N_MODES` 12→8) is already fixed, so —
   unlike the 2×2 — there's no open mode-identity concern underneath this
   comparison; only gap 2 (resolution) remains unsettled.
@@ -504,7 +890,7 @@ and rationale are unchanged from the 07-30 submission.
   `examples/verification/python/verify_mmi_1x2_hybrid_vs_fdtd.py`
 - Same shape as 11585849, ported to `mmi_1x2`'s port names (`out_0`/`out_1`
   vs `out_top`/`out_bot`). `--dependency=afterany:11585845`.
-- **Why:** `mmi_1x2_validation.md` gap 5.
+- **Why:** `resolved/mmi_1x2_validation.md` gap 5.
 - **Result (10:28, 9 s):** max |ΔT| **0.0359** at λ = 1.33 µm, mean |ΔT|
   0.0253, **9.11%** of mean T_fdtd. `check_passive()` true both sides; the two
   output ports agree to 4 decimals, so splitter symmetry survives the cascade.
@@ -512,7 +898,7 @@ and rationale are unchanged from the 07-30 submission.
   is the Δβ-discretization signature from
   `resolved/directional_coupler_validation.md` items 6/14 (coupler: ~5%
   uncalibrated → 0.11% with `calibrate_body_neff=True`, never tried here).
-  Folded into `mmi_1x2_validation.md` gap 5; output under
+  Folded into `resolved/mmi_1x2_validation.md` gap 5; output under
   `example_output/verification/mmi_1x2_hybrid_vs_fdtd/`. Provenance records
   beef `1cc8edc`.
 
@@ -528,7 +914,7 @@ and rationale are unchanged from the 07-30 submission.
 - **Why:** (a) gives the least-supported device in the repo (no golden, no
   FDTD reference, shared resolution knob) its first real output; (b)
   exercises `beef.mode_identity.transfer_matrix_duplicate_scan()` /
-  `warn_on_transfer_duplicate()` (`fdtd_vs_EME_mode_validation.md` item 8)
+  `warn_on_transfer_duplicate()` (`resolved/fdtd_vs_EME_mode_validation.md` item 8)
   against this device's real `solve_section()` interfaces for the first
   time — `modal_multiplexer_validation.md` gap 6 flags this as "not yet
   exercised... needs an actual meep/meow run." Watch
@@ -717,7 +1103,7 @@ and rationale are unchanged from the 07-30 submission.
   no `save_dir` reuse the way the modal mux's does) would need to redo all of
   it, or the script needs checkpointing / a longer wall-clock budget before
   trying again. Not resubmitted as of this snapshot — see
-  `mmi_2x2_validation.md` gap 4 for the validation-doc-side reasoning.
+  `resolved/mmi_2x2_validation.md` gap 4 for the validation-doc-side reasoning.
 
 ### 11596845 `[0-3]` + 11596851 — `beef_mmi_2x2_engine_agreement` (reshape of 11591249) — ✅ COMPLETED, GAP 4 CLOSED
 - **Scripts:** `batch/verification/run_mmi_2x2_engine_agreement.batch`
@@ -756,7 +1142,7 @@ and rationale are unchanged from the 07-30 submission.
   measurement.
 - **Cost datum worth keeping:** 96 / 183 / 215 / 307 min for L = 2/4/6/8 —
   13.4 h serial, i.e. the original single 5 h slot was never going to make it
-  and L=8 alone exceeds it. Folded into `mmi_2x2_validation.md` gap 4 and
+  and L=8 alone exceeds it. Folded into `resolved/mmi_2x2_validation.md` gap 4 and
   `README.md`.
 
 ### 11597177 `[0-2]` + 11597199 — `beef_modal_mux_examples` (reshape of 11590663) — ❌ THIRD TIMEOUT, cause found, NOT resubmitted
@@ -839,7 +1225,7 @@ and rationale are unchanged from the 07-30 submission.
   is unachievable by *any* seeding policy"; the re-run showed a laddered seed
   reaches **14**, so the ceiling is 14 and part of the shortfall is a software
   defect. Folded into
-  `fdtd_vs_EME_mode_validation.md` item 12, with the caveat that whether (10,11)
+  `resolved/fdtd_vs_EME_mode_validation.md` item 12, with the caveat that whether (10,11)
   is a solver duplicate or a real pair meep cannot separate is still item 1's
   open question.
 - **And it opened item 14.** `_iter_distinct_bands()` (`beef/solvers/fdtd.py:1049`)
@@ -920,7 +1306,7 @@ and rationale are unchanged from the 07-30 submission.
   **worst guided |Δn_eff| 0.0007** — the same number as the 2026-07-26 audit at
   15 modes. **Zero duplicate-guard firings** in the log from either engine, which
   answers the specific concern gap 6 raised: this is the repo's highest-mode-count
-  SOI_220 device on the 2.8 µm body that `fdtd_vs_EME_mode_validation.md` item 11
+  SOI_220 device on the 2.8 µm body that `resolved/fdtd_vs_EME_mode_validation.md` item 11
   names as the guard's least-margin case, and it had nothing to fire on. "The
   cleanest device audited" is a current claim again.
 
@@ -960,7 +1346,7 @@ and rationale are unchanged from the 07-30 submission.
   duplicate fired at res 60, itself a new data point given the res-40 firings.
   **Cost:** A 934.0 s, B 2948.5 s, C 2997.7 s ⇒ `B/A = 3.16×`, `C/A = 3.21×`;
   the two ratios agreeing confirms the expense is the eigenproblem, not the
-  filtering. Item 13 closed; folded into `fdtd_vs_EME_mode_validation.md` item
+  filtering. Item 13 closed; folded into `resolved/fdtd_vs_EME_mode_validation.md` item
   13, which also records why `_DUP_MODE_MAX_EXTRA` was **not** cut yet.
 
 ### 11586986 — `beef_dispersive_convergence`
@@ -1023,7 +1409,7 @@ and rationale are unchanged from the 07-30 submission.
 - **Resources:** 2 nodes × 24 ranks, 300 min — same shape as the uncalibrated
   hybrid array task (11585845_2, 1:46:59), since `calibrate_body_neff` changes
   how the body section's phase is propagated, not how many FDTD sections run.
-- **Why:** `mmi_1x2_validation.md` gap 5 measured the hybrid 9.11% **under**
+- **Why:** `resolved/mmi_1x2_validation.md` gap 5 measured the hybrid 9.11% **under**
   the full-device FDTD reference, every ΔT negative — the Δβ-discretization
   signature `resolved/directional_coupler_validation.md` items 6/14 describe
   on the coupler, where `calibrate_body_neff=True` took it from ~5% to 0.11%.
@@ -1050,7 +1436,7 @@ and rationale are unchanged from the 07-30 submission.
   `examples/verification/python/verify_mmi_2x2_gap2_dbeta.py` (new).
 - **Resources:** 1 node, 8 cpus, serial, 180 min budget. Eigensolve only —
   `EMESolver.compute_modes()` at `num_modes=2`, no FDTD, no time-stepping.
-- **Why:** `mmi_2x2_validation.md` gap 2's existing measurement (job 11500536)
+- **Why:** `resolved/mmi_2x2_validation.md` gap 2's existing measurement (job 11500536)
   shows the MMI body's fundamental n_eff still moving at res 100, but that
   doc explicitly declines to conclude anything from an arbitrary quantity —
   same "sweep the wrong thing, hide the real error" lesson item 11 taught on
@@ -1075,7 +1461,7 @@ and rationale are unchanged from the 07-30 submission.
   relative to each quantity's own value, the two converge at a *similar*
   rate; what actually matters is that Δβ_01 itself is small enough to trust
   by res 100, not how its convergence rate compares to another quantity's.
-  Full table in `mmi_2x2_validation.md` gap 2.
+  Full table in `resolved/mmi_2x2_validation.md` gap 2.
 
 ### 11589771 / 11589899 / 11589936 — `beef_modal_mux_fdtd` — ❌ BLOCKED, do not resubmit
 - **Script:** `batch/run_modal_multiplexer_fdtd.batch` (new) → `make
