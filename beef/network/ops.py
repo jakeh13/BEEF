@@ -34,14 +34,20 @@ formula does not reduce to Branch A's, so this isn't a single formula with
 a degenerate case — it's two different formulas. Branch B raises
 NotImplementedError with this same explanation.
 
-Branch B DOES now have a required caller, identified 2026-08-01: the ring
-resonator's physical 4-port form. Its loop runs ring_R -> around the outer
-ring -> ring_L, i.e. port_out != port_in, so the composable/add-drop/cascaded
-route is blocked on this function. See validation_markdown/
-ring_resonator_validation.md's "Wiring to-do" item 1. That doc's decision is
-to ship the 2-port aggregate form (Branch A) first as a numerical
-cross-check, then implement Branch B -- so this is scheduled work with a
-named dependent, no longer an open-ended deferral.
+Branch B was thought to be what the ring's physical 4-port form needs. It is
+NOT -- established 2026-08-03 by working the algebra through. Forcing only
+`a_p = loop @ b_q` with p != q leaves `a_q` free and `b_p` live, so `b_q` is
+consumed by the loop while still appearing as an output: the reduction is not
+a valid S-matrix. Physically, a ring's outer path circulates BOTH ways, so
+wiring only ring_R -> ring_L leaves a_{ring_R} and b_{ring_L} unconnected.
+
+What that caller actually needs is close_loop_pair() below: both ports
+eliminated at once, each one's output feeding the other's input. That IS
+well-posed, and it reduces to Branch A exactly when one direction is dead
+(tests/test_network_ops_pair.py). Branch B therefore has no known required
+caller again -- it is a one-way, non-reciprocal connection between two ports
+of one block, which is a meaningful operation but not this device's. It stays
+unimplemented for want of a caller, not for want of a derivation.
 """
 from __future__ import annotations
 
@@ -320,3 +326,121 @@ def close_loop(
 
     new_modes = {q: block.modes_per_port[q] for q in E}
     return SMatrixBlock(wavelengths=wavelengths, ports=tuple(E), modes_per_port=new_modes, data=S_EE_new)
+
+
+def close_loop_pair(
+    block: SMatrixBlock, port_a: str, port_b: str,
+    loop_ba: Optional[Union[Number, np.ndarray]] = None,
+    loop_ab: Optional[Union[Number, np.ndarray]] = None,
+    *,
+    cond_warn: float = 1e6,
+    cond_error: float = 1e12,
+) -> SMatrixBlock:
+    """Eliminate a PAIR of the block's own ports by wiring each one's output
+    into the other's input:
+
+        a_{port_a} = loop_ba @ b_{port_b}        (the port_b -> port_a path)
+        a_{port_b} = loop_ab @ b_{port_a}        (the port_a -> port_b path)
+
+    Why this exists rather than `close_loop(port_out != port_in)`. A one-way
+    closure of two distinct ports ("Branch B", see the module docstring) is
+    under-determined: forcing only `a_p = loop @ b_q` leaves `a_q` free and
+    `b_p` live, so `b_q` is consumed by the loop while still appearing as an
+    output and the reduction is not a valid S-matrix. A ring resonator's outer
+    path circulates BOTH ways, so wiring only `ring_R -> ring_L` leaves
+    `a_{ring_R}` and `b_{ring_L}` unconnected. Closing the pair in both
+    directions eliminates both ports cleanly and leaves a well-posed block --
+    for the ring's physical 4-port form, `bus_L`/`bus_R`.
+    See validation_markdown/ring_resonator_validation.md, wiring item 1.
+
+    With E the remaining ports, F = loop_ab, R = loop_ba, the two port
+    relations substituted into the block give a single 2n-by-2n system per
+    wavelength:
+
+        [ I - S_AB F      -S_AA R  ] [b_A]   [S_AE]
+        [   -S_BB F     I - S_BA R ] [b_B] = [S_BE]  a_E
+
+        b_E = S_EE a_E + S_EB F b_A + S_EA R b_B
+
+    Structurally the same shape as close_loop()'s `(I - S_pp @ loop)^-1`, on
+    the port pair instead of one port.
+
+    Setting loop_ab = 0 reduces this EXACTLY to close_loop()'s Branch A
+    formula with S_pp -> S_BA, S_Ep -> S_EA, S_pE -> S_BE and loop -> loop_ba,
+    which is how it is cross-checked against the already-proven Branch A (and
+    hence against the ring's closed form) in tests/test_network_ops_pair.py.
+
+    Args:
+        block: the block to reduce.
+        port_a, port_b: the two DISTINCT ports to eliminate. They must carry
+            the same number of modes, since each one's output feeds the
+            other's input.
+        loop_ba: operator on the port_b -> port_a path. None means identity;
+            a scalar or [M] array means that times identity (the ring's own
+            `P` is a [M] array); or a full [M, n, n].
+        loop_ab: operator on the port_a -> port_b path, same accepted forms.
+            For a symmetric racetrack this equals loop_ba, but an add-drop or
+            a cascaded ring need not, so it is a separate argument rather than
+            assumed.
+
+    Returns:
+        A new SMatrixBlock over the remaining ports.
+
+    Raises:
+        ValueError: unknown port, port_a == port_b, mismatched mode counts, or
+            a near/exactly-singular loop system (see cond_warn/cond_error --
+            a ring at critical coupling genuinely produces this).
+    """
+    if port_a == port_b:
+        raise ValueError(
+            "close_loop_pair: port_a and port_b must be distinct; for a single "
+            "port fed back into itself use close_loop() (Branch A)."
+        )
+    for p in (port_a, port_b):
+        if p not in block.ports:
+            raise ValueError(
+                f"close_loop_pair: port {p!r} not in block (have {block.ports})."
+            )
+    n_a, n_b = block.modes_per_port[port_a], block.modes_per_port[port_b]
+    if n_a != n_b:
+        raise ValueError(
+            f"close_loop_pair: {port_a!r} carries {n_a} mode(s) but {port_b!r} "
+            f"carries {n_b}; each port's output feeds the other's input, so the "
+            "two must match."
+        )
+
+    n = n_a
+    wavelengths = block.wavelengths
+    M = len(wavelengths)
+    R = _as_loop_operator(loop_ba, n, wavelengths)
+    F = _as_loop_operator(loop_ab, n, wavelengths)
+
+    E = [q for q in block.ports if q not in (port_a, port_b)]
+    idx_E = _group_indices(block, E)
+    idx_A = _group_indices(block, [port_a])
+    idx_B = _group_indices(block, [port_b])
+
+    sub = lambda r, c: _submatrix_by_index(block.data, r, c)
+    S_AA, S_AB, S_AE = sub(idx_A, idx_A), sub(idx_A, idx_B), sub(idx_A, idx_E)
+    S_BA, S_BB, S_BE = sub(idx_B, idx_A), sub(idx_B, idx_B), sub(idx_B, idx_E)
+    S_EA, S_EB, S_EE = sub(idx_E, idx_A), sub(idx_E, idx_B), sub(idx_E, idx_E)
+
+    I_n = np.broadcast_to(np.eye(n, dtype=complex), (M, n, n))
+    sys_mat = np.empty((M, 2 * n, 2 * n), dtype=complex)
+    sys_mat[:, :n, :n] = I_n - S_AB @ F
+    sys_mat[:, :n, n:] = -(S_AA @ R)
+    sys_mat[:, n:, :n] = -(S_BB @ F)
+    sys_mat[:, n:, n:] = I_n - S_BA @ R
+    _check_conditioning(sys_mat, wavelengths, "close_loop_pair", cond_warn, cond_error)
+
+    if idx_E.size:
+        rhs = np.concatenate([S_AE, S_BE], axis=1)          # [M, 2n, |E|]
+        solved = np.linalg.solve(sys_mat, rhs)
+        b_A, b_B = solved[:, :n, :], solved[:, n:, :]
+        S_EE_new = S_EE + S_EB @ F @ b_A + S_EA @ R @ b_B
+    else:
+        S_EE_new = np.zeros((M, 0, 0), dtype=complex)
+
+    new_modes = {q: block.modes_per_port[q] for q in E}
+    return SMatrixBlock(wavelengths=wavelengths, ports=tuple(E),
+                        modes_per_port=new_modes, data=S_EE_new)

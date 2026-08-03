@@ -77,6 +77,7 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon as MplPolygon
 import matplotlib.patches as mpatches
 import matplotlib.path as mpath
 
@@ -89,13 +90,38 @@ from beef.geometry.base import polygons_to_prisms
 from beef.materials import SOI_220
 from beef.materials.stack import resolved_material_config
 from beef.results import SMatrix
+from beef.spectral import interp_complex
 from beef.solvers.fdtd import (
     check_source_coverage, monitor_freq_grid, source_fwidth,
 )
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "ring_resonator", "ring_resonator_hybrid"))
+# A resolution sweep (RING_FDTD_RES set, see FDTD_RESOLUTION below) writes into
+# its own subfolder. Without this every task overwrites the same ring_data.npz.
+#
+# ADDED 2026-08-03, and it was already costing data. Only the CASCADED script
+# had this guard -- and only the cascaded script read RING_FDTD_RES at all.
+# Job 11655349 swept both scripts over res 20/30/40; this one ignored the
+# variable, ran three times at res 40, and overwrote its own output twice. Two
+# of the six results in that job never existed. Nothing production was harmed
+# (the two_d redirect below kept it out of the way) but the sweep was silently
+# a third as informative as it looked. Keep the two scripts symmetric.
+_res_sweep = os.environ.get("RING_FDTD_RES")
+if _res_sweep:
+    output_dir = os.path.join(output_dir, "res_sweep", f"res_{float(_res_sweep):g}")
+# RING_THREE_D writes into its own subfolder: a 2-D run's ring_data.npz is not
+# the production result and must never land on top of it. The guard is the env
+# var, not its value, so an explicit RING_THREE_D=1 also stays out of the way.
+_three_d_env = os.environ.get("RING_THREE_D")
+if _three_d_env is not None:
+    output_dir = os.path.join(output_dir,
+                              "three_d" if bool(int(_three_d_env)) else "two_d")
 os.makedirs(output_dir, exist_ok=True)
+# Per-simulation geometry previews live here, NOT at the top level: the output
+# root is for whole-device results. Mirrors ring_resonator_hybrid_cascaded.py.
+sections_dir = os.path.join(output_dir, "sections")
+os.makedirs(sections_dir, exist_ok=True)
 
 # Persistent on-disk simulation cache (see beef/cache/) — same shared
 # example_sim_cache/ directory every other example's FDTDSolver/
@@ -142,13 +168,34 @@ L_FAR = L_C                 # um, far straight (analytic neff only)
 # resolution and 3-D FDTD cost scales roughly as res^4, so it stays at 40 rather
 # than paying ~39x for an unmeasured claim. Splitting is what makes those two
 # independent statements expressible at all.
-FDTD_RESOLUTION = 20.0 if TEST_MODE else 40.0    # pts/um -- meep; NOT converged-tested
+# RING_FDTD_RES override added 2026-08-03 to match _cascaded.py, which has had
+# it since the gap-3 sweep. Without it this script silently ignored the sweep
+# variable -- see the output_dir note above for what that cost.
+FDTD_RESOLUTION = float(os.environ.get(
+    "RING_FDTD_RES", 20.0 if TEST_MODE else 40.0))   # pts/um -- meep; NOT converged
 MODE_RESOLUTION = 20.0 if TEST_MODE else 100.0   # pts/um -- meow/MPB; gap 3 converged
-THREE_D = not TEST_MODE                       # full 3-D core vs. cheap 2-D planar fallback
+# 2-D/3-D is its OWN knob, split out of TEST_MODE 2026-08-03 -- see the same
+# comment in ring_resonator_hybrid_cascaded.py. Short version: validation check
+# 4 can only afford the full device in 2-D (3-D is 167 h at res 40), so it needs
+# a 2-D run of this script to compare against, and RING_TEST_MODE=1 cannot be
+# that partner because it moves five knobs at once. RING_THREE_D=0 moves exactly
+# one. Unset keeps the previous behaviour.
+THREE_D = (not TEST_MODE) if _three_d_env is None else bool(int(_three_d_env))
 WL_MIN, WL_MAX = 1.50, 1.60                    # um, C-band
 N_WL_FDTD = 21 if TEST_MODE else 101           # FDTD DFT points (moderate — 5 monitors x freqs is expensive)
 N_WL_SOLVE = 5 if TEST_MODE else 13            # mode-solve (neff) points — each a real MPB solve
-N_WL_DENSE = 501 if TEST_MODE else 2001        # dense interpolated grid, to resolve resonance dips
+N_WL_DENSE = 2001 if TEST_MODE else 20001     # dense interpolated grid, to resolve resonance dips.
+# Raised from 501/2001 on 2026-08-03 because Q was GRID-LIMITED, not physical: at 2001
+# points the 1.50-1.60 um span steps 0.05 nm, and every reported FWHM came out an exact
+# multiple of it (0.15/0.20/0.25/0.30 = 3/4/5/6 steps), so Q was set by this knob rather
+# than by either resolution. 20001 points = 0.005 nm, ~30 samples across the narrowest
+# FWHM seen so far. Pure post-processing on interpolated coefficients -- costs no FDTD and
+# is in no cache fingerprint (the FDTD grid is `wavelengths`, N_WL_FDTD, which is separate).
+# CONVERGENCE VERIFIED, not assumed: rebuilding the dense assembly from the same cached
+# coefficients at 2001/5001/10001/20001/40001/80001 points gives first-dip FWHM
+# 0.1500/0.1400/0.1100/0.1050/0.1050/0.1050 nm -- flat from 20001 on. The old 2001-point
+# value under-reported Q by ~43% (10006 vs 14294). Do not lower this to "save time": it is
+# an interpolation, and the whole reported Q spectrum moves with it.
 DPML = 0.5
 SIM_HEIGHT = 1.5            # um, inner z-span when THREE_D
 DECAY_TOL = 1e-11
@@ -270,17 +317,100 @@ BEND_D_OUT = STUB_LEN - MONITOR_MARGIN
 
 
 # ---------------------------------------------------------------------------
+# The straight guide the standalone-bend FDTD carries INSIDE its own measured
+# coefficient: BEND_D_IN before the arc and BEND_D_OUT after it, per bend -- and
+# b is squared, because there are two far bends. phi_bend_correction strips that
+# PHASE out of b so b_corrected refers to the arc endpoints, and L_OUTER then
+# supplies the full physical straights. Net straight phase = L_OUTER.
+#
+# Equivalent formulation, verified 2026-08-03 to 1.2e-13 in T and to identical
+# dip wavelengths: never touch b, and use L_OUTER - BEND_STRAIGHT_TOTAL as the
+# analytic length instead. That is the DirectionalCoupler's approach
+# (`body_lengths = coupling_lengths - 2*BODY_STUB`). The two agree exactly because
+# both strip and re-add with the same neff. Keeping the strip because it is
+# MANDATORY whenever the difference below would go negative, and because
+# b_corrected ("the arc alone") stays meaningful across ring geometries.
+#
+# THE GUARD. The DC has one (`assert body_lengths[0] >= 0`); this script did not
+# until 2026-08-03. The equivalent analytic length must not go negative: if the
+# bend's own stubs cover more straight than the device physically has between its
+# arcs, the model attributes straight to the bends that does not exist -- and it
+# would do so SILENTLY. Headroom here is only 2.0 um, and in terms of the knob that
+# sets it, only 0.5 um: BEND_STRAIGHT_TOTAL = 4*(STUB_LEN - MONITOR_MARGIN), so
+# STUB_LEN = 2.0 is exactly the boundary and anything above it trips this assert
+# (verified by exercising this block against broken configs, 2026-08-03). A smaller
+# ring trips it without touching the bend at all -- L_SIDE=1.0, L_FAR=2.0 at the
+# shipped STUB_LEN already fails.
+#
+# Note this uses the SHIPPED L_outer expression. Whether that expression is itself
+# plane-consistent is a separate question -- see the round-trip ledger, which
+# reports it.
+# ---------------------------------------------------------------------------
+L_OUTER = 2 * (L_SIDE - S_MON) + L_FAR
+BEND_STRAIGHT_TOTAL = 2 * (BEND_D_IN + BEND_D_OUT)          # 2 far bends
+BEND_STRAIGHT_HEADROOM = L_OUTER - BEND_STRAIGHT_TOTAL
+assert BEND_STRAIGHT_HEADROOM >= 0, (
+    f"the far bends' own straight stubs ({BEND_STRAIGHT_TOTAL:.2f} um total) exceed "
+    f"the physical straight path between the arcs (L_OUTER = {L_OUTER:.2f} um), so the "
+    f"DC-style equivalent analytic length would be negative. Reduce STUB_LEN or "
+    f"MONITOR_MARGIN, or lengthen L_SIDE / L_FAR."
+)
+
+
+# ---------------------------------------------------------------------------
 # 5. Raw-meep simulation helpers
 # ---------------------------------------------------------------------------
-def make_sim(polys, wl_center, cell_size, geometry_center):
-    prisms = polygons_to_prisms(polys, MATERIAL_STACK.si_medium(wl_center), wg_height=_wg_height)
+# ---------------------------------------------------------------------------
+# M1 FIX, 2026-08-03 — the FDTD half now tracks the band.
+#
+# Until today both media were built with `si_medium(wl_center)` / a SCALAR, so
+# the whole 1.50-1.60 um sweep ran on one index frozen at band centre while the
+# meow/EME half re-evaluated its SampledMaterials at every wavelength. The two
+# engines were simulating different silicon: n_Si off by +0.004338 at 1.50 um
+# and -0.003913 at 1.60 um, which is +1.42% / -1.20% of an FSR in round-trip
+# phase.
+#
+# The library fixed this on 2026-08-01 inside `FDTDSolver._media()`, so every
+# example that goes through the solver inherited it with no edit. These ring
+# scripts are the ONLY non-library callers of si_medium/sio2_medium in the repo
+# -- they hand-roll mp.Simulation and never construct an FDTDSolver, so they
+# could not inherit a solver fix. This function is `FDTDSolver._media()`
+# replicated, deliberately line-for-line, rather than a second opinion about
+# what "dispersive" means.
+#
+# NOTE the reparameterisation matters and is not optional: a naive dispersive
+# meep Medium LOSES 0.0496 in n_eff at res 40, because meep subpixel-averages
+# only the instantaneous eps and meep's Sellmeier form puts eps_inf = 1, giving
+# no Si/SiO2 contrast for smoothing to act on. `si_medium(dispersive=True)`
+# routes through `meep_medium_reparam()`, which puts the contrast back in
+# eps_inf. See MaterialStack.si_medium()'s docstring for the measurement.
+#
+# RING_FDTD_DISPERSIVE overrides for an A/B; unset inherits the stack (True).
+_disp_env = os.environ.get("RING_FDTD_DISPERSIVE")
+FDTD_DISPERSIVE = None if _disp_env is None else bool(int(_disp_env))
+
+
+def _media(wavelengths):
+    """(si_medium, sio2_medium) for this run's band -- FDTDSolver._media()."""
+    dispersive = MATERIAL_STACK.resolve_dispersive(FDTD_DISPERSIVE)
+    wl = (np.asarray(wavelengths, dtype=float) if dispersive
+          else float(np.mean(wavelengths)))
+    return (MATERIAL_STACK.si_medium(wl, dispersive=dispersive),
+            MATERIAL_STACK.sio2_medium(wl, dispersive=dispersive))
+
+
+def make_sim(polys, wavelengths, cell_size, geometry_center):
+    """`wavelengths` is the run's whole BAND, not a centre wavelength -- see
+    _media() above for why that distinction is the entire M1 fix."""
+    si, sio2 = _media(wavelengths)
+    prisms = polygons_to_prisms(polys, si, wg_height=_wg_height)
     return mp.Simulation(
         resolution=FDTD_RESOLUTION,
         cell_size=mp.Vector3(cell_size[0], cell_size[1], _cell_sz),
         geometry_center=mp.Vector3(geometry_center[0], geometry_center[1], 0),
         boundary_layers=[mp.PML(DPML)],
         geometry=prisms,
-        default_material=MATERIAL_STACK.sio2_medium(wl_center),
+        default_material=sio2,
     )
 
 
@@ -373,11 +503,16 @@ def _sim_params(wavelengths):
         # Sellmeier change nor the 2026-08-01 dispersion-default flip moves this
         # key, so a stale entry keeps matching and is served with the old
         # physics -- the same failure the resolved_* spectral fields above exist
-        # to stop, on the material axis. `dispersive=False` is the RESOLVED
-        # value (M4), not the stack's flag: this script's FDTD half still calls
-        # si_medium(wl_center) with a SCALAR, so it genuinely simulates frozen
-        # media (M1). When M1 is fixed, this argument must move with it.
-        **resolved_material_config(MATERIAL_STACK, np.asarray(wavelengths), False),
+        # to stop, on the material axis. The third argument is the RESOLVED
+        # value (M4), not the stack's flag.
+        #
+        # M1 FIXED 2026-08-03: it used to be a hardcoded `False`, because the
+        # FDTD half really did simulate frozen media -- si_medium(wl_center)
+        # with a SCALAR. It now passes the band (see _media()), so this
+        # resolves to True and the key turns over correctly, exactly as the M4
+        # note predicted it would need to.
+        **resolved_material_config(MATERIAL_STACK, np.asarray(wavelengths),
+                                  MATERIAL_STACK.resolve_dispersive(FDTD_DISPERSIVE)),
     }
 
 
@@ -447,7 +582,7 @@ def run_coupler_fdtd(excite, wavelengths, save_dir=None, cache_only=False):
     check_source_coverage(fcen, fwidth, wavelengths)
 
     polys = build_coupler_polys()
-    sim = make_sim(polys, wl_center, (COUPLER_SX, COUPLER_SY), (0.0, COUPLER_Y_CENTER))
+    sim = make_sim(polys, wavelengths, (COUPLER_SX, COUPLER_SY), (0.0, COUPLER_Y_CENTER))
 
     bus_l_x = -INNER_X_HALF + MONITOR_MARGIN
     bus_r_x = INNER_X_HALF - MONITOR_MARGIN
@@ -537,7 +672,7 @@ def run_bend_fdtd(wavelengths, save_dir=None, cache_only=False):
     check_source_coverage(fcen, fwidth, wavelengths)
 
     polys = build_bend_polys()
-    sim = make_sim(polys, wl_center, (BEND_SX, BEND_SY), (BEND_X_CENTER, BEND_Y_CENTER))
+    sim = make_sim(polys, wavelengths, (BEND_SX, BEND_SY), (BEND_X_CENTER, BEND_Y_CENTER))
 
     src_x = -STUB_LEN + SOURCE_MARGIN
     sim.sources = [mp.EigenModeSource(
@@ -636,12 +771,12 @@ def solve_neff(wl, save_dir=None, cache_only=False):
 # ---------------------------------------------------------------------------
 # 9. Interpolation helpers
 # ---------------------------------------------------------------------------
-def interp_complex(wl_src, c, wl_dense):
-    """Magnitude + unwrapped-phase interpolation — see module docstring for
-    why linear real/imag interpolation is the wrong tool here."""
-    mag = np.interp(wl_dense, wl_src, np.abs(c))
-    phase = np.interp(wl_dense, wl_src, np.unwrap(np.angle(c)))
-    return mag * np.exp(1j * phase)
+# interp_complex now comes from beef.spectral (imported above) rather than
+# being defined here. It was duplicated verbatim in this script and
+# ring_resonator_hybrid_cascaded.py, had no test, and is load-bearing: see
+# tests/test_spectral.py, which measures why real/imag interpolation is the
+# wrong tool (it damps the coefficients and made Q look non-convergent) and
+# pins this strategy's own failure mode.
 
 
 def find_dips(wl_dense, T):
@@ -719,7 +854,7 @@ plot_cell(
         ("mon", *_mon_seg(PORT_APERTURE, xc=-STUB_X, y=Y_RING + R + S_MON), "ring_L", "purple"),
         ("mon", *_mon_seg(PORT_APERTURE, xc=STUB_X, y=Y_RING + R + S_MON), "ring_R", "purple"),
     ],
-    os.path.join(output_dir, "geometry_coupler.png"),
+    os.path.join(sections_dir, "fdtd_coupler_section.png"),
     "Ring Resonator — Coupler Section (bus + near straight + 2 near bends)",
 )
 plot_cell(
@@ -729,10 +864,218 @@ plot_cell(
         ("mon", *_mon_seg(PORT_APERTURE, x=-STUB_LEN + MONITOR_MARGIN, yc=0.0), "norm", "orange"),
         ("mon", *_mon_seg(PORT_APERTURE, xc=R, y=R + STUB_LEN - MONITOR_MARGIN), "out", "purple"),
     ],
-    os.path.join(output_dir, "geometry_bend.png"),
+    os.path.join(sections_dir, "fdtd_standalone_bend.png"),
     "Ring Resonator — Standalone 90 deg Bend (loss/phase reference)",
 )
-print(f"Geometry preview plots saved -> {output_dir}/geometry_coupler.png, geometry_bend.png")
+print(f"Section previews saved -> {sections_dir}/ (fdtd_coupler_section, fdtd_standalone_bend)")
+
+
+# ---------------------------------------------------------------------------
+# 10b. Reference-plane table + round-trip ledger.
+#
+#      Counterpart to ring_resonator_hybrid_cascaded.py's
+#      device_assembly_ledger(): for every contribution to the ring's optical
+#      path, the length this script's algebra assigns vs the physical span
+#      between the reference planes that actually bound it. A non-zero mismatch
+#      is unaccounted round-trip phase, and resonance position is round-trip
+#      phase, so it is a wrong answer for the one quantity this device reports.
+#
+#      Added 2026-08-03 after the cascaded ledger found a 0.5 um shortfall
+#      there. This device has the opposite problem and a second one besides:
+#      its ring port is ASYMMETRIC (in and out planes differ), which no single
+#      lever-arm constant can express. Built as a table rather than patched
+#      term-by-term deliberately -- correcting L_outer alone was measured to
+#      improve FSR agreement while making comb-position agreement worse, which
+#      is what happens when several offsets interact.
+# ---------------------------------------------------------------------------
+ARC_LEN = np.pi * R / 2.0                    # quarter-circle centerline
+
+# Ring-stub reference planes, as heights ABOVE the near bend's arc end.
+RING_IN_PLANE = STUB_LEN - MONITOR_MARGIN    # ring-excited norm monitor, LEFT stub  (Y_TOP - MONITOR_MARGIN)
+RING_OUT_PLANE = S_MON                       # ring_r_mon,                RIGHT stub (Y_RING + R + S_MON)
+BUS_L_PLANE = -INNER_X_HALF + MONITOR_MARGIN
+BUS_R_PLANE = INNER_X_HALF - MONITOR_MARGIN
+
+
+def coefficient_reference_planes():
+    """Which plane pair each of the four coefficients is referenced to.
+
+    The point of tabulating it: `k1` and `k2` are NOT referenced to the same
+    ring plane, because this script launches the ring-excited run from the stub
+    TOP and reads the ring output at S_MON. Reciprocity (`|k1| == |k2|`) is
+    only expected for coefficients at MATCHING planes, so the reciprocity print
+    below compares magnitudes across a plane mismatch -- and the phases differ
+    by 0.712*pi, measured 2026-08-03.
+    """
+    return [
+        ("t",      f"bus x={BUS_L_PLANE:+.2f}", f"bus x={BUS_R_PLANE:+.2f}", "symmetric"),
+        ("k1",     f"bus x={BUS_L_PLANE:+.2f}", f"ring +{RING_OUT_PLANE:.2f} above arc", "—"),
+        ("k2",     f"ring +{RING_IN_PLANE:.2f} above arc", f"bus x={BUS_R_PLANE:+.2f}", "—"),
+        ("t_ring", f"ring +{RING_IN_PLANE:.2f} above arc", f"ring +{RING_OUT_PLANE:.2f} above arc",
+         f"ASYMMETRIC by {RING_IN_PLANE - RING_OUT_PLANE:.2f} um"),
+    ]
+
+
+def plot_reference_planes(path):
+    """The four coefficients' reference planes, drawn.
+
+    ADDED 2026-08-03 because the plane mismatch this script has always had is
+    the thing the k1/k2 phase residual is measured against, and it existed only
+    as a table (`coefficient_reference_planes()`). A table makes the numbers
+    checkable; it does not make the ASYMMETRY visible, and the asymmetry is the
+    point.
+
+    What the figure has to get right, and what a naive version would get wrong:
+    the two ring planes are on OPPOSITE stubs. `RING_IN_PLANE` (+1.25, the
+    ring-excited run's normalization) is on the LEFT stub; `RING_OUT_PLANE`
+    (+0.50, `ring_r_mon`) is on the RIGHT. Drawing them both on one stub would
+    suggest 0.75 um of guide physically separates them, which is false -- they
+    are separated by the whole coupler section. The 0.75 um is a difference in
+    how far each sits ABOVE its own arc end, and the -beta*d correction is valid
+    because the two stubs are identical isolated straight guide, mirrored.
+
+    That "identical isolated straight guide" claim is now measured rather than
+    assumed: the stub cross-section solves to n_eff = 2.402279 at 1.50 um and
+    2.339523 at 1.55 um, bit-identical to the bare strip (nearest neighbour is
+    ~5 um away). So the transport n_eff is NOT wrong for cross-section reasons.
+    """
+    fig, ax = plt.subplots(figsize=(9, 7))
+    for poly in build_coupler_polys():
+        ax.add_patch(MplPolygon(poly, closed=True, facecolor="none",
+                                edgecolor="0.35", lw=1.0, zorder=2))
+
+    arc_end = Y_RING + R
+    y_in, y_out = arc_end + RING_IN_PLANE, arc_end + RING_OUT_PLANE
+
+    def seg(x0, y0, x1, y1, color, ls, label):
+        ax.plot([x0, x1], [y0, y1], color=color, lw=1.8, ls=ls, zorder=6,
+                label=label)
+
+    seg(*_mon_seg(PORT_APERTURE, x=BUS_L_PLANE, yc=0.0), "orange", "-",
+        f"bus planes (x = {BUS_L_PLANE:+.2f}, {BUS_R_PLANE:+.2f}) — symmetric")
+    seg(*_mon_seg(PORT_APERTURE, x=BUS_R_PLANE, yc=0.0), "orange", "-", None)
+    seg(*_mon_seg(PORT_APERTURE, xc=-STUB_X, y=y_in), "crimson", "-",
+        f"ring IN plane, LEFT stub  (+{RING_IN_PLANE:.2f} above arc) — k2, t_ring")
+    seg(*_mon_seg(PORT_APERTURE, xc=STUB_X, y=y_out), "purple", "--",
+        f"ring OUT plane, RIGHT stub (+{RING_OUT_PLANE:.2f} above arc) — k1, t_ring")
+
+    # Mark each arc end. Without this the "+1.25 above arc" / "+0.50 above arc"
+    # labels have no visible datum, which was the first version's flaw.
+    lbl_a = "arc end (the datum both offsets are measured from)"
+    for x in (-STUB_X, STUB_X):
+        ax.plot([x - PORT_APERTURE / 2, x + PORT_APERTURE / 2], [arc_end, arc_end],
+                color="0.55", lw=1.1, ls=":", zorder=5, label=lbl_a)
+        lbl_a = None
+    # Offsets annotated on the INSIDE of each stub, so neither runs into the frame.
+    ax.annotate("", xy=(-STUB_X + 1.0, y_in), xytext=(-STUB_X + 1.0, arc_end),
+                arrowprops=dict(arrowstyle="<->", color="crimson", lw=1.3))
+    ax.text(-STUB_X + 1.15, (arc_end + y_in) / 2, f"+{RING_IN_PLANE:.2f}",
+            color="crimson", fontsize=9.5, va="center", fontweight="bold")
+    ax.annotate("", xy=(STUB_X - 1.0, y_out), xytext=(STUB_X - 1.0, arc_end),
+                arrowprops=dict(arrowstyle="<->", color="purple", lw=1.3))
+    ax.text(STUB_X - 1.15, (arc_end + y_out) / 2, f"+{RING_OUT_PLANE:.2f}",
+            color="purple", fontsize=9.5, va="center", ha="right", fontweight="bold")
+
+    d = RING_IN_PLANE - RING_OUT_PLANE
+    ax.text(0.0, arc_end + STUB_LEN + 0.6,
+            f"ring planes differ by {d:.2f} um — k1 and k2 are NOT referenced alike.\n"
+            f"Correcting by exp(-i*beta*{d:.2f}) leaves a residual that DRIFTS "
+            f"0.0068pi across the band\n(101-pt fit: a free propagation term beats "
+            f"a pure constant 23x), so it is not a sign\nand not a fixed length. "
+            f"Stub cross-section = bare strip exactly, so it is not the n_eff either.",
+            ha="center", va="bottom", fontsize=8.5,
+            bbox=dict(boxstyle="round,pad=0.45", fc="#fff4e6", ec="crimson", lw=1.0))
+
+    ax.set_xlim(-INNER_X_HALF - 1.0, INNER_X_HALF + 1.0)
+    ax.set_ylim(-2.0, arc_end + STUB_LEN + 3.6)
+    ax.set_aspect("equal")
+    ax.set_xlabel("x (um)")
+    ax.set_ylabel("y (um)")
+    ax.set_title("Monolithic ring — coefficient reference planes "
+                 "(the k1/k2 mismatch, drawn)")
+    ax.legend(loc="lower center", fontsize=8, framealpha=0.95)
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(path, dpi=200)
+    plt.close(fig)
+
+
+def device_assembly_ledger():
+    """Round-trip ledger. Rows with assigned=None are measured by FDTD between
+    two planes and so carry no length assumption."""
+    L_outer_shipped = 2 * (L_SIDE - S_MON) + L_FAR
+    rows = [
+        dict(span="coupler section: ring_in -> ring_out", modelled_by="t/k1/k2/t_ring (one FDTD)",
+             assigned=None,
+             physical=RING_IN_PLANE + ARC_LEN + L_C + ARC_LEN + RING_OUT_PLANE),
+        dict(span="right side straight", modelled_by="L_outer (analytic neff)",
+             assigned=L_SIDE - S_MON, physical=L_SIDE - RING_OUT_PLANE),
+        dict(span="far-right bend arc", modelled_by="b_corrected (planes stripped)",
+             assigned=ARC_LEN, physical=ARC_LEN),
+        dict(span="far straight", modelled_by="L_outer (analytic neff)",
+             assigned=L_FAR, physical=L_FAR),
+        dict(span="far-left bend arc", modelled_by="b_corrected (planes stripped)",
+             assigned=ARC_LEN, physical=ARC_LEN),
+        # The defect: L_outer subtracts S_MON on BOTH sides, but the ring INPUT
+        # plane is RING_IN_PLANE (1.25), not S_MON (0.5).
+        dict(span="left side straight", modelled_by="L_outer (analytic neff)",
+             assigned=L_SIDE - S_MON, physical=L_SIDE - RING_IN_PLANE),
+    ]
+    for r in rows:
+        r["mismatch"] = None if r["assigned"] is None else r["assigned"] - r["physical"]
+    return rows, L_outer_shipped
+
+
+def print_assembly_ledger():
+    rows, L_shipped = device_assembly_ledger()
+    print("\nCoefficient reference planes (why |k1|==|k2| is not a like-for-like test)")
+    print(f"  {'coeff':8s}{'normalized at':34s}{'measured at':34s}{'note'}")
+    print("  " + "-" * 100)
+    for name, src, dst, note in coefficient_reference_planes():
+        print(f"  {name:8s}{src:34s}{dst:34s}{note}")
+
+    print("\nRound-trip ledger — assigned length vs physical span between reference planes")
+    print(f"  {'span':40s}{'modelled by':32s}{'assigned':>10s}{'physical':>10s}{'mismatch':>10s}")
+    print("  " + "-" * 102)
+    total_mismatch = 0.0
+    for r in rows:
+        a = "measured" if r["assigned"] is None else f"{r['assigned']:.4f}"
+        m = "     —" if r["mismatch"] is None else f"{r['mismatch']:+.4f}"
+        flag = ""
+        if r["mismatch"] is not None:
+            total_mismatch += r["mismatch"]
+            if abs(r["mismatch"]) > 1e-9:
+                flag = "  <-- MISMATCH"
+        print(f"  {r['span']:40s}{r['modelled_by']:32s}{a:>10s}{r['physical']:10.4f}{m:>10s}{flag}")
+    print(f"\n  Bend straight-stub budget: b^2 carries {BEND_STRAIGHT_TOTAL:.4f} um of straight "
+          f"(phase stripped, magnitude NOT)")
+    print(f"    vs L_OUTER = {L_OUTER:.4f} um of physical straight  ->  DC-style equivalent "
+          f"analytic length {BEND_STRAIGHT_HEADROOM:.4f} um")
+    print(f"    HEADROOM {BEND_STRAIGHT_HEADROOM:.4f} um before the strip becomes MANDATORY "
+          f"(guarded at import; the DC's own assert is `body_lengths[0] >= 0`)")
+    physical_total = sum(r["physical"] for r in rows)
+    print("  " + "-" * 102)
+    print(f"  {'physical round trip (sum of spans)':40s}{'':32s}{'':>10s}{physical_total:10.4f}")
+    print(f"  {'PERIMETER constant':40s}{'':32s}{'':>10s}{PERIMETER:10.4f}"
+          f"   (delta {physical_total - PERIMETER:+.2e})")
+    L_true = (L_SIDE - RING_OUT_PLANE) + (L_SIDE - RING_IN_PLANE) + L_FAR
+    print(f"\n  L_outer as shipped = {L_shipped:.4f} um   "
+          f"plane-consistent value = {L_true:.4f} um   (over-count {L_shipped - L_true:+.4f})")
+    if abs(total_mismatch) > 1e-9:
+        print(f"  ** TOTAL UNACCOUNTED PATH: {total_mismatch:+.4f} um ** — the modelled round trip is "
+              f"LONGER than the device.")
+        print("     NOT patched here: correcting L_outer alone was measured to improve route FSR "
+              "agreement (2.9% -> 0.24%)\n     while making comb-position agreement WORSE "
+              "(0.31 -> 0.45 FSR), i.e. at least one further offset\n     interacts with it — most "
+              "likely the k1/k2 ring-plane mismatch in the table above.")
+    else:
+        print("  Every assigned length matches its physical span. Bookkeeping closes.")
+    return total_mismatch
+
+
+print_assembly_ledger()
+plot_reference_planes(os.path.join(sections_dir, "reference_planes.png"))
+print(f"Reference-plane diagram saved -> {sections_dir}/reference_planes.png")
 
 
 # ---------------------------------------------------------------------------
@@ -802,7 +1145,7 @@ b_d = interp_complex(wl_fdtd, b_raw, wl_dense)
 phi_bend_correction = 2 * np.pi * neff_dense * (BEND_D_IN + BEND_D_OUT) / wl_dense
 b_corrected = b_d * np.exp(-1j * phi_bend_correction)
 
-L_outer = 2 * (L_SIDE - S_MON) + L_FAR
+L_outer = L_OUTER                              # module-level, guarded above
 phi = 2 * np.pi * neff_dense * L_outer / wl_dense
 P = (b_corrected ** 2) * np.exp(1j * phi)
 

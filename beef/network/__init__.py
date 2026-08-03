@@ -15,7 +15,7 @@ from __future__ import annotations
 from .block import SMatrixBlock, check_passive, rename_ports
 from .circuit import Circuit
 from .convert import from_smatrix, from_transfer_matrix, to_smatrix
-from .ops import close_loop, connect
+from .ops import close_loop, close_loop_pair, connect
 
 __all__ = [
     "SMatrixBlock",
@@ -23,6 +23,7 @@ __all__ = [
     "check_passive",
     "connect",
     "close_loop",
+    "close_loop_pair",
     "Circuit",
     "from_transfer_matrix",
     "from_smatrix",

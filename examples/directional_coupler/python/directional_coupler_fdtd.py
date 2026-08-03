@@ -34,9 +34,12 @@ Contrast with the hybrid tutorial, which decomposes the same device into
     the hybrid example sweeps 201 lengths for the cost of one (see its
     module docstring). Use FDTD to spot-check; use the hybrid to explore.
 
-The coupling length is hard-coded to 15.15 µm — the measured 50:50 (3 dB)
-splitting length for this cross-section, read off the hybrid example's
-coupling_length_sweep.png (its own PLOT_COUPLING_LENGTH) and verified here.
+The coupling length is hard-coded to 15.1 µm — a round tenth of a micron from
+the 50:50 (3 dB) splitting length this cross-section shows under the dispersive
+material model, and the same number directional_coupler_hybrid.py pins its
+PLOT_COUPLING_LENGTH to, so the two engines are compared at one identical
+length. See COUPLING_LENGTH below for the measurements behind it (and for why
+the value is a rounded convenience, not itself a measured crossing).
 
 Two details make the single-domain launch clean (both handled by the
 library, shown here for the tutorial value):
@@ -105,12 +108,24 @@ N_WL = 11           # number of wavelength points
 # from the pre-fix hybrid sweep, which reported L₅₀ = 13.65 µm *with the
 # wavelength axis reversed* (item 1), and it survived both that fix and item 5's
 # ground-truth rebuild because nothing rechecked it.
-COUPLING_LENGTH = 15.13   # µm, hard-coded — the 3 dB length; see above.
-                          # 15.13, not the hybrid's grid-snapped 15.151:
-                          # this is a full-device FDTD run, so item 5's
-                          # ground-truth crossing (15.129 µm) is the finer
-                          # reference. Documented in archive/
-                          # dc_validation_20260727.md item 14. Commit
+COUPLING_LENGTH = 15.1    # µm, hard-coded — the tenth-of-a-micron round number
+                          # nearest the DISPERSIVE 50:50 point, set 2026-08-03.
+                          # Everything above this line is the FROZEN-era record
+                          # and is why the value used to read 15.13; dispersion
+                          # defaulted 2026-08-01 and moved L₅₀ to 15.089958 µm
+                          # (hybrid, job 11609658) / ~15.074 µm inferred for this
+                          # engine (job 11609659), and 15.1 is the nearest tenth
+                          # to both. The two engines' crossings are still ~0.1%
+                          # apart and that gap is a *result* this device measures
+                          # — pinning both examples to one length is for the
+                          # side-by-side comparison, NOT a claim they agree.
+                          # As of 2026-08-03 the hybrid simulates a true 15.1
+                          # too: it used to argmin its pinned length onto a
+                          # 0.299 µm sweep grid (which contains neither 15.13
+                          # nor 15.1) and silently land on 15.150754; it now
+                          # splices the pinned length into the grid, so the two
+                          # examples are at the identical length. Documented in
+                          # archive/dc_validation_20260727.md item 14. Commit
                           # e85b350 (a ring-resonator CACHE cleanup) moved
                           # this to 15.15 with no mention of it; restored
                           # 2026-07-31.
@@ -139,16 +154,21 @@ COUPLING_LENGTH = 15.13   # µm, hard-coded — the 3 dB length; see above.
 # dispersive. The engine gap survives the material model — it is not a
 # dispersion artifact.
 #
-# The file default stays 15.13 anyway. 15.074 rests on one length plus the
-# *hybrid's* slope; there is no dispersive full-device FDTD length sweep, and
-# adopting the hybrid-derived number here would re-commit e85b350's error of
-# pinning this engine to the other one's answer. Regenerate the item-5 sweep
-# dispersively before touching the constant.
+# The file default moved 15.13 -> 15.1 on 2026-08-03 (user's call), to sit a
+# tenth of a micron from the dispersive 50:50 point instead of on the frozen-era
+# one. KEEP THE CAVEAT IN VIEW: ~15.074 is not a measured crossing for THIS
+# engine — it rests on one length plus the *hybrid's* slope, and there is still
+# no dispersive full-device FDTD length sweep. 15.1 is defensible because it is
+# within a tenth of this engine's own numbers too (15.129 frozen, ~15.074
+# inferred), so it is not the e85b350 mistake of pinning this engine to the
+# other's answer; but it is a rounded convenience value, not a measurement.
+# Regenerate the item-5 sweep dispersively before treating 15.1 as this engine's
+# measured 3 dB length.
 _env_CL = os.environ.get("DC_COUPLING_LENGTH")
 if _env_CL is not None:
     COUPLING_LENGTH = float(_env_CL)
     print(f"DC_COUPLING_LENGTH -> COUPLING_LENGTH = {COUPLING_LENGTH:.6f} µm "
-          f"(file default 15.13 µm, frozen-era)")
+          f"(file default 15.1 µm)")
 
 # ---------------------------------------------------------------------------
 # 1. Geometry — identical to directional_coupler_hybrid.py except that

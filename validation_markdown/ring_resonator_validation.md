@@ -1191,9 +1191,34 @@ cause this doc is already about — the ring hand-rolls raw meep/meow instead of
 going through `FDTDSolver`/`EMESolver` — so they are cheap once the
 `HybridSolver` recommendation above lands, and awkward before it.
 
-Nothing here is currently *corrupt*: `example_sim_cache/` holds no ring entries
+~~Nothing here is currently *corrupt*: `example_sim_cache/` holds no ring entries
 at all, so items M3/M4 were latent mechanism gaps, not live staleness. They will
-become live the first time either ring script is run.
+become live the first time either ring script is run.~~
+
+> **✅ SUPERSEDED 2026-08-03 — they became live, and they landed on the right
+> side of the fix.** `example_sim_cache/` now holds **66 ring entries**, all
+> dated 2026-08-02, all written by job 11634900:
+>
+> | slug | count |
+> |---|---|
+> | `ring_resonator_hybrid_solve_neff_..._BareStrip` | 18 |
+> | `ring_resonator_hybrid_cascaded_solve_neff_..._BareStrip` | 18 |
+> | `ring_resonator_hybrid_cascaded_solve_body_supermodes_..._CoupledPairCrossSection` | 18 |
+> | `..._run_coupler_fdtd_{bus,ring}_RingResonatorCoupler` | 2 + 2 |
+> | `..._cascaded_run_left_fdtd_{bus,ring}_RingResonatorLeftSection` | 2 + 2 |
+> | `..._run_bend_fdtd_RingResonatorBend` (both scripts) | 2 + 2 |
+>
+> **They postdate the M3/M4 fingerprint fix (2026-08-01), so they are correctly
+> keyed.** Verified by reading a stored `config.json`: it carries
+> `resolved_si_index`, `resolved_sio2_index` and `resolved_probe_wl` alongside
+> `geometry_polygons` and every `_sim_params()` constant. Had these entries been
+> written a day earlier they would have carried no material fingerprint at all
+> and would now be silent staleness traps. **Nothing is corrupt — but that was
+> timing, not design.**
+>
+> Note what the fingerprint honestly reveals: `resolved_si_index` holds **three
+> frozen values** (one per probe wavelength), which is M1 visible in the cache
+> key. The fingerprint is right; the physics is still half-frozen.
 
 > **Status 2026-08-02 — M3 and M4 are DONE, M1 and M2 are NOT.** The cache
 > fingerprint is fixed; the physics is not. The ring's FDTD half still freezes
@@ -1437,6 +1462,172 @@ ring port) also disagrees. The phases are not comparable between routes at all
 without a full per-coefficient reference-plane accounting, which neither script
 does and which `L_outer` does not supply.
 
+### 🛠 DEFECT FOUND 2026-08-03 — `P_body` under-propagates the body by 0.5 µm
+
+**Found by the new assembly ledger, not by inspection.**
+`ring_resonator_hybrid_cascaded.py` gained `device_assembly_ledger()` /
+`plot_device_assembly()` (section 10b): the round trip drawn and tallied as the
+performance algebra assembles it, each section placed between the reference
+planes its own coefficients are normalized to.
+
+**The ledger validates itself first.** Summing the *physical* spans reproduces the
+`PERIMETER` constant exactly — `43.4159` vs `43.4159`, delta `+0.00e+00`. That
+cross-check caught a sign error in the ledger's own right-section term during
+development, so it is load-bearing, not decoration.
+
+With that established, exactly one row disagrees:
+
+| span | modelled by | assigned | physical | mismatch |
+|---|---|---|---|---|
+| left section: ring port → interface | `M_left` (FDTD) | *measured* | 9.1040 | — |
+| **body: interface → interface** | **`P_body`** | **2.0000** | **2.5000** | **−0.5000** |
+| right section: interface → ring port | `M_left.T` | *measured* | 9.1040 | — |
+| side straights (×2), far straight | `L_outer` | 1.5 / 4.0 | 1.5 / 4.0 | +0.0000 |
+| far bend arcs (×2) | `b_corrected` | 7.8540 | 7.8540 | +0.0000 |
+
+**The mechanism.** `BODY_LENGTH = L_C − 2*IFACE_BUFFER` = 2.0 µm assumes the body
+spans `IFACE_X` to `−IFACE_X`. But the supermode monitor is placed at
+**`IFACE_X − MONITOR_MARGIN`** (`:462`), not `IFACE_X` — so the actual span
+between the two decomposition planes is
+
+```
+(−IFACE_X + MONITOR_MARGIN) − (IFACE_X − MONITOR_MARGIN)
+    = BODY_LENGTH + 2*MONITOR_MARGIN = 2.5 µm
+```
+
+The shipped comment says the body is shortened by `2*IFACE_BUFFER` "since each
+section's own FDTD domain already simulates `IFACE_BUFFER` of the physical `L_C`."
+It simulates it but **measures at `IFACE_BUFFER − MONITOR_MARGIN` = 0.75 µm**, so
+the shortening should have been `2*0.75`, not `2*1.0`. **The model's round trip is
+0.5 µm shorter than the device's actual perimeter.**
+
+### The decisive test — real defect, PARTIAL explanation
+
+Run read-only from the cached `M_left` columns plus the script's own `find_dips`;
+no FDTD, nothing written. The shipped case reproduces production exactly
+(`|t|=0.9713`, `arg(t_ring)=−1.2722`, FSR 13.350 nm, the 11634900_1 comb to four
+decimals), so the harness is faithful.
+
+| | mean FSR | error vs analytic 12.87 | dips near band centre |
+|---|---|---|---|
+| cascaded, **as shipped** (2.00 µm) | 13.350 nm | **3.7%** | 1.5422 · **1.5555** · 1.5691 |
+| cascaded, **corrected** (2.50 µm) | **13.143 nm** | **2.1%** | 1.5391 · **1.5522** · 1.5655 |
+| monolithic (reference) | 12.975 nm | 0.8% | 1.5481 · 1.5612 |
+
+**The correction improves both metrics in the right direction.** FSR error halves
+(3.7% → 2.1%); the comb offset against the monolithic near band centre drops from
+**~0.55 FSR to ~0.31 FSR**. **It does not close the gap.** Something else remains.
+
+**So: a real, geometrically proven bookkeeping defect that accounts for part of
+the disagreement and not all of it.** Recorded that way deliberately — the scale
+was suggestive enough (0.5 µm ≈ 0.75 of an FSR of bare-strip round-trip phase) to
+have been written up as *the* cause on the strength of the estimate alone, which
+is the error this doc has already paid for once.
+
+### 📌 ROOT CAUSE — the ring applied the excite-side margin to a measure plane
+
+**The library already does this correctly, and the DC proves it.** In
+`_section_layout()` (`beef/solvers/fdtd.py:602`) the two sides use deliberately
+different conventions:
+
+```python
+src_x, norm_x, mea_x = source_margin, monitor_margin, L
+```
+
+- the **excite/norm** side is inset by `source_margin`/`monitor_margin` — forced,
+  since a source must sit inside the domain and its normalization monitor is
+  co-located with it;
+- the **measure** side sits at `mea_x = L`, i.e. **exactly on the section
+  boundary**, with `dpml` added outside it (`L = (x1-x0) + stub_left + stub_right`,
+  "PML not" included; `Sx = span + stubs + 2*dpml`).
+
+Measure planes landing exactly on the seam is what makes section lengths compose
+exactly. `directional_coupler_hybrid.py` depends on it and **audits it**:
+
+```python
+body_lengths = coupling_lengths - 2 * BODY_STUB
+assert np.allclose(body_lengths + 2 * BODY_STUB, coupling_lengths)
+```
+
+That audit is *correct* because its interface monitor really is at
+`boundaries[1] = -half_body + BODY_STUB`, exactly as the script prints.
+
+**The ring hand-rolls raw meep and put its interface monitor at
+`IFACE_X - MONITOR_MARGIN` — the excite-side convention on a measure plane.** The
+library solver would have placed it at `IFACE_X`, and `BODY_LENGTH = L_C -
+2*IFACE_BUFFER` would then have been exactly right. So this is not an arithmetic
+slip: it is one specific consequence of the ring bypassing `FDTDSolver`, the same
+root cause this whole document is about. It is also a concrete, previously
+unlisted cost of that bypass — add it to the M1–M4 list's rationale.
+
+### ✅ FIXED 2026-08-03 — the length is now derived from the plane, and the prediction held
+
+**What changed.** The interface plane had been computed in two independent places;
+it is now defined once and the length derived from it:
+
+```python
+IFACE_PLANE_L = IFACE_X - MONITOR_MARGIN     # the plane actually measured at
+IFACE_PLANE_R = -IFACE_PLANE_L
+BODY_LENGTH   = IFACE_PLANE_R - IFACE_PLANE_L
+```
+
+Both monitor placements (`run_left_fdtd()`'s `iface_mon` and the section preview)
+now name `IFACE_PLANE_L` instead of recomputing `IFACE_X - MONITOR_MARGIN`, so a
+future change to the plane cannot desynchronize the length again. **This repair is
+correct regardless of which plane is chosen** — that is why it was done first.
+
+**Free to apply.** `BODY_LENGTH` only reaches `phi_even`/`phi_odd` → `P_body`,
+i.e. post-processing. Supermodes are length-independent, so it appears in no cache
+fingerprint. Verified: all three 3-D FDTD entries still hit, and the cache stayed
+at 97 entries with none added.
+
+**The prediction was registered before the change and matched exactly.** From the
+read-only cache rebuild: mean FSR 13.143 nm and the comb at
+`1.5009 1.5134 1.5261 1.5391 1.5522 1.5655 1.5791 1.5929`. The patched script
+produced **13.143 nm** and precisely that comb.
+
+**Ledger after the fix:**
+
+```
+body: interface -> interface   P_body (supermode phase)   2.5000   2.5000   +0.0000
+physical round trip (sum of spans)                                43.4159
+PERIMETER constant                                                43.4159   (delta +0.00e+00)
+Every assigned length matches its physical span. Bookkeeping closes.
+```
+
+**Every metric moved toward the monolithic and the analytic prediction:**
+
+| at λ=1.5500 µm | monolithic | cascaded, before | cascaded, **after** |
+|---|---|---|---|
+| mean FSR | 12.975 nm | 13.350 nm (3.7% vs analytic) | **13.143 nm (2.1%)** |
+| \|t\| | 0.9674 | 0.9713 (0.40%) | **0.9657 (0.18%)** |
+| \|k1\| | 0.2530 | 0.2374 (**6.2%**) | **0.2593 (2.5%)** |
+| \|t_ring\| | 0.9639 | 0.9677 (0.39%) | **0.9621 (0.19%)** |
+| comb offset near centre | — | ~0.55 FSR | **~0.31 FSR** |
+
+⚠ **The route disagreement is NOT closed.** ~0.31 FSR of comb offset survives, dip
+counts are still 8 vs 7, and per the earlier per-coefficient analysis the residual
+lives in the coefficient *phases*, which this fix does not address. This was a real
+defect worth fixing on its own merits; it was never established to be the whole
+cause and it is not.
+
+~~⚠ **Q is still grid-limited**~~ — **✅ RESOLVED later the same day, see
+`## Q is no longer grid-limited` below.**
+
+### Still open — should the plane move to the library convention?
+
+Deliberately NOT done. `FDTDSolver` puts a measure plane exactly on the section
+boundary (`mea_x = L`), insetting only the excite/norm side; the ring keeps a
+`MONITOR_MARGIN` inset. Adopting the library convention would:
+
+1. change what the FDTD measures → **all three 3-D runs must be redone**; and
+2. ⚠ **hit a cache trap.** `monitor_margin` is in `_sim_params()`, but the
+   *derived* monitor position is not. Changing `IFACE_X - MONITOR_MARGIN` →
+   `IFACE_X` with `MONITOR_MARGIN` unchanged leaves the fingerprint **identical**,
+   so the cache would silently serve the old measurement. Needs a fingerprint
+   field or a `_CACHE_SCHEMA_VERSION` bump **first**. This is the standing
+   schema-version exposure biting in a concrete place.
+
 📌 **Reframing worth keeping.** `L_outer = 2*(L_SIDE − S_MON) + L_FAR` subtracts
 `S_MON`, which matches the *cascaded* convention. The monolithic's ring input
 plane sits at `STUB_LEN − MONITOR_MARGIN`, not `S_MON`. So the shared assembly
@@ -1453,21 +1644,620 @@ agreeing proves little because they consume the same inputs; two routes
 disagreeing means at least one is wrong and is cheap to adjudicate — the
 analytic FSR already favours the monolithic (0.8% vs 3.7%).
 
-⚠ **Q in both runs is grid-limited, not physical.** Every FWHM is an exact
+⚠ **[RESOLVED 2026-08-03 — `N_WL_DENSE` raised to 20001, see
+`## Q is no longer grid-limited`. Left in place because the reasoning is still
+the reason the knob matters.]** Q in both runs is grid-limited, not physical. Every FWHM is an exact
 multiple of the 2001-point grid spacing (0.05 nm) — 0.15/0.20/0.25/0.30 =
 3/4/5/6 steps. The reported Q (5293–10193) is set by **`N_WL_DENSE`**, a knob
 independent of both resolutions. In the 501-point `RING_TEST_MODE` smoke every
 FWHM was pinned at exactly 0.4000 nm. **If Q is wanted, raise `N_WL_DENSE`** —
 it is post-processing on an interpolated grid and costs no new FDTD.
 
+## Filing status — this doc stays at top level, NOT in `resolved/`
+
+**Asked 2026-08-02, re-asked and re-answered 2026-08-03. Recorded here so it
+does not have to be re-litigated a third time.** This analysis previously lived
+only in a session context snapshot, which is explicitly not a durable record —
+that was the gap.
+
+The bar taken from [README.md](README.md): `resolved/` means *"whole docs
+sufficiently addressed (open to-dos may remain)"*, and the directional coupler is
+described there as **the only device where all four checks have actually been
+run**. Against that:
+
+| check | ring | is this an "open to-do"? |
+|---|---|---|
+| 1. Engine agreement | ~~**not run — not runnable.** No shared cross-section object exists~~ **✅ RUN AND PASSES 2026-08-03** — `UniformCrossSection` supplied the shared object. Job 11654797 at the shipped res 100: bare strip **bit-identical** (0.000e+00), coupled pair 1.3–1.6e-10 = its translation floor exactly at all 3 wavelengths | Done |
+| 2. Mode identity | ~~**not run — not applicable.** No interface mode basis is exchanged~~ **✅ RUN AND PASSES 2026-08-03** — matched overlap 1.000000, identity permutation, unit completeness, clean self-overlap control | Done |
+| 3. Resolution convergence | **MEASURED, and the FDTD side does not converge.** Mode side converged at 100. Job 11653509 (20/30/40/60): FSR converges (0.16% of an FSR at res 60) but **absolute comb position converges at p ≈ 0.70** and is still 29% of an FSR out at res 60 — the signature of a wavelength-flat phase, probably the 0.976π | Yes |
+| 4. Full-device FDTD reference | ~~**not run.** No `ring_resonator_fdtd.py` exists~~ **WRITTEN 2026-08-03**, job 11655143 (2-D res 20/30/40). 3-D is 167 h at res 40 — beyond the wall limit | Yes |
+
+~~Checks 1 and 2 are not unfinished work; they are **unattemptable** until the ring
+moves onto `HybridSolver`.~~
+**↑ Superseded 2026-08-03.** They turned out not to need `HybridSolver` at all —
+only a `DeviceGeometry` both engines could consume, which is a much smaller thing
+than this paragraph claimed. `UniformCrossSection` (75 lines) unblocked both, and
+both now pass. The standing recommendation below is still worth doing for
+composability, but it was **never the blocker** these two checks were waiting on.
+Worth noting as a case where "structurally blocked" was an over-reading of the
+obstacle, and where re-deriving the actual dependency was cheaper than the
+migration it seemed to require. Prerequisites (a) and (b) landed 2026-07-29;
+**(c) "HybridSolver must express feedback" is the substantive one.** Two further
+live items as of 2026-08-03: the **half-FSR route disagreement is undiagnosed**
+(see `## Order item 1`), and **M1/M2 leave the device half-frozen** — FDTD side
+frozen at band centre while the meow side tracks the band.
+
+**`deferred/` is also wrong**, and for a different reason: that folder means work
+postponed *by choice* (the mux, at the user's direction). The ring is under
+active work with an unmade gating decision in front of it — **port topology,
+4-port `bus_L/bus_R/ring_L/ring_R` vs composed 2-port.** "Blocked and active"
+reads differently from both "addressed" and "postponed," and top level is the
+only one of the three that says it.
+
+**Nothing in the 2026-08-02 or 2026-08-03 results moved this.** The clamp fix
+closed a defect and job 11634859 confirmed it at production config, but neither
+touched checks 1–4; the same session *opened* the route disagreement. Progress on
+correctness is not progress against the filing bar.
+
+## 📌 CORRECTION — wiring items 2–4 are already DONE (Branch A), 2026-08-03
+
+**A "what is left before `resolved/`" answer given earlier today listed wiring
+items 2–5 as outstanding. That was wrong, and the error was not checking the
+verification script before summarising the to-do list.**
+
+`examples/verification/python/verify_ring_network_crosscheck.py` already
+implements the whole Branch A path this document recommends doing first:
+
+| wiring item | where | state |
+|---|---|---|
+| 2. hand-assemble the `SMatrixBlock` | `:292`, `:311`, `:369` | **done** |
+| 3. build the loop propagator `P` | `loop_propagator()` | **done** |
+| 4. close the loop and cross-check | `close_loop(block, port_out="ring", port_in="ring", loop=P)` at `:393` | **done, passes** |
+
+`port_out == port_in` is the same-port self-loop, i.e. **Branch A** — the
+implemented branch. Its own module docstring says so at line 4. Job 11634859
+measured `worst |E_legacy - E_network| = 1.735e-18` at production 3-D config.
+
+**What actually remains** is wiring item **1** (port topology → needs
+`close_loop()` **Branch B**, which raises `NotImplementedError` for
+`port_out != port_in`) and item **5** (a production example script replacing both
+hand-rolled ones, plus a golden). Checks 1 and 2 stay blocked behind item 1.
+
+So the ring is further along the library path than the gap list implied: Branch A
+runs *through* `beef.network` on `RingResonatorCouplerSection` geometry today.
+
+## 🔍 The monolithic has its OWN reference-plane inconsistency — partial result
+
+> **SUPERSEDED the same day — see `## The route disagreement is essentially RESOLVED`
+> below. The mixed result recorded here is what motivated building the ledger instead of
+> patching further, and that is why it is kept.**
+
+**Tested 2026-08-03, read-only from the monolithic `ring_data.npz`. Applied to
+nothing.** After fixing the cascaded body length, the natural next hypothesis was
+that the monolithic carries the mirror-image defect — and geometrically it does:
+
+- monolithic ring **input** normalization plane: arc end **+1.25 µm**
+  (`Y_TOP - MONITOR_MARGIN`)
+- monolithic ring **output** plane: arc end **+0.50 µm** (`Y_RING + R + S_MON`)
+- but `L_outer = 2*(L_SIDE - S_MON) + L_FAR` subtracts `S_MON` = 0.5 on **both**
+  sides
+
+The input side should subtract 1.25, so the correct lever arm is
+`(L_SIDE - 0.5) + (L_SIDE - 1.25) + L_FAR` = **6.25 µm**, not 7.0 — the monolithic
+**over**-counts by 0.75 µm where the cascaded **under**-counted by 0.5.
+
+**The test result is genuinely mixed, which is why nothing was changed:**
+
+| | mean FSR | vs cascaded post-fix (13.141) | comb offset near centre |
+|---|---|---|---|
+| monolithic, shipped `L_outer=7.00` | 12.973 nm | 1.3% apart | ~0.31 FSR |
+| monolithic, corrected `L_outer=6.25` | **13.175 nm** | **0.24% apart** | **~0.45 FSR** |
+
+**FSR agreement between the two routes improves ~5× (2.9% → 0.24%). Comb position
+agreement gets WORSE (0.31 → 0.45 FSR).**
+
+**And the analytic FSR cannot adjudicate.** `FSR_GUESS` uses `NG_GUESS = 4.3`, a
+hand-entered group-index guess the script itself labels *"just for the printed
+FSR estimate"*. Treating 12.87 nm as a reference at the 1–2% level is not sound,
+so "the shipped monolithic is closer to analytic" is not evidence.
+
+**Reading, held deliberately loose.** The 0.75 µm inconsistency is real and
+geometrically demonstrable. Correcting it alone does not improve the thing that
+matters, which means **at least one further uncompensated offset exists** in the
+monolithic. The leading candidate is already measured: `arg(k1)` and `arg(k2)`
+differ by **0.712π** there, because `k1` is normalized at the bus plane and `k2`
+at the ring input plane — and `k1·k2` enters `E_thru` directly.
+
+**Next step is the principled one, not another single-term patch:** build a
+monolithic round-trip ledger the way `device_assembly_ledger()` does for the
+cascaded, covering **all four** coefficients' reference planes at once. Patching
+terms one at a time on a device with several interacting offsets is how the
+"π sign flip in `T_ii`" day was lost.
+
+## ✅ The route disagreement is essentially RESOLVED — 2026-08-03
+
+**From ~0.55 FSR to ~0.05 FSR, with matching dip counts.** Two monolithic defects,
+both found by building the ledger rather than by patching terms.
+
+### The monolithic ledger, and it self-validates
+
+`ring_resonator_hybrid.py` section 10b now carries `device_assembly_ledger()` /
+`coefficient_reference_planes()` / `print_assembly_ledger()`, the counterpart to
+the cascaded's. Physical spans sum to **43.4159 = `PERIMETER`, delta `+0.00e+00`**,
+so the tally is trustworthy before any conclusion is drawn from it. One row
+disagrees:
+
+| span | modelled by | assigned | physical | mismatch |
+|---|---|---|---|---|
+| coupler section: ring_in → ring_out | one FDTD | *measured* | 21.4580 | — |
+| right side straight | `L_outer` | 1.5000 | 1.5000 | +0.0000 |
+| far bend arcs (×2) | `b_corrected` | 7.8540 | 7.8540 | +0.0000 |
+| far straight | `L_outer` | 4.0000 | 4.0000 | +0.0000 |
+| **left side straight** | **`L_outer`** | **1.5000** | **0.7500** | **+0.7500** |
+
+`L_outer` as shipped **7.0000**, plane-consistent value **6.2500**. The monolithic's
+modelled round trip is 0.75 µm **longer** than the device — the opposite sign to
+the cascaded's 0.5 µm shortfall.
+
+### Defect 2: a wavelength-flat π in the ring-excited coefficients
+
+The reference-plane table makes the second defect visible: `k1` and `k2` are **not
+referenced to the same ring plane** (`k1` measured at arc end +0.50, `k2`
+normalized at +1.25), so `max ||k1| − |k2||` was never a like-for-like test.
+
+Referencing `k2` onto `k1`'s plane and asking whether the residual is flat
+(a convention constant) or drifting (another length) — **the discriminator was
+chosen before looking**:
+
+| λ (µm) | \|k1\| | \|k2\| | raw Δarg/π | after +βd | **after −βd** |
+|---|---|---|---|---|---|
+| 1.5000 | 0.1974 | 0.1973 | 0.5775 | 0.1752 | **0.9798** |
+| 1.5250 | 0.2238 | 0.2237 | 0.6457 | 0.3137 | **0.9778** |
+| 1.5500 | 0.2530 | 0.2530 | 0.7119 | 0.4479 | **0.9760** |
+| 1.5750 | 0.2852 | 0.2852 | 0.7762 | 0.5781 | **0.9744** |
+| 1.6000 | 0.3206 | 0.3205 | 0.8386 | 0.7043 | **0.9730** |
+
+**The −βd column is flat: 0.976π ± 0.003 across 100 nm**, while the raw gap drifts
+0.26π. Magnitudes agree to four decimals. So after the plane correction the two
+differ by a **wavelength-independent constant near π** — a sign, not a length.
+
+### Applying both collapses the disagreement
+
+Read-only from the monolithic `ring_data.npz`, using the script's own
+`interp_complex()`/`find_dips()`:
+
+| case | dips | FSR | offset vs cascaded |
+|---|---|---|---|
+| monolithic as shipped | 7 | 12.973 nm | ~0.31 FSR |
+| + `L_outer` → 6.25 only | 7 | 13.175 | ~0.45 FSR |
+| + ring-excited sign only | 8 | 12.976 | ~0.23 FSR |
+| **+ BOTH** | **8** | **13.177** | **~0.053 FSR** |
+| cascaded (post-fix, reference) | 8 | 13.141 | — |
+
+Comb, both corrections: `1.5015 1.5140 1.5268 1.5397 1.5529 1.5663 1.5799 1.5937`
+against the cascaded's `1.5009 1.5134 1.5261 1.5390 1.5522 1.5655 1.5791 1.5929`
+— **0.7 nm apart, uniformly, with the dip count finally matching (8 vs 8)** and FSR
+within 0.27%. Both corrections are needed; neither suffices alone.
+
+### Mechanism localized — and why it was never caught
+
+`get_coeffs(..., forward=False)` returns `alpha[0, :, 1]`, the opposite-traveling
+index, and its own docstring says it is needed **"exactly once in this script"** —
+the ring-excited run's norm monitor, whose source launches −y. That single call is
+the normalization denominator for exactly the two coefficients carrying the π
+(`k2` and `t_ring`), and for neither of the two that don't.
+
+⚠ **This is the gap in blocker 0's closure.** Blocker 0 was the y-normal excite
+normalization; it was closed 2026-08-01 (11616920/11616921) on the finding that the
+ratio converges as h² with fitted **p = 1.988**, i.e. discretization rather than a
+bug. **That test was magnitude-only** — `max ||k1| − |k2||`. A π in the phase is
+invisible to it. The closure was right about what it measured and silent about
+this.
+
+### ❌ MECHANISM REFUTED — the backward index is sign-consistent, 2026-08-03
+
+**`verify_ring_ynormal_sign.py`, and it says no.** Two mirror-image runs on a
+uniform y-oriented strip (2-D, res 30, 5 wavelengths): source at y=−S launching
++y read via `alpha[...,0]`, versus source at y=+S launching −y read via
+`alpha[...,1]`, each monitor `MONITOR_MARGIN` downstream of its own source. Mirror
+symmetry demands the two coefficients be identical.
+
+```
+|ratio| deviation from 1 : 1.289e-06
+arg(ratio)/pi mean       : +0.00000
+arg(ratio)/pi spread     : 2.509e-07
+VERDICT: CONVENTIONS AGREE (ratio ~ +1)
+```
+
+**`alpha[..., 1]` is NOT sign-flipped relative to `alpha[..., 0]`.** The
+`get_coeffs(forward=False)` call is not the source of the ring's flat π, and
+**`get_coeffs()` must not be changed.** Straight guide, no bend, no coupler — the
+one geometry where the expected answer is known exactly, so this is not a
+near-miss to be argued with.
+
+**This is the second mechanism proposed for that π and the second one refuted**
+(the first, in an older session, was "π sign flip in `T_ii`"). The measurement —
+0.976π flat across 100 nm with magnitudes equal to four decimals, and a 10×
+collapse in route disagreement when applied — is unaffected. Only the explanation
+died. **Measured: the π and what it fixes. Still not established: where it comes
+from.**
+
+⚠ **What the test does and does not cover.** It compares
+`source(−y) + alpha[...,1]` against `source(+y) + alpha[...,0]` as a *pairing*, so
+it would not detect a sign that cancels within that pairing. More importantly it
+compares **y-normal against y-normal**. The ring's π is between `k1` (bus-excited,
+**x-normal** source) and `k2` (ring-excited, **y-normal** source) — a
+**cross-orientation** comparison this test never makes.
+
+**Next candidate, and the next test:** does an x-normal port carry the same phase
+convention as a y-normal one? Same uniform strip, run once along x and once along
+y (a 90° rotation of an identical structure), compare the extracted coefficients.
+That is the only remaining difference between how `k1` and `k2` are obtained, and
+it is squarely in the territory blocker 0 examined with magnitudes only.
+
+### ❌ SECOND MECHANISM REFUTED — port orientation is not it either, 2026-08-03
+
+`verify_ring_ynormal_sign.py` test 2: **cross-orientation reciprocity on the ring's
+own standalone bend**, the simplest structure with one x-normal and one y-normal
+port. Excite the x stub and measure the y stub (`c_A`); excite the y stub and
+measure the x stub (`c_B`). The bend is reciprocal and both runs use the same two
+planes at the same two distances, so reciprocity demands `c_A == c_B` as **complex**
+numbers — this is the ring's `k1`/`k2` pairing with no coupler, no feedback and no
+second bend.
+
+```
+arg(ratio)/pi mean   : +0.00040
+arg(ratio)/pi spread : 5.086e-03
+VERDICT: ORIENTATIONS AGREE (ratio ~ +1)
+```
+
+**An x-normal port and a y-normal port carry the same phase convention.** Combined
+with test 1 (backward vs forward index, `+0.00000π`), **both port-convention
+explanations for the ring's flat π are now dead.**
+
+**Where that leaves it.** The measurement is unchanged: 0.976π flat across 100 nm,
+magnitudes equal to four decimals, and applying it (with the plane fix) collapses
+the route disagreement 10× and fixes the dip count. But after **two controlled
+refutations** the origin is unknown, and that raises the weight on a possibility
+worth stating plainly: **0.976π is not π.** The 0.024π offset and its 0.007π drift
+may mean the correction is not a sign at all, but something else that happens to
+sit near π. **Do not apply it to the scripts.** An empirical constant that works
+without a mechanism is exactly what the "π sign flip in `T_ii`" entry warns about.
+
+📌 **A separate finding from the same test, and it is blocker 0's signature.**
+Magnitudes did *not* agree: `|ratio|` deviates by **4.9%**, and `|c_B|` comes out
+**above 1.0** (1.00559–1.00884) — unphysical transmission for a lossy bend, i.e.
+the y-excited run's normalization is a few percent high. That is precisely blocker
+0's symptom, at res 30, and consistent with its h² closure (p = 1.988,
+extrapolating to 0.979 at res 40). **So blocker 0's magnitude story reproduces on
+a bare bend, while its phase was never examined by either investigation.**
+
+## ✅ Checks 1 and 2 are now RUNNABLE — `UniformCrossSection`, 2026-08-03
+
+**What "not runnable" actually meant.** This doc recorded check 1 as *"not
+measurable today — the mode solve is a direct meow call, and the FDTD is raw meep,
+so there is no shared cross-section object to compare."* Chasing that down: the
+blocker is that **both ring geometry classes raise on `to_gds_eme()`**, by design —
+
+> `RingResonatorCouplerSection.to_gds_eme()`: *"covers only the mixed-orientation
+> coupler section, never a whole-device EME cell layout — the straight bus+ring
+> 'body' cross-section is built directly (raw polygons + `mw.compute_modes_meep`),
+> not through a DeviceGeometry"*
+
+So there was no object an `EMESolver` and an `FDTDSolver` could both consume. That
+is a much smaller gap than "not runnable" implies, and it is now closed.
+
+**`beef/geometry/uniform.py` — `UniformCrossSection`.** N parallel straight strips,
+constant along x. Covers both of the ring's cross-sections:
+
+```python
+UniformCrossSection([(0.0, W)], length=...)                 # solve_neff()'s bare strip
+UniformCrossSection([(0.0, W), (Y_RING, W)], length=...)     # solve_body_supermodes()' pair
+```
+
+**Verified end to end, not just unit-tested:**
+
+```
+EMESolver.solve_section on UniformCrossSection(coupled pair) -> (1, 2, 2)
+  |S| = [[1. 0.]
+         [0. 1.]]
+bare strip -> (1, 1, 1) |S| = 1.0
+```
+
+`|S|` being the identity is the **correct** answer, not a null result: supermodes
+are the eigenbasis of a uniform section, so its transfer matrix is diagonal with
+unit magnitude and all the content is in the *phase*. That is precisely the
+structure the ring builds by hand as `P_body` — so the EME path reproduces its
+shape from a shared geometry object.
+
+**15 tests** (`tests/test_geometry_uniform.py`). The load-bearing one pins the
+drawn geometry against the ring's own constants — both core y-spans, the `GAP`
+between them, the oxide span — because this only unblocks the checks if it draws
+*exactly* what the ring builds by hand. It also asserts, rather than absorbs, that
+`to_gds_eme()` centres its oxide on y=0 while the ring centres on `BODY_Y_CENTER`,
+so a caller must shift it.
+
+Every cut is legal here (no `_check_cut`), which makes it the one geometry where a
+cut-position invariance sweep has a known-exact answer — useful for check 2.
+
+⚠ **Runnable is not run.** The demonstration above is res 14 against the ring's
+res-100 cached supermodes, so it shows the *path* works, not that the engines
+agree. **Check 1 proper is now a matched-resolution comparison** of `EMESolver`'s
+supermode `n_eff` against `solve_body_supermodes()`'s — a real run, and the next
+concrete step. Check 2 (mode identity) needs the interface basis exchanged across
+the same object, which this makes possible for the first time.
+
+## ✅ Checks 1 and 2 RUN — and PASS at the shipped res 100, 2026-08-03
+
+`examples/verification/python/verify_ring_eme_engine_agreement.py`. Mode solve
+only, no FDTD. **Job 11654797, res 100 = the ring's shipped `MODE_RESOLUTION`,
+three wavelengths, 17.6 min.** (A res-20 login-node smoke run passed first at
+`9.116e-08`.)
+
+| cross-section | λ | ring `n_eff` | beef `n_eff` | \|Δ\| | translation floor |
+|---|---|---|---|---|---|
+| bare strip | 1.500 | 2.402279484 | 2.402279484 | **0.000e+00** | 0.000e+00 |
+| bare strip | 1.550 | 2.339522768 | 2.339522768 | **0.000e+00** | 0.000e+00 |
+| bare strip | 1.600 | 2.276618695 | 2.276618695 | **0.000e+00** | 0.000e+00 |
+| pair, even | 1.500 | 2.408939184 | 2.408939184 | 1.520e-11 | — |
+| pair, odd | 1.500 | 2.392196768 | 2.392196768 | 1.285e-10 | **1.285e-10** |
+| pair, even | 1.550 | 2.349084582 | 2.349084582 | 1.977e-11 | — |
+| pair, odd | 1.550 | 2.326731377 | 2.326731377 | 1.347e-10 | **1.347e-10** |
+| pair, even | 1.600 | 2.289906149 | 2.289906149 | 3.564e-11 | — |
+| pair, odd | 1.600 | 2.260436363 | 2.260436363 | 1.615e-10 | **1.615e-10** |
+
+Check 2 at every one of the six mode/wavelength combinations: matched overlap
+`1.000000`, identity correspondence, row/col completeness `1.000000`, clean
+same-engine control (max off-diagonal `1e-06`).
+
+**Two different results, worth not conflating.** The **bare strip is
+bit-identical** — `0.000e+00`, not "small" — because it needs no y-shift at all
+(only the coupled pair's oxide is off-axis), so that comparison is completely
+free of the translation. The **coupled pair matches its own translation floor
+to every digit at all three wavelengths**, so its `~1e-10` is the rigid shift
+and nothing else. Neither number contains an engine disagreement.
+
+**The number that matters is that TEST 1 equals TEST 0 to every printed digit.**
+The two are independent measurements. TEST 0 is a *within-engine* control: the
+ring's own recipe, run twice, once shifted by `-BODY_Y_CENTER`. That shift is
+forced — `section_gds()` centres its oxide on `y=0` while the ring centres on
+`BODY_Y_CENTER`, so an exact reproduction is impossible without it, and pretending
+otherwise would compare two different structures. TEST 1 is the *cross-engine*
+comparison. Their agreeing at `9.116e-08` says the entire residual is the
+deliberate translation and **none of it is the engines**. Had the script only
+printed TEST 1, `9e-08` would have looked like a small engine disagreement rather
+than what it is: zero.
+
+Check 2 goes further than "same `n_eff`". Two different structures can share an
+`n_eff`, so the script takes the field overlap matrix between the two engines'
+mode sets, and reports:
+
+* **matched diagonal** 1.000000 — same modes, not just same numbers;
+* **identity permutation** — the ring's `(even, odd)` band index carries across
+  engines. This is the failure that would corrupt `P_body`'s diagonal, and it is
+  now excluded rather than assumed;
+* **row/col completeness** 1.000000 — neither engine found a mode the other's
+  basis cannot represent. The diagonal alone is blind to that;
+* **a same-engine control** — the ring's own basis against itself, which must be
+  the identity by construction. Two confident-looking "correspondence failures"
+  elsewhere in this project turned out to be artifacts of the *checker*; this
+  control is what distinguishes them from real findings.
+
+**Resolutions are not free parameters here.** `compute_modes_meep` needs `dy ==
+dz`, and the coupled pair's `BODY_MESH_WIDTH = 4.7` does not divide evenly at
+every `res`. Legal: 20, 30, 40, 50, 60, 80, 100. **Illegal: 14 and 25** — the
+first smoke attempt was at res 14 and died inside meow three minutes in. The
+script now refuses an illegal resolution up front with the legal list, and does
+*not* silently round to a legal grid, which would change the structure under test.
+
+**Scope, stated in the script's own verdict.** This is the EME/mode-solve half
+only. It does not compare against FDTD, and it does not test propagation —
+`solve_section()`'s S-matrix, reflection and reverse transmission stay out of
+scope. Checks 1 and 2 close for the mode solve; check 4 is still the only thing
+that puts the whole device against a reference.
+
+## ✅ The physical 4-port route now RUNS — and what it does and doesn't buy
+
+**Added to `verify_ring_network_crosscheck.py` 2026-08-03 as route C.** The 4-port
+block already existed there (`connect(left, "iface", right, "iface")` →
+`('bus_L','ring_L','bus_R','ring_R')`) but was collapsed to the `[bus, ring]`
+aggregate before closure. It is now also closed *as a 4-port* with the new
+`close_loop_pair()`, keeping `bus_L`/`bus_R` distinct.
+
+**C1 is a control, and it passes exactly.** With the counter direction dead
+(`loop_ab=0`) the paired closure must reproduce the aggregate's Branch A result,
+because the aggregate's "ring" port *is* the one-directional `ring_L`-in /
+`ring_R`-out identification:
+
+```
+CONTROL  worst |E_4port(1-way) - E_aggregate| = 0.000e+00   -> PASS
+route C ports after pair closure: ('bus_L', 'bus_R')
+```
+
+Exactly zero. **The 4-port port bookkeeping is verified**, which is what had to be
+true before any 4-port number meant anything.
+
+### ⚠ C2 agreeing is a TAUTOLOGY, and the script now says so itself
+
+Closing both circulation directions also gives `0.000e+00` — and that is **not** a
+physics result. The script now measures the terms the second loop would act on:
+
+```
+backward terms: S[ring_L,bus_L]=0.00e+00  S[ring_L,ring_R]=0.00e+00
+                S[bus_L,ring_R]=0.00e+00  S[bus_L,bus_R]=0.00e+00
+-> TAUTOLOGY, not a physics result.
+```
+
+All structurally zero, because `_side_block` fills **forward transmission only** —
+its own docstring: *"reflection and reverse transmission are zero, matching what
+`solve_section()` actually models."* The counter-circulation loop has nothing to act
+on, so 2-way *must* equal 1-way.
+
+I had first written this verdict as "the counter path is dark, as a co-propagating
+coupler implies," which reads as a measurement of the device. It is not. The
+detector was added so the script cannot make that claim on anyone's behalf again.
+
+### What this changes for the gap list
+
+**Wiring item 1 is no longer blocked.** The 4-port route runs, its bookkeeping is
+verified against the proven aggregate, and `close_loop_pair()` has independent
+mutation-checked tests. What remains under item 1 is a decision, not a blocker:
+whether `P_LR` and `P_RL` are one propagator (equal for a symmetric racetrack).
+
+**But a NEW gap is now named:** the 4-port route currently buys **composability,
+not new physics**. To differ from the aggregate at all it needs side blocks
+carrying reflection and reverse transmission, and `solve_section()` does not model
+them. Anything requiring backward paths — add-drop, cascaded rings, backscatter,
+counter-propagating resonances — is blocked on *that*, not on the network layer.
+This is the same class as the item-2 structural limit (no basis-free flux from
+`solve_section()`): the network algebra is ahead of what the solver can measure.
+
+📌 **`RING_XC_OUT` added.** The script `np.savez()`es unconditionally, and on
+2026-08-02 two login-node smoke runs used that to destroy the production
+`crosscheck.npz`. This doc's standing advice was "redirect `OUT` before running
+outside the queue" — which required a code change to be possible. Now it is:
+`RING_XC_OUT` redirects the output tree, and today's smoke runs used it.
+
+## 📌 Wiring item 1 rescoped — Branch B as specified is not what the ring needs
+
+**Derived 2026-08-03 from `close_loop()`'s actual algebra.** Branch B is defined as
+`a_{port_in} = loop @ b_{port_out}` with `port_in = p != q = port_out`. Working it
+through: with `E` the remaining ports and `a_p` forced by `b_q`,
+
+```
+b_q = (I - S_qp L)^-1 (S_qq a_q + S_qE a_E)
+b_E = S_Ep L b_q + S_Eq a_q + S_EE a_E
+b_p = S_pp L b_q + S_pq a_q + S_pE a_E
+```
+
+**The free inputs are `a_q, a_E`; the outputs are `b_p, b_q, b_E`.** That is not a
+valid S-matrix reduction: `b_q` is consumed by the loop yet still appears as an
+output, and `a_q` and `b_p` are left dangling. A one-way `p != q` closure is
+**under-determined for the ring**, because a real ring circulates both ways —
+closing only `ring_R -> ring_L` leaves `a_{ring_R}` and `b_{ring_L}` unconnected.
+
+**What the ring actually needs is a PAIRED closure**, both circulation directions
+at once:
+
+```
+a_L = P_RL b_R          and          a_R = P_LR b_L
+```
+
+Then both ring ports are fully eliminated and `bus_L, bus_R` remain — a well-posed
+2-port. With `x = [b_L; b_R]`:
+
+```
+[ I - S_LR P_LR      -S_LL P_RL  ] [b_L]   [S_LE]
+[   -S_RR P_LR     I - S_RL P_RL ] [b_R] = [S_RE]  a_E
+
+b_E = S_EL P_RL b_R + S_ER P_LR b_L + S_EE a_E
+```
+
+A single 2n×2n solve per wavelength, structurally the same shape as Branch A's
+`(I - S_pp P)^-1` but on the port pair. **This is implementable and well-posed,
+where the one-way Branch B is not.**
+
+**Consequence for the to-do list.** Wiring item 1 was recorded as "decide the port
+topology, then implement Branch B." The decision is narrower than that: the 4-port
+route needs a **`close_loop_pair()`-style paired elimination**, not the one-way
+Branch B that `ops.py` currently raises on. The existing `NotImplementedError`
+message is accurate about Branch A vs B being different formulas, but names an
+operation that does not close the ring by itself. **Not implemented here** — this
+is scoping, and it needs its own tests plus a decision on whether `P_LR` and `P_RL`
+are independent (they are equal for a symmetric racetrack, but an add-drop or a
+cascade would not be).
+
+### ⚠ NOT patched, and deliberately so
+
+**What is established:** the plane inconsistency (geometric, ledger-verified); the
+π being flat across the band (measured); that applying both collapses the route
+disagreement 10× and fixes the dip count; and that the suspect path is a single
+documented `forward=False` call.
+
+**What is NOT established:** that meep's `alpha[..., 1]` actually carries a −1
+relative to `alpha[..., 0]` for a y-normal port in this geometry. That is a claim
+about meep's convention and it has not been tested. **This document already
+records one confidently-wrong "π sign flip in `T_ii`" diagnosis that cost a day**,
+and inserting a bare `-1` on the strength of a curve fit would be that mistake
+again with better arithmetic.
+
+**Next step, and it is a measurement:** a controlled 2-D straight-waveguide test —
+launch −y, read the same coefficient via the forward and backward indices at two
+planes, and compare against the +y case. Cheap, decisive, and it settles whether
+the fix belongs in `get_coeffs()` (a convention bug affecting anything using
+`forward=False`) or in the ring script alone.
+
+## Q is no longer grid-limited — `N_WL_DENSE` 2001 → 20001, 2026-08-03
+
+**The knob was raised and the convergence was measured, not assumed.** Both ring
+scripts now use `N_WL_DENSE = 20001` (2001 in `RING_TEST_MODE`), giving 0.005 nm
+steps across 1.50–1.60 µm.
+
+Rebuilding the dense assembly from the *same* cached coefficients at increasing
+density — no new FDTD, and using the scripts' own `interp_complex()`/`find_dips()`
+rather than a reimplementation:
+
+| `N_WL_DENSE` | step (nm) | first-dip FWHM (nm) | first-dip Q |
+|---|---|---|---|
+| 2001 | 0.0500 | 0.1500 | 10006 |
+| 5001 | 0.0200 | 0.1400 | 10720 |
+| 10001 | 0.0100 | 0.1100 | 13644 |
+| **20001** | **0.0050** | **0.1050** | **14294** |
+| 40001 | 0.0025 | 0.1050 | 14294 |
+| 80001 | 0.0013 | 0.1050 | 14294 |
+
+**Flat from 20001 on** — 4× and 8× further refinement change nothing. So 20001 is
+converged, and Q is now a property of the device rather than of the grid.
+
+**Every previously reported Q was an under-estimate**, by up to ~43% (10006 →
+14294 on the first dip). Production values after the change:
+
+| | dips | Q range |
+|---|---|---|
+| monolithic | 7 | 6757 – 13131 |
+| cascaded | 8 | 5792 – 14294 |
+
+against the old 5293–10193. `T_min` also deepened (e.g. 0.4145 → 0.3512): at
+0.05 nm steps the sampled minimum was simply missing the true one.
+
+⚠ **A first attempt at this table was wrong and is worth recording.** Rebuilding
+with plain real/imag interpolation gave Q still climbing at 80001 and never
+converging. The scripts interpolate **magnitude + unwrapped phase**
+(`interp_complex()`), which is not the same thing for a rapidly rotating
+coefficient — real/imag chords across the circle and distorts the lineshape. Dip
+*positions* were unaffected (those are set by the analytic `exp(iφ)` on the dense
+grid), which is why the earlier `BODY_LENGTH` test still stands, but every FWHM
+was wrong. **Extract the script's own helpers rather than re-deriving them.**
+
+This closes the "if Q is wanted, raise `N_WL_DENSE`" item outstanding since
+2026-08-02. It cost no FDTD and no cache invalidation — the dense grid is
+post-processing and appears in no fingerprint.
+
 ## Gaps against the four checks
 
-1. **Engine agreement** — not measurable today. The mode solve is a direct meow
+1. ~~**Engine agreement** — not measurable today. The mode solve is a direct meow
    call, and the FDTD is raw meep, so there is no shared cross-section object to
-   compare. Blocked on the recommendation above.
-2. **Mode identity** — not applicable in the current form (no interface mode
-   basis is exchanged; the scripts thread scalar coefficients). Becomes check 2
-   proper once (c) lands.
+   compare. Blocked on the recommendation above.~~
+   **✅ MEASURED AND PASSES 2026-08-03.** `UniformCrossSection` supplied the
+   shared object; `verify_ring_eme_engine_agreement.py` runs the comparison.
+   Worst `|Δn_eff|` at res 20 is `9.116e-08`, **equal to the script's own
+   within-engine translation-floor control to every printed digit** — so the
+   residual is the forced `-BODY_Y_CENTER` y-shift and none of it is the
+   engines. Res-100 run: job 11654797. See the dedicated section above.
+   ⚠ Scope: this is EME-vs-EME through two different call paths (hand-rolled
+   meow vs `EMESolver`), **not** EME-vs-FDTD. It closes the "no shared object"
+   blocker and shows the library path reproduces the ring's own numbers; an
+   FDTD comparison of the same cross-section is still unwritten.
+2. ~~**Mode identity** — not applicable in the current form (no interface mode
+   basis is exchanged; the scripts thread scalar coefficients).~~
+   **✅ MEASURED AND PASSES 2026-08-03**, same script and same run. Field
+   overlap matrix between the two engines' mode sets: matched diagonal
+   `1.000000`, **identity permutation** (so the ring's `(even, odd)` band index
+   carries across — the failure that would corrupt `P_body`'s diagonal is now
+   excluded rather than assumed), unit row/col completeness (neither engine
+   found a mode the other's basis cannot represent), and a same-engine control
+   that comes back clean. The scripts still thread scalar coefficients in
+   production; what changed is that the bases can now be compared at all.
 3. ~~**Resolution convergence** — never measured, for either engine.~~
    **✅ MEASURED 2026-08-01 — job 11616610 (4:34). The shipped `RESOLUTION = 40`
    slides the resonance comb by a QUARTER of an FSR.**
@@ -1557,6 +2347,87 @@ it is post-processing on an interpolated grid and costs no new FDTD.
 
    Raw data: `example_output/verification/ring_gap3_neff/neff_convergence.npz`.
 
+   ### 🔴 FDTD SIDE MEASURED 2026-08-03 — job 11653509, and it does NOT converge
+
+   The sweep the split above was made to enable. `FDTD_RESOLUTION` 20/30/40/60
+   on the cascaded route, mode side pinned. **Control: `neff_solve[0]` is
+   `2.402279484` bit-identical at all four resolutions**, so everything that
+   moved is the FDTD half and nothing leaked in from the mode solve.
+
+   | res | dips | comb (first 4, µm) | FSR over shared lines |
+   |---|---|---|---|
+   | 20 | 8 | 1.5043 1.5167 1.5293 1.5421 | 13.124 nm |
+   | 30 | 8 | 1.5021 1.5146 1.5273 1.5402 | 13.212 nm |
+   | 40 (**shipped**) | 8 | 1.5009 1.5134 1.5261 1.5390 | 13.243 nm |
+   | 60 | **7** | 1.5121 1.5248 1.5378 1.5509 | 13.268 nm |
+
+   ⚠ **The as-printed "mean FSR" is not comparable across rows and must not be
+   read.** Res 60 reports 7 dips, not 8: the comb shifted down far enough that
+   the first line slid below the 1.500 µm window edge (it sat only 0.9 nm
+   inside at res 40). Averaging over a different set of intervals made the
+   printed mean jump 13.141 → 13.268 nm, which looks like divergence and is
+   pure bookkeeping. Compared over the **7 shared lines** the FSRs are 13.243
+   vs 13.268. Every number in the table above is measured that way.
+
+   **Two quantities, two completely different convergence orders.** Fitting
+   `f(h) = A - B·h^p` on the comb:
+
+   | quantity | fitted order | res 40 | res 60 |
+   |---|---|---|---|
+   | FSR | p ≈ 1.4–2.1 | 0.35% of an FSR out | **0.16% out** |
+   | absolute comb position | **p ≈ 0.70** | 39% out | **29% out** |
+
+   The position order is `0.680 / 0.719 / 0.703` from the three independent
+   triplets (20,30,40), (30,40,60), (20,40,60) — consistent, and **sub-linear**.
+   Per-step comb shift: 20→30 **−1.86 nm**, 30→40 **−1.11**, 40→60 **−1.24**.
+   Not shrinking.
+
+   ### 📌 What that signature means — this is probably the flat 0.976π
+
+   A *difference* of positions converging at ~h² while the *absolute* position
+   crawls at h^0.7 has one natural cause: a **wavelength-flat phase offset**. It
+   shifts every dip equally and **cancels exactly in the FSR**. That is the same
+   signature as the unexplained flat 0.976π in the ring-excited coefficients
+   (two mechanism hypotheses already refuted by direct test), so these are
+   likely **one defect, not two** — and this is the first evidence that ties
+   them together.
+
+   ### ⛔ Consequence — do NOT set `FDTD_RESOLUTION` from this sweep
+
+   Picking a value here would be reading a number off a curve that is not
+   converging. Refinement cannot fix it: at p ≈ 0.70 the extrapolated
+   requirement to reach 1% of an FSR is far outside anything runnable, which is
+   the finding rather than a prescription.
+
+   **What can be trusted today:** FSR, which is converged at res 40+ (0.35% of
+   an FSR) and barely improves at 60. **What cannot:** absolute resonance
+   wavelength, at *any* resolution, until the flat phase is found.
+
+   This also retires the standing "decide the resolution first, then re-run"
+   ordering. That ordering assumed the FDTD side had a convergent answer to
+   decide on. It does not, so M1/M2 and the monitor-plane convention are no
+   longer gated behind a resolution choice — they are gated behind the flat
+   phase.
+
+   ### 🔬 Check 4 is now the discriminator, and it is running
+
+   The full-device FDTD (`ring_resonator_fdtd.py`, job 11655143) shares **none**
+   of the hybrid's phase bookkeeping — no reference planes, no decomposition, no
+   network algebra.
+
+   * Full-device comb *also* drifts at p ≈ 0.7 → the flat phase is
+     discretization (meep resolving the staircased arcs) and the hybrid is
+     faithfully reproducing it.
+   * Full-device comb converges cleanly while the hybrid's does not → the flat
+     phase is in the **decomposition's reference-plane arithmetic**, which
+     localizes 0.976π to code rather than physics.
+
+   Comparison harness written and waiting: `verify_ring_check4_comparison.py`.
+   Its 2-D hybrid partner is job 11655349, run with `RING_THREE_D=0` (one knob)
+   rather than `RING_TEST_MODE=1` (five knobs, one of them a grid-limited
+   `N_WL_DENSE`). The harness aligns combs by best offset rather than comparing
+   `mean(diff(·))`, precisely because of the 8→7 dip trap above.
+
    ### ✅ DECIDED 2026-08-01 — split the knob, don't bump it
 
    `RESOLUTION` was **one** constant driving both the meep FDTD
@@ -1602,16 +2473,113 @@ it is post-processing on an interpolated grid and costs no new FDTD.
    directly. Given `directional_coupler_validation.md` item 11 found the shared res=40 overstates
    Δn_eff by 7% on a coupled pair, the bare-strip n_eff here needs its own
    convergence check before any resonance wavelength is trusted.
-4. **Full-device FDTD reference** — **none exists**, and there is no
-   `ring_resonator_fdtd.py` to build one from. A whole-ring 3-D FDTD is expensive
-   but is the only thing that would test the feedback-loop assembly end to end;
-   without it the closed-form sum is unchecked against anything.
+4. ~~**Full-device FDTD reference** — **none exists**, and there is no
+   `ring_resonator_fdtd.py` to build one from.~~
+   **✅ WRITTEN 2026-08-03 — `examples/ring_resonator/python/ring_resonator_fdtd.py`,
+   running as job 11655143 (2-D, res 20/30/40).**
 
-Also unchecked: the interpolation strategy. FDTD coefficients are interpolated
+   Bus + complete racetrack in one meep run, normalized against the same cell
+   with the racetrack deleted, so source spectrum, mode profile, bus
+   propagation and both PML interfaces divide out. No decomposition, no EME, no
+   network algebra, no reference planes — which is the point: the monolithic
+   and cascaded routes are two ways of *assembling* this device, and no
+   comparison between them can say which assembly is right.
+
+   **The cost was measured, and it kills 3-D.** Driver is Q, not mesh. Q=14294
+   → τ = Q/(2πf) = **3526 meep time units**, and `stop_when_dft_decayed(1e-9)`
+   stops near **26 τ**. Scaling job 11653509_3's measured 0.060 s/step by the
+   4.00× cell-volume ratio and by res³:
+
+   | res | 2-D @10 τ | 2-D @30 τ | 3-D @10 τ | 3-D @30 τ |
+   |---|---|---|---|---|
+   | 20 | 0.07 h | 0.21 h | 3 h | 10 h |
+   | 30 | 0.24 h | 0.71 h | 18 h | 53 h |
+   | 40 | 0.56 h | 1.67 h | 56 h | **167 h** |
+
+   So **3-D full-ring is out of reach of the 10 h wall at every usable
+   resolution** — it needs a multi-day allocation or checkpoint/restart. That
+   is a finding about this check, not a way around it, and the script's verdict
+   prints the 2-D scope rather than implying 3-D coverage.
+
+   ⚠ **My first cost estimate was wrong and is recorded rather than replaced.**
+   It said 45 h for 3-D res 40, from assuming T = 8 τ. 8 τ leaves 1.8% residual
+   amplitude and the decay criterion actually used stops near 26 τ. The real
+   figure is 167 h — 3.7× worse. The 45 h number had already been used to
+   justify defaulting to 2-D; the corrected one justifies it far more strongly.
+
+   **2-D still answers the question in play**, because both hybrid scripts have
+   a 2-D path (`RING_TEST_MODE=1`), so the comparison runs at *matched* physics
+   instead of conflating decomposition error with a 2-D-vs-3-D material
+   difference. It does **not** validate the 3-D numbers the device ships, and
+   the verdict says so.
+
+   The array sweeps resolution for the same reason check 3 existed: a
+   full-device reference that is itself mesh-limited would "disagree" with the
+   hybrid for a reason unrelated to the decomposition.
+
+   Two guards, both exercised on a deliberately-too-short smoke run (res 8, cap
+   600 = 0.2 τ): a **truncation detector** that refuses to let linewidths be
+   quoted from a capped run, and a **τ check** that fires when the device run
+   decays too fast for the assumed Q. The smoke run produced 32 spurious dips
+   and FSR 6.5 nm against the predicted 12.87 — and was correctly flagged
+   rather than reported. `assert_geometry_closes()` re-derives the racetrack
+   perimeter from the polygons the file actually draws (43.4159 µm) and checks
+   the far-bend corners meet their straights, so a drifted mirrored constant
+   fails loudly instead of shifting the FSR.
+
+~~Also unchecked: the interpolation strategy. FDTD coefficients are interpolated
 magnitude + unwrapped-phase, and n_eff by a degree-2 polynomial fit, onto a dense
 grid. Both choices are argued in the docstring and both are load-bearing for
 resonance position — a piecewise-linear n_eff would put an artificial kink at
-every solve node — but neither has a test.
+every solve node — but neither has a test.~~
+
+**✅ Half-closed 2026-08-03.** `interp_complex` is now `beef/spectral.py` with 11
+tests (`tests/test_spectral.py`), and both ring scripts import it — a test
+asserts bit-identical output against the removed inline definition, so promoting
+it changed no result. The mag/phase-vs-real/imag claim is now *measured* on an
+analytic ramp (exact to `<1e-12` vs 4+ orders worse) rather than argued. The
+strategy's own failure mode is pinned too, including a **false negative I did not
+expect**: `unwrap_is_safe()` measures the post-unwrap step, which `np.unwrap`
+forces into `(-π, π]`, so on already-aliased data it reports safe while the
+interpolant is badly wrong with a perfectly flat magnitude. That limit is
+fundamental — above Nyquist the aliased ramp is self-consistent even under
+decimation — and is now documented and tested rather than assumed away.
+
+**✅ Fully closed 2026-08-03 — the degree-2 `n_eff` polyfit is measured too.**
+`examples/verification/python/verify_ring_neff_polyfit.py`. No new simulation:
+it reads the 26 bare-strip and 13 coupled-pair `n_eff` values already in
+`example_sim_cache/` at res 100, and does **leave-one-out** — drop an interior
+wavelength, fit the rest, predict the dropped point, compare against what the
+mode solver returned there. A held-out prediction, not a goodness-of-fit on the
+training points, because a low-order fit can hug its own nodes and still be
+wrong between them, which is the failure in question.
+
+Every number is converted into the currency check 3 uses, `Δφ = 2π·Δn_eff·L_outer/λ`
+as a fraction of one FSR, so it is directly comparable rather than a residual in
+isolation:
+
+| degree | LOO max \|Δn_eff\| | % of one FSR (strip) | % of one FSR (even supermode) |
+|---|---|---|---|
+| 1 | 5.99e-05 | 0.0271% | 0.0642% |
+| **2 (shipped)** | **9.83e-06** | **0.0044%** | **0.0055%** |
+| 3 | 5.28e-07 | 0.0002% | 0.0002% |
+| 4 | 6.27e-09 | 0.0000% | 0.0000% |
+
+Production-like — fit degree 2 on 13 points, residual against all 26 including
+the ones the fit never saw — gives **0.0033% of an FSR**.
+
+**Verdict: the fit is not a limiting error source.** 0.0044% against the 12.5%
+of an FSR the shipped FDTD resolution contributes is a factor of **2817**.
+Raising the degree would change no resonance position anyone could measure.
+*Even degree 1* comes in at 0.0271%, so degree 2 has real headroom — the choice
+was safe, and is now known to be safe rather than argued to be.
+
+⚠ Scope: this validates the **fit**, not the `n_eff` values fitted to. Those are
+check 3's business.
+
+With this, **both halves of the interpolation gap are closed** — the coefficient
+resampler by measurement against an analytic function, the `n_eff` fit by
+held-out prediction against cached solves.
 
 ## Order
 

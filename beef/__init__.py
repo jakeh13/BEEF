@@ -97,9 +97,10 @@ from .mode_identity import (
     overlap_diagnostics, self_overlap_diagnostics,
 )
 from .network import (
-    SMatrixBlock, connect, close_loop, Circuit,
+    SMatrixBlock, connect, close_loop, close_loop_pair, Circuit,
     from_transfer_matrix, from_smatrix, to_smatrix,
 )
+from .spectral import interp_complex, unwrap_is_safe
 from .results import SMatrix
 from .solvers import EMESolver, FDTDSolver, PortSpec, HybridSolver
 from .sweep import ParallelSweep
@@ -120,8 +121,10 @@ __all__ = [
     # materials
     "MaterialStack", "SOI_160", "SOI_220",
     # network
-    "SMatrixBlock", "connect", "close_loop", "Circuit",
+    "SMatrixBlock", "connect", "close_loop", "close_loop_pair", "Circuit",
     "from_transfer_matrix", "from_smatrix", "to_smatrix",
+    # spectral resampling
+    "interp_complex", "unwrap_is_safe",
     # mode identity
     "field_overlap_matrix", "best_correspondence", "mesh_cell_centers", "stack_meow_mode_fields",
     "overlap_diagnostics", "self_overlap_diagnostics",

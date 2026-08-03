@@ -24,11 +24,22 @@ from beef import extrude_polygons
 WG_WIDTH = 0.45
 MESH_WIDTH, MESH_HEIGHT = 4.0, 2.0
 MATERIAL_STACK = SOI_220
-# ring_resonator_hybrid.py: L_SIDE=2.0, S_MON, L_FAR=L_C. L_outer is the
-# analytic-phase path length; 2*(L_SIDE) + L_FAR with L_C=10.0 is the shipped
-# scale. Only used to convert a d(neff) into a d(phase), so the exact value
-# just sets the lever arm.
-L_OUTER = 2 * 2.0 + 10.0
+# L_outer is the analytic-phase path length, used only to convert a d(neff) into
+# a d(phase) -- but its value sets the lever arm linearly, so it has to be the
+# real one.
+#
+# FIXED 2026-08-03. This was `2 * 2.0 + 10.0` = 14.0 um, on a comment asserting
+# L_C=10.0 was "the shipped scale". It is not: ring_resonator_hybrid.py:125 ships
+# L_C = 4.0, and its round-trip phase (`:805`) uses a reference-plane pullback the
+# old expression dropped entirely. Job 11634859 printed `L_outer = 7.0000 um`
+# directly, confirming the value below. The old 14.0 was wrong twice over -- wrong
+# L_C, and no -2*S_MON term -- so every Delta-phi this script reported was
+# exactly 2x too large, and the headline "shipped res 40 is a QUARTER-FSR off
+# res 100" is really an EIGHTH (12.6%).
+#
+# Mirrored from ring_resonator_hybrid.py rather than re-derived; keep in sync.
+L_SIDE, S_MON, L_FAR = 2.0, 0.5, 4.0          # == ring_resonator_hybrid.py:126,160,127
+L_OUTER = 2 * (L_SIDE - S_MON) + L_FAR        # == ring_resonator_hybrid.py:805  -> 7.0
 RESOLUTIONS = [20.0, 30.0, 40.0, 60.0, 80.0, 100.0]
 WAVELENGTHS = [1.50, 1.55, 1.60]
 OUT = os.path.abspath(os.path.join(os.path.dirname(__file__),

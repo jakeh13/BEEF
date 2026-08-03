@@ -31,7 +31,7 @@ import numpy as np
 
 from beef.geometry.ring_coupler import RingResonatorCouplerSection
 from beef.materials import SOI_220
-from beef.network import close_loop, connect
+from beef.network import close_loop, close_loop_pair, connect
 from beef.network.block import SMatrixBlock
 from beef.solvers.fdtd import FDTDSolver, PortSpec
 
@@ -46,7 +46,13 @@ FDTD_RESOLUTION = float(os.environ.get("RING_XC_RES", "20"))
 THREE_D = os.environ.get("RING_XC_2D") != "1"
 WL_MIN, WL_MAX, N_WL = 1.50, 1.60, int(os.environ.get("RING_XC_NWL", "5"))
 
-OUT = os.path.abspath(os.path.join(os.path.dirname(__file__),
+# RING_XC_OUT redirects the output tree. This script np.savez()es
+# unconditionally, and on 2026-08-02 two login-node smoke runs used that to
+# overwrite the production crosscheck.npz. The validation doc's standing advice
+# was "redirect OUT before running outside the queue" -- which needed a code
+# change to be possible, so here it is. Smoke runs should set it.
+OUT = os.environ.get("RING_XC_OUT") or os.path.abspath(os.path.join(
+      os.path.dirname(__file__),
       "..", "..", "..", "..", "example_output", "verification", "ring_network_crosscheck"))
 
 
@@ -343,7 +349,7 @@ def coupler_coefficients(wavelengths):
         return full.data[:, r, c][:, 0, 0]
 
     return (S("bus_R", "bus_L"), S("ring_R", "bus_L"),
-            S("ring_R", "ring_L"), S("bus_R", "ring_L"))
+            S("ring_R", "ring_L"), S("bus_R", "ring_L"), full)
 
 
 def loop_propagator(wavelengths, neff, b_raw):
@@ -374,7 +380,7 @@ def main():
     wl = np.linspace(WL_MIN, WL_MAX, N_WL)
     print(f"[xc] res={FDTD_RESOLUTION} three_d={THREE_D} n_wl={N_WL}", flush=True)
 
-    t, k1, t_ring, k2 = coupler_coefficients(wl)
+    t, k1, t_ring, k2, full4 = coupler_coefficients(wl)
     # Bend coefficient: reuse the coupler's own ring-side self-term magnitude
     # as a stand-in ONLY if no bend run is supplied. A real assembly uses
     # run_bend_fdtd()'s b; this script's job is the ROUTE comparison, and both
@@ -392,6 +398,33 @@ def main():
     block = build_block(wl, t, k1, k2, t_ring)
     closed = close_loop(block, port_out="ring", port_in="ring", loop=P)
     E_B = closed.data[:, 0, 0]
+
+    # Route C -- the PHYSICAL 4-port, closed with close_loop_pair() instead of
+    # collapsed to the [bus, ring] aggregate first. This is the route the
+    # aggregate exists to stand in for, and the one that composes: it keeps
+    # bus_L/bus_R as distinct ports and eliminates the ring pair.
+    #
+    # C1 is a CONTROL, not a result. With the counter-circulation direction
+    # dead (loop_ab=0) close_loop_pair() reduces to close_loop()'s Branch A
+    # exactly (proven in tests/test_network_ops_pair.py), and the aggregate's
+    # "ring" port IS the one-directional ring_L-in/ring_R-out identification.
+    # So C1 must equal route B to machine precision. If it does not, the 4-port
+    # port bookkeeping is wrong and C2 means nothing.
+    #
+    # C2 is the physical question: close BOTH circulation directions. A
+    # co-propagating coupler should not backscatter bus_L into ring_L, so the
+    # counter path ought to stay dark and C2 should also match. Any gap
+    # measures how much counter-circulation the composed block actually
+    # carries -- which the aggregate silently drops.
+    def _thru(blk):
+        r = blk.port_slice("bus_R"); c = blk.port_slice("bus_L")
+        return blk.data[:, r, c][:, 0, 0]
+
+    closed_c1 = close_loop_pair(full4, "ring_L", "ring_R", loop_ba=P, loop_ab=0.0)
+    E_C1 = _thru(closed_c1)
+    closed_c2 = close_loop_pair(full4, "ring_L", "ring_R", loop_ba=P, loop_ab=P)
+    E_C2 = _thru(closed_c2)
+    print(f"[xc] route C ports after pair closure: {closed_c1.ports}", flush=True)
 
     print(f"\n{'wl':>7} {'|E| legacy':>12} {'|E| network':>12} {'abs diff':>12}")
     worst = 0.0
@@ -432,6 +465,52 @@ def main():
     else:
         print("[xc] physics checks PASS (power sum ~1, reciprocity holds)")
 
+    worst_c1 = float(np.max(np.abs(E_C1 - E_B)))
+    worst_c2 = float(np.max(np.abs(E_C2 - E_B)))
+    print(f"\n[xc] {'wl':>7} {'|E| aggregate':>14} {'|E| 4port 1-way':>16}"
+          f" {'|E| 4port 2-way':>16}")
+    for i, w in enumerate(wl):
+        print(f"[xc] {w:7.3f} {abs(E_B[i]):14.8f} {abs(E_C1[i]):16.8f} {abs(E_C2[i]):16.8f}")
+    print(f"\n[xc] CONTROL  worst |E_4port(1-way) - E_aggregate| = {worst_c1:.3e}")
+    if worst_c1 < 1e-10:
+        print("[xc]   -> PASS: the 4-port bookkeeping reproduces the aggregate exactly.")
+    else:
+        print("[xc]   -> FAIL: the 4-port block's port assignment disagrees with the "
+              "aggregate's\n[xc]      ring_L-in/ring_R-out identification. Fix this "
+              "before reading the 2-way number.")
+    # Is the counter-circulation loop even capable of doing anything? The
+    # per-side blocks fill FORWARD TRANSMISSION ONLY (see _side_block: reflection
+    # and reverse transmission are zero, matching what solve_section() models),
+    # so the terms the 2-way closure needs may be structurally absent. Measure
+    # that rather than assuming either way -- otherwise "2-way agrees" reads as
+    # a physics result when it is a tautology.
+    def _amp(out_port, in_port):
+        r = full4.port_slice(out_port); c = full4.port_slice(in_port)
+        return float(np.max(np.abs(full4.data[:, r, c])))
+
+    back = {f"S[{o},{i}]": _amp(o, i) for o, i in
+            (("ring_L", "bus_L"), ("ring_L", "ring_R"), ("bus_L", "ring_R"),
+             ("bus_L", "bus_R"))}
+    back_max = max(back.values())
+    print(f"[xc] PHYSICS  worst |E_4port(2-way) - E_aggregate| = {worst_c2:.3e}")
+    print("[xc]   backward terms the 2-way closure would act on: "
+          + ", ".join(f"{k}={v:.2e}" for k, v in back.items()))
+    if back_max < 1e-12:
+        print("[xc]   -> TAUTOLOGY, not a physics result. Every backward term in the "
+              "composed block is\n[xc]      structurally ZERO (_side_block fills forward "
+              "transmission only), so the\n[xc]      counter-circulation loop has nothing "
+              "to act on and 2-way MUST equal 1-way.\n[xc]      The 4-port route therefore "
+              "buys composability, not new physics, until the side\n[xc]      blocks carry "
+              "reflection / reverse transmission.")
+    elif worst_c2 < 1e-10:
+        print("[xc]   -> the backward terms are nonzero yet the counter path stays dark, "
+              "which is what a\n[xc]      co-propagating coupler implies. The aggregate "
+              "drops nothing.")
+    else:
+        print("[xc]   -> the composed block DOES carry counter-circulation the aggregate "
+              "drops. That is a\n[xc]      real physical difference -- decide which model "
+              "the device represents before\n[xc]      trusting either comb.")
+
     print(f"\n[xc] worst |E_legacy - E_network| = {worst:.3e}")
     print(f"[xc] L_outer = {L_outer:.4f} um")
     if worst < 1e-12:
@@ -446,6 +525,9 @@ def main():
     np.savez(os.path.join(OUT, "crosscheck.npz"),
              wavelengths=wl, t=t, k1=k1, k2=k2, t_ring=t_ring, P=P,
              E_legacy=E_A, E_network=E_B, worst_abs_diff=worst,
+             E_4port_1way=E_C1, E_4port_2way=E_C2,
+             worst_4port_1way=worst_c1, worst_4port_2way=worst_c2,
+             backward_term_max=back_max,
              res=FDTD_RESOLUTION, three_d=THREE_D, L_outer=L_outer)
     print(f"[xc] saved -> {OUT}/crosscheck.npz")
 

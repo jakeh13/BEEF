@@ -1,7 +1,95 @@
 # Active SLURM jobs — snapshot
 
-**★ TWENTIETH SNAPSHOT — 2026-08-03, verified against `squeue -u jhiesener3`
-(empty) and `sacct -u jhiesener3 -S 2026-08-02`. This is the current one.**
+**★ TWENTY-SECOND SNAPSHOT — 2026-08-03 (later still), verified against
+`squeue -u jhiesener3`. This is the current one.**
+
+| job | state | what |
+|---|---|---|
+| **11655592_[0-2]** | ⏳ PENDING, 2 nodes × 24, `-t 720` | `beef_dc_L151` — all three coupler examples at **15.1 µm**. Task 0 = `directional_coupler_hybrid`, 1 = `directional_coupler_mode`, 2 = `directional_coupler_fdtd` |
+| **11655405_[0-2]** | ❌ CANCELLED ~1 min in | `beef_dc_L1513` — same run at 15.13 µm. Superseded by 11655592; script deleted |
+
+### What 11655592 is for
+
+Re-run of all three directional coupler examples with the hybrid and the
+full-device FDTD **at the same coupling length, 15.1 µm** — user request,
+2026-08-03. Script `batch/run_directional_coupler_L151.batch`, account
+`gts-sr108-ece`.
+
+**Why 15.1 and not 15.13.** 15.13 is the FROZEN-era 3 dB length (item 5's
+ground-truth crossing, 15.129 µm). Dispersion defaulted 2026-08-01 and moved
+L₅₀ down about 0.05 µm: **15.089958 µm** measured for the hybrid (job 11609658)
+and **~15.074 µm** inferred for the full-device FDTD (job 11609659 — band-mean
+ratio 0.500675 at 15.089958, over the hybrid's local slope 0.0418/µm). 15.1 is
+the round tenth nearest both. ⚠ It is a *rounded convenience value*, not a
+measured crossing for either engine — the item-5 sweep has still never been run
+dispersively. Do not quote 15.1 as a measured 3 dB length.
+
+**The two examples were NOT at the same length before this fix, despite both
+source files reading `15.13`.** `directional_coupler_fdtd.py` builds its device
+at a true 15.13. `directional_coupler_hybrid.py` only ever `argmin`'d its pinned
+`PLOT_COUPLING_LENGTH` against `np.linspace(2*BODY_STUB, 60.0, 200)` — a
+0.298995 µm grid that contains neither 15.13 nor 15.1 — and so **actually
+simulated 15.150754 µm, 0.0208 µm away** (measured: `argmin` index 49 on that
+grid). The old `.2f` print rounded this to `"15.13 -> 15.15"`, which is why it
+survived. Fixed 2026-08-03 by splicing the pinned length into the grid (201 pts)
+and asserting the hit is exact; `L_mid` is still taken from the base grid so the
+FDTD section cache keys do not move (confirmed unchanged at 30.399497 µm).
+
+Verified pre-submit by executing each script's geometry header: both now build
+`dc.coupling_length = 15.1`, hybrid `argmin` sample `= 15.1` exactly.
+
+⚠ Even at 15.1 this is an **engine-vs-engine comparison at one identical
+length**, not a 50:50 search. The two engines' crossings are ~0.1% apart
+(15.129/15.151 frozen, 15.074/15.090 dispersive) and that gap is a *result* this
+device measures. Expect a ratio near but not exactly 0.5 from both; do not read
+the offset as disagreement.
+
+This script does **not** `rm -rf` the output dirs, unlike
+`run_directional_coupler_examples.batch`: they hold `*_FROZEN_pre20260801.*`
+baselines that cannot be regenerated. Copies parked in
+`example_output/_frozen_baseline_backup/` as well. `-t 720`, not that script's
+300 — 300 is what killed cache-cold hybrid job 11592462_0 (parity item P7).
+
+---
+
+**TWENTY-FIRST SNAPSHOT — 2026-08-03 (later), verified against
+`squeue -u jhiesener3`. Superseded; kept unedited.**
+
+| job | state | what |
+|---|---|---|
+| **11653509_[0-3]** | ⏳ PENDING (`Resources`), 2 nodes × 24, `-t 600` | `beef_ring_gap3_fdtd_res` — **gap 3's missing half: FDTD-side resolution convergence** (check 3). Array sweeps `RING_FDTD_RES` = **20 / 30 / 40 / 60** |
+
+### What 11653509 is for, and how to read it
+
+Check 3 has been **half** measured since 2026-08-01: the mode side converges at
+`MODE_RESOLUTION=100` (job 11616610), but **`FDTD_RESOLUTION=40` has never been
+measured at all**, so every resonance position this device reports rests on an
+unchecked assumption. This array is that measurement.
+
+**Read the comb POSITION, not the transmission magnitudes.** Gap 3's mode-side
+result moved `n_eff` by only 0.028 and slid the comb an eighth of an FSR;
+magnitudes settling proves nothing about resonance position. Convergence means
+the comb stops moving.
+
+⚠ **Task `_2` (res 40) is a deliberate control, not a spare.** It reproduces the
+production config, so it must come back a **pure cache hit**. If it instead runs
+a simulation, something has moved in the fingerprint and the sweep is not
+comparable to 11634900_1.
+
+Outputs land in
+`example_output/.../ring_resonator_hybrid_cascaded/res_sweep/res_<N>/`, one
+subfolder per task — added today via a `RING_FDTD_RES` guard, because an
+unguarded sweep would have had all four tasks overwrite the same
+`ring_data.npz`. That is not hypothetical: it is how a smoke run destroyed the
+11634900_1 arrays earlier the same day.
+
+Expected wall clock, from res^4 scaling against res 40's 44:18: res 20 ~3 min,
+res 30 ~14 min, res 40 instant (cache), res 60 **~3.7 h**.
+
+---
+
+**TWENTIETH SNAPSHOT — 2026-08-03, verified against `squeue -u jhiesener3`
+(empty) and `sacct -u jhiesener3 -S 2026-08-02`. Superseded; kept unedited.**
 
 ## NOTHING RUNNING. Queue is empty.
 

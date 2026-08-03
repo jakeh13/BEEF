@@ -9,8 +9,498 @@ fuller write-up, it points there rather than repeating it.
 
 ## 2026-08-03
 
-No library code changed. Two corrections to recorded results, both from
-measurement rather than re-reasoning.
+Two corrections to recorded results, both from measurement rather than
+re-reasoning, plus a cache cleanup and two new library modules.
+
+### Added — `beef/spectral.py`: `interp_complex`, `unwrap_is_safe`
+
+Promoted out of the two ring example scripts, which each defined `interp_complex`
+verbatim and identically. It resamples complex coefficients onto a dense
+wavelength grid via **magnitude and unwrapped phase**, not real and imaginary
+parts.
+
+**Why it needed a test rather than a comment.** The choice is load-bearing and
+was previously unverified. A coefficient that is mostly a propagation phase,
+`A·exp(i·β·λ)`, has a slowly-varying magnitude and a nearly-linear phase, so
+linear interpolation of those two is near-exact; interpolating Re and Im instead
+chords across every oscillation and **shrinks the magnitude**. That is not
+hypothetical — a Q-convergence table built the wrong way showed Q never
+converging with grid refinement, because the interpolant itself was damping the
+coefficients. Dip *positions* were unaffected, which is what made it dangerous:
+the resonance wavelengths looked right throughout.
+
+`tests/test_spectral.py` (11 tests) measures that on an analytic ramp where the
+exact answer is known everywhere: the mag/phase route reproduces it to `<1e-12`,
+real/imag is worse by more than four orders of magnitude, and the damage is
+specifically a magnitude deficit that never overshoots.
+
+**`unwrap_is_safe()` and the limit it cannot cross.** `np.unwrap` only resolves a
+step below π per *source* sample; past that it picks the wrong branch silently.
+The first version of this guard was **wrong in a way its own test caught**: it
+measures the *post-unwrap* step, and `np.unwrap` forces every step into `(-π, π]`
+by construction, so on genuinely aliased data it reports safe. Measured: a ramp
+advancing 5.0 rad/sample folds to an observed 1.28 rad, the guard passes it, and
+the interpolant is off by >0.5 in amplitude with a perfectly flat magnitude — no
+sanity check on `|c|` would catch it.
+
+That limit is fundamental, not deferred work: recovering a phase rate above
+Nyquist from one sampled sequence is undecidable, and the aliased ramp stays
+self-consistent under decimation, so no data-only refinement test rescues it.
+The function now says so, and `test_reports_safe_on_already_aliased_data` pins
+the false negative so the advertised scope cannot quietly widen. What the guard
+*is* for — flagging sampling close enough to the branch boundary that a modest
+change in the device would flip it — has its own test.
+
+Both ring scripts now import it; `test_matches_the_ring_scripts_inline_form`
+asserts bit-identical output against the removed inline definition, so promoting
+it changed no result.
+
+### Measured — the ring's FDTD resolution, and it does NOT converge (job 11653509)
+
+The sweep the 2026-08-01 knob split existed to enable: `FDTD_RESOLUTION`
+20/30/40/60 on the cascaded route with the mode side pinned. Control:
+`neff_solve[0]` is bit-identical at all four resolutions, so everything that
+moved is the FDTD half.
+
+Two quantities, two very different convergence orders:
+
+| quantity | fitted order | res 40 | res 60 |
+|---|---|---|---|
+| FSR | p ≈ 1.4–2.1 | 0.35% of an FSR | **0.16%** |
+| absolute comb position | **p ≈ 0.70** | 39% | **29%** |
+
+The position order is 0.680 / 0.719 / 0.703 from three independent resolution
+triplets — consistent, and sub-linear. Per-step comb shift 20→30 −1.86 nm,
+30→40 −1.11, 40→60 −1.24: not shrinking.
+
+⚠ **The as-printed "mean FSR" is not comparable across resolutions.** Res 60
+reports 7 dips rather than 8 because the comb shifted enough for the first line
+to slide below the 1.500 µm window edge (0.9 nm inside at res 40). Averaging
+over a different set of intervals moved the printed mean 13.141 → 13.268 nm,
+which reads as divergence and is pure bookkeeping. Over the 7 shared lines the
+values are 13.243 vs 13.268.
+
+**A difference of positions converging at ~h² while the absolute position
+crawls at h^0.7 is the signature of a wavelength-flat phase offset** — it shifts
+every dip equally and cancels exactly in the FSR. That is the same signature as
+the unexplained flat 0.976π, so those are likely one defect rather than two.
+
+Consequence: **`FDTD_RESOLUTION` must not be set from this sweep**, and the
+long-standing "decide the resolution first, then re-run" ordering is retired —
+it assumed the FDTD side had a convergent answer to decide on. FSR is
+trustworthy at res 40+; absolute resonance wavelength is not, at any resolution,
+until the flat phase is found. Check 4 (job 11655143) is the discriminator,
+since the full-device run shares none of the hybrid's phase bookkeeping.
+
+### Added — the ring's degree-2 `n_eff` polyfit is measured, and it is fine
+
+`examples/verification/python/verify_ring_neff_polyfit.py`. The second half of
+the "interpolation strategy is untested" gap; `interp_complex` was the first.
+No new simulation — it reads the 26 bare-strip and 13 coupled-pair `n_eff`
+values already cached at res 100 and does leave-one-out held-out prediction.
+
+Reported in check 3's currency (`Δφ = 2π·Δn_eff·L_outer/λ`, as a fraction of an
+FSR) rather than as a raw `n_eff` residual, so it is comparable to something.
+The shipped degree 2 contributes **0.0044% of an FSR**, against the **12.5%**
+the shipped FDTD resolution contributes — a factor of 2817. Degree 1 would be
+0.0271%, so degree 2 has genuine headroom. The fit is not a limiting error
+source and raising its degree would change no measurable resonance position.
+
+### Added — check 4: the ring's full device in one FDTD run
+
+`examples/ring_resonator/python/ring_resonator_fdtd.py`. Bus + complete
+racetrack in one meep simulation, normalized against the same cell with the
+racetrack deleted. No decomposition, no EME, no network algebra, no reference
+planes — which is the point. The monolithic and cascaded routes are two ways of
+*assembling* this device, so no comparison between them can say which assembly
+is right; a direct solve can. Running as job **11655143** (2-D, res 20/30/40).
+
+**The cost was measured, and it rules 3-D out.** The driver is Q, not the mesh:
+Q=14294 gives τ = Q/(2πf) = 3526 meep time units, and
+`stop_when_dft_decayed(1e-9)` stops near **26 τ**. Scaling the res-60
+left-section job's measured 0.060 s/step by the 4.00× cell-volume ratio and by
+res³ puts 3-D res 40 at **167 h** against 1.7 h for 2-D. 3-D full-ring exceeds
+the 10 h wall at every usable resolution and needs a multi-day allocation or
+checkpoint/restart. `RING_FULL_3D=1` still builds it for whoever has that.
+
+⚠ **My first estimate of this was wrong: 45 h, from assuming T = 8 τ.** 8 τ
+leaves 1.8% residual amplitude, and the criterion the script actually uses stops
+at 26 τ. Both numbers are kept in the docstring — the 45 h figure had already
+been used to justify defaulting to 2-D, and the corrected 167 h justifies it far
+more strongly.
+
+2-D remains a real check because both hybrid scripts have a 2-D path
+(`RING_TEST_MODE=1`), so the comparison runs at matched physics rather than
+conflating decomposition error with a 2-D-vs-3-D material difference. The
+script's verdict prints that scope instead of implying 3-D coverage.
+
+Two guards, both exercised on a deliberately-too-short smoke run (res 8, cap 600
+= 0.2 τ): a truncation detector that refuses to let linewidths be read from a
+capped run, and a τ check for a device run that decays faster than the assumed Q
+allows. That smoke run produced 32 spurious dips and an FSR of 6.5 nm against
+12.87 predicted — flagged, not reported. `assert_geometry_closes()` re-derives
+the perimeter from the polygons the file draws (43.4159 µm) and checks the far
+corners meet their straights, so a drifted mirrored constant fails loudly rather
+than shifting the FSR.
+
+### Added — checks 1 and 2 of the ring validation now RUN, and pass
+
+`examples/verification/python/verify_ring_eme_engine_agreement.py`, built on
+`UniformCrossSection` below. Mode solve only — no FDTD, no time stepping.
+
+**Job 11654797, at the shipped `MODE_RESOLUTION=100`, 3 wavelengths, 17.6 min:
+both checks pass everywhere.** The bare strip is **bit-identical** —
+`0.000e+00`, not merely small — at all three wavelengths. The coupled pair comes
+in at `1.3–1.6e-10`, which **equals the script's own translation-floor control
+to every printed digit** at each wavelength, so that residual is entirely the
+forced `-BODY_Y_CENTER` y-shift (`section_gds()` centres oxide on `y=0`, the
+ring on `BODY_Y_CENTER`) and none of it is the engines. Reporting only the
+cross-engine number would have made `1e-10` look like a small disagreement
+instead of zero. Check 2 at all six mode/wavelength combinations: matched
+overlap `1.000000`, identity correspondence, unit row/col completeness, clean
+same-engine control.
+
+Note
+`compute_modes_meep` requires `dy == dz`, which makes most resolutions illegal
+for the coupled pair (`BODY_MESH_WIDTH = 4.7`): 20/30/40/50/60/80/100 are legal,
+**14 and 25 are not**. The script refuses an illegal value up front rather than
+failing inside meow minutes later, and does not round to a legal grid — that
+would change the structure under test.
+
+### Added — `UniformCrossSection`, the shared geometry object the ring's EME half lacked
+
+`beef/geometry/uniform.py`. N parallel straight strips, constant along x.
+
+**Why.** The ring's EME half builds its two cross-sections from raw polygons and
+calls `mw.compute_modes_meep` directly — the bare strip in `solve_neff()` and the
+coupled bus+ring pair in `solve_body_supermodes()`. Neither goes through a
+`DeviceGeometry`, and `RingResonatorCouplerSection.to_gds_eme()` deliberately
+raises (it covers the mixed-orientation coupler section, never a cross-section).
+
+That is the *actual* content of `ring_resonator_validation.md` checks 1 and 2
+being "not runnable": there was **no geometry object both engines could consume**,
+so an EMESolver-vs-FDTDSolver comparison had nothing to stand on. This class is
+that object for the uniform cross-sections, which is what both checks need.
+
+It is also the simplest possible `DeviceGeometry`, deliberately: being
+longitudinally uniform, **every cut is legal** — no `_check_cut`, unlike `Taper`
+(varies everywhere), `SBend`/`DirectionalCoupler` (no interior bend cut) or
+`RingResonatorCouplerSection` (no cut inside the arc). A cross-section that is a
+function of nothing is the one place a cut-position invariance sweep has a
+known-exact answer.
+
+`source_aperture_at()` returns the widest launch window on a chosen strip that
+clears its nearest neighbour (halfway to that neighbour's centreline — the gap
+midpoint for equal widths). That is what a coupled pair needs instead of
+`FDTDSolver.half_domain_aperture`, whose split-at-y=0 rule assumes the excited
+guide sits off-axis — false for a pair with one strip *on* the axis.
+
+**Tests — `tests/test_geometry_uniform.py`, 15 cases.** The load-bearing one is
+`test_reproduces_the_ring_scripts_own_cross_sections`: the class only unblocks
+those checks if it draws *exactly* what the ring builds by hand, so the test pins
+both core y-spans, the `GAP` between them, and the oxide span against the ring's
+own constants. It also records honestly that `to_gds_eme()` centres its oxide on
+y=0 while the ring centres on `BODY_Y_CENTER`, so a caller must shift it — asserted
+rather than quietly absorbed.
+
+Two test bugs of my own, both fixed rather than worked around: a cut-legality
+parametrization that included the section endpoints (where a zero-length section
+correctly draws nothing — now its own pinned test), and a vacuous
+`abs(...) >= 0.0` aperture assertion that could not fail.
+
+Suite: **552 passed, 18 skipped.**
+
+### Added — `close_loop_pair()`, and Branch B turns out not to be what the ring needs
+
+`beef/network/ops.py`. Eliminates a **pair** of a block's own ports by wiring each
+one's output into the other's input:
+
+```
+a_{port_a} = loop_ba @ b_{port_b}
+a_{port_b} = loop_ab @ b_{port_a}
+```
+
+**Why not Branch B.** `close_loop(port_out != port_in)` was recorded as the ring's
+4-port blocker. Working the algebra through says otherwise: forcing only
+`a_p = loop @ b_q` leaves `a_q` free and `b_p` live, so `b_q` is consumed by the
+loop while still appearing as an output — not a valid S-matrix reduction. A ring's
+outer path circulates **both** ways, so wiring only `ring_R -> ring_L` leaves
+`a_{ring_R}` and `b_{ring_L}` unconnected. Branch B is a one-way non-reciprocal
+connection: meaningful, but not this device's. It stays unimplemented **for want of
+a caller now, not for want of a derivation**, and `ops.py`'s docstring says so.
+
+The paired form is one 2n-by-2n solve per wavelength:
+
+```
+[ I - S_AB F      -S_AA R  ] [b_A]   [S_AE]
+[   -S_BB F     I - S_BA R ] [b_B] = [S_BE]  a_E
+b_E = S_EE a_E + S_EB F b_A + S_EA R b_B
+```
+
+`loop_ab` and `loop_ba` are separate arguments: equal for a symmetric racetrack,
+not for an add-drop or a cascade.
+
+**Tests — `tests/test_network_ops_pair.py`, 10 cases.** Two are load-bearing:
+
+1. **Chains onto an existing proof.** With `loop_ab = 0` the paired formula must
+   reproduce `close_loop()`'s Branch A *exactly* — and Branch A is already proven
+   against the ring's closed-form all-pass formula. Verified to 1e-12.
+2. **Independent brute force.** The reduced block must match a direct solve of the
+   raw amplitude system (`b = S a` plus both loop constraints plus the driving
+   `a_E`), 2N equations in 2N unknowns. Deliberately **not** built from the
+   implementation's own 2n-by-2n matrix — a first draft was, which made it circular,
+   validating the solve while assuming the algebra.
+
+**The tests were mutation-checked**, because a passing test proves nothing about
+what it would catch. Three deliberate bugs — transposing `S_AA @ R`, writing the
+`S_BB @ F` block into the wrong quadrant, and swapping `b_A`/`b_B` in the output
+row — each fail 2–5 cases. Suite: **537 passed, 18 skipped.**
+
+Consequence for `ring_resonator_validation.md` wiring item 1: the port-topology
+decision is narrower than recorded. The 4-port route now has its library
+primitive; what remains is building the 4-port block itself and choosing whether
+the two circulation directions share one propagator.
+
+### Added — the guard the DirectionalCoupler had and the ring didn't
+
+Both ring scripts now assert, at import, that the far bends' own straight stubs do
+not exceed the physical straight path between the arcs:
+
+```python
+L_OUTER = 2 * (L_SIDE - S_MON) + L_FAR
+BEND_STRAIGHT_TOTAL = 2 * (BEND_D_IN + BEND_D_OUT)     # 2 far bends
+assert L_OUTER - BEND_STRAIGHT_TOTAL >= 0
+```
+
+**Why it matters.** `phi_bend_correction` strips `BEND_D_IN + BEND_D_OUT` = 2.5 µm
+of straight *phase* per bend out of `b` (5.0 µm total, since `b` is squared), and
+`L_OUTER` = 7.0 µm then supplies the full physical straights. That is the exact dual
+of the DC's `body_lengths = coupling_lengths - 2*BODY_STUB`, and the two forms were
+verified equivalent to **1.2e-13 in T with identical dip wavelengths** — the strip
+and the re-add use the same `neff`, so nothing distinguishes them numerically.
+
+The DC-style form needs `L_OUTER - BEND_STRAIGHT_TOTAL >= 0`; below zero it is
+impossible (no negative EME length) and the phase strip becomes mandatory. Either
+way, a negative value means the model attributes straight to the bends that the
+device does not have — **silently**. The DC guards this
+(`assert body_lengths[0] >= 0`); the ring did not.
+
+**The margin is thin.** Headroom is 2.0 µm, but only **0.5 µm in the knob that sets
+it**: `BEND_STRAIGHT_TOTAL = 4*(STUB_LEN - MONITOR_MARGIN)`, so `STUB_LEN = 2.0` is
+exactly the boundary. A smaller ring trips it without touching the bend at all —
+`L_SIDE=1.0, L_FAR=2.0` at the shipped `STUB_LEN` already fails.
+
+**The assert was exercised, not just written**: the block was pulled verbatim from
+the source and run against five configs — shipped and `STUB_LEN=2.0` pass (headroom
++2.00 and exactly 0.00), `STUB_LEN=2.25`/`2.5` and the small ring all raise.
+
+Both ledgers now print the budget: straight carried inside `b²`, `L_OUTER`, the
+DC-style equivalent length, and the remaining headroom. Also recorded there:
+**the strip is phase-only, so `|b|²` keeps the loss over those 5 µm and attributes
+it to the arcs** — resolution-dependent, and visible in the sweep now in flight.
+`L_outer` is hoisted to a module-level `L_OUTER` so the guard and the assembly use
+one definition.
+
+### Assembly plot — bend monitors were drawn at the arc endpoints
+
+The far bends' reference planes were drawn only at the arc endpoints and labelled
+"reference plane (coefficient normalization)", which implied `b`'s monitors sat
+there; they are 1.25 µm outside each arc end. Both are now drawn and
+distinguished — actual `b` monitors (dotted) and the corrected, phase-stripped
+reference planes at the arc endpoints (dashed).
+
+### Added — reference-plane table + round-trip ledger for the monolithic ring
+
+`ring_resonator_hybrid.py` section 10b, counterpart to the cascaded's. Physical
+spans sum to `PERIMETER` exactly (43.4159, delta `+0.00e+00`), and it isolates two
+defects the cascaded ledger's sibling made findable.
+
+**Defect 1 — `L_outer` over-counts by 0.75 µm.** The ring port is asymmetric: input
+normalized at arc end +1.25 (`Y_TOP - MONITOR_MARGIN`), output read at +0.50
+(`Y_RING + R + S_MON`), while `L_outer = 2*(L_SIDE - S_MON) + L_FAR` subtracts 0.5
+on both sides. Plane-consistent value is 6.25, not 7.0 — opposite sign to the
+cascaded's 0.5 µm shortfall.
+
+**Defect 2 — a wavelength-flat π in the ring-excited coefficients.** Referencing
+`k2` onto `k1`'s plane leaves a residual of **0.976π ± 0.003 across 100 nm** while
+the raw gap drifts 0.26π; magnitudes agree to four decimals. Flat means a
+convention constant, not a length. The discriminator was fixed before measuring.
+
+**Applying both collapses the route disagreement from ~0.55 FSR to ~0.053 FSR**, with
+dip counts finally matching (8 vs 8) and FSR within 0.27% (13.177 vs 13.141).
+Neither correction suffices alone.
+
+**Mechanism localized:** `get_coeffs(..., forward=False)` → `alpha[0, :, 1]`, used
+"exactly once in this script" per its own docstring — the ring-excited norm
+monitor, i.e. the normalization denominator for precisely the two coefficients
+carrying the π and neither of the two that don't.
+
+⚠ **This is the gap in blocker 0's closure.** Blocker 0 (y-normal excite
+normalization) was closed 2026-08-01 on a fitted h² convergence, p = 1.988 — but
+that test was **magnitude-only** (`max ||k1| - |k2||`). A phase π is invisible to
+it. The closure was correct about what it measured and silent about this.
+
+⚠ **Nothing patched.** Not established: that meep's `alpha[..., 1]` really carries
+−1 relative to `alpha[..., 0]` for a y-normal port here. Next step is a controlled
+2-D straight-waveguide −y launch test, which also decides whether the fix belongs
+in `get_coeffs()` (affecting every `forward=False` caller) or only in the ring
+script. Full write-up in `validation_markdown/ring_resonator_validation.md`.
+
+### Q is no longer grid-limited — `N_WL_DENSE` 2001 → 20001 in both ring scripts
+
+Q had been set by the dense-grid spacing, not the device: at 2001 points the
+1.50–1.60 µm span steps 0.05 nm and every FWHM came out an exact multiple of it.
+Raised to 20001 (0.005 nm), and **convergence measured rather than assumed** —
+rebuilding the assembly from the same cached coefficients gives first-dip FWHM
+0.1500 / 0.1400 / 0.1100 / **0.1050 / 0.1050 / 0.1050** nm at
+2001 / 5001 / 10001 / **20001 / 40001 / 80001** points. Flat from 20001 on.
+
+**Every Q reported before today was an under-estimate**, by up to ~43% (first dip
+10006 → 14294). New production ranges: monolithic 6757–13131 (7 dips), cascaded
+5792–14294 (8 dips), against the old 5293–10193. `T_min` also deepened — the
+coarse grid was missing the true minimum. No FDTD, no cache invalidation.
+
+⚠ A first attempt at the convergence table used real/imag interpolation and
+showed Q never converging. The scripts interpolate **magnitude + unwrapped
+phase**; for a fast-rotating coefficient that is a different curve. Dip positions
+were unaffected, so earlier position-based conclusions stand, but the FWHMs were
+wrong. Extract the script's own `interp_complex()`/`find_dips()`, don't re-derive.
+
+### Fixed — `verify_ring_gap3_neff_convergence.py`'s lever arm, in source
+
+`L_OUTER` was `2*2.0 + 10.0` = 14.0 µm on a comment claiming `L_C=10.0` was the
+shipped scale; the shipped `L_C` is 4.0 and the device applies a reference-plane
+pullback the expression dropped. Now `2*(L_SIDE - S_MON) + L_FAR` = 7.0, matching
+`ring_resonator_hybrid.py:805` and the `L_outer = 7.0000` job 11634859 printed.
+Recomputed from the stored `neff` (no re-run needed — Δφ is post-processing):
+Δφ/2π at res 30/40/60/80/100 = 24.8% / **12.5%** / 5.3% / 6.7% / 0.5%, and shipped
+res 40 → res 100 is **0.789 rad = 12.6% of an FSR**, an eighth rather than the
+quarter previously recorded. The stored npz still carries `L_outer=14.0` until
+that script is next run.
+
+### Added — `RING_FDTD_RES` override + per-resolution output tree (ring cascaded)
+
+`FDTD_RESOLUTION` is now overridable via `RING_FDTD_RES`, and when it is set the
+script writes into `res_sweep/res_<N>/` instead of the shared output folder. This
+is what lets gap 3's missing half be swept as a SLURM array
+(`batch/run_ring_gap3_fdtd_resolution.batch`, array over 20/30/40/60) without
+four tasks overwriting one `ring_data.npz` — the failure that destroyed the
+11634900_1 arrays earlier the same day. `resolution` is already in the cache
+fingerprint, so each value gets its own entry and res 40 is a deliberate
+cache-hit control.
+
+### Ring section geometry previews moved out of the output root
+
+Both ring scripts now write per-simulation geometry previews to
+`<output_dir>/sections/` and keep the output root for whole-device results only.
+Monolithic: `fdtd_coupler_section.png`, `fdtd_standalone_bend.png`. Cascaded adds
+the two mode-solve cross-sections. Stale copies at the old top-level paths
+removed.
+
+### Added — whole-device assembly diagram + round-trip ledger for the cascaded ring
+
+`examples/ring_resonator/python/ring_resonator_hybrid_cascaded.py` section 10b:
+`device_assembly_ledger()` and `plot_device_assembly()`. The cascaded ring has no
+whole-device geometry anywhere — the right section is only ever `M_left.T`, the
+body is a supermode phase, and `L_SIDE`/`L_FAR` are never drawn at all — and
+`section_gds(x0,x1)`'s x-in/y-out contract cannot express a y-normal ring port or
+a closed loop, so the MMI/DirectionalCoupler cut-based section view is not
+available here (see `beef/geometry/ring_coupler.py`'s class docstring).
+
+What is drawable is the round trip *as the performance algebra assembles it*: each
+simulated section clipped to the reference planes its coefficients are normalized
+between, each analytic-only span dashed across the gap it is assumed to fill. That
+makes the diagram a check on the phase bookkeeping rather than a picture of
+intent. Everything consumes `build_left_polys()`/`build_bend_polys()` and the
+module constants; no coordinate is re-derived.
+
+**It immediately found a defect** (below), and its own `PERIMETER` cross-check
+(physical spans must sum to 43.4159) caught a sign error in the ledger during
+development — so that row is load-bearing.
+
+### Fixed — the cascaded ring's body length is now derived from its own reference plane
+
+`ring_resonator_hybrid_cascaded.py`: the interface plane was computed in two
+independent places, and they disagreed (below). It is now defined once and the
+length derived from it, so they cannot desynchronize again:
+
+```python
+IFACE_PLANE_L = IFACE_X - MONITOR_MARGIN     # the plane actually measured at
+IFACE_PLANE_R = -IFACE_PLANE_L
+BODY_LENGTH   = IFACE_PLANE_R - IFACE_PLANE_L
+```
+
+Both monitor placements now name `IFACE_PLANE_L` rather than recomputing it. The
+repair is correct whichever plane is chosen, which is why it was done before
+settling the convention question.
+
+**No re-simulation, no cache invalidation.** `BODY_LENGTH` only reaches
+`phi_even`/`phi_odd` → `P_body` (post-processing); supermodes are
+length-independent so it is in no fingerprint. All three 3-D FDTD entries still
+hit; cache unchanged at 97 entries.
+
+**Verified against a prediction registered before the change** (rebuilt read-only
+from the cached `M_left` columns): mean FSR 13.143 nm and the comb
+`1.5009 1.5134 1.5261 1.5391 1.5522 1.5655 1.5791 1.5929`. The patched script
+reproduced both exactly. The ledger's body row now reads `+0.0000` and prints
+"Every assigned length matches its physical span."
+
+Every metric moved toward the monolithic route and the analytic FSR: FSR error
+3.7% → **2.1%**, `|k1|` error 6.2% → **2.5%**, `|t|` 0.40% → **0.18%**,
+`|t_ring|` 0.39% → **0.19%**, comb offset ~0.55 → **~0.31 FSR**.
+
+⚠ **The half-FSR route disagreement is not closed** — ~0.31 FSR survives and the
+residual is in the coefficient phases, which this does not touch. ⚠ **Q remains
+grid-limited.** Whether the plane should move to the library's convention
+(`mea_x = L`, measure planes exactly on the seam) is deliberately still open: it
+needs the 3-D runs redone *and* a fingerprint/schema bump first, because the
+derived monitor position is not in `_sim_params()` and the cache would otherwise
+serve the old measurement silently. Full write-up in
+`validation_markdown/ring_resonator_validation.md`.
+
+### Found — the cascaded ring's `P_body` under-propagated by 0.5 µm
+
+`BODY_LENGTH = L_C - 2*IFACE_BUFFER` = 2.0 µm assumes the body spans `IFACE_X` to
+`-IFACE_X`, but the supermode monitor sits at `IFACE_X - MONITOR_MARGIN`, so the
+real span between decomposition planes is `BODY_LENGTH + 2*MONITOR_MARGIN` =
+2.5 µm. The shipped comment credits each section with `IFACE_BUFFER` of the
+physical `L_C`; each section *measures* `IFACE_BUFFER - MONITOR_MARGIN` = 0.75 µm.
+**The cascaded model's round trip is 0.5 µm shorter than the device perimeter.**
+
+Tested read-only from the cached `M_left` columns (no FDTD): correcting the length
+moves mean FSR 13.350 → 13.143 nm (error 3.7% → 2.1%) and cuts the comb offset
+against the monolithic from ~0.55 to ~0.31 FSR. **Improves both, closes neither** —
+a real defect that partly explains the half-FSR disagreement, not all of it.
+
+Not repaired, because the remedy is a design call: propagate over the true 2.5 µm,
+or move the monitors to `IFACE_X` (which `MONITOR_MARGIN` exists to prevent).
+Full write-up in `validation_markdown/ring_resonator_validation.md`.
+
+### `example_sim_cache/` — 29 dead entries deleted
+
+Every cache entry written before 2026-08-01 was permanently unmatchable: the
+dispersion work that day added `resolved_dispersive`, `resolved_si_reparam` and
+`resolved_sio2_reparam` to `call_kwargs`, so the older entries have a strictly
+smaller key set and `_hash_config()` can never reproduce their folder names
+again. Verified per entry before deleting (all 29 lacked `resolved_dispersive`;
+no ring entry was touched). This is the invalidation the 2026-08-01 entry
+predicted — *"every cache entry misses"* — being swept up rather than a new one.
+
+Also removed **17 dangling `_mode_family_pointers/`** entries pointing at the
+deleted folders, and pruned **29 stale `index.jsonl` lines**. The pointers were
+worth removing rather than leaving: `lookup_superset()` tolerates a missing
+target (treats it as a miss), but `update_family_pointer()` only overwrites a
+pointer whose `dims` the new result dominates, so a dangling pointer recorded at
+high mode count would have blocked its own replacement indefinitely and quietly
+cost reuse. Pointers and manifest lines are hints, never data.
+
+Cache: 126 → 97 entries, 24 MB → 14 MB. Nothing needs re-running; deleted
+entries were unreachable, not wrong.
+
+⚠ **`_CACHE_SCHEMA_VERSION` is still 1 and has never been bumped.** Both
+invalidations to date happened because a *tracked field* changed, not because the
+counter was touched. Any future solver-internals change that alters results
+without moving a tracked field still depends on someone bumping it by hand.
 
 ### Gap 3's resolution-convergence lever arm was 2× too large
 

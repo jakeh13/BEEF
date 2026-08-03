@@ -118,16 +118,28 @@ N_WL = 11           # number of wavelength points
 # and the SMatrix that gets saved. Set to a specific value (µm) to pin it;
 # leave as None to auto-pick the length in coupling_lengths (defined below)
 # whose coupling ratio is closest to a 50:50 (3 dB) split.
-PLOT_COUPLING_LENGTH = 15.15   # µm — measured 50:50 split point (job 11544656),
-# hardcoded rather than left on auto so this script and directional_coupler_fdtd.py's
-# COUPLING_LENGTH stay pinned to the identical number instead of two independent
-# auto-picks that could drift apart.
+PLOT_COUPLING_LENGTH = 15.1   # µm — the tenth-of-a-micron round number nearest
+# the DISPERSIVE 50:50 point, set 2026-08-03. Hardcoded rather than left on auto
+# so this script and directional_coupler_fdtd.py's COUPLING_LENGTH stay pinned to
+# the identical number instead of two independent auto-picks that could drift.
+#
+# Why 15.1 and not the older 15.13: 15.13 came from item 5's ground-truth sweep
+# on the FROZEN material model. Dispersion defaulted 2026-08-01 and moved L₅₀
+# down — measured 15.089958 µm (hybrid, job 11609658) and ~15.074 µm inferred for
+# the full-device FDTD (job 11609659: band-mean ratio 0.500675 at 15.089958, over
+# the hybrid's local slope of 0.0418 per µm). 15.1 is the nearest tenth to both.
+#
+# Whatever is pinned here is spliced into coupling_lengths (step 1) and asserted
+# exact in step 5b. Before 2026-08-03 it was only argmin'd against the 0.299 µm
+# sweep grid, which contains neither 15.13 nor 15.1 — the old pinned 15.13 was in
+# fact simulated at 15.150754 µm while the FDTD example ran at a true 15.13, so
+# the two examples sat 0.0208 µm apart despite both files reading "15.13".
 #
 # DC_PLOT_COUPLING_LENGTH overrides it without editing this file: a number pins
 # that length, the literal "auto" re-derives it from this run's own sweep.
-# Added 2026-08-01 for the dispersive re-measure — the pinned 15.15 was measured
-# on the *frozen* material model (job 11544656), so re-using it would have
-# assumed the very thing the re-run exists to check. Same override idiom as
+# Added 2026-08-01 for the dispersive re-measure — the then-pinned 15.13 was
+# measured on the *frozen* material model (job 11544656), so re-using it would
+# have assumed the very thing the re-run exists to check. Same override idiom as
 # MMI1X2_CALIBRATE_BODY / DC_CALIBRATE_BODY.
 _env_L = os.environ.get("DC_PLOT_COUPLING_LENGTH")
 if _env_L is not None:
@@ -187,6 +199,30 @@ CALIBRATE_BODY = True
 #    sections at all (its EME body length would be negative).
 coupling_lengths = np.linspace(2 * BODY_STUB, 60.0, 200)   # µm, the swept coupling length
 L_mid = coupling_lengths[len(coupling_lengths) // 2]
+
+#    The pinned plot length is spliced into the grid as an extra sample so the
+#    argmin in step 5b lands on it *exactly*. Without this the 0.299 µm grid
+#    silently snaps it to the nearest sample, and it holds no round number:
+#    neither 15.13 nor today's 15.1 is on it. Measured — the pinned 15.13 was
+#    being simulated at 15.150754 µm, 0.0208 µm from the length
+#    directional_coupler_fdtd.py runs at, which defeats the whole point of
+#    pinning the two examples to the same number. Extra lengths are free:
+#    solve_section_length_sweep() solves the supermodes once per wavelength and
+#    evaluates exp(2j*pi*neff*L) per length, so 201 lengths cost what 200 do.
+#    L_mid is deliberately taken from the base grid *above* this splice: it is
+#    only the reference geometry the FDTD sections are built on (bend shape is
+#    independent of coupling_length), and holding it fixed keeps their cache
+#    keys stable across changes to the pin.
+if PLOT_COUPLING_LENGTH is not None:
+    if PLOT_COUPLING_LENGTH < 2 * BODY_STUB:
+        raise ValueError(
+            f"PLOT_COUPLING_LENGTH ({PLOT_COUPLING_LENGTH} µm) is shorter than the "
+            f"two FDTD body stubs ({2 * BODY_STUB} µm); the EME body length would be negative"
+        )
+    if not np.any(np.isclose(coupling_lengths, PLOT_COUPLING_LENGTH, rtol=0, atol=1e-9)):
+        coupling_lengths = np.sort(np.append(coupling_lengths, PLOT_COUPLING_LENGTH))
+        print(f"Spliced pinned plot length {PLOT_COUPLING_LENGTH:.6f} µm into the sweep grid "
+              f"({len(coupling_lengths)} pts)")
 
 dc = DirectionalCoupler(
     waveguide_width=0.45,    # single-mode strip width (µm)
@@ -370,8 +406,8 @@ M_out_cross = M_in1.transpose(0, 2, 1)    # [n_wl, 1, N_MODES]
 # this is not optional. Solved on the body's own span, the same [boundaries[1],
 # boundaries[2]] the length sweep below propagates through, so the two are
 # talking about the same cross-section by construction. β is a property of that
-# cross-section and not of the swept length, so this is one solve for all 200
-# lengths.
+# cross-section and not of the swept length, so this is one solve for every
+# length in the sweep.
 _body_neff = None
 if CALIBRATE_BODY:
     _beta = fdtd_solver.section_mode_beta(
@@ -440,8 +476,15 @@ if sign_changes.size:
 
 if PLOT_COUPLING_LENGTH is not None:
     L_plot_idx = int(np.argmin(np.abs(coupling_lengths - PLOT_COUPLING_LENGTH)))
-    print(f"Plot length: user-set {PLOT_COUPLING_LENGTH:.2f} µm -> "
-          f"nearest sampled length {coupling_lengths[L_plot_idx]:.2f} µm")
+    # Exact by construction — step 1 splices the pin into coupling_lengths.
+    # Printed at 6 decimals, not 2: the old .2f rounding is what let a 0.0208 µm
+    # snap error read as "15.13 -> 15.15" and go unnoticed.
+    assert np.isclose(coupling_lengths[L_plot_idx], PLOT_COUPLING_LENGTH, rtol=0, atol=1e-9), (
+        f"pinned plot length {PLOT_COUPLING_LENGTH} µm was not sampled exactly "
+        f"(got {coupling_lengths[L_plot_idx]} µm)"
+    )
+    print(f"Plot length: user-set {PLOT_COUPLING_LENGTH:.6f} µm -> "
+          f"sampled length {coupling_lengths[L_plot_idx]:.6f} µm (exact)")
 else:
     L_plot_idx = L50_idx
     print(f"Plot length: auto-picked {coupling_lengths[L_plot_idx]:.2f} µm "
