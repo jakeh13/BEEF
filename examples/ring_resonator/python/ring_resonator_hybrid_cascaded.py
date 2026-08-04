@@ -1571,9 +1571,26 @@ print(f"\nPower-conservation check @ mid-lambda (should be <~1, lossy/leaky by d
       f"only 2 of several outgoing ports captured here, same as the monolithic version):")
 print(f"  bus-excited path : |t|^2+|k1|^2 = {conserve_a:.4f}")
 print(f"  ring-excited path: |t_ring|^2+|k2|^2 = {conserve_b:.4f}")
-print(f"  reciprocity check: max|k1-k2| = {k_mismatch:.2e} (should be at/near machine precision — "
-      f"S_coupler=M_left.T@P_body@M_left is symmetric BY CONSTRUCTION here, a stronger guarantee "
-      f"than the monolithic version's independently-normalized |k1|~=|k2|)")
+# ⚠ THIS NUMBER IS A TAUTOLOGY, NOT A MEASUREMENT — corrected 2026-08-03.
+# This line used to call it "a stronger guarantee than the monolithic version's
+# independently-normalized |k1|~=|k2|". That is backwards. S_coupler =
+# M_left.T @ P_body @ M_left makes k1 and k2 THE SAME MATRIX ELEMENT read from
+# either side, so machine epsilon here is arithmetic, not physics: the route
+# ENFORCES reciprocity rather than verifying it, and the check cannot fail no
+# matter what the FDTD returns. An identity is the weakest possible evidence,
+# not the strongest. It was briefly recorded as part of this example's
+# validation basis on the strength of that wording; the entry is withdrawn.
+#
+# The real, independent coefficient-level test is the power-conservation pair
+# printed above: nothing in the network algebra forces an FDTD-measured M_left
+# to conserve power. Measured post-M1 in 3-D (job 11658568):
+# |t|^2+|k1|^2 = 0.999640 .. 0.999926, deviation 3.6e-04.
+print(f"  reciprocity check: max|k1-k2| = {k_mismatch:.2e} — EXPECTED at machine "
+      f"precision and NOT evidence: S_coupler=M_left.T@P_body@M_left makes k1 and k2 "
+      f"the same matrix element, so this is an identity, not a measurement. Use the "
+      f"power-conservation lines above as the independent check. (The monolithic "
+      f"route normalizes the two independently, so there the comparison is real — "
+      f"and there it FAILS, at 1.3e-04 with 0.0068*pi of arg drift.)")
 
 # ---------------------------------------------------------------------------
 # 12. Mode solve — bare-strip neff(lambda) for the side/far straights and

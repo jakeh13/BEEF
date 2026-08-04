@@ -5,16 +5,41 @@ One file per example device, recording what has to hold before that device's
 
     resolved/mmi_1x2_validation.md              1×2 MMI
     resolved/mmi_2x2_validation.md              2×2 MMI
-    ring_resonator_validation.md       ring resonator
+    resolved/ring_resonator_validation.md       ring resonator
 
     resolved/fdtd_vs_EME_mode_validation.md     cross-device — the mode-correspondence MECHANISM itself
     running_jobs.md                    snapshot — active SLURM jobs and which gap/item each is for
+    mmi_1x4_sin300_validation.md       1×4 MMI on 300 nm Si3N4 — BUILD PLAN, device does not exist yet
     archive/                           closed items, kept whole
     resolved/                          whole docs sufficiently addressed (open to-dos may remain)
     resolved/directional_coupler_validation.md  directional coupler — the worked example
     resolved/material_model_validation.md       cross-device — shared Si/SiO2 model, both engines
     deferred/                          work intentionally postponed, not blocked or closed
     deferred/modal_multiplexer_validation.md    modal multiplexer — postponed until the others are verified
+
+Every per-device file for an **existing** device lives in `resolved/`.
+
+**`mmi_1x4_sin300_validation.md` (2026-08-03) is the first doc here that is a
+plan rather than a gap list**, and it sits at the top level deliberately: the
+device does not exist, so `resolved/` (sufficiently addressed) and `deferred/`
+(postponed by choice) both misdescribe it. It orders the work to build a 1×4 MMI
+example — FDTD, hybrid and EME — on a 300 nm silicon nitride core, and converts
+to a normal four-checks gap list once those three scripts run. Its headline
+finding is that the 1×4 *geometry* is already supported (`MMI(n_inputs=1,
+n_outputs=4, …)`) and the real work is in the shared material model:
+`beef/materials/stack.py` is hardwired Si-core/SiO2-clad, and `_SELLMEIER` has no
+nitride. Read its measured-vs-argued section before quoting any number from it —
+the material model numbers are measured, every device dimension is not.
+
+**`ring_resonator_validation.md` moved into `resolved/` on 2026-08-03.** It carries
+a `📁 FILED INTO resolved/` box at the top listing exactly what is closed, what is
+out of scope **by decision** (absolute resonance wavelength, on a finesse argument;
+comparison against a full-device FDTD, which reports transmission > 1 for a passive
+device), and five open items deliberately carried in — most importantly that the
+**monolithic** route keeps an unexplained k1/k2 residual and that the cascaded
+route's reciprocity check is a *tautology* rather than evidence. Read that box
+before quoting the file. As with the directional coupler below, citations elsewhere
+name it bare; there are no markdown links to repoint (checked).
 
 Check 2 below (mode identity) has grown its own cross-device file:
 `resolved/fdtd_vs_EME_mode_validation.md` covers the *mechanism* — what must hold for any
@@ -43,9 +68,18 @@ to-dos and outstanding verification.
 
 That file moved into `resolved/` on 2026-07-30, and ~23 citations across these
 docs still name it bare, as `directional_coupler_validation.md`. They are
-backticked prose references rather than markdown links (no link in this
-directory is broken — checked), so they resolve by name; read a bare citation as
-`resolved/directional_coupler_validation.md`.
+backticked prose references rather than markdown links, so they resolve by name;
+read a bare citation as `resolved/directional_coupler_validation.md`.
+
+⚠ **"No link in this directory is broken — checked" was true for prose citations
+and wrong about relative links.** Moving a file down one level silently breaks
+every `](README.md)` inside it, because that now resolves to
+`<subdir>/README.md`. Found 2026-08-03 while filing the ring doc: two in
+`resolved/ring_resonator_validation.md` (mine, same day) and **one pre-existing in
+`deferred/modal_multiplexer_validation.md`**, which had been broken since its own
+2026-07-31 move. All three now point at `../README.md`, and every link under this
+directory is verified resolvable by walking them, not by reading. **When moving a
+doc between these folders, re-check its relative links.**
 
 **`modal_multiplexer_validation.md` moved into the new `deferred/` on
 2026-07-31**, at the user's direction: verify the other devices first, come

@@ -8,6 +8,8 @@ floating-point tolerance, what a per-length solve() computes from scratch.
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pytest
 
@@ -88,6 +90,77 @@ class TestLengthSweepEquivalence:
                 rtol=1e-6, atol=1e-9,
                 err_msg=f"length-sweep result at L={L} disagrees with a direct solve()",
             )
+
+
+@pytest.mark.slow
+class TestSolveFingerprintsMaterial:
+    """Real, `.solve()`-executing confirmation of the fix in
+    `tests/test_cache_config.py::TestEMESolveFingerprintsMaterial` (which is
+    meep/meow-free by that file's own convention and only checks the fix is
+    wired into the source). This is the end-to-end evidence: two real
+    `EMESolver.solve(save_dir=...)` calls, differing ONLY in
+    `material_stack.core_kind` at the SAME wg_height/sz -- the exact
+    collision `_solver_config()`'s bare `{wg_height, sz}` would not have
+    caught, and which `solve()` had no OTHER fingerprint contribution to catch
+    with either, before 2026-08-03 (`mmi_1x4_sin300_validation.md` step 3).
+    """
+
+    def test_different_core_kind_same_dims_does_not_cache_collide(self, tmp_path):
+        from beef.materials.stack import MaterialStack
+
+        geometry = Taper(length=1.0, width_start=0.8, width_end=0.8)  # straight
+        wavelengths = np.linspace(1.50, 1.51, 2)
+
+        si = MaterialStack(wg_height=0.30, sz=2.0, core_kind="si")
+        sin = MaterialStack(wg_height=0.30, sz=2.0, core_kind="si3n4")
+        assert (si.wg_height, si.sz) == (sin.wg_height, sin.sz), (
+            "the two stacks must agree on everything _solver_config() alone "
+            "records, or this test isn't isolating the fixed gap"
+        )
+
+        save_dir = str(tmp_path)
+        solver_si = EMESolver(num_modes=[1], num_cells=[1], lengths=[1.0],
+                              oxide_width=3.0, oxide_height=2.0, res=20.0,
+                              material_stack=si, mode_solver="tidy3d")
+        solver_sin = EMESolver(num_modes=[1], num_cells=[1], lengths=[1.0],
+                               oxide_width=3.0, oxide_height=2.0, res=20.0,
+                               material_stack=sin, mode_solver="tidy3d")
+
+        solver_si.solve(geometry, wavelengths, ports=["through"], save_dir=save_dir)
+        solver_sin.solve(geometry, wavelengths, ports=["through"], save_dir=save_dir)
+
+        run_dirs = [d for d in os.listdir(save_dir)
+                    if os.path.isdir(os.path.join(save_dir, d))]
+        assert len(run_dirs) == 2, (
+            f"expected two distinct cache entries (si-core, si3n4-core), got "
+            f"{len(run_dirs)}: {run_dirs} -- the material collision is back"
+        )
+
+    def test_cache_hit_on_the_second_identical_call(self, tmp_path):
+        """Companion to the test above: confirms the fix didn't overshoot into
+        making EVERY call a cache miss (e.g. by leaking something
+        non-deterministic like a timestamp into the fingerprint)."""
+        geometry = Taper(length=1.0, width_start=0.8, width_end=0.8)
+        wavelengths = np.linspace(1.50, 1.51, 2)
+        save_dir = str(tmp_path)
+
+        def _solver():
+            return EMESolver(num_modes=[1], num_cells=[1], lengths=[1.0],
+                             oxide_width=3.0, oxide_height=2.0, res=20.0,
+                             material_stack=SOI_160, mode_solver="tidy3d")
+
+        smat_a = _solver().solve(geometry, wavelengths, ports=["through"], save_dir=save_dir)
+        smat_b = _solver().solve(geometry, wavelengths, ports=["through"], save_dir=save_dir)
+        np.testing.assert_array_equal(
+            smat_a.coeff(port="through"), smat_b.coeff(port="through"))
+
+        run_dirs = [d for d in os.listdir(save_dir)
+                    if os.path.isdir(os.path.join(save_dir, d))]
+        assert len(run_dirs) == 1, (
+            f"identical solver/geometry/wavelengths produced {len(run_dirs)} "
+            "cache entries instead of one hit -- the fingerprint gained "
+            "nondeterminism"
+        )
 
 
 @pytest.mark.slow

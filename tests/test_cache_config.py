@@ -379,6 +379,61 @@ class TestMaterialIndicesAreFingerprinted:
         assert out.stdout.strip().endswith("False"), out.stdout + out.stderr
 
 
+class TestEMESolveFingerprintsMaterial:
+    """`EMESolver.solve()`/`solve_length_sweep()` -- found and fixed 2026-08-03
+    while implementing `mmi_1x4_sin300_validation.md` step 3.
+
+    Every OTHER cache-relevant method (`FDTDSolver.solve`/`solve_section`,
+    `EMESolver.solve_section`/`solve_section_length_sweep`) has merged
+    `resolved_material_config(...)` into its cache config since 2026-08-01.
+    `solve()`/`solve_length_sweep()` never did -- their fingerprint carried
+    only `_solver_config()`'s bare `material_stack: {wg_height, sz}`. Two real
+    consequences, not a hypothetical: (1) a stack differing only in
+    `core_kind` at the same wg_height/sz -- e.g. `SIN_300` vs a same-thickness
+    Si stack -- would have shared a cache entry, wrong material and all;
+    (2) `dispersive` genuinely changes what these methods draw
+    (`EMESolver._extrusion_rules()` frozen-vs-exact branch), and was not
+    fingerprinted AT ALL for these two methods, meep/Si/SiO2 included -- this
+    part of the bug predates nitride and could in principle already have bitten
+    an `EMESolver(dispersive=False)` A/B run cached alongside a dispersive one
+    at the same save_dir.
+
+    Meep/meow-free per this file's own convention (see module docstring): does
+    NOT call `.solve()` (its first line is `import meow as mw`, unconditional,
+    even down the `cache_only=True` short-circuit). Instead confirms the fix
+    is wired into the real method source, via `inspect` rather than a
+    reimplementation. A real end-to-end confirmation (an actual `.solve()`
+    call under `--runslow`) lives in `test_eme_length_sweep.py`.
+    """
+
+    def test_solve_source_calls_resolved_material_config(self):
+        import inspect
+
+        src = inspect.getsource(EMESolver.solve)
+        assert "resolved_material_config(" in src
+        assert "self._resolved_dispersive()" in src, (
+            "must use the EME-specific dispersive resolution (None means "
+            "dispersive here), not the stack's own flag -- see "
+            "_resolved_dispersive()'s docstring"
+        )
+
+    def test_solve_length_sweep_source_calls_resolved_material_config(self):
+        import inspect
+
+        src = inspect.getsource(EMESolver.solve_length_sweep)
+        assert "resolved_material_config(" in src
+        assert "self._resolved_dispersive()" in src
+
+    def test_solve_sweep_is_uncached_so_needs_no_fix(self):
+        """`solve_sweep()` (the memory-batched variant) has no save_dir
+        parameter at all -- confirms it is out of scope for this fix rather
+        than silently unfixed."""
+        import inspect
+
+        sig = inspect.signature(EMESolver.solve_sweep)
+        assert "save_dir" not in sig.parameters
+
+
 class TestOneDispersionModelForBothEngines:
     """directional_coupler_validation.md item 8, steps 1 and 2.
 

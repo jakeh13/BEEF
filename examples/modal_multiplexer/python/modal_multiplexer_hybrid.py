@@ -110,6 +110,7 @@ from beef import (
     MMI, MMIPort, CompoundGeometry, WaveguideRun,
     EMESolver, FDTDSolver, HybridSolver, SOI_160, plot_hybrid_geometry,
 )
+from beef.cache import is_master
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "modal_multiplexer", "modal_multiplexer_hybrid"))
@@ -389,6 +390,13 @@ ax.grid(True)
 
 plt.suptitle("2-Stage MMI Modal Multiplexer — FDTD/EME/FDTD/EME/FDTD Hybrid", fontsize=11)
 plt.tight_layout()
-fig.savefig(os.path.join(output_dir, "hybrid_results.png"), dpi=300)
+# is_master(): from 2026-08-03 this runs under `srun` (see
+# batch/run_modal_multiplexer_examples.batch — it had been running 1 of 96
+# ranks, which is why 11585847/11590663/11597177 all hit the 5 h wall). Three
+# array tasks already share this output_dir, and the batch's own comment worries
+# about them racing this file; multiplying each task by 96 ranks makes the gate
+# necessary rather than merely tidy.
+if is_master():
+    fig.savefig(os.path.join(output_dir, "hybrid_results.png"), dpi=300)
 plt.close("all")
 print(f"Results plot saved → {output_dir}/hybrid_results.png")

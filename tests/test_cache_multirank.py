@@ -60,6 +60,39 @@ def _config(**kwargs):
     return base
 
 
+class TestPublicExport:
+    """`is_master` was promoted out of `_is_master` on 2026-08-03 so example
+    scripts could gate their own np.savez/savefig when running under srun.
+    Before that they had only two options, and both were taken in practice:
+    race the output file across ranks, or launch one rank and throw the
+    allocation away (batch/run_modal_multiplexer_examples.batch did the latter
+    for three 5-hour timeouts)."""
+
+    def test_is_master_is_importable_from_the_package(self):
+        from beef.cache import is_master
+        assert callable(is_master)
+
+    def test_it_is_in_dunder_all(self):
+        import beef.cache
+        assert "is_master" in beef.cache.__all__
+
+    def test_private_alias_is_the_same_object(self):
+        """Not merely equal — identical. Two separate definitions could drift
+        into two different master elections, which is the one failure this
+        module exists to prevent."""
+        from beef.cache import is_master
+        assert is_master is _is_master
+
+    def test_the_public_name_honours_launcher_rank(self, serial_env, monkeypatch):
+        """The alias is not enough on its own: confirm the exported name really
+        carries the rank logic, not just a callable of the same name."""
+        from beef.cache import is_master
+        monkeypatch.setenv("SLURM_PROCID", "3")
+        assert not is_master()
+        monkeypatch.setenv("SLURM_PROCID", "0")
+        assert is_master()
+
+
 class TestRankDetection:
     def test_no_mpi_is_master(self, serial_env):
         assert _is_master()

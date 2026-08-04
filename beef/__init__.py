@@ -16,8 +16,12 @@ Core public API:
                                       validation_markdown/ring_resonator_validation.md)
 
     Materials:
-        MaterialStack              — Si/SiO2 layer definitions
-        SOI_160, SOI_220           — pre-built stacks for common platforms
+        MaterialStack              — core/clad layer definitions (any pair in
+                                      beef.materials.stack._SELLMEIER; Si/SiO2
+                                      by default via core_kind/clad_kind)
+        SOI_160, SOI_220           — pre-built Si/SiO2 stacks for common platforms
+        SIN_300                    — pre-built 300 nm Si3N4/SiO2 stack (sz UNVALIDATED,
+                                      see validation_markdown/mmi_1x4_sin300_validation.md)
 
     Solvers:
         EMESolver                  — meow-based eigenmode expansion
@@ -91,7 +95,7 @@ from .geometry import (
     CompoundGeometry, WaveguideRun, GdsGeometry, load_gds_polygons,
     arc_polygon, RingResonatorCouplerSection, RingResonatorBendSection,
 )
-from .materials import MaterialStack, SOI_160, SOI_220
+from .materials import MaterialStack, SOI_160, SOI_220, SIN_300
 from .mode_identity import (
     field_overlap_matrix, best_correspondence, mesh_cell_centers, stack_meow_mode_fields,
     overlap_diagnostics, self_overlap_diagnostics,
@@ -119,7 +123,7 @@ __all__ = [
     "GdsGeometry", "load_gds_polygons",
     "arc_polygon", "RingResonatorCouplerSection", "RingResonatorBendSection",
     # materials
-    "MaterialStack", "SOI_160", "SOI_220",
+    "MaterialStack", "SOI_160", "SOI_220", "SIN_300",
     # network
     "SMatrixBlock", "connect", "close_loop", "close_loop_pair", "Circuit",
     "from_transfer_matrix", "from_smatrix", "to_smatrix",

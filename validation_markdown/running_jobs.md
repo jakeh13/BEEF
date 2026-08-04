@@ -1,7 +1,37 @@
 # Active SLURM jobs — snapshot
 
-**★ TWENTY-SECOND SNAPSHOT — 2026-08-03 (later still), verified against
+**★ TWENTY-THIRD SNAPSHOT — 2026-08-03 (even later), verified against
 `squeue -u jhiesener3`. This is the current one.**
+
+| job | state | what |
+|---|---|---|
+| **11655592_0** | ✅ **COMPLETED** 06:38:10 | `beef_dc_L151` hybrid task — closes out the 15.1 µm coupler re-run. `Plot length: user-set 15.100000 µm -> sampled length 15.100000 µm (exact)` confirms the splice fix holds under real load. **Cross T=0.4907, Through T=0.5075, ratio=0.492** — within 0.3% of the FDTD task's ratio=0.492 (Cross T=0.4920/Through T=0.5075), consistent with this device's documented ~0.1% engine-agreement level |
+| **11660092** | 🏃 RUNNING | `beef_mmi1x4_sin_xsec` — nitride cross-section sweep (steps 4a/4b), corrected candidate ranges and `compute_modes_tidy3d` backend (see `mmi_1x4_sin300_validation.md`) |
+| **11658729_3** | 🏃 RUNNING, ~1:54 | `beef_ring_gap3_fdtd_res` — unrelated, unchanged this snapshot |
+
+### 11660092 — what it's for, and what came before it
+
+Two prior submissions for the same goal were **cancelled**, not completed:
+
+- **11659619** — the first real cross-section sweep, using `compute_modes_meep`
+  (this repo's usual mode-solve backend). Cancelled after it reported ZERO
+  guided modes at every tested width/sz — later confirmed to be a real,
+  general limitation of that backend for weakly-index-contrasted structures
+  (silicon nitride's core/clad contrast is ~5.3x weaker than Si/SiO2's), not
+  real physics. Full chain of evidence in the validation doc's step 4 section.
+- **11659878** — a 4-case diagnostic to isolate the cause. Cancelled once the
+  root cause was found via a faster, more direct test (three explicit initial
+  k-guesses fed straight into meep's `get_eigenmode`, all three converging to
+  the identical wrong answer) before the diagnostic's slower cases finished.
+
+**11660092** uses `compute_modes_tidy3d` (meow's other, FDE-based mode
+solver) instead, cross-validated against `compute_modes_meep` on a silicon
+control first (agrees ~1-3%, consistent with this repo's other documented
+engine gaps). Candidate ranges also widened based on real smoke-test numbers
+with the fixed backend, since the original ranges didn't bracket either the
+sz convergence point or the single-mode width cutoff.
+
+---
 
 | job | state | what |
 |---|---|---|

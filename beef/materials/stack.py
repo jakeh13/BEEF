@@ -1,7 +1,15 @@
-"""MaterialStack: single source of truth for Si/SiO2 layer definitions.
+"""MaterialStack: single source of truth for waveguide core/cladding layer
+definitions.
 
 Replaces the duplicated stack_extrusions_GF() and meep_material_from_meow()
 calls scattered across every master and sweep script.
+
+Originally Si-core/SiO2-clad only; generalized 2026-08-03 to any core/clad
+pair in `_SELLMEIER` via `core_kind`/`clad_kind`
+(`validation_markdown/mmi_1x4_sin300_validation.md` step 2). `SOI_160`/
+`SOI_220` are unaffected (still Si/SiO2, still the codebase's default); `si_*`
+method names on `MaterialStack` are now aliases for the generalized `core_*`
+names, kept so no existing caller had to change.
 """
 from __future__ import annotations
 
@@ -16,22 +24,77 @@ import numpy as np
 #
 #     eps(l) = eps_inf + SUM_i  sigma_i * l^2 / (l^2 - lambda_i^2)
 #
-# These are lifted verbatim from meep's own materials library, converting its
-# Lorentzian form (frequency = 1/lambda_i, gamma = 0) into wavelength terms —
-# verified to reproduce `meep.materials.Si` / `fused_quartz` to 4e-16 over
-# 1.4-1.7 um. Holding the numbers here rather than importing them means meow
+# These are lifted from meep's own materials library, converting its Lorentzian
+# form (frequency = 1/lambda_i, gamma = 0) into wavelength terms.
+#
+# ⚠ "verified to reproduce `meep.materials.Si` / `fused_quartz` to 4e-16 over
+# 1.4-1.7 um" is what this comment claimed until 2026-08-03, and it was NEVER
+# TESTED. It is now, and it is **false for silicon**: term 2's sigma is written
+# here to 7 significant figures (0.003043475) where meep carries 8
+# (0.0030434748), which puts n_Si up to **8.35e-11** off the library over
+# 1.4-1.7 um. SiO2 and Si3N4 do hold at machine precision (<1e-14, measured).
+#
+# NOT corrected, deliberately: 8.35e-11 is ~7 orders below anything modelled
+# here, but the fix moves `resolved_si_index`/`resolved_si_reparam` in their 9th
+# decimal and would restale every dispersive cache entry and all four goldens.
+# Do it during a scheduled regeneration, not on its own. Guarded either way by
+# `tests/test_material_reparam.py::TestSellmeierMatchesMeepLibrary`, which pins
+# the current drift so a real coefficient change still trips.
+#
+# Holding the numbers here rather than importing them means meow
 # and meep are driven from one source instead of two, which is the whole point:
 # before 2026-07-28 the EME interpolated meow's sampled tables while the FDTD
 # froze a single snapped index, and nothing kept the two consistent.
 #
-#   Si   - Salzberg & Villa, JOSA 47, 244 (1957)
-#   SiO2 - Malitson, JOSA 55, 1205 (1965), fused silica
+#   Si    - Salzberg & Villa, JOSA 47, 244 (1957)
+#   SiO2  - Malitson, JOSA 55, 1205 (1965), fused silica
+#   Si3N4 - K. Luke et al., Optics Letters 40, 4823-26 (2015), via meep's
+#           `Si3N4_NIR`; see the block comment below before touching it.
 #
 # meow's own `silicon_oxide` table *is* Malitson: they agree to 0.00000 across
 # 1.50-1.60 um. Its `silicon` table is a different, noisier source sitting
 # ~0.002 above Salzberg, so adopting this model shifts n_Si by that much —
 # a deliberate change, not a refactor. It buys a smooth analytic n(lambda)
 # where the table had only two samples between 1.45 and 1.65 um.
+#
+# ---------------------------------------------------------------------------
+# SILICON NITRIDE, added 2026-08-03 for the 300 nm SiN platform
+# (`validation_markdown/mmi_1x4_sin300_validation.md` step 1).
+#
+# ⚠ THREE nitride models ship with meep and ONLY `Si3N4_NIR` is usable here.
+# Reaching for the one called plainly `Si3N4` because of its name is a silent
+# error, so the alternatives are recorded rather than left to be rediscovered:
+#
+#   meep model      valid wl (um)    gamma      verdict
+#   Si3N4           0.230 - 0.830    1.4413     NO - visible-range fit, AND
+#                                               lossy: a nonzero gamma is not
+#                                               representable in this lossless
+#                                               (eps_inf, ((lam_i, sigma_i),..))
+#                                               form at all. Raises
+#                                               out-of-range at 1.31/1.55 um.
+#   Si3N4_VISNIR    0.207 - 1.240    0          NO - upper edge is below the
+#                                               C-band; raises at 1.31/1.55 um.
+#   Si3N4_NIR       0.310 - 5.504    0          YES - covers O- and C-band and
+#                                               all of _MODEL_RANGE_UM below.
+#
+# `Si3N4_NIR` has eps_inf = 1 and two gamma=0 Lorentzians, the same convention
+# as the two entries above, so this is a direct transcription rather than a
+# re-fit: meep writes the poles literally as 0.1353406 um and 1239.842 um.
+# MEASURED: reproduces `meep.materials.Si3N4_NIR` to max|dn| = 4.44e-16 across
+# _MODEL_RANGE_UM, i.e. machine precision — the same standard the Si/SiO2
+# entries are held to. Guarded by
+# `tests/test_material_reparam.py::TestSellmeierMatchesMeepLibrary`.
+#
+# The second term is a far-IR pole with an enormous strength (lam_2 = 1239.842
+# um, sigma_2 = 40314). That is how Luke parameterises it; it is numerically
+# harmless at telecom and is why this entry has two terms where the other two
+# have three. Do NOT "simplify" it away.
+#
+# n(1.31 um) = 2.003130, n(1.55 um) = 1.996280 — roughly half silicon's index,
+# so a SiN/SiO2 stack has ~5.3x less eps contrast than Si/SiO2. Consequences
+# for confinement, mode size and the subpixel-averaging gate are NOT settled by
+# adding this entry; see the validation doc's part A7.
+# ---------------------------------------------------------------------------
 _SELLMEIER: Dict[str, Any] = {
     "si": (1.0, ((0.301516485, 10.6684293),
                  (1.13475115, 0.003043475),
@@ -39,6 +102,8 @@ _SELLMEIER: Dict[str, Any] = {
     "sio2": (1.0, ((0.0684043, 0.6961663),
                    (0.1162414, 0.4079426),
                    (9.896161, 0.8974794))),
+    "si3n4": (1.0, ((0.1353406, 3.0249),
+                    (1239.842, 40314.0))),
 }
 
 # Range the meow-side sampled copies span, and the range these models are used
@@ -277,10 +342,12 @@ def meep_medium(kind: str):
 
 
 class MaterialStack:
-    """Si waveguide on SiO2 substrate with SiO2 upper cladding.
+    """A core waveguide material clad in a second material, both drawn from
+    `_SELLMEIER`. Defaults to Si core / SiO2 clad, this codebase's original and
+    still most common platform.
 
     Args:
-        wg_height: Si core thickness (µm).
+        wg_height: core thickness (µm).
         sz: total vertical simulation span for meow cross-sections (µm).
         dispersive: build the FDTD media from the re-parameterised
             single-Lorentzian fit (`reparam_lorentz`) over the run's own band
@@ -304,13 +371,50 @@ class MaterialStack:
 
             Still switchable, and `False` on both engines remains the way to
             run a frozen A/B — see `EMESolver._extrusion_rules`.
+
+            ⚠ **The strip-test gate above was measured on Si/SiO2 only.**
+            `_REPARAM_LAM0_FACTOR = 1.15` (the pinned Lorentzian pole) has been
+            validated on four (stack, band) combinations, all Si/SiO2. A
+            non-default `core_kind` inherits `dispersive=True` without having
+            been through that gate — see `core_kind` below.
+
+        core_kind: key into `_SELLMEIER` for the core material. Default `"si"`
+            preserves every existing stack's behaviour exactly.
+
+            Added 2026-08-03 (`validation_markdown/mmi_1x4_sin300_validation.md`
+            step 2) so a non-silicon core — nitride, so far — can reuse this
+            class instead of a parallel one. Threaded through
+            `extrusion_rules_at()`, `si_index()`/`si_medium()` (now aliases,
+            see below) and `_medium()`'s dispersive dispatch.
+
+            ⚠ **This does NOT mean a non-default core is validated.** It makes
+            the class *able* to build one; A6/A7 in the validation doc list what
+            still has to be measured — the subpixel-averaging strip-test gate
+            above chief among them, since it has only ever been run at Si's
+            much stronger core/clad contrast.
+        clad_kind: key into `_SELLMEIER` for the cladding, both upper and
+            substrate. Default `"sio2"`, same preservation rationale as
+            `core_kind`.
     """
 
     def __init__(self, wg_height: float = 0.16, sz: float = 2.0,
-                 dispersive: bool = True):
+                 dispersive: bool = True,
+                 core_kind: str = "si", clad_kind: str = "sio2"):
+        if core_kind not in _SELLMEIER:
+            raise ValueError(
+                f"core_kind={core_kind!r} is not in _SELLMEIER "
+                f"({sorted(_SELLMEIER)}) -- add it there first"
+            )
+        if clad_kind not in _SELLMEIER:
+            raise ValueError(
+                f"clad_kind={clad_kind!r} is not in _SELLMEIER "
+                f"({sorted(_SELLMEIER)}) -- add it there first"
+            )
         self.wg_height = wg_height
         self.sz = sz
         self.dispersive = bool(dispersive)
+        self.core_kind = core_kind
+        self.clad_kind = clad_kind
 
     def resolve_dispersive(self, override: Optional[bool] = None) -> bool:
         """This stack's `dispersive` setting, or `override` when not None.
@@ -341,18 +445,18 @@ class MaterialStack:
         h = self.wg_height
         sz = self.sz
         if wl is None:
-            si, ox = meow_material("si"), meow_material("sio2")
+            core, clad = meow_material(self.core_kind), meow_material(self.clad_kind)
         else:
-            si, ox = (_flat_meow_material("si", float(wl)),
-                      _flat_meow_material("sio2", float(wl)))
+            core, clad = (_flat_meow_material(self.core_kind, float(wl)),
+                          _flat_meow_material(self.clad_kind, float(wl)))
         return {
             (2, 0): [
-                mw.GdsExtrusionRule(material=ox, h_min=-sz/2, h_max=-h/2, mesh_order=2),
-                mw.GdsExtrusionRule(material=si, h_min=-h/2,  h_max=h/2,  mesh_order=1),
-                mw.GdsExtrusionRule(material=ox, h_min=h/2,   h_max=sz/2, mesh_order=2),
+                mw.GdsExtrusionRule(material=clad, h_min=-sz/2, h_max=-h/2, mesh_order=2),
+                mw.GdsExtrusionRule(material=core, h_min=-h/2,  h_max=h/2,  mesh_order=1),
+                mw.GdsExtrusionRule(material=clad, h_min=h/2,   h_max=sz/2, mesh_order=2),
             ],
             (1, 0): [
-                mw.GdsExtrusionRule(material=ox, h_min=-sz/2, h_max=sz/2, mesh_order=2),
+                mw.GdsExtrusionRule(material=clad, h_min=-sz/2, h_max=sz/2, mesh_order=2),
             ],
         }
 
@@ -365,26 +469,39 @@ class MaterialStack:
         """
         return self.extrusion_rules_at(None)
 
-    def si_index(self, wl: float) -> float:
-        """Refractive index of silicon at wavelength wl (µm), from the shared
-        Sellmeier model both engines now use.
+    def core_index(self, wl: float) -> float:
+        """Refractive index of this stack's CORE material at wavelength wl
+        (µm), from the shared Sellmeier model both engines use.
 
-        Until 2026-07-28 this snapped to the nearest sample of meow's table
-        (`argmin(|wls - wl|)`), which has only *two* entries between 1.45 and
-        1.65 µm — so the whole band below their midpoint got n = 3.4784 and
-        everything above got 3.4710, a 0.0063 step mid-C-band plus a +0.00196
-        bias at 1.55 µm. That snap, duplicated in
+        Until 2026-07-28 the silicon case snapped to the nearest sample of
+        meow's table (`argmin(|wls - wl|)`), which has only *two* entries
+        between 1.45 and 1.65 µm — so the whole band below their midpoint got
+        n = 3.4784 and everything above got 3.4710, a 0.0063 step mid-C-band
+        plus a +0.00196 bias at 1.55 µm. That snap, duplicated in
         `meow/fde/meep.py::meep_material()`, is the Δn_eff kink recorded as
         directional_coupler_validation.md item 8. Both copies are gone.
         """
-        return float(sellmeier_index("si", wl))
+        return float(sellmeier_index(self.core_kind, wl))
+
+    def clad_index(self, wl: float) -> float:
+        """Refractive index of this stack's CLADDING material at wavelength wl
+        (µm). See `core_index()`."""
+        return float(sellmeier_index(self.clad_kind, wl))
+
+    def si_index(self, wl: float) -> float:
+        """Alias for `core_index()`, kept for every caller written before
+        `core_kind` existed (2026-08-03). Despite the name this is the
+        stack's CORE index, not necessarily silicon's — on a stack built with
+        `core_kind="si3n4"` it returns nitride's index. See `core_kind` on the
+        class docstring for why the alias, rather than a rename, was kept."""
+        return self.core_index(wl)
 
     def sio2_index(self, wl: float) -> float:
-        """Refractive index of SiO2 at wavelength wl (µm). See `si_index()`."""
-        return float(sellmeier_index("sio2", wl))
+        """Alias for `clad_index()`. See `si_index()`."""
+        return self.clad_index(wl)
 
-    def si_medium(self, wl, dispersive: Optional[bool] = None):
-        """meep Medium for silicon at wavelength wl (µm).
+    def core_medium(self, wl, dispersive: Optional[bool] = None):
+        """meep Medium for this stack's CORE material at wavelength wl (µm).
 
         **Non-dispersive, and that is now a measured choice rather than an
         oversight.** A broadband FDTD run gets one Medium for its whole band,
@@ -414,14 +531,14 @@ class MaterialStack:
         does not matter. That needs its own fit and its own resolution sweep,
         which is why it is not bundled here.
 
-        What *is* fixed: `si_index()` now comes from the shared analytic model,
-        so the EME and FDTD agree on n(wl) to machine precision at any given
-        wavelength — the frozen-band limitation remains, the silent
+        What *is* fixed: `core_index()` now comes from the shared analytic
+        model, so the EME and FDTD agree on n(wl) to machine precision at any
+        given wavelength — the frozen-band limitation remains, the silent
         engine-to-engine disagreement does not.
 
         **`dispersive=True` changes this** (opt-in, off by default). `wl` may
         then be the run's whole wavelength array, and the medium is built by
-        `meep_medium_reparam()` — eps_inf carrying ~100% of the Si/SiO2
+        `meep_medium_reparam()` — eps_inf carrying ~100% of the core/clad
         contrast so subpixel smoothing still acts, one Lorentzian carrying the
         band's wavelength dependence. A scalar `wl` still gives the plain
         frozen medium under either setting: there is no band to disperse over,
@@ -433,16 +550,48 @@ class MaterialStack:
         `FDTDSolver(dispersive=...)` overrides a shared stack without mutating
         it — the module-level `SOI_160`/`SOI_220` singletons are shared by
         every solver in the process.
+
+        Reaches `meep_medium_reparam(self.core_kind, ...)` — **not** a literal
+        `"si"` — since 2026-08-03. Before that, `si_medium()` passed the
+        literal string `"si"` straight through, so any stack would have built
+        a *silicon* Lorentzian under dispersion regardless of what its own
+        `si_index()` returned. That silent mismatch was traced but never
+        exercised (no non-Si stack existed yet); this is the fix, and
+        `TestNonDefaultCoreClad` in `tests/test_material_reparam.py` is the
+        regression guard.
         """
-        return self._medium("si", wl, dispersive)
+        return self._medium(self.core_kind, wl, dispersive)
+
+    def clad_medium(self, wl, dispersive: Optional[bool] = None):
+        """meep Medium for this stack's CLADDING material at wavelength wl
+        (µm), or across a band when dispersion is enabled. See
+        `core_medium()`."""
+        return self._medium(self.clad_kind, wl, dispersive)
+
+    def si_medium(self, wl, dispersive: Optional[bool] = None):
+        """Alias for `core_medium()`. See `si_index()` for why this stays an
+        alias rather than being renamed."""
+        return self.core_medium(wl, dispersive)
 
     def sio2_medium(self, wl, dispersive: Optional[bool] = None):
-        """meep Medium for SiO2 at wavelength wl (µm), or across a band when
-        dispersion is enabled. See `si_medium()`."""
-        return self._medium("sio2", wl, dispersive)
+        """Alias for `clad_medium()`. See `si_index()`."""
+        return self.clad_medium(wl, dispersive)
 
     def _medium(self, kind: str, wl, dispersive: Optional[bool] = None):
-        """Shared body of `si_medium()`/`sio2_medium()`.
+        """Shared body of `core_medium()`/`clad_medium()`.
+
+        `kind` is always `self.core_kind` or `self.clad_kind` by construction —
+        every caller goes through one of those two, never a bare literal. Before
+        2026-08-03 the frozen-index fallback dispatched on a literal
+        `kind == "si"` (`self.si_index if kind == "si" else self.sio2_index`),
+        which was harmless only because `kind` itself was always the literal
+        `"si"`/`"sio2"` passed in by `si_medium()`/`sio2_medium()` — the same
+        two strings `si_index`/`sio2_index` were hardcoded to. It would have
+        broken the moment either side stopped being literally silicon or
+        silica, which is exactly what `core_kind` now makes possible. Calling
+        `sellmeier_index(kind, ...)` directly removes the redundant dispatch
+        rather than generalizing it, since `kind` already names the right
+        entry.
 
         Dispersion requires BOTH the flag and a real band — a scalar `wl` falls
         through to the frozen index under either setting, so single-wavelength
@@ -455,8 +604,7 @@ class MaterialStack:
         if (self.resolve_dispersive(dispersive)
                 and wl_arr.size > 1 and wl_arr.min() < wl_arr.max()):
             return meep_medium_reparam(kind, wl_arr)
-        index_of = self.si_index if kind == "si" else self.sio2_index
-        return mp.Medium(index=index_of(float(np.mean(wl_arr))))
+        return mp.Medium(index=float(sellmeier_index(kind, float(np.mean(wl_arr)))))
 
 
 def resolved_material_config(material_stack, wavelengths: np.ndarray,
@@ -505,6 +653,11 @@ def resolved_material_config(material_stack, wavelengths: np.ndarray,
     """
     wl = np.asarray(wavelengths, dtype=float)
     probes = (float(wl.min()), float(np.mean(wl)), float(wl.max()))
+    # `si_index()`/`sio2_index()` are the 2026-08-03 core/clad aliases (see
+    # `MaterialStack.si_index()`) -- they already resolve to the real core/clad
+    # index for a non-Si stack, e.g. nitride's ~2.00 rather than silicon's
+    # ~3.48. That is what makes the FROZEN half of this key correctly
+    # stack-agnostic already.
     config = {
         "resolved_probe_wl": [round(w, 9) for w in probes],
         "resolved_si_index": [round(material_stack.si_index(w), 9) for w in probes],
@@ -523,17 +676,56 @@ def resolved_material_config(material_stack, wavelengths: np.ndarray,
     # model-version tag, so any change to the fit -- band, pinned lam0, sample
     # count, or the Sellmeier coefficients underneath it -- moves the key on
     # its own, with nothing to remember to bump.
+    #
+    # FIXED 2026-08-03 (`mmi_1x4_sin300_validation.md` step 3). `label` is a
+    # fixed ("si", "sio2") pair purely for the KEY NAMES below
+    # (`resolved_si_reparam`/`resolved_sio2_reparam`) -- kept literal
+    # deliberately, not renamed to `resolved_core_reparam`/`resolved_clad_
+    # reparam`, so a default (core_kind="si", clad_kind="sio2") stack's cache
+    # key is byte-for-byte what it always was; only the newly-possible
+    # non-default case gets a new key. `kind` is what actually gets fit --
+    # `material_stack.core_kind`/`clad_kind` -- which before this fix was the
+    # SAME hardcoded literal as `label`, so `reparam_lorentz("si", wl)` ran
+    # for every stack regardless of what its own `core_medium()` built. On a
+    # nitride stack that meant the cache key recorded SILICON's (eps_inf,
+    # sigma) while the medium actually simulated was nitride's -- the
+    # `resolved_si_index` half of this config, one field up, had already been
+    # stack-correct since step 2; this was the still-hardcoded other half.
+    # `TestNonDefaultCoreClad.test_resolved_material_config_still_has_the_
+    # step3_gap` in `tests/test_material_reparam.py` demonstrated this on real
+    # code before the fix and is updated alongside it to assert the fix
+    # instead (see that test for the historical record).
     resolved = (getattr(material_stack, "dispersive", False) if dispersive is None
                 else bool(dispersive))
     if resolved and wl.min() < wl.max():
         config["resolved_dispersive"] = True
-        for kind in ("si", "sio2"):
+        for label, kind in (("si", material_stack.core_kind),
+                            ("sio2", material_stack.clad_kind)):
             eps_inf, sigma, _ = reparam_lorentz(kind, wl)
-            config[f"resolved_{kind}_reparam"] = [
+            config[f"resolved_{label}_reparam"] = [
                 round(eps_inf, 9), round(sigma, 9), round(reparam_lam0(wl), 9)]
     return config
 
 
-# Pre-built stacks for common SOI platforms.
+# Pre-built stacks for common platforms.
 SOI_160 = MaterialStack(wg_height=0.16, sz=2.0)   # 160 nm Si (default in this codebase)
 SOI_220 = MaterialStack(wg_height=0.22, sz=2.0)   # 220 nm Si (standard commercial SOI)
+
+# 300 nm Si3N4 on SiO2. Added 2026-08-03 for the 1x4 MMI build
+# (`validation_markdown/mmi_1x4_sin300_validation.md` step 2).
+#
+# sz=5.0 MEASURED 2026-08-03 (step 4, job 11660166): converged (|dn_eff| < 1e-4
+# going sz 4.0->5.0) at the actual design width, 1.1 um -- NOT the placeholder
+# 2.0 inherited from the SOI stacks, which A7 correctly flagged as suspect
+# (nitride's core/clad eps contrast is ~5.3x weaker than Si/SiO2's, so its
+# mode reaches further into the cladding). Fundamental n_eff plateaus at
+# 1.587348 (margin +0.14332 above n_clad=1.444024); a second guided mode at
+# 1.510616 (margin +0.06659) -- 1.1 um is a genuinely 2-mode width, not
+# single-mode (the true single-mode window, 0.2-0.35 um, turned out to be so
+# weakly confined it would not converge even at sz=10 um -- see the doc's
+# step 4 writeup for the full measurement and why 1.1 um was chosen instead).
+#
+# `dispersive` is still the class default, True -- see `core_kind` on
+# MaterialStack's docstring for why that inherits the flag without having
+# been through the Si/SiO2-only strip-test gate.
+SIN_300 = MaterialStack(wg_height=0.30, sz=5.0, core_kind="si3n4")

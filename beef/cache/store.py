@@ -41,9 +41,17 @@ _FAMILY_POINTER_DIR = "_mode_family_pointers"
 _LAUNCHER_RANK_VARS = ("SLURM_PROCID", "OMPI_COMM_WORLD_RANK", "PMI_RANK", "PMIX_RANK")
 
 
-def _is_master() -> bool:
+def is_master() -> bool:
     """True on exactly one process per job — the only one allowed to write to
-    save_dir.
+    save_dir, and the gate an example script should use before `np.savez` or
+    `savefig` when it may run under `srun`.
+
+    Exported (2026-08-03) because example scripts need exactly this test and
+    were otherwise reduced to either racing their output files across ranks or
+    throwing away the allocation by launching one rank. Both happened: see
+    `batch/run_ring_cascaded_3d_postm1.batch` and
+    `batch/run_modal_multiplexer_examples.batch`. `_is_master` remains as an
+    alias so nothing internal has to change.
 
     Deliberately a bool and not a rank: nothing here needs to know *which*
     rank it is, and meep cannot cheaply say (see below), so returning a number
@@ -84,6 +92,11 @@ def _is_master() -> bool:
             except ValueError:
                 pass
     return True
+
+
+# Historical name. Kept so nothing inside beef.cache has to change, and so the
+# two names can never drift apart into two different master elections.
+_is_master = is_master
 
 
 def _barrier() -> None:

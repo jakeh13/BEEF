@@ -12,7 +12,7 @@
 
 
 Opened 2026-07-26. This is the gap list against the four checks in
-[README.md](README.md).
+[README.md](../README.md).
 
 **Status 2026-07-30 (late):** gap 2 (resolution) is **measured** — job
 11575516 swept both engines' `res` independently at interface 0 and found the

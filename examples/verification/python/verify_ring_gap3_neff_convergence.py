@@ -38,8 +38,45 @@ MATERIAL_STACK = SOI_220
 # res 100" is really an EIGHTH (12.6%).
 #
 # Mirrored from ring_resonator_hybrid.py rather than re-derived; keep in sync.
-L_SIDE, S_MON, L_FAR = 2.0, 0.5, 4.0          # == ring_resonator_hybrid.py:126,160,127
-L_OUTER = 2 * (L_SIDE - S_MON) + L_FAR        # == ring_resonator_hybrid.py:805  -> 7.0
+L_SIDE, S_MON, L_FAR = 2.0, 0.5, 4.0          # == ring_resonator_hybrid.py:152,207,153
+L_OUTER = 2 * (L_SIDE - S_MON) + L_FAR        # == ring_resonator_hybrid.py:349  -> 7.0
+
+# THE LEVER ARM IS NOT THE SAME FOR THE TWO ROUTES, as of 2026-08-03.
+#
+# What this script measures is a mode-solver mesh error in neff. That error only
+# reaches the resonance position through the straight length the ANALYTIC phase
+# covers. Whatever straight length is instead carried inside an FDTD-measured
+# bend coefficient is immune to it -- it has its own, separate discretization
+# error, which is what the res_sweep study measures.
+#
+# The two routes now divide that length differently:
+#
+#   monolithic (ring_resonator_hybrid.py:1148, phase-strip form)
+#       b_corrected strips BEND_D_IN+BEND_D_OUT back to the bare arc, so the
+#       analytic phase spans the full L_OUTER = 7.00 um.
+#
+#   cascaded (ring_resonator_hybrid_cascaded.py:1657, DC-style form, default
+#   since 2026-08-03)
+#       b_d KEEPS its 1.25 um on each side of each arc, so the analytic phase
+#       spans only L_OUTER - BEND_STRAIGHT_TOTAL = 7.00 - 5.00 = 2.00 um.
+#
+# The two P assemblies are algebraically identical (max |P1-P2| = 7.2e-15), so
+# this is NOT a physics difference -- but it IS a 3.5x difference in how much
+# an neff mesh error matters, so a single dphi column would misreport one route.
+#
+# THIS IS THE THIRD TIME THIS LEVER ARM HAS BEEN WRONG. First it was 14.0 (wrong
+# L_C, and missing the -2*S_MON pullback -> 2x too large). Fixed to 7.0. Then the
+# bend accounting moved 5.00 um of straight out of the analytic phase and into b,
+# which left 7.0 3.5x too large for the cascaded route without anything in this
+# file changing. Report both, and derive them from the constants above rather
+# than hardcoding, so the next accounting change shows up as a number instead of
+# a stale comment.
+BEND_D_IN = BEND_D_OUT = 1.5 - 0.25           # STUB_LEN - MONITOR_MARGIN -> 1.25
+BEND_STRAIGHT_TOTAL = 2 * (BEND_D_IN + BEND_D_OUT)            # 2 far bends -> 5.0
+LEVER_ARMS = {                                # route label -> analytic straight length
+    "monolithic (phase-strip, L_OUTER)": L_OUTER,
+    "cascaded (DC-style, L_OUTER-BEND_STRAIGHT_TOTAL)": L_OUTER - BEND_STRAIGHT_TOTAL,
+}
 RESOLUTIONS = [20.0, 30.0, 40.0, 60.0, 80.0, 100.0]
 WAVELENGTHS = [1.50, 1.55, 1.60]
 OUT = os.path.abspath(os.path.join(os.path.dirname(__file__),
@@ -72,20 +109,36 @@ if __name__ == "__main__":
             neff[i, j] = solve_neff(wl, res)
             print(f"[gap3] res={res:5.1f} wl={wl:.2f} neff={neff[i, j]:.6f}", flush=True)
 
-    print("\n res |" + "".join(f"  neff@{w:.2f}" for w in WAVELENGTHS)
-          + "".join(f"   dphi@{w:.2f}(rad)" for w in WAVELENGTHS))
+    print("\n res |" + "".join(f"  neff@{w:.2f}" for w in WAVELENGTHS))
     for i, res in enumerate(RESOLUTIONS):
-        row = f"{res:5.1f}|" + "".join(f"  {neff[i, j]:9.6f}" for j in range(len(WAVELENGTHS)))
-        if i:
-            d = [2 * np.pi * (neff[i, j] - neff[i - 1, j]) * L_OUTER / WAVELENGTHS[j]
+        print(f"{res:5.1f}|" + "".join(f"  {neff[i, j]:9.6f}"
+                                      for j in range(len(WAVELENGTHS))))
+
+    # One dphi table per route, because the two routes hand a different amount of
+    # straight length to the analytic phase (see LEVER_ARMS above).
+    for label, arm in LEVER_ARMS.items():
+        print(f"\n[gap3] dphi, {label}: analytic straight = {arm:.2f} um")
+        print(" res |" + "".join(f"   dphi@{w:.2f}(rad)" for w in WAVELENGTHS)
+              + "   |  worst as frac of an FSR")
+        for i, res in enumerate(RESOLUTIONS):
+            if not i:
+                continue
+            d = [2 * np.pi * (neff[i, j] - neff[i - 1, j]) * arm / WAVELENGTHS[j]
                  for j in range(len(WAVELENGTHS))]
-            row += "".join(f"   {x:+12.4f}" for x in d)
-        print(row)
+            worst = max(abs(x) for x in d) / (2 * np.pi)
+            print(f"{res:5.1f}|" + "".join(f"   {x:+12.4f}" for x in d)
+                  + f"   |  {worst:8.4f}")
 
     print("\n[gap3] dphi is the CHANGE in round-trip phase from the previous "
           "resolution row. A full 2*pi means the resonance comb has slid by an "
           "entire FSR between those two meshes.")
+    print("[gap3] The cascaded row is the one that describes the shipped default. "
+          "Its smaller lever arm is NOT a free improvement -- the 5.00 um it "
+          "dropped now rides inside the FDTD-measured bend coefficient, whose own "
+          "resolution error is what the res_sweep study measures separately.")
     np.savez(os.path.join(OUT, "neff_convergence.npz"),
              resolutions=np.array(RESOLUTIONS), wavelengths=np.array(WAVELENGTHS),
-             neff=neff, L_outer=L_OUTER)
+             neff=neff, L_outer=L_OUTER,
+             lever_arm_labels=np.array(list(LEVER_ARMS.keys())),
+             lever_arms=np.array(list(LEVER_ARMS.values())))
     print(f"[gap3] saved -> {OUT}/neff_convergence.npz")

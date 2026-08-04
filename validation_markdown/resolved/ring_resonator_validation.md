@@ -1,5 +1,77 @@
 # Ring resonator validation — to-do
 
+> ## 📁 FILED INTO `resolved/` — 2026-08-03
+>
+> Per this directory's README, `resolved/` means *"whole docs sufficiently
+> addressed (open to-dos may remain)"*. It is **not** a claim that everything
+> below is closed. Read this box before quoting anything from this file.
+>
+> **The validated route is the CASCADED one** (`ring_resonator_hybrid_cascaded.py`).
+> Its basis, all measured:
+>
+> | check | result |
+> |---|---|
+> | 1 — engine agreement | bare strip bit-identical (`0.000e+00`); coupled pair `1.3–1.6e-10` = the translation floor exactly |
+> | 2 — mode identity | field overlap at the translation floor |
+> | unitarity `\|t\|²+\|k1\|²` | **0.999640 – 0.999926**, deviation **3.60e-04**, on an FDTD-measured `M_left` — post-M1 3-D, job 11658568 |
+> | FSR convergence | p ≈ 1.4–2.1 |
+> | mode-solve resolution | converged at res 100; res 40 → 100 moves the comb **3.5–3.7%** of an FSR (job 11658491) |
+> | `interp_complex`, degree-2 `n_eff` polyfit | both measured, both fine |
+>
+> **✅ The basis is stable under M1** — the material fix did not move it, which is
+> the outcome that makes it usable. Post-M1 3-D (11658568, 1h05) against the
+> pre-M1 numbers: unitarity deviation **3.595e-04** vs 3.5e-04; `|t_ring|` vs `|t|`
+> **3.774e-03** vs 3.768e-03; reciprocity **1.665e-16** vs 2.220e-16. 8 resonances,
+> mean FSR **12.752 nm** against 12.87 predicted from the 43.42 µm perimeter
+> (0.9%). Supermode `n_eff` fit residuals 1.45e-05 (even) / 7.30e-07 (odd),
+> bare-strip 7.29e-06. The assembly ledger reports the corrected DC-style spans
+> (0.25 / 1.50 / 0.25, each matching its physical span to `+0.0000`).
+>
+> **⛔ OUT OF SCOPE BY DECISION, not by omission:**
+> * **Absolute resonance wavelength.** Finesse `F = Q·FSR/λ ≈ 120`, so any
+>   per-round-trip phase error is amplified ~120×. Neither model positions the
+>   comb to better than a linewidth. FSR and coefficient-level quantities are
+>   validatable; absolute comb position is not.
+> * **Comparison against a full-device FDTD.** Retired 2026-08-03 at the user's
+>   direction and independently disqualified by its own output: it reports
+>   transmission **> 1** for a passive device over **46%** of the band, and the
+>   excess *grows* with refinement (+0.067 at res 30 → +0.084 at res 40), so it is
+>   not a coarse-grid artifact. See the ⛔ RETIRED section below.
+>
+> **🔴 OPEN, carried into `resolved/` deliberately:**
+> 1. **The MONOLITHIC route (`ring_resonator_hybrid.py`) has a real, unexplained
+>    defect** — a k1/k2 residual of `1.320e-04` with `arg` drift `0.0068 π` that no
+>    plane correction removes and **six tested mechanisms do not explain**. The
+>    cascaded route does not have it (`2.220e-16`). Do not quote monolithic comb
+>    positions. Its 3-D output is also still pre-M1, deliberately not re-run.
+> 2. **⚠ The cascaded route's reciprocity check is a TAUTOLOGY, not evidence.**
+>    `S_coupler = M_left.T @ P_body @ M_left` makes `k1` and `k2` the same matrix
+>    element, so `1.665e-16` is machine epsilon — the route *enforces* reciprocity
+>    rather than verifying it. Unitarity above is the real coefficient-level test.
+>    The script itself used to print this as *"a stronger guarantee than the
+>    monolithic version's independently-normalized `|k1|~=|k2|`"*, which is
+>    backwards — an identity is the weakest possible evidence, and that wording is
+>    why it was briefly recorded as part of the validation basis. Corrected in
+>    source 2026-08-03; the entry is withdrawn.
+> 3. **Check 3's resolution sweep is pre-M1.** The `p ≈ 0.70` comb-position and
+>    `p ≈ 1.4–2.1` FSR numbers come from job 11653509 (ended 12:33–14:40); M1
+>    landed ~15:00, and those cache configs lack the `resolved_dispersive` key
+>    entirely. Re-run **RUNNING as 11658729** (released when 11658568 completed);
+>    pre-M1 data archived at `archive/ring_res_sweep_pre_m1_20260803/`. **Update
+>    the numbers here when it lands.**
+> 4. ~~**Post-M1 3-D production**~~ — **✅ CLOSED, job 11658568, 2026-08-03,
+>    1h05.** The production directory is now internally consistent: post-M1
+>    assembly on post-M1 FDTD. Numbers folded into the table above.
+> 5. **Bookkeeping:** `_CACHE_SCHEMA_VERSION` is still 1 and the monitor-plane
+>    convention change wants the bump; **no ring golden exists at all**
+>    (`tests/golden/` has none, so nothing in `test_golden_examples.py` /
+>    `test_golden_provenance.py` covers this device); and the two routes now ship
+>    different bend conventions — phase-strip in the monolithic
+>    (`ring_resonator_hybrid.py:1148`), DC-style in the cascaded
+>    (`ring_resonator_hybrid_cascaded.py:1657`). Those two are algebraically
+>    identical (`max |P₁−P₂| = 7.2e-15`), so this is an inconsistency between two
+>    files meant to be compared, not a physics difference.
+
 > **2026-07-28 — the material model changed under every device here.** Both engines
 > now evaluate one analytic Sellmeier model (Salzberg Si, Malitson SiO2) instead of
 > each doing its own nearest-tabulated lookup, which shifts n_Si by ~0.002 and
@@ -1178,7 +1250,7 @@ listed there as separate, still-undone work and is **not** a prerequisite
 for the ring.
 
 Until that wiring lands the ring cannot be validated the way the other
-devices are: checks 1–3 in [README.md](README.md) all assume
+devices are: checks 1–3 in [README.md](../README.md) all assume
 `FDTDSolver`/`EMESolver` objects that this device never constructs — the
 existing example scripts are unchanged and still don't call any of (a)/(b)/(c).
 
@@ -1660,7 +1732,7 @@ does not have to be re-litigated a third time.** This analysis previously lived
 only in a session context snapshot, which is explicitly not a durable record —
 that was the gap.
 
-The bar taken from [README.md](README.md): `resolved/` means *"whole docs
+The bar taken from [README.md](../README.md): `resolved/` means *"whole docs
 sufficiently addressed (open to-dos may remain)"*, and the directional coupler is
 described there as **the only device where all four checks have actually been
 run**. Against that:
@@ -1931,6 +2003,513 @@ the y-excited run's normalization is a few percent high. That is precisely block
 0's symptom, at res 30, and consistent with its h² closure (p = 1.988,
 extrapolating to 0.979 at res 40). **So blocker 0's magnitude story reproduces on
 a bare bend, while its phase was never examined by either investigation.**
+
+## ✅ CHECK 4 RAN, AND IT LOCALIZED THE DEFECT — 2026-08-03
+
+Job 11655143 (2-D, res 20/30/40) against the 2-D hybrid partner (11655349), both
+pre-M1 so matched. Comparison in `verify_ring_check4_comparison.py`.
+
+| res | FSR difference | comb offset vs cascaded hybrid |
+|---|---|---|
+| 20 | −0.603 nm | +3.610 nm (24.8% of an FSR) |
+| 30 | −0.143 nm | +5.123 nm (34.4%) |
+| 40 | −0.192 nm | +4.639 nm (30.9%) |
+
+**FSR agrees to ~1.2% and converges. Absolute comb position disagrees by ~30% of an
+FSR and does NOT shrink with resolution.**
+
+That was the pre-registered discriminator and it came out on the bookkeeping side:
+
+> the flat phase lives in the hybrid's reference-plane arithmetic, not in meep's
+> treatment of the staircased arcs.
+
+The full-device run shares **none** of the hybrid's phase bookkeeping — no reference
+planes, no decomposition, no network algebra — so a resolution-independent
+disagreement cannot be discretization the hybrid is faithfully reproducing. This is
+what rules out the explanation the p ≈ 0.70 comb drift had made plausible.
+
+⚠ **At 34% the offset approaches the half-FSR aliasing limit**, so the line pairing
+could be off by one. The script now warns on this itself. The monolithic route is the
+cross-check (data from 11656190, not yet compared).
+
+## 🔴 THE k1/k2 RESIDUAL IS MONOLITHIC-ONLY — and the cascaded route's reciprocity is a TAUTOLOGY, 2026-08-03
+
+**This should have been checked six mechanisms ago.** The residual was measured on the
+**monolithic** route's `ring_data.npz` and treated throughout as "the ring's" defect.
+It is not. Measured on both:
+
+| route | plane offset | max \|\|k1\|−\|k2\|\| | arg(k2)−arg(k1), corrected | drift |
+|---|---|---|---|---|
+| monolithic | 0.75 µm | 1.320e-04 | −2.9798 .. −2.9730 π | 0.0068 π |
+| **cascaded** | **0.00 µm** | **2.220e-16** | **0.0000 π exactly** | **0.0000 π** |
+
+**The cascaded route has no residual at all.** Its ring port sits at `LEFT_RING_Y` in
+*both* directions by construction — that symmetry is precisely what makes
+`M_right = M_left.T` a valid reuse — so there is no plane offset to correct and
+nothing to disagree.
+
+### ⚠ But that zero is a TAUTOLOGY, not a measurement
+
+`S_coupler = M_left.T @ P_body @ M_left`, so `k1` and `k2` are **the same matrix
+element** read from either side. `2.220e-16` is machine epsilon: the cascaded route
+does not *verify* reciprocity, it **enforces** it. Same for `arg(k2/k1)` at 6.3e-16.
+
+So one of the entries I listed as a validation basis is not evidence. Sorting the
+cascaded route's coefficient checks honestly:
+
+| check | value | real measurement? |
+|---|---|---|
+| reciprocity \|k1\| = \|k2\| | 2.220e-16 | ❌ **tautology** — same matrix element |
+| reciprocity arg(k1) = arg(k2) | 6.341e-16 rad | ❌ **tautology** |
+| **unitarity \|t\|²+\|k1\|²** | **0.999647 – 0.999941** | ✅ **real** — nothing forces the FDTD-measured `M_left` to conserve power; deviation **3.5e-04** |
+| \|t_ring\| vs \|t\| | 3.768e-03 | ⚠ partly structural (flows from the `M_left.T` reuse) |
+
+**Unitarity to 3.5e-04 on an FDTD-measured transfer matrix is the substantive
+coefficient-level result**, and it is genuinely independent: `M_left` comes from two
+meep runs and nothing in the algebra makes `|t|²+|k1|²` come out at 1.
+
+### What this means for the two routes
+
+* **The cascaded example** — the one being validated — **does not have this defect.**
+  The six-mechanism hunt was chasing a monolithic bookkeeping error.
+* **The monolithic route has a real defect**: its asymmetric ring port (+1.25 in,
+  +0.50 out) leaves a residual that no plane correction removes, and which six tested
+  mechanisms do not explain. It is not a blocker for the cascaded example; it is a
+  reason to prefer the cascaded route, and a reason the monolithic's comb positions
+  should not be quoted.
+* **The ~0.05 FSR route disagreement** is therefore between a route with a known
+  plane-bookkeeping defect and a route without one. That is no longer a mystery
+  requiring a tiebreaker — it is an expected consequence.
+
+### ❌ SIXTH MECHANISM REFUTED — `get_norm_calibrated()` is phase-transparent
+
+Tested before the above was noticed, and still worth recording since the monolithic
+defect is open. `verify_ring_norm_calibrated_phase.py`:
+
+* `arg(get_norm_calibrated) − arg(coeff)` = **5.35e-17 π**. The helper takes its phase
+  from the modal coefficient and changes nothing — it cannot inject a π.
+* `mp.get_fluxes()` is negative at **11/11** points and `np.abs()` does discard that
+  sign — but correctly: the sign belonged to a *magnitude*, and direction is carried by
+  the separately-taken phase.
+* The calibration changes the normalizer **magnitude** by a factor **1.2662**. That is
+  real, and it is what "blocker 0" was actually about.
+
+⚠ **This script's first verdict was wrong and I nearly reported it as a find.** It
+compared against the *forward* coefficient at that monitor and got 0.995 π. But the
+source launches −y, so the forward coefficient there is a **weak reflection**:
+`|a_fwd|/|a_bwd| = 4.4%`. Two tells were already on screen and I read past both — the
+magnitude ratio, and the fact that the "π" varied **0.73–0.99 π** across the band where
+a genuine sign convention would sit at exactly π. The verdict now checks whether the
+comparison quantity is even meaningful before ruling on it.
+
+### ⛔ RETIRED — a full-device FDTD is NOT a valid reference for this device, 2026-08-03
+
+**Decision: stop validating the ring by comparison against a full-device FDTD.**
+Not deferred, not caveated — the reference is disqualified by its own output.
+
+**The transmission of a passive device exceeds 1:**
+
+| run | T max | excess | points T>1 | % of band |
+|---|---|---|---|---|
+| res 20 | 0.9829 | −0.0171 | 0 | 0% (the run that resolved only 2 lines) |
+| res 30 | 1.0671 | **+0.0671** | 186 | **46.4%** |
+| res 40 | 1.0837 | **+0.0837** | 187 | **46.6%** |
+
+Up to **8.4% gain, over 46% of the band, and WORSENING with refinement**
+(0.067 → 0.084). That last fact is what makes it a disqualification rather than a
+coarse-grid artifact: a discretization error refines away, and this does not. The
+likely mechanism is the bus-only normalization — the ring perturbs the through-port
+mode near the coupler, so `|a_dev|² / |a_ref|²` is not a true transmission — but the
+cause hardly matters once the reference reports gain in a lossless passive device.
+
+**Two independent reasons, and either alone is sufficient:**
+
+1. **Unphysical output** (above). The reference violates energy conservation.
+2. **The reference does not converge.** Between res 30 and 40 its own comb moves
+   **−2.357 nm = 18.1% of an FSR**, per-line shifts −4.0 to −0.3 nm (so the FSR moves
+   too, +4.3%), against a hybrid-vs-reference offset of ~30% of an FSR. The arbiter
+   carried uncertainty of the same order as the thing it was arbitrating.
+
+⚠ **Everything the "check 4 verdict" section below claims is therefore withdrawn as a
+validation result.** The measurement happened and the numbers are real, but they do
+not adjudicate the hybrid. Kept in place because the reasoning — why the observable
+had to be group delay, the 3-D cost table, the artifact at res 20 — is worth keeping,
+and because a withdrawn conclusion should be visible rather than deleted.
+
+Job 11656189_2 (check 4, res 40, post-M1) was **cancelled at 1:58:19** rather than
+finished: more output from a disqualified reference has no value.
+
+### 📌 WHY a full-device FDTD cannot referee a high-finesse resonator
+
+Finesse `F = Q·FSR/λ = 14294 × 13/1550 ≈ 120`. The field circulates ~120 times, so
+**any per-round-trip phase error is amplified ~120×** — a 0.5% round-trip error moves
+a resonance a full linewidth. FDTD's staircased arcs give O(h) boundary-position
+error, which *is* a round-trip path-length error. The reference is therefore subject
+to exactly the amplification it is supposed to be checking, and at the resolutions a
+full ring can afford it has no accuracy advantage over the model.
+
+⚠ The device is **linear** throughout — no Kerr, no TPA. It is *resonant*, which for
+validation is a harder problem than nonlinearity would be, because the amplification
+is structural rather than intensity-dependent.
+
+### ✅ WHAT VALIDATES THIS DEVICE INSTEAD
+
+Absolute resonance wavelength is **out of scope** — not validatable at any affordable
+resolution, by the hybrid or by an FDTD reference. The validation rests on quantities
+that carry no finesse amplification:
+
+| basis | status |
+|---|---|
+| **Engine agreement** (check 1) | ✅ closed — bare strip bit-identical, pair = translation floor |
+| **Mode identity** (check 2) | ✅ closed — overlap 1.000000, identity permutation |
+| **Network algebra vs the closed form** | ✅ routes A/B/C agree to machine precision |
+| **Coefficient reciprocity** \|k1\| = \|k2\| | ✅ agree to 1.3e-04 |
+| **Coefficient unitarity** \|t\|²+\|k1\|² | ✅ ~1 |
+| **FSR** | ✅ converges p ≈ 1.4–2.1, 0.16% of an FSR at res 60 |
+| **Mode-solve resolution** (check 3, EME half) | ✅ converged at 100 |
+| **FDTD resolution** (check 3, FDTD half) | ⚠️ measured; sets the absolute-position limit |
+| `k1`/`k2` **phase residual** | ⚠️ **OPEN** — the one remaining defect |
+
+Every entry above is a **single-pass or algebraic** quantity. That is the point: they
+are measurable to 1e-4 or better and they do not depend on accumulated round-trip
+phase. The `k1`/`k2` phase residual stays open precisely because it is also
+single-pass, so it can be chased cleanly — unlike the comb.
+
+### 🔴 CAVEAT — the reference is NOT converged either, and the verdict above is overstated
+
+**Measured 2026-08-03, after the verdict was written.** The full-device FDTD was
+treated as the arbiter without checking whether it converges. It does not:
+
+| res | lines | FSR | comb shift from previous |
+|---|---|---|---|
+| 20 | **2** | 80.25 nm | — (unusable post-M1) |
+| 30 | 7 | 14.500 nm | — |
+| 40 | 7 | 15.125 nm | **−2.357 nm = 18.1% of an FSR** |
+
+Per-line shifts run −4.0 to −0.3 nm, so it is not even a rigid translation — the FSR
+moves +4.3% too. **The reference carries ~18% of an FSR of its own uncertainty at the
+only two usable resolutions**, while the hybrid-vs-reference offset varies ~11% of an
+FSR across those same resolutions.
+
+**What survives:** the offset does not trend toward zero with refinement, which still
+argues against pure discretization.
+**What does not:** "~30% of an FSR, attributable to the decomposition's bookkeeping"
+as a clean number. That is overstated and should be read as ~30% ± something of the
+same order.
+
+### 📌 WHY a resonator resists this kind of validation — the finesse amplifies everything
+
+This is the deeper reason, and it reframes the whole check:
+
+    F = Q·FSR/lambda = 14294 x 13/1550 ~ 120
+
+The field circulates ~120 times, so **any per-round-trip phase error is amplified by
+~120×**; a 0.5% round-trip error moves a resonance by a full linewidth. FDTD's
+staircased arcs give O(h) boundary-position error, which *is* a round-trip
+path-length error. That is the mechanism behind the hybrid's p ≈ 0.70 comb-position
+convergence, and behind the reference's own wobble above. **It is not a bug in either
+model — it is what a high-finesse resonator does to a discretization error.**
+
+⚠ Note the ring's response is **not** nonlinear in the optical sense — no Kerr, no
+TPA, linear passive device throughout. It is *resonant*, which for validation purposes
+is a harder problem than nonlinearity would be, because the amplification is
+structural rather than intensity-dependent.
+
+**Consequence for what this device can claim.** Absolute resonance wavelength is the
+quantity the finesse amplifies and the grid corrupts, in the hybrid *and* in a
+full-device FDTD. It is **not validatable at any affordable resolution by either
+model.** Two quantities are well behaved and should carry the validation instead:
+
+* **FSR** — converges at p ≈ 1.4–2.1, within 0.16% of an FSR at res 60. Set by n_g and
+  perimeter, not by accumulated round-trip phase.
+* **The coupling coefficients** `t`, `k1`, `k2`, `t_ring` — single-pass quantities with
+  no finesse amplification. `|k1|` vs `|k2|` already agree to `1.3e-04`.
+
+So check 4's useful output is the **FSR comparison** (−0.14 to −0.19 nm at res 30/40,
+~1.2%, and converging) and not the comb offset. The `k1`/`k2` phase residual remains
+worth chasing precisely because it is single-pass: measurable cleanly, unlike the comb.
+
+### ⚠ THE OBSERVABLE HAD TO CHANGE — amplitude dips were the wrong measurement
+
+The first version of `ring_resonator_fdtd.py` copied the hybrid scripts'
+`find_dips()`, looking for `|T|²` minima. For this device that is wrong, and the job
+showed it:
+
+| res | gap in pixels | ringdown | amplitude dips | group-delay peaks |
+|---|---|---|---|---|
+| 20 | 5.0 | 3.6 τ | 5 | **7** |
+| 30 | 7.5 | 0.3 τ | **0** | **7** |
+| 40 | 10.0 | 0.4 τ | 3 | **7** |
+
+The same device cannot resonate at res 20 and not at res 30. This is an **all-pass**
+ring — one bus, no drop port — and a lossless all-pass ring has **|T| ≡ 1
+identically**; its resonances live entirely in the PHASE. Amplitude dips therefore
+exist only in proportion to loss and **shrink as the discretization improves**: the
+better the simulation, the less there is to see.
+
+Res 20's apparent resonance was a **5-pixel-gap subpixel-smoothing artifact** (the
+0.25 µm gap smeared into artificially strong coupling) plus staircase scatter, and its
+comb was junk on its own terms — spacings 14.0 / 14.5 / 14.75 / **30.25** nm (a missed
+line) and a mean FSR of 18.4 against 12.87 predicted. **It must not be used.**
+
+`τ_g = −dφ/dω` peaks at every resonance for any coupling and any loss including zero,
+because the phase winds 2π per FSR regardless. Amplitude dips are still reported as a
+secondary diagnostic whose depth measures loss.
+
+⚠ **Peak-finding needs a half-FSR minimum separation** or each resonance is reported
+two or three times — 22 "peaks" for 7 at res 40, in triplets 1.25 nm apart between
+real 11.5–12.25 nm gaps. `ring_resonator_fdtd.py` and
+`verify_ring_check4_comparison.py` briefly disagreed about how many resonances the
+same spectrum held because only the latter had the filter.
+
+### 3-D full-ring is out of reach, and that is measured
+
+Q = 14294 → τ = Q/(2πf) = **3526 meep time units**, and
+`stop_when_dft_decayed(1e-9)` stops near **26 τ**. Scaling job 11653509_3's measured
+0.060 s/step by the 4.00× cell-volume ratio and by res³:
+
+| res | 2-D | 3-D |
+|---|---|---|
+| 20 | 0.2 h | 10 h |
+| 30 | 0.7 h | 53 h |
+| 40 | **1.7 h** | **167 h** |
+
+**3-D exceeds the 10 h wall at every usable resolution.** ⚠ An earlier estimate said
+45 h, from assuming T = 8 τ; 8 τ leaves 1.8% residual amplitude and the criterion
+actually used stops at 26 τ. Both numbers are kept in the script's docstring because
+the 45 h figure had already been used to justify defaulting to 2-D.
+
+## ✅ M1 FIXED — the ring's FDTD half now tracks the band, 2026-08-03
+
+`si_medium(wl_center)` with a **scalar** froze one index at band centre while the
+meow half re-evaluated per wavelength: n_Si off by **+0.004338 @1.50** and
+**−0.003913 @1.60**, i.e. **+1.42% / −1.20% of an FSR** in round-trip phase.
+
+**Why the ring alone was left behind.** The library fixed this on 2026-08-01 inside
+`FDTDSolver._media()` — six lines: resolve the flag, pass the whole band. Every
+example that calls `FDTDSolver` inherited it with no edit. Grepping every direct
+caller of `si_medium`/`sio2_medium` outside the library returns **only the three ring
+scripts**. They hand-roll `mp.Simulation` and never construct an `FDTDSolver`, so
+they could not inherit a solver fix. **M1 is not a separate bug from the hand-rolled
+bypass — it is that bypass, surfacing as a wrong number.**
+
+`_media()` is now replicated in all three scripts (deliberately line-for-line, not a
+second opinion about what "dispersive" means) and `make_sim()` takes the band.
+Verified:
+
+* `eps_inf` **12.0946 → 12.2220** with one Lorentzian — that is
+  `meep_medium_reparam()`, and it matters: a naive dispersive medium *loses* 0.0496 in
+  n_eff at res 40 because meep subpixel-averages only the instantaneous ε and meep's
+  Sellmeier form puts ε∞ = 1, leaving no Si/SiO₂ contrast to smooth.
+* `gamma = 0`, `Im(n) = 0` — lossless. Index accurate to 6e-4, contrast to 0.03%.
+* The fingerprint gains `resolved_dispersive: true` and the first run wrote **new**
+  cache entries rather than being served frozen media — M3/M4's machinery working on
+  its first real test.
+
+**Not a regression.** Res 30 post-M1 resonates (spacings 1.25, 1.25, **11.50**, …).
+Res 20's collapse from 3.6 τ to 0.1 τ was that resolution losing its 5-pixel-gap
+artifact, which is correct behaviour.
+
+⚠ **Every 3-D result on disk predates M1** — 0 of the 3-D cascaded FDTD cache entries
+carry `resolved_dispersive=True`. So the top-level production `ring_data.npz`,
+`smatrix_hybrid.pkl` and every figure beside them describe the frozen model. Job
+11657558 re-runs the cascaded 3-D production; **the monolithic is still stale.**
+
+## ✅ Bend-straight accounting — DC-style is now the default, 2026-08-03
+
+`phi_bend_correction` strips `b`'s internal 2×1.25 µm and lets `L_OUTER` carry the
+full 7.00 µm. The DC-style alternative never touches `b` and shortens the analytic
+length to `L_OUTER − BEND_STRAIGHT_TOTAL = 2.00 µm`, i.e. **0.25 µm per side straight
+and 1.50 µm across the far straight**.
+
+**They are algebraically identical, and stay so even when `b`'s internal phase
+corresponds to a different index than the analytic β.** Tested with
+`n_true = n_analytic + 0.025` — exactly the error under investigation:
+`max |P1 − P2| = 7.2e-15`. Both reduce to `b² · exp(iβₐ · 2.00)`; β only ever
+multiplies the 2.00 µm remainder, and neither form re-derives the FDTD's internal
+straight phase. **So this cannot be the phase error**, and switching moved no number:
+dips **bit-identical**, `max |diff| = 0.000e+00`.
+
+Switched anyway, for robustness: `b_corrected` was labelled *"the arc alone"*, which
+is only true if the analytic `n_eff` describes the bend's 2.5 µm — the exact
+assumption under investigation; and `n_eff` entered in **two** places that had to stay
+in sync, which would silently stop cancelling the moment a bend-corrected index is
+used for one and not the other. Phase-strip is auto-selected when
+`BEND_STRAIGHT_HEADROOM < 0`, where it is mandatory. A **standing assertion** now
+verifies equivalence every run (`2.5e-14 in P`), replacing a one-off measurement.
+
+### ⚠ Three separate figure/ledger defects, and I reported the fix three times before it was fixed
+
+1. **Ledger and labels quoted 1.50 / 4.00** while the code propagated 2.00 µm total.
+   Now **0.25 / 1.50**, with `assigned` *and* `physical` moving together — the DC form
+   draws the span boundaries in different places — so every mismatch stays `+0.0000`
+   and PERIMETER still closes at **43.4159, delta +0.00e+00**.
+2. **`bend_strip` spanned the full 2.00 µm stub-through-PML**, not `b`'s 1.25 µm
+   reference plane. Drawn solid (it is *kept* under the DC form) it covered the side
+   straight. Now clipped to `BEND_D_IN/OUT`.
+3. **The analytic spans were hollow**, so the 1.50 µm far-straight gap read as
+   continuous blue — the pale EME wash sits inside it and thick green dashes frame it.
+   Now white-filled under the DC form; the old *"don't fill, it would hide the
+   hatch"* reason no longer applies because the hatch is clipped away.
+
+Everything keys off one flag, so a negative headroom reverts arithmetic, spans, stub
+styling, fill and labels together.
+
+**Each of the first two was checked by eye on a downscaled figure where 1.5 µm is a
+few pixels wide, and reported as done while still wrong.** A probe on the drawing
+code settled it in one step — `x −7.225..−2.000 arc | −2.000..−0.750 stub |
++0.750..+2.000 stub | +2.000..+7.225 arc`, gap **1.50 µm**. Read the geometry from
+the code, not from the PNG.
+
+⚠ **Also: only one of seven `geometry_assembly.png` files was regenerated** at first.
+The `res_sweep/` + `two_d/` output isolation added the same day — specifically so runs
+could not overwrite each other — multiplied the figure into seven copies. All three
+2-D ones are now current; the four 3-D ones are stale pending the re-run.
+
+## ⚠ HAZARD — `run_ring_resonator_examples.batch` is destructive, 2026-08-03
+
+It runs `rm -rf "../../example_output/ring_resonator/${NAME}"` before `make`, to give
+each device a fresh tree. That was safe when one device owned that path. **It is not
+safe now:** the same tree holds `res_sweep/res_{20,30,40,60}/` — the gap-3 FDTD
+convergence sweep behind the p ≈ 0.70 finding, including a res-60 run that cost
+2h07 — and `res_sweep/res_*/two_d/`, check 4's comparison partner. The subfolder
+redirects added the same day silently widened what that `rm -rf` destroys.
+
+`batch/run_ring_cascaded_3d_postm1.batch` (job 11657558) is a **non-destructive**
+replacement for the cascaded re-run, and everything under
+`example_output/ring_resonator/` was copied to **`archive/ring_pre_m1_20260803/`**
+(31 MB, 13 `ring_data.npz`) first. **Do not submit the old batch until that `rm -rf`
+is scoped.**
+
+Separately: the monolithic script **never read `RING_FDTD_RES`** and had no
+`res_sweep` redirect — only the cascaded did. Job 11655349 therefore ran it **three
+times at res 40 into one file**; two of its six results never existed. Both scripts
+are symmetric now.
+
+## 🔴 THE RECORDED "flat 0.976π" READING IS WRONG — re-measured on 101 points, 2026-08-03
+
+The two refutations above were aimed by a misreading, and this is the correction.
+
+The table under *"Defect 2: a wavelength-flat π"* has **5 wavelengths** and was read
+as `0.976π ± 0.003` — flat, therefore *"a sign, not a length"*. Recomputed from the
+production `ring_data.npz` at all **101 FDTD wavelengths**, with the same 0.75 µm
+plane correction:
+
+| model fitted to the corrected residual | rms |
+|---|---|
+| pure constant (**the recorded reading**) | 1.98e-03 |
+| constant + propagation length | **8.59e-05** |
+| exactly π + a length | 7.28e-02 |
+| quadratic in 1/λ | **8.99e-06** |
+
+* **It is not flat.** The residual drifts **0.0068π monotonically** across the band.
+  A free propagation term beats a pure constant by **23×**. What was read as
+  `±0.003` scatter is a trend.
+* **It is not a clean sign either.** Forcing the constant to exactly π and fitting
+  only a length is **850× worse** than leaving it free — so "π plus a small path
+  length" is also refuted.
+
+**Why this matters more than the arithmetic.** The discriminator was sound and was
+pre-registered correctly (*flat → convention; drifting → another length*). Its
+**verdict** was misread, and that misreading is what pointed mechanisms 1 and 2 at
+**sign conventions** — where both died. Every hypothesis tested against this residual
+so far has been wavelength-INDEPENDENT, and the residual is wavelength-DEPENDENT.
+
+The free fit gives `const ≈ 0.87π`, `d ≈ −35 nm`, but 1/λ spans only 6.5% across this
+band so that split is poorly constrained. **Quote the existence of the drift, not
+those two numbers.**
+
+### ❌ THIRD MECHANISM REFUTED — the stub cross-section is the bare strip, 2026-08-03
+
+The natural reading of a dispersive residual is that `β = 2πn_eff/λ` uses the wrong
+`n_eff`: the transport planes sit in the ring stub, not in an isolated straight. If
+the stub's cross-section differed, the transport index would differ, and the error
+would drift. Tested directly, at the ring's own `MODE_RESOLUTION = 100`:
+
+| λ | stub cross-section | bare strip |
+|---|---|---|
+| 1.50 | 2.402279 | 2.402279 |
+| 1.55 | 2.339523 | 2.339523 |
+
+**Bit-identical.** And it has to be: the stub is the vertical guide at
+`x = ±STUB_X = ±7.0`, and its nearest neighbour — the bus, the near straight, the
+other stub — is **≥ 5 µm away**. It is isolated straight guide, so its mode *is* the
+bare strip's. The transport `n_eff` is not wrong for cross-section reasons.
+
+⚠ **Also corrected here:** `RING_IN_PLANE` (+1.25) is on the **LEFT** stub and
+`RING_OUT_PLANE` (+0.50) on the **RIGHT** — opposite sides of the device, not two
+heights on one stub. The 0.75 µm `exp(−iβd)` correction is still the right
+correction, because the two stubs are identical mirrored guide, but the earlier
+description of it as a single 0.75 µm span was wrong. See
+`plot_reference_planes()` in `ring_resonator_hybrid.py`, added 2026-08-03, which
+draws both planes on their actual stubs against the arc-end datum.
+
+### ❌ FIFTH MECHANISM REFUTED — the field past the arc IS modal, 2026-08-03
+
+`examples/verification/python/verify_ring_stub_phase_evolution.py`. Mode monitors up
+the bend's output stub at 13 distances from the arc end, with a **straight-guide
+control** in the same cell so a positive result could not be a harness artifact.
+Local index from the phase gradient between adjacent planes; 2-D, res 20.
+
+| quantity, over the ring's own 0.50-1.25 um window | value |
+|---|---|
+| worst \|n_local - relaxed\| , BEND | **0.000207** |
+| worst \|n_local - relaxed\| , straight CONTROL | 0.000016 (harness floor) |
+| what the transport residual demands | **~0.025** |
+| shortfall | **121x too small** |
+| \|a\| spread across all 13 planes | **2.2e-04** relative |
+
+**Refuted on two independent grounds.** The local index departs from its relaxed
+value by 121x less than the residual needs, in the very window where `k1` and `k2`
+are referenced. And `|a|` is **flat**, not rising — a relaxing superposition projects
+less onto the fundamental near the arc and more further out, and there is no such
+trend. The field is modally pure essentially immediately.
+
+⚠ **2-D caveat.** A 2-D slab confines more tightly than the real 450x220 nm strip, so
+it may relax faster. The 121x margin is wide enough that 3-D is unlikely to reverse
+it; `RING_SPE_3D=1` closes that if wanted.
+
+⚠ **The script's first verdict rule was wrong** and would have sent a decided question
+back for compute: it asked "is the excess > 0.005?" and called a 121x-too-small
+result *inconclusive, raise the resolution*. The bar is not an absolute threshold, it
+is the 0.025 the residual actually demands. Fixed.
+
+### 🔬 The hypothesis this refuted (kept for the record)
+*Below was the surviving hypothesis before the measurement above. It is now dead.*
+
+### 🔬 THE SURVIVING HYPOTHESIS — the field near the arc is not the fundamental mode
+
+Assume the residual is a π sign flip and solve for the `n_eff` the transport would
+have needed:
+
+| λ | needed | bare strip | Δ |
+|---|---|---|---|
+| 1.500 | 2.42249 | 2.40228 | **+0.02021** |
+| 1.550 | 2.36433 | 2.33952 | **+0.02480** |
+| 1.600 | 2.30544 | 2.27662 | **+0.02883** |
+
+A smooth **+0.025 (1.06%)** offset, and a physically sensible guided Si mode. Since
+the cross-section is provably right, the remaining explanation is that **the field
+0.50 µm past an arc is not the pure fundamental mode.** A bend excites a
+superposition; over the transport distance that mixture's phase does not evolve at
+any single `n_eff`. That is consistent with every constraint:
+
+* dispersive residual ✓ (a modal mismatch is wavelength-dependent)
+* correct cross-section ✓ (measured above)
+* correct bend-stub accounting ✓ (see the DC-style section)
+* defect in the bookkeeping, not the physics ✓ (check 4)
+
+**None of the four refuted mechanisms touched this.** Δ is not perfectly constant
+either (it drifts +0.0086 across the band, ~7% of the bare index's own dispersion),
+so a single wrong constant `n_eff` is not the whole story — which is itself what a
+non-modal field would look like.
+
+**Next step, and it is a measurement:** monitor the phase along the stub at several
+distances from the arc end and infer the *local* effective index from the phase
+gradient. If it starts ~+0.025 high near the arc and relaxes toward the bare strip
+with distance, the hypothesis is confirmed and the fix is to reference `b` and the
+coupler coefficients at a plane far enough out for the field to have relaxed — or to
+carry the measured phase rather than an assumed modal one.
 
 ## ✅ Checks 1 and 2 are now RUNNABLE — `UniformCrossSection`, 2026-08-03
 
@@ -2318,9 +2897,60 @@ post-processing and appears in no fingerprint.
    number. `RING_TEST_MODE`'s res 20 is ~37% of an FSR from res 40, not 75%.
 
    **This does NOT explain the half-FSR route offset** in `## Order item 1`.
-   Both device scripts compute `L_outer` identically, so no `L_outer` error can
-   separate them — and a 2× lever-arm error would move FSR by 2×, while the two
+   ~~Both device scripts compute `L_outer` identically, so no `L_outer` error can
+   separate them~~ — and a 2× lever-arm error would move FSR by 2×, while the two
    measured FSRs differ by 2.9%.
+
+   ⚠ **CORRECTED AGAIN 2026-08-03 — the lever arm was wrong a THIRD time, and the
+   two scripts no longer compute `L_outer` identically.** The struck sentence above
+   was true when written and stopped being true the same day, when the DC-style
+   bend accounting moved 5.00 µm of straight out of the analytic phase and into the
+   FDTD-measured `b` — **for the cascaded route only**:
+
+   | route | source | analytic straight = lever arm |
+   |---|---|---|
+   | monolithic (phase-strip) | `ring_resonator_hybrid.py:1148` | 7.00 µm |
+   | **cascaded (DC-style, shipped default)** | `ring_resonator_hybrid_cascaded.py:1657` | **2.00 µm** |
+
+   Nothing in the verification script changed to cause this; a hardcoded
+   `L_OUTER = 7.0` simply stopped describing the shipped default.
+
+   **Re-measured, job 11658491** (4m35s, mode solve only). Shipped res 40 → res 100,
+   Δn_eff = +0.027384 … +0.028121:
+
+   | route | Δφ, res 40 → 100 | as a fraction of an FSR |
+   |---|---|---|
+   | monolithic (7.00 µm arm) | 0.773 – 0.803 rad | **12.3 – 12.8%** — confirms the recorded 12.6% |
+   | **cascaded (2.00 µm arm)** | **0.221 – 0.229 rad** | **3.5 – 3.7%** |
+
+   ✅ **Independent cross-check inside the same run:** res-100 `n_eff@1.50` came out
+   **2.402279**, against the **2.402279484** control that checks 1 and 2 measured as
+   bit-identical across resolutions. Agreement to the printed precision (4.8e-07)
+   confirms this script's mode-solve recipe really is the one the ring uses, which
+   is the assumption the whole gap-3 study rests on.
+
+   The per-step table also reproduces the recorded **non-monotonicity at 60→80**
+   (worst-case 0.0550 → 0.0672 of an FSR, monolithic arm), so a two-point trend
+   still must not be extrapolated. Converged at res 100: 0.61% of an FSR
+   (monolithic) / 0.17% (cascaded).
+
+   ⚠ **It is NOT a 3.5× improvement in accuracy.** The 5.00 µm did not stop
+   mattering — it moved into the bend coefficient, whose own resolution error is
+   the p ≈ 0.70 problem. The sensitivity was reallocated between two studies, not
+   reduced. Anyone quoting 3.6% must quote the FDTD resolution result alongside it.
+
+   The script now derives both arms from `L_OUTER` and `BEND_STRAIGHT_TOTAL`,
+   prints one Δφ table per route with the worst value as a fraction of an FSR, and
+   stores `lever_arms` in the npz, so the next accounting change surfaces as a
+   number instead of a stale comment. Re-run: **job 11658491**. The npz on disk
+   still held `L_outer = 14.0`, the *first* wrong value, because the previous fix
+   was source-only and the artifact was never regenerated.
+
+   📌 **The two routes now ship different (algebraically identical) bend
+   conventions.** `max |P_phase-strip − P_DC-style| = 7.2e-15`, so this is not a
+   physics difference and not a candidate for the route offset. It is still an
+   inconsistency between two files that exist to be compared — open decision
+   whether to move the monolithic to DC-style too.
 
    **Converges at res 100** (last step 1.1% of 2π). That is the same tier as
    the 2×2 and one below the 1×2's 120, so the ring is not an outlier — it was

@@ -349,3 +349,39 @@ an already-supported path; if it lands with MPB, that is two operators against o
 - The engine-agreement measurement itself is re-runnable:
   `examples/verification/python/verify_item_6_engine_agreement.py`, with `--res` for the
   resolution sweep.
+
+### 2026-08-03 — hybrid vs. FDTD re-run at an identical 15.1 µm, engines agree to ~0.3%
+
+User request: re-run both engines at the SAME coupling length (round tenth
+nearest the current dispersive 50:50 point — see `material_model_validation.md`
+for L₅₀'s dispersive value — not the frozen-era 15.13/15.15 numbers above).
+Found and fixed a real bug first: `directional_coupler_hybrid.py`'s
+`PLOT_COUPLING_LENGTH` was only ever `argmin`'d against the 0.299 µm
+`coupling_lengths` sweep grid, so a pinned length that wasn't already ON that
+grid silently snapped to the nearest sample — the two examples' "same" length
+had been 0.0208 µm apart despite both files reading identical numbers.
+Fixed by splicing the pinned length into the grid and asserting the hit is
+exact (both scripts now build the device at a verified-exact length).
+
+**MEASURED, job 11655592 (array: hybrid task `_0`, mode task `_1`, FDTD task
+`_2`; `batch/run_directional_coupler_L151.batch`), both at coupling_length =
+15.10 µm exactly:**
+
+| | Through T | Cross T | Total T | ratio |
+|---|---|---|---|---|
+| Hybrid (`_0`) | 0.5075 | 0.4907 | 0.9983 | 0.492 |
+| Full-device FDTD (`_2`) | 0.5075 | 0.4920 | — | 0.492 |
+
+Agree to **~0.3%** on cross T, printed ratio identical to 3 significant
+figures — consistent with this device's already-documented ~0.1% engine gap
+(this table's own `+0.111%` row above), not a new discrepancy. Hybrid log
+line `Plot length: user-set 15.100000 µm -> sampled length 15.100000 µm
+(exact)` confirms the splice fix held under the real run, not just the
+pre-submit smoke test.
+
+⚠ 15.1 µm is a **rounded convenience value** picked to sit near the
+dispersive 50:50 point for both engines simultaneously — it is not itself a
+measured 3 dB crossing for either engine (see `material_model_validation.md`
+for the actual dispersive L₅₀ measurements this was rounded from). Read this
+entry as an engine-agreement confirmation at a shared, exact length, not as a
+new 50:50 measurement.

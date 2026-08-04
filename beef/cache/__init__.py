@@ -29,10 +29,11 @@ those hold.
 """
 from .config import build_run_config, build_whole_device_config
 from .store import (
-    CacheMissError, lookup, lookup_superset, load_result, save_run, update_family_pointer,
+    CacheMissError, is_master, lookup, lookup_superset, load_result, save_run,
+    update_family_pointer,
 )
 
 __all__ = [
-    "build_run_config", "build_whole_device_config", "CacheMissError",
+    "build_run_config", "build_whole_device_config", "CacheMissError", "is_master",
     "lookup", "lookup_superset", "load_result", "save_run", "update_family_pointer",
 ]

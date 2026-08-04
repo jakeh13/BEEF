@@ -108,7 +108,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from beef.cache import CacheMissError, load_result, lookup, save_run
+from beef.cache import CacheMissError, is_master, load_result, lookup, save_run
 from beef.geometry.base import polygons_to_prisms
 from beef.geometry import arc_polygon
 from beef.materials import SOI_220
@@ -608,17 +608,25 @@ def main():
               "physics. It does NOT", flush=True)
         print("[full]   validate the 3-D numbers the device ships.", flush=True)
 
-    np.savez(os.path.join(OUT, "full_fdtd.npz"),
-             wavelengths=wl, a_device=a_dev, a_busonly=a_ref, T=T,
-             wl_dense=wl_dense, T_dense=T_dense,
-             dips=np.asarray(res_wl),                 # PRIMARY: group-delay comb
-             tau_g=tau_g, group_delay_peaks=np.asarray(res_tau),
-             amp_dips=np.asarray([w for w, _ in dips]),   # secondary
-             amp_dip_depths=np.asarray([t for _, t in dips]),
-             fsr_nm=fsr * 1000 if fsr.size else fsr,
-             perimeter=perim, resolution=FDTD_RESOLUTION, three_d=THREE_D,
-             stop_device=stop_dev, stop_busonly=stop_ref,
-             t_device=t_dev, t_busonly=t_ref, tau_est=TAU_EST)
+    # is_master(): this script runs under `srun` (it is FDTD — one rank would
+    # waste the allocation, which is exactly the bug fixed in
+    # batch/run_ring_full_fdtd.batch on 2026-08-03). Every rank reaches here
+    # with identical values, because meep reduces the eigenmode coefficients
+    # before returning them, so an ungated write is 24 processes racing to put
+    # the same bytes in one file. Same bytes or not, a torn write is a corrupt
+    # npz — gate it.
+    if is_master():
+        np.savez(os.path.join(OUT, "full_fdtd.npz"),
+                 wavelengths=wl, a_device=a_dev, a_busonly=a_ref, T=T,
+                 wl_dense=wl_dense, T_dense=T_dense,
+                 dips=np.asarray(res_wl),                 # PRIMARY: group-delay comb
+                 tau_g=tau_g, group_delay_peaks=np.asarray(res_tau),
+                 amp_dips=np.asarray([w for w, _ in dips]),   # secondary
+                 amp_dip_depths=np.asarray([t for _, t in dips]),
+                 fsr_nm=fsr * 1000 if fsr.size else fsr,
+                 perimeter=perim, resolution=FDTD_RESOLUTION, three_d=THREE_D,
+                 stop_device=stop_dev, stop_busonly=stop_ref,
+                 t_device=t_dev, t_busonly=t_ref, tau_est=TAU_EST)
 
     # Two panels, primary on top: the group delay IS the measurement, the
     # amplitude is context. Plotting them the other way round is what made the
@@ -645,7 +653,8 @@ def main():
     ax1.legend(loc="lower right", fontsize=8)
     ax1.grid(alpha=0.3)
     fig.tight_layout()
-    fig.savefig(os.path.join(OUT, "full_fdtd_transmission.png"), dpi=150)
+    if is_master():                      # same reason as the np.savez above
+        fig.savefig(os.path.join(OUT, "full_fdtd_transmission.png"), dpi=150)
     plt.close(fig)
 
     print(f"\n[full] saved -> {OUT}", flush=True)

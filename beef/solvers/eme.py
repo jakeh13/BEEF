@@ -729,9 +729,25 @@ class EMESolver:
                     straight_length=self.straight_length, oxide_width=self.oxide_width,
                     x_start=0.0, side=side, **kwargs,
                 )
+                # Added 2026-08-03 (`mmi_1x4_sin300_validation.md` step 3).
+                # Before this, solve()'s fingerprint carried NO material
+                # information beyond `_solver_config()`'s bare
+                # `material_stack: {wg_height, sz}` -- unlike solve_section()/
+                # solve_section_length_sweep(), which have called
+                # resolved_material_config() since 2026-08-01. That means
+                # solve() could not distinguish two stacks agreeing on
+                # wg_height/sz but differing in core_kind (silicon vs nitride
+                # at the same thickness) OR in `dispersive` (frozen vs
+                # dispersive DOES change what _build_cells()/_extrusion_rules()
+                # actually draws here -- see _extrusion_rules()'s own
+                # docstring) -- a real collision risk for the *_eme.py
+                # examples this method serves, not a theoretical one.
                 config = build_whole_device_config(
                     self, "solve",
-                    dict(side=side, wavelengths=wavelengths, kwargs=kwargs),
+                    dict(side=side, wavelengths=wavelengths, kwargs=kwargs,
+                         **resolved_material_config(
+                             self.material_stack, wavelengths,
+                             self._resolved_dispersive())),
                     geometry, gds_polys,
                 )
                 hit = lookup(save_dir, config)
@@ -851,10 +867,15 @@ class EMESolver:
                     straight_length=self.straight_length, oxide_width=self.oxide_width,
                     x_start=0.0, side=side, **kwargs,
                 )
+                # Same fix and reasoning as solve() above, 2026-08-03
+                # (`mmi_1x4_sin300_validation.md` step 3).
                 config = build_whole_device_config(
                     self, "solve_length_sweep",
                     dict(side=side, wavelengths=wavelengths, lengths=lengths,
-                         sweep_region=sweep_region, kwargs=kwargs),
+                         sweep_region=sweep_region, kwargs=kwargs,
+                         **resolved_material_config(
+                             self.material_stack, wavelengths,
+                             self._resolved_dispersive())),
                     geometry, gds_polys,
                 )
                 hit = lookup(save_dir, config)

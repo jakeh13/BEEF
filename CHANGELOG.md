@@ -10,7 +10,244 @@ fuller write-up, it points there rather than repeating it.
 ## 2026-08-03
 
 Two corrections to recorded results, both from measurement rather than
-re-reasoning, plus a cache cleanup and two new library modules.
+re-reasoning, plus a cache cleanup and two new library modules. Late in the
+day the ring's long-standing `k1`/`k2` blocker was found to belong to the
+*monolithic* route only — see the first two entries.
+
+### Corrected — the ring's `k1`/`k2` residual is MONOLITHIC-ONLY, and the cascaded route's reciprocity is a TAUTOLOGY
+
+**This should have been checked six mechanisms ago.** The residual was measured on
+the **monolithic** route's `ring_data.npz` and then carried through the whole
+investigation as "the ring's" defect, without ever testing whether the route
+actually being validated has it. Measured on both:
+
+| route | ring-plane offset | max \|\|k1\|−\|k2\|\| | arg(k2)−arg(k1), plane-corrected | drift over band |
+|---|---|---|---|---|
+| monolithic | 0.75 µm | 1.320e-04 | −2.9798 .. −2.9730 π | 0.0068 π |
+| **cascaded** | **0.00 µm** | **2.220e-16** | **0.0000 π exactly** | **0.0000 π** |
+
+The cascaded route's ring port sits at `LEFT_RING_Y` in *both* directions by
+construction — that symmetry is exactly what makes the `M_right = M_left.T` reuse
+valid — so there is no plane offset to correct and nothing to disagree.
+
+**But that zero is not evidence.** `S_coupler = M_left.T @ P_body @ M_left` makes
+`k1` and `k2` **the same matrix element** read from either side; `2.220e-16` is
+machine epsilon. The cascaded route does not *verify* reciprocity, it **enforces**
+it. Sorting its coefficient checks by whether they can fail:
+
+| check | value | real measurement? |
+|---|---|---|
+| reciprocity \|k1\| = \|k2\| | 2.220e-16 | ❌ **tautology** — same matrix element |
+| reciprocity arg(k1) = arg(k2) | 6.341e-16 rad | ❌ **tautology** |
+| **unitarity \|t\|² + \|k1\|²** | **0.999647 – 0.999941** | ✅ **real**, deviation **3.5e-04** |
+| \|t_ring\| vs \|t\| | 3.768e-03 | ⚠ partly structural — flows from the `M_left.T` reuse |
+
+**Unitarity is the substantive coefficient-level result and it is genuinely
+independent**: `M_left` comes out of two meep runs, and nothing in the network
+algebra forces `|t|²+|k1|²` to land on 1. A previous note listing reciprocity as a
+validation basis is withdrawn.
+
+Consequences: the cascaded example does **not** carry this defect, so it is not a
+blocker there. The monolithic route does — its asymmetric ring port (+1.25 in,
++0.50 out) leaves a residual no plane correction removes and six tested mechanisms
+do not explain — which is a reason to prefer the cascaded route and a reason not to
+quote monolithic comb positions. The ~0.05-FSR route disagreement is then an
+expected consequence of comparing a route with a plane-bookkeeping defect against
+one without, not a mystery needing a tiebreaker.
+
+Full write-up: `validation_markdown/ring_resonator_validation.md`.
+
+### Refuted — `get_norm_calibrated()` is phase-transparent (sixth mechanism)
+
+New: `examples/verification/python/verify_ring_norm_calibrated_phase.py`. Tested
+before the monolithic-only finding above, and still worth keeping since the
+monolithic defect is open.
+
+* `arg(get_norm_calibrated) − arg(coeff)` = **5.35e-17 π**. The helper takes its
+  phase from the modal coefficient and changes nothing — it cannot inject a π.
+* `mp.get_fluxes()` is negative at **11/11** points, and `np.abs()` does discard
+  that sign — but correctly: the sign belonged to a *magnitude*, and direction is
+  carried by the separately-taken phase.
+* The calibration changes the normalizer **magnitude** by a factor **1.2662**. That
+  part is real, and it is what "blocker 0" was actually about.
+
+⚠ **This script's first verdict was wrong and was nearly reported as a find.** It
+compared against the *forward* coefficient at that monitor and got 0.995 π — but
+the source launches −y, so the forward coefficient there is a **weak reflection**:
+`|a_fwd|/|a_bwd| = 4.4%`. Two tells were already on screen: the magnitude ratio,
+and the fact that the "π" varied **0.73–0.99 π** across the band where a genuine
+sign convention sits at exactly π. The verdict now gates on
+`ratio_fwd > 0.5` — it checks that the comparison quantity is meaningful before
+ruling on it.
+
+### Fixed — `run_ring_cascaded_3d_postm1.batch` ran a 48-rank allocation on ONE rank
+
+The batch ended in `python examples/ring_resonator/python/ring_resonator_hybrid_cascaded.py`
+where every other device batch calls `make <target>`. `make` is what selects
+`srun --mpi=pmi2 python3` on Phoenix (the `LMOD_SYSHOST` branch in
+`examples/Makefile`) and sets `RING_TEST_MODE=0`. Calling python directly
+duplicated that launch contract and silently dropped the `srun`, so the job used
+1 of the 48 cores it allocated.
+
+**This was nearly recorded as an M1 performance regression.** Measuring it instead
+separates the two effects cleanly:
+
+| configuration | s/step |
+|---|---|
+| pre-M1, 48 ranks (job 11634900_1) | 0.0175 |
+| post-M1, **1 rank** (job 11657558) | **0.6362** |
+| post-M1, 48 ranks (job 11658568) | 0.0283 |
+
+* **the launch bug: 22.5×** — 9.8 h projected against a 10 h wall limit, for work
+  that is 26 min of stepping
+* **M1's actual cost: 1.61×** — one Lorentzian per material, which is the expected
+  tax and not a concern
+
+The tells that it was not M1: decay times unchanged (163/283/245 in meep time,
+55300 timesteps either way) and an identical cell print (`9 x 9.45 x 2.5 with
+resolution 40`). Only the rank count differed.
+
+11657558 was cancelled at 1:36 with nothing banked. 11658568 replaces it and is
+confirmed at `launching on 48 ranks across 2 nodes`.
+
+⚠ **No result needs redoing.** Rank count changes speed, not physics — every ring
+number measured under a single-rank job is unaffected.
+
+**An audit of all 56 batch files** found the same shape elsewhere. Most are
+deliberate and documented — the mode-solve verification scripts
+(`run_ring_gap3_neff_convergence`, `run_ring_network_crosscheck`,
+`run_solve_section_power_control`) each carry "Bare `python`, NOT srun: single-rank,
+and the script does its own `np.savez` (multiple ranks would race one file)". Four
+were not, and are fixed below under one rule, now written into the batch files
+themselves:
+
+> **FDTD script → `make <target>` or `srun --mpi=pmi2 python3`, ranks used.
+> Mode-solve-only script → bare `python`, and `--ntasks-per-node=1` to match.**
+
+Requesting ranks you never launch is the failure; either half of the rule alone
+still wastes the allocation.
+
+| batch | was | now | why |
+|---|---|---|---|
+| `run_ring_eme_engine_agreement` | 24 alloc, 1 used | **1 alloc** | mode solve only (6 `compute_modes_meep`, 0 `mp.Simulation`), unguarded `np.savez`. 8 G is ~5× the measured 1.52 GB peak |
+| `run_ring_hybrid_2d` | 24 alloc, 1 used | **`srun`** | FDTD. `srun` not `make`, because the loop parameterises `RING_FDTD_RES`/script name, which the Makefile target does not |
+| `run_ring_full_fdtd` | 24 alloc, 1 used | **`srun`** | FDTD. Also gained a ⛔ banner: the reference is retired, re-run it only to investigate its own T > 1 bug |
+| `run_modal_multiplexer_examples` | 96 alloc, 1 used | **`srun`** | FDTD via `FDTDSolver`. See below — this one had never once succeeded |
+
+### 🔴 `run_modal_multiplexer_examples.batch` had never succeeded, for this reason
+
+Every attempt hit the wall on 96 allocated CPUs while using one:
+
+| job | CPUs | elapsed | state |
+|---|---|---|---|
+| 11585847_0 | 96 | 5:00:25 | TIMEOUT |
+| 11590663_0 | 96 | 5:00:11 | TIMEOUT |
+| 11597177_[0-2] | 96 | 5:00:2x | TIMEOUT (all three tasks) |
+
+**The cause was already diagnosed — in the wrong file.**
+`batch/verification/run_mmi_1x2_engine_agreement.batch` states in its own comments:
+*"ran 1 rank where 96 were allocated (11597177 [0-2], three 5h timeouts). Here 1
+rank is the intended and proven configuration, not an accident."* That note was
+written into a batch file that was already correct, while the actually-broken
+script was left broken. At the 22.5× measured penalty, 13 minutes of work becomes
+5 hours.
+
+The one-port-per-array-task reshape is kept — `make` would run all three ports in
+one process, which is what the reshape exists to avoid — so the script is still
+called directly, now through `srun`. Its account also moves `gedc_main` →
+`ece` (the one with a balance); **37 other batch files still name `gedc_main`**,
+which is a separate sweep.
+
+### Added — `beef.cache.is_master()`, promoted from `_is_master`
+
+Switching those FDTD batches to `srun` newly exposes their top-level `np.savez` /
+`savefig` to every rank. Values are identical across ranks (meep reduces the
+eigenmode coefficients before returning), but identical bytes still tear when 24 or
+96 processes write one path, and a torn `.npz` is a corrupt `.npz`.
+
+The correct test already existed as `beef.cache.store._is_master()`, with the
+subtlety that matters: `am_really_master()` rather than `am_master()` (per-group
+under `divide_parallel_processes`, which would elect one writer per group), and a
+`SLURM_PROCID` fallback for EME-only runs that import neither meep nor mpi4py yet
+are still launched under `srun -n 48`. It was private, so example scripts had only
+two options and both were taken in practice: race the file, or launch one rank.
+
+Now exported. `_is_master` remains as an alias bound to the same object, so the two
+names cannot drift into two different master elections — pinned by a test, along
+with the export and `__all__` membership. Gates added to
+`ring_resonator_fdtd.py` (`np.savez` + `savefig`) and
+`modal_multiplexer_hybrid.py` (`savefig`); all three sites verified inside a gate
+by walking the AST, not by reading. `ring_resonator_hybrid.py` and
+`_cascaded.py` are left alone: they already run multi-rank routinely through
+`make` (11634900_0/_1, the 11653509 sweep), so this change does not alter their
+exposure — gating them is a separate, optional tidy.
+
+563 tests pass, including 4 new ones.
+
+### Corrected — gap 3's neff lever arm is wrong for a THIRD time, and this time the cause was our own bend-accounting change
+
+`verify_ring_gap3_neff_convergence.py` converts an neff mesh error into the
+round-trip phase error that actually moves a resonance. That conversion is linear
+in the straight length the **analytic** phase covers — straight length carried
+inside an FDTD-measured bend coefficient is immune, since it has its own separate
+discretization error (the one `res_sweep/` measures).
+
+Today's DC-style bend change moved 5.00 µm of straight out of the analytic phase
+and into `b`, for the cascaded route only. The verification script's hardcoded
+`L_OUTER = 7.0` did not change, so it silently became **3.5× too large** for the
+shipped default:
+
+| route | source | analytic straight = lever arm |
+|---|---|---|
+| monolithic (phase-strip) | `ring_resonator_hybrid.py:1148` | 7.00 µm |
+| **cascaded (DC-style, shipped default)** | `ring_resonator_hybrid_cascaded.py:1657` | **2.00 µm** |
+
+**The recorded headline changes for the cascaded route.** Re-measured (job 11658491,
+4m35s, mode solve only) — shipped res 40 → res 100, Δn_eff = +0.0274 … +0.0281:
+
+| route | Δφ, res 40 → 100 | fraction of an FSR |
+|---|---|---|
+| monolithic (7.00 µm arm) | 0.773 – 0.803 rad | **12.3 – 12.8%** — confirms the recorded 12.6% |
+| **cascaded (2.00 µm arm)** | **0.221 – 0.229 rad** | **3.5 – 3.7%** |
+
+✅ The same run cross-checks itself: res-100 `n_eff@1.50` = **2.402279** against the
+**2.402279484** control that checks 1 and 2 found bit-identical across resolutions
+— agreement to the printed precision, confirming this script's mode-solve recipe is
+the ring's. It also reproduces the recorded non-monotonicity at 60→80.
+
+⚠ **This is not a free 3.5× improvement**, and the script now says so in its own
+output: the 5.00 µm did not stop mattering, it moved to the FDTD-measured bend
+coefficient, whose resolution error is exactly the p ≈ 0.70 problem. The change
+reallocates the sensitivity between two studies rather than reducing it.
+
+The script now derives both arms from `L_OUTER` and `BEND_STRAIGHT_TOTAL` instead
+of hardcoding one, prints a `dphi` table per route with the worst value as a
+fraction of an FSR, and stores `lever_arms`/`lever_arm_labels` in the npz. The
+history of the three errors is in the source comment so the next accounting change
+surfaces as a number rather than a stale comment. Re-run: job **11658491**.
+
+Also note the on-disk `example_output/verification/ring_gap3_neff/neff_convergence.npz`
+still carried `L_outer = 14.0` — the *first* wrong value — because the earlier fix
+was source-only and the artifact was never regenerated. 11658491 replaces it.
+
+### Fixed — `run_ring_resonator_examples.batch` no longer `rm -rf`s the study subtrees
+
+The batch did `rm -rf ../../example_output/ring_resonator/${NAME}` before `make`,
+which was safe when that path held only one production run's output. It is not
+safe now: the same tree holds `res_sweep/res_{20,30,40,60}/` (job 11653509, the
+data behind the p ≈ 0.70 comb-position finding; res 60 alone cost 2h07) and
+`two_d/` (the cheap 2-D cross-check partners). A production re-run regenerates
+**neither** — `res_sweep/` is only reachable via `RING_FDTD_RES`, which production
+never sets — so the delete was unrecoverable and silent.
+
+Now clears only the top-level production artifacts, skipping a `PRESERVE=(res_sweep
+two_d)` list, and echoes what it kept. Verified on a mock tree: production files
+and `sections/` removed, both study subtrees intact with contents. The rule for
+future edits is in the comment: add to `PRESERVE`, never widen the delete.
+
+This is why `batch/run_ring_cascaded_3d_postm1.batch` exists as a separate
+non-destructive path; that script stays, since it also pins the post-M1 re-run's
+provenance.
 
 ### Added — `beef/spectral.py`: `interp_complex`, `unwrap_is_safe`
 
@@ -54,6 +291,109 @@ change in the device would flip it — has its own test.
 Both ring scripts now import it; `test_matches_the_ring_scripts_inline_form`
 asserts bit-identical output against the removed inline definition, so promoting
 it changed no result.
+
+### Fixed — M1: the ring's FDTD half now tracks the band
+
+`_media()` replicated from `FDTDSolver._media()` into all three ring scripts;
+`make_sim()` now takes the run's whole band instead of `wl_center`.
+
+**Why only the ring needed this.** The library fixed the frozen-band problem on
+2026-08-01 inside `FDTDSolver._media()`, so every example calling the solver
+inherited it with no edit. The three ring scripts are the **only** non-library
+callers of `si_medium`/`sio2_medium` in the repo — they hand-roll
+`mp.Simulation` and never construct an `FDTDSolver`, so a solver fix could not
+reach them. M1 was not a separate bug from that bypass; it was that bypass
+surfacing as a wrong number: n_Si off by +0.004338 at 1.50 µm and −0.003913 at
+1.60 µm, i.e. ±1.4% of an FSR in round-trip phase, against a meow half that was
+exact per wavelength.
+
+Verified: `eps_inf` 12.0946 → 12.2220 with one Lorentzian (`meep_medium_reparam`,
+which matters — a naive dispersive medium loses 0.0496 in n_eff because meep
+subpixel-averages only the instantaneous ε and its Sellmeier form puts ε∞ = 1);
+`gamma = 0` and `Im(n) = 0`, so lossless; index to 6e-4 and contrast to 0.03%.
+The cache fingerprint gains `resolved_dispersive: true` and the first run wrote
+new entries rather than being served frozen media.
+
+⚠ Every 3-D ring result on disk predates this — 0 of the 3-D cascaded FDTD cache
+entries carry `resolved_dispersive=True`. Job 11657558 re-runs the cascaded 3-D
+production; the monolithic is still stale.
+
+### Changed — the ring's bend-straight accounting is DC-style by default
+
+`b` is no longer phase-stripped; the analytic length is shortened to
+`L_OUTER − BEND_STRAIGHT_TOTAL = 2.00 µm` instead (0.25 µm per side straight,
+1.50 µm across the far straight). The phase-strip is auto-selected when
+`BEND_STRAIGHT_HEADROOM < 0`, where it is the only legal form.
+
+**No number moves** — dips bit-identical, `max |diff| = 0.000e+00`. The two forms
+are algebraically identical and stay so even when `b`'s internal phase
+corresponds to a different index than the analytic β (tested with
+`n_true = n_analytic + 0.025`: `max |P1 − P2| = 7.2e-15`). Both reduce to
+`b²·exp(iβₐ·2.00)`, so neither re-derives the FDTD's measured straight phase.
+**This is therefore not a candidate fix for the ring's phase error.**
+
+Done for robustness: `b_corrected` was labelled "the arc alone", true only under
+the assumption currently under investigation; and `n_eff` entered in two places
+that had to stay in sync. A standing assertion now verifies the equivalence every
+run (2.5e-14 in P) instead of relying on a one-off measurement.
+
+### Changed — `RING_THREE_D` split out of `RING_TEST_MODE`
+
+`TEST_MODE` moves five knobs at once (FDTD resolution → 20, `MODE_RESOLUTION`
+→ 20, 2-D, `N_WL_FDTD` → 21, `N_WL_SOLVE` → 5, plus `N_WL_DENSE` → 2001 which is
+already known grid-limited for Q), so it could never serve as a matched
+comparison partner — a disagreement against it is uninterpretable.
+`RING_THREE_D=0` moves exactly one knob; unset preserves the previous behaviour.
+Outputs redirect to a `two_d/` subfolder so a 2-D result cannot land on the
+production 3-D `ring_data.npz`.
+
+Also fixed: the monolithic script never read `RING_FDTD_RES` and had no
+`res_sweep` output redirect — only the cascaded did. A sweep across both
+therefore ran the monolithic three times at res 40 into one file. Both are
+symmetric now.
+
+### Corrected — check 4's reference is not converged, so its verdict was overstated
+
+The full-device FDTD was used to adjudicate the hybrid without first checking
+whether it converges. Measured after the fact: between res 30 and 40 its own comb
+moves **−2.357 nm = 18.1% of an FSR**, with per-line shifts from −4.0 to −0.3 nm
+(so the FSR moves too, +4.3%), and res 20 post-M1 resolves only 2 lines.
+
+The hybrid-vs-reference offset was reported as "~30% of an FSR, attributable to
+the decomposition's bookkeeping". The offset not trending toward zero still argues
+against pure discretization, but the clean attribution does not survive — the
+reference's own uncertainty is of the same order.
+
+**Why a resonator resists this.** Finesse `F = Q·FSR/λ ≈ 120`, so the field
+circulates ~120 times and any per-round-trip phase error is amplified ~120×; a
+0.5% round-trip error moves a resonance a full linewidth. FDTD's staircased arcs
+give O(h) boundary-position error, which is exactly a round-trip path-length
+error. That is the mechanism behind both the hybrid's p ≈ 0.70 comb convergence
+and the reference's wobble — not a bug in either, but what a high-finesse
+resonator does to a discretization error. (The device is linear throughout; it is
+*resonant*, which for validation is harder than nonlinearity would be, because
+the amplification is structural rather than intensity-dependent.)
+
+**Consequence:** absolute resonance wavelength is not validatable at any
+affordable resolution, by either model. FSR (p ≈ 1.4–2.1, 0.16% at res 60) and the
+single-pass coupling coefficients should carry the validation instead.
+
+### Added — check 4's observable is group delay, not amplitude dips
+
+`ring_resonator_fdtd.py` measures `τ_g = −dφ/dω`, not `|T|²` minima. An all-pass
+ring (one bus, no drop port) has `|T| ≡ 1` identically when lossless, so
+amplitude dips exist only in proportion to loss and *shrink as the
+discretization improves*. Measured on the same data: amplitude found 5 / 0 / 3
+resonances at res 20 / 30 / 40, group delay found **7 at every resolution**.
+
+Res 20's apparent resonance was a 5-pixel-gap subpixel-smoothing artifact plus
+staircase scatter, and its comb was self-evidently junk (spacings
+14.0/14.5/14.75/**30.25** nm, mean FSR 18.4 vs 12.87 predicted).
+
+⚠ Peak-finding needs a half-FSR minimum separation or each resonance is reported
+two or three times (22 "peaks" for 7 at res 40). `ring_resonator_fdtd.py` and
+`verify_ring_check4_comparison.py` briefly disagreed about how many resonances
+the same spectrum contained because only the latter had the filter.
 
 ### Measured — the ring's FDTD resolution, and it does NOT converge (job 11653509)
 
