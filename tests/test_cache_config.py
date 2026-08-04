@@ -327,6 +327,7 @@ class TestMaterialIndicesAreFingerprinted:
         """Snap -> interpolate is the change item 8 will actually make. It is
         invisible to a hash of the raw table (the data is untouched), which is
         why this records what the stack *returns*, not what it stores."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         import numpy as np
         import meow as mw
         from beef.materials.stack import resolved_material_config
@@ -393,6 +394,7 @@ class TestOneDispersionModelForBothEngines:
     def test_both_engines_agree_to_machine_precision(self):
         """The point of the exercise. EME goes through meow's material call,
         FDTD through a dispersive meep Medium; both must be the same function."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         import numpy as np
         from meow.environment import Environment
         from meow.fde.meep import meep_material
@@ -432,6 +434,7 @@ class TestOneDispersionModelForBothEngines:
         someone re-enables dispersion, they must re-parameterise so eps_inf
         carries the bulk of the permittivity, and re-run the resolution sweeps
         -- notes.md recommendation #9."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         from beef.materials import SOI_220
 
         med = SOI_220.si_medium(1.55)
@@ -444,6 +447,7 @@ class TestOneDispersionModelForBothEngines:
     def test_the_dispersive_model_is_still_available_and_correct(self):
         """`meep_medium()` is unused by the solvers but kept as the starting
         point for the eps_inf re-parameterisation, so it must stay right."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         import numpy as np
         from beef.materials.stack import meep_medium, sellmeier_index
 
@@ -454,6 +458,7 @@ class TestOneDispersionModelForBothEngines:
     def test_oxide_still_matches_meows_table_in_band(self):
         """Malitson either way, so step 2 must not have moved the cladding.
         (meep's `SiO2` is crystalline quartz and would have shifted it 0.0138.)"""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         import numpy as np
         import meow as mw
         from beef.materials.stack import sellmeier_index
@@ -467,6 +472,7 @@ class TestOneDispersionModelForBothEngines:
         """Salzberg is declared valid from 1.36 um but examples run the O-band
         to 1.26 um, so the media are built from raw susceptibilities with no
         valid_freq_range. Evaluating below 1.36 um must not raise."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         import numpy as np
         from beef.materials.stack import meep_medium
 

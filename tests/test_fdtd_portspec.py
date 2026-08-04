@@ -77,6 +77,7 @@ class TestSolveSectionPortValidation:
         past the argument-validation stage cleanly (it will go on to need
         a real geometry/meep, which we don't provide here, so we only
         assert it does NOT raise the y0/y1-related ValueError)."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         solver = self._solver()
         with pytest.raises(AttributeError):
             # None has no section_prisms()/width_at() etc. — proves

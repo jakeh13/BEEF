@@ -51,6 +51,7 @@ def test_port_aperture_crossing_pml_raises():
     Fast (no meep run): the guard fires while the domain is being set up,
     before any time stepping.
     """
+    pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
     geometry = RingResonatorBendSection(waveguide_width=0.45, bend_radius=5.0, output_margin=0.5)
     port = geometry.out_port()
     solver = FDTDSolver(

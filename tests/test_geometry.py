@@ -358,6 +358,7 @@ class TestCompoundGeometryStubIsAppliedExactlyOnce:
         assert (lo_x, hi_x) == pytest.approx((ox_lo, ox_hi))
 
     def test_section_prisms_stub_not_doubled_when_window_is_inside_one_segment(self):
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         g = self._compound()
         prisms = g.section_prisms(-0.5, 0.5, si_medium=None, stub_left=0.5, stub_right=0.5,
                                   wg_height=0.22)

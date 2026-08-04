@@ -135,6 +135,7 @@ class TestSmoothableContrastIsRestored:
         this stays far below the ~0.008 the frozen medium is wrong by at the
         band edges, which the next test pins directly.
         """
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         med = meep_medium_reparam("si", C_BAND)
         for wl in (1.50, 1.55, 1.60):
             n_meep = float(np.sqrt(med.epsilon(1.0 / wl)[0][0].real))
@@ -144,6 +145,7 @@ class TestSmoothableContrastIsRestored:
         """The actual value proposition, stated as a test rather than a claim:
         across the band the fitted medium must track n(λ) far better than a
         single index frozen at band centre — which is what ships today."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         for band in (C_BAND, O_BAND):
             med = meep_medium_reparam("si", band)
             frozen = float(sellmeier_index("si", float(np.mean(band))))
@@ -159,6 +161,7 @@ class TestSmoothableContrastIsRestored:
             )
 
     def test_medium_has_real_dielectric_contrast(self):
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         med = meep_medium_reparam("si", C_BAND)
         assert med.epsilon_diag.x > 10.0, (
             "eps_inf collapsed toward 1 -- this is the reverted attempt's bug"
@@ -176,6 +179,7 @@ class TestOptInIsInert:
         `test_default_stack_is_not_dispersive_even_given_a_band`) once the
         strip-test gate passed on all four stack/band combinations. This is the
         one test that should fail if someone flips it back without meaning to."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         stack = MaterialStack(wg_height=0.22)
         assert stack.dispersive is True
         med = stack.si_medium(C_BAND)
@@ -185,6 +189,7 @@ class TestOptInIsInert:
     def test_an_explicitly_frozen_stack_is_still_available(self):
         """The A/B path has to survive the default flip, or the frozen arm of
         every comparison in material_model_validation.md becomes unreachable."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         stack = MaterialStack(wg_height=0.22, dispersive=False)
         med = stack.si_medium(C_BAND)
         assert not med.E_susceptibilities
@@ -193,10 +198,12 @@ class TestOptInIsInert:
     def test_scalar_stays_frozen_even_when_dispersive(self):
         """Single-wavelength callers (mode solves) want exactly the index at
         that wavelength; the flag must not reach them."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         stack = MaterialStack(wg_height=0.22, dispersive=True)
         assert not stack.si_medium(1.55).E_susceptibilities
 
     def test_band_is_dispersive_when_enabled(self):
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         stack = MaterialStack(wg_height=0.22, dispersive=True)
         assert len(stack.si_medium(C_BAND).E_susceptibilities) == 1
         assert len(stack.sio2_medium(C_BAND).E_susceptibilities) == 1
@@ -263,6 +270,7 @@ class TestSolverFlags:
     in what `None` means on each."""
 
     def test_fdtd_none_inherits_the_stack(self):
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         from beef import FDTDSolver
 
         off = FDTDSolver(res=10, material_stack=MaterialStack(wg_height=0.22,
@@ -275,6 +283,7 @@ class TestSolverFlags:
     def test_fdtd_default_stack_gives_a_dispersive_solver(self):
         """The deployment, end to end: build an FDTDSolver the way the examples
         do and get dispersive media without asking for them."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         from beef import FDTDSolver
 
         assert FDTDSolver(res=10)._media(C_BAND)[0].E_susceptibilities
@@ -282,6 +291,7 @@ class TestSolverFlags:
     def test_fdtd_flag_overrides_the_stack_without_mutating_it(self):
         """The SOI_* stacks are process-wide singletons; a solver-level
         override must not leak into other solvers sharing one."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         from beef import FDTDSolver
 
         stack = MaterialStack(wg_height=0.22, dispersive=False)
@@ -297,6 +307,7 @@ class TestSolverFlags:
         silently downgrade every existing EME run. Still explicitly a *frozen*
         stack here — since 2026-08-01 the default stack is dispersive, so
         leaving it implicit would stop testing anything."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         from beef import EMESolver
 
         from beef.materials.stack import meow_material
@@ -307,6 +318,7 @@ class TestSolverFlags:
         assert _si_material(eme._extrusion_rules(C_BAND)) is meow_material("si")
 
     def test_eme_explicit_false_freezes(self):
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         from beef import EMESolver
         from beef.materials.stack import meow_material
 
@@ -317,6 +329,7 @@ class TestSolverFlags:
         assert np.allclose(si.n, si.n[0]), "frozen material still varies with wl"
 
     def test_frozen_eme_material_is_constant_across_the_band(self):
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         from beef.materials.stack import _flat_meow_material
 
         mat = _flat_meow_material("si", 1.31)
@@ -396,6 +409,7 @@ class TestMaterialIndexAgreement:
         the O-band edges. Constructed explicitly now — it was the default when
         this test was written (as `test_todays_default_really_does_disagree`)
         and is not any more."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         gap, wl, kind, a, b = self._hybrid(
             fdtd_disp=False, eme_disp=True)._material_disagreement(O_BAND)
         assert gap > 5e-3, f"expected the known ~0.008 mismatch, got {gap:.2e}"
@@ -404,6 +418,7 @@ class TestMaterialIndexAgreement:
         """The deployment's acceptance criterion, stated as a test. Build the
         chain the way the examples do and the worst index gap must sit under
         the guard's own 2e-3 tolerance — it was 0.00786, over it, before."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         from beef.solvers.hybrid import _MATERIAL_INDEX_TOL
 
         gap, *_ = self._hybrid()._material_disagreement(O_BAND)
@@ -411,17 +426,20 @@ class TestMaterialIndexAgreement:
             f"the shipped default still fails the material guard at {gap:.2e}")
 
     def test_enabling_dispersion_closes_it_to_the_fit_error(self):
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         gap, *_ = self._hybrid(fdtd_disp=True, eme_disp=True)._material_disagreement(O_BAND)
         assert gap < 2e-3, f"dispersive chain still disagrees by {gap:.2e}"
 
     def test_both_frozen_agree_exactly(self):
         """Same frozen index on both sides -- the A/B configuration."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         gap, *_ = self._hybrid(fdtd_disp=False, eme_disp=False)._material_disagreement(O_BAND)
         assert gap < 1e-12
 
     def test_raise_action_rejects_the_broken_chain(self):
         """Explicitly mixed since 2026-08-01 — the default chain is no longer
         broken, so `self._hybrid(action="raise")` would not raise."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         with pytest.raises(ValueError, match="resolve different si indices"):
             self._hybrid(fdtd_disp=False, eme_disp=True, action="raise") \
                 ._check_material_index_agreement(O_BAND)
@@ -446,6 +464,7 @@ class TestMaterialIndexAgreement:
         Sellmeier model, so it agrees to machine precision in EVERY
         configuration, including the broken one. If the guard ever starts
         reading that instead of the built media, this fails."""
+        pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         stack = MaterialStack(wg_height=0.22)
         assert abs(stack.si_index(1.26) - stack.si_index(1.26)) < 1e-15
         gap, *_ = self._hybrid()._material_disagreement(O_BAND)
