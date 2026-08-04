@@ -20,8 +20,9 @@ Core public API:
                                       beef.materials.stack._SELLMEIER; Si/SiO2
                                       by default via core_kind/clad_kind)
         SOI_160, SOI_220           — pre-built Si/SiO2 stacks for common platforms
-        SIN_300                    — pre-built 300 nm Si3N4/SiO2 stack (sz UNVALIDATED,
-                                      see validation_markdown/mmi_1x4_sin300_validation.md)
+        SIN_300                    — pre-built 300 nm Si3N4/SiO2 stack (sz=5.0 measured
+                                      converged, job 11660166; see
+                                      validation_markdown/mmi_1x4_sin300_validation.md)
 
     Solvers:
         EMESolver                  — meow-based eigenmode expansion
