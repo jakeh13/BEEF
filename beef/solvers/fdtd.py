@@ -1024,6 +1024,177 @@ class FDTDSolver:
 
         return smat
 
+    def solve_reflection(
+        self,
+        geometry: DeviceGeometry,
+        wavelengths: np.ndarray,
+        port: str = "top",
+        input_mode: int = 1,
+        edge_clearance: float = 0.0,
+        save_dir: Optional[str] = None,
+        cache_only: bool = False,
+        **kwargs,
+    ) -> SMatrix:
+        """Broadband FDTD reflection spectrum for a single-port device.
+
+        solve() cannot report anything physical for a device with no far-side
+        output port to normalize against — a mirror, a grating coupler, or
+        any other structure whose only well-defined waveguide cross-section
+        is the one it is excited from (e.g. a GdsGeometry import with one
+        access waveguide feeding a freeform region and no matching waveguide
+        on the opposite side). It requires output_monitor_centers on the
+        opposite domain edge and, at its own normalization monitor, only
+        ever reads the forward-traveling mode coefficient
+        (``coeff.alpha[0, :, 0]``) — never the backward one.
+
+        This method reads BOTH directions off that same monitor instead:
+        ``alpha[0, :, 0]`` (forward, the incident/normalization amplitude)
+        and ``alpha[0, :, 1]`` (backward, the amplitude reflected back into
+        the excited mode) — meep's standard single-run S11 decomposition,
+        and the same forward/backward convention ``PortSpec.alpha_idx``
+        documents elsewhere in this module (validated there against
+        ``ring_resonator_hybrid_cascaded.py``'s ``get_coeffs()``). No second
+        "incident-only" reference run is needed: both amplitudes come off
+        one monitor's DFT fields in the single structured run.
+
+        Domain sizing deliberately does NOT reuse solve()'s
+        ``Sx = total_length + 2*waveguide_length + 2*dpml``. That formula
+        assumes ``geometry.polygons(stub_length=...)`` extends the drawn
+        silicon by ``waveguide_length`` on each side to reach the PML —
+        true for every parametric geometry (MMI, Taper, ...), false for
+        GdsGeometry and any geometry whose docstring says stub_length is
+        ignored. Relying on it here would place the source/monitor in bare
+        oxide past the geometry's own silicon, not inside a waveguide.
+        Instead PML sits ``edge_clearance`` (plain oxide, default 0 — flush)
+        outside ``geometry.total_length``'s own bounding box on both sides,
+        and ``source_margin``/``monitor_margin`` (measured inward from the
+        PML inner edge, same meaning as solve()) must be picked small enough
+        to land inside whatever real input waveguide the geometry itself
+        drew there — check with a geometry plot before trusting a run; there
+        is no automatic guard for this, because the geometry does not
+        generally expose its own stub length.
+
+        Args:
+            geometry: device geometry (implements to_meep_prisms()).
+            wavelengths: wavelengths to evaluate (µm), determines DFT frequencies.
+            port: input port label — as solve(): "top" selects
+                geometry.input_ys' last (highest-y) entry, "bot" its first.
+            input_mode: 1-based waveguide mode index to excite and measure.
+            edge_clearance: plain-oxide gap (µm) between geometry.total_length's
+                bounding box and the PML, both sides. 0 (default) puts PML
+                flush against the geometry's own edges.
+            save_dir, cache_only: as solve().
+            **kwargs: forwarded to geometry.source_aperture_at(), as solve().
+
+        Returns:
+            SMatrix with a single entry, ``port="in"``,
+            ``in_mode=out_mode=input_mode``: complex amplitude whose
+            ``|.|**2`` is the power reflected back into that mode, i.e.
+            ``smat.transmission(port="in", in_mode=input_mode,
+            out_mode=input_mode)`` gives R(λ). ``smat.check_passive()`` is a
+            necessary-but-not-sufficient sanity check that R never exceeds 1
+            — it says nothing about where the rest of the power went
+            (radiated, scattered, or genuinely absorbed).
+        """
+        import meep as mp
+
+        wavelengths = np.asarray(wavelengths)
+        stub_length = 0.0  # see docstring — GdsGeometry ignores this anyway
+
+        config = None
+        if save_dir:
+            config = build_whole_device_config(
+                self, "solve_reflection",
+                dict(port=port, input_mode=input_mode, edge_clearance=edge_clearance,
+                     wavelengths=wavelengths, kwargs=kwargs,
+                     **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor),
+                     **resolved_material_config(
+                         self.material_stack, wavelengths,
+                         self.material_stack.resolve_dispersive(self.dispersive))),
+                geometry, geometry.polygons(stub_length=stub_length),
+            )
+            hit = lookup(save_dir, config)
+            if hit is not None:
+                logger.info("solve_reflection: cache hit at %s", hit)
+                return load_result(hit)
+        if cache_only:
+            raise CacheMissError(
+                f"solve_reflection(): cache_only=True but no cached run found "
+                f"for this config (save_dir={save_dir!r}). Run once with "
+                f"cache_only=False to populate the cache."
+            )
+
+        wl_center = float(np.mean(wavelengths))
+        Sx = geometry.total_length + 2 * (edge_clearance + self.dpml)
+        Sy = self.sim_width + 2 * self.dpml
+        si_med, sio2_med = self._media(wavelengths)
+        fcen = 1.0 / wl_center
+        fwidth = source_fwidth(wavelengths, self.source_bandwidth_factor)
+        mon_freqs, wl_order = monitor_freq_grid(wavelengths)
+        check_source_coverage(fcen, fwidth, wavelengths)
+
+        geometry_meep = geometry.to_meep_prisms(
+            si_med, stub_length=stub_length, wg_height=self._wg_height,
+        )
+
+        input_ys = getattr(geometry, "input_ys", [0.0])
+        input_idx = len(input_ys) - 1 if port == "top" else 0
+        src_yo = input_ys[input_idx]
+        src_x = -Sx / 2 + self.dpml + self.source_margin
+        src_width = self.sim_width
+        _aperture_at = getattr(geometry, "source_aperture_at", None)
+        if _aperture_at is not None:
+            src_aperture = _aperture_at(src_x, **kwargs)
+            if src_aperture is not None:
+                src_width = min(src_aperture, self.sim_width - 2.0 * abs(src_yo))
+
+        src = mp.EigenModeSource(
+            mp.GaussianSource(fcen, fwidth=fwidth),
+            center=mp.Vector3(src_x, src_yo),
+            size=mp.Vector3(0, src_width, self._mon_sz),
+            eig_band=input_mode,
+            eig_kpoint=mp.Vector3(1, 0, 0),
+            eig_match_freq=True,
+        )
+
+        mon_x = -Sx / 2 + self.dpml + self.monitor_margin
+
+        sim = mp.Simulation(
+            resolution=self.res,
+            cell_size=mp.Vector3(Sx, Sy, self._cell_sz),
+            boundary_layers=[mp.PML(self.dpml)],
+            geometry=geometry_meep,
+            sources=[src],
+            default_material=sio2_med,
+            eps_averaging=self.eps_averaging,
+            subpixel_tol=self.subpixel_tol,
+            subpixel_maxeval=self.subpixel_maxeval,
+        )
+
+        mon = sim.add_mode_monitor(
+            mon_freqs,
+            mp.FluxRegion(center=mp.Vector3(mon_x, src_yo),
+                          size=mp.Vector3(0, src_width, self._mon_sz)),
+        )
+
+        sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol))
+
+        coeff = sim.get_eigenmode_coefficients(mon, [input_mode], eig_parity=mp.NO_PARITY)
+        fwd = coeff.alpha[0, :, 0]   # [nfreq] incident amplitude, monitor order
+        bwd = coeff.alpha[0, :, 1]   # [nfreq] reflected amplitude, monitor order
+
+        smat = SMatrix(wavelengths=wavelengths)
+        r = (bwd / fwd)[wl_order]
+        smat.set(r, port="in", in_mode=input_mode, out_mode=input_mode)
+
+        sim.reset_meep()
+
+        if save_dir:
+            folder = save_run(save_dir, config, smat)
+            logger.info("solve_reflection: cache saved at %s", folder)
+
+        return smat
+
     # ------------------------------------------------------------------
     # Mode inspection (no time-stepping)
     # ------------------------------------------------------------------

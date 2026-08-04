@@ -1,5 +1,16 @@
 # Modal multiplexer validation — to-do
 
+> **Status 2026-08-04 — resumed, moved out of `deferred/`.** Reviewed against
+> the live repo before touching anything: every claim below still matches —
+> `modal_multiplexer_hybrid.py` still ships `N_MODES=16`/`RESOLUTION=40`
+> unchanged, `modal_multiplexer_fdtd.py` still opens with its `BLOCKED — do
+> not run` docstring, only geometry-plot output exists on disk for either
+> script (no `smatrix.pkl` for either), and the orphaned merge job
+> (11597199, per `running_jobs.md`) is no longer in the queue. Nothing moved
+> here since the 2026-08-01 snapshot. At the user's direction this file
+> leaves `deferred/` and work restarts, beginning with gap 5/check 1 (engine
+> agreement) — see gap 5 below for the new script and its run status.
+
 > **2026-07-28 — the material model changed under every device here.** Both engines
 > now evaluate one analytic Sellmeier model (Salzberg Si, Malitson SiO2) instead of
 > each doing its own nearest-tabulated lookup, which shifts n_Si by ~0.002 and
@@ -12,7 +23,7 @@
 
 
 Opened 2026-07-26. This is the gap list against the four checks in
-[README.md](../README.md).
+[README.md](README.md).
 
 **Status 2026-07-30 (late):** gap 2 (resolution) is **measured** — job
 11575516 swept both engines' `res` independently at interface 0 and found the
@@ -355,10 +366,54 @@ So it has the most ways to be wrong and the fewest ways to find out.
    the resolution question settles, so the recorded values are not immediately
    invalidated.
 
-5. **Engine agreement not measured.** Adapt
-   `verify_item_6_engine_agreement.py` onto a uniform stretch of the body. The
-   extraction helper (`tests/test_engine_agreement.py::dbeta_from_phases`) is
-   device-independent.
+5. **Engine agreement — script written 2026-08-04, run in progress.** Adapted
+   `verify_item_6_engine_agreement.py` onto a uniform stretch of the body, per
+   the sibling MMIs' own precedent (`resolved/mmi_1x2_validation.md` gap 4,
+   `resolved/mmi_2x2_validation.md` gap 4) rather than re-deriving the
+   approach: `examples/verification/python/
+   verify_modal_multiplexer_engine_agreement.py` cuts a section of MMI 1's
+   body (mm_length=16.92, the shorter of the two — gap 1 already established
+   both bodies share an identical 2.8 µm × 0.16 µm SOI_160 cross-section, so
+   checking one represents both) at four lengths (2/4/6/8 µm, 4.46 µm clear of
+   the taper seam at the longest), fits `Δβ_FDTD` from FDTD's accumulated
+   phase between the two lowest guided modes via the device-independent
+   `beef.solvers.fdtd.dbeta_from_phases()`, and compares it against `Δβ_EME`
+   from the same cross-section's own eigenvalues. Pinned at the shipped
+   `RESOLUTION = 40` (checks the shipped config, not a converged one — see the
+   script's own docstring for why the two lowest modes are less exposed to
+   gap 2's res-40 shortfall than the full 16-mode basis is) and the shipped
+   O-band grid (1.26–1.36 µm), matching `modal_multiplexer_hybrid.py` exactly
+   so this is a check *of* that device, not an adjacent one.
+
+   Shipped already in the array-per-length + merge shape from the start
+   (`batch/verification/run_modal_multiplexer_engine_agreement.batch` +
+   `..._merge.batch`, `--account=gts-sr108-ece`) rather than discovering the
+   need for it the way the 2×2 sibling did (its first attempt, job 11591249,
+   TIMED OUT at 5h having finished only 2 of 4 lengths). Deliberately bare
+   `python`, not `srun --mpi=pmi2` — this script carries no MPI rank guards,
+   and both MMI siblings already proved a single meep process finishes a
+   problem this size inside an 8h budget; see the script's own docstring for
+   why this is the proven-safe configuration here, not a repeat of the
+   missing-launcher bug that cost gap 6 three timeouts on the much larger,
+   rank-guarded production hybrid solve.
+
+   Login-node smoke check before submission (object construction + the cheap
+   EME half only, no FDTD time-stepping — the OOM lesson from this device's
+   own hybrid work says any real-mesh FDTD belongs in SLURM, not a login-node
+   background process): `make_mmi1()` builds the correct 16.92 µm body, all
+   four section lengths land inside it with 4.46–7.46 µm of taper clearance,
+   both solvers construct cleanly, and `eme_dbeta()` ran for real (1 rank,
+   1237 s) returning sensible, strictly-descending n_eff (`[2.7458, 2.7183]`
+   at 1.26 µm down to `[2.6688, 2.6359]` at 1.36 µm) and smoothly increasing
+   `Δβ_EME` across the band (0.1370 → 0.1519 rad/µm) — the assert on mode
+   ordering did not fire, and nothing about the geometry/API calls needed
+   correcting before committing to the expensive FDTD half.
+
+   Submitted 2026-08-04 as **job 11670540 `[0-3]`** (array, one section
+   length per task, `batch/verification/run_modal_multiplexer_engine_
+   agreement.batch`, `-t 480`, `gts-sr108-ece`) with merge job **11670544**
+   dependent on it (`--dependency=afterok:11670540`,
+   `..._merge.batch`, `-t 30`). See `running_jobs.md` for live status.
 
 6. **New, opened 2026-07-30 — `FDTDSolver`'s duplicate-eigenmode-band bug.
    DONE 2026-07-30 for `section_mode_neff()`/`section_mode_fields()`;
@@ -641,3 +696,17 @@ for the order below:
 
 Then **4**, to stop the numbers drifting unnoticed while the rest is worked on.
 **3** and **5** last: both are real simulation campaigns.
+
+**Re-ordered 2026-08-04, at the user's direction: start with 5, not last.**
+This reverses the sequencing above, for reasons that did not exist when it
+was written — **3** is now known-blocked on a real library gap (`notes.md`
+Geometry item 8), not merely expensive, so it cannot go next regardless of
+where the list puts it; and **4** (golden) is explicitly gated on the
+`N_MODES`/`RESOLUTION` decision that gap 2 raised, which has not been made.
+**5** (engine agreement), by contrast, is unblocked, cheap relative to the
+device's other campaigns (both MMI siblings closed their own version inside
+an 8h budget once reshaped), and — same reasoning `directional_coupler_
+validation.md` item 6 and both MMI gap-4s already used — is a localized
+question (does the body's own uniform cross-section accumulate phase the
+same way in both engines) that does not depend on **3** or **4** being
+settled first. See gap 5 for the script and run status.

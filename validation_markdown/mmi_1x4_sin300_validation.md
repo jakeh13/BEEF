@@ -886,6 +886,76 @@ the "same" length differed by 0.0208 µm between two examples (fixed 2026-08-03,
 job 11655592). If the 1×4 hybrid pins an `mm_length` for its plots, splice it
 into the sweep grid and assert the hit is exact — do not repeat that.
 
+**⚠ v1 of the design-tool script was WRONG, not just imprecise — MEASURED
+2026-08-03/04.** The first attempt built `M_in`/`M_out[k]` by calling
+`EMESolver.solve_section()` directly on the taper+access bands (mirroring the
+body's own `solve_section_length_sweep()` call, on the theory that an
+"all-EME, cheaper than hybrid" design tool could reuse the same convenience
+method everywhere). Smoke-test job 11660322 returned **T = 1.0000 exactly**
+for every output, every `mm_length`, every wavelength (`total T = 4.0000`,
+violating energy conservation on its face).
+
+Root cause, confirmed both empirically and by reading meow's own source
+(`create_cells`/`Cell.structures_2d`/`compute_s_matrix`, job 11661894):
+`solve_section()` builds exactly **one** `Ls=[length]` cell, samples the
+geometry at **one** z location (`Cell.structures_2d`: `z =
+0.5*(z_min+z_max)`), and computes **one** mode basis shared by both the
+"left" and "right" ports of that cell. `mw.compute_s_matrix()` with only one
+cell has no second, distinct cross-section to build a mode-overlap interface
+against — the returned block is the **identity** (mode *i* → mode *i*, unit
+magnitude, phase only) **by construction**, regardless of how physically
+complex the sampled cross-section is. Verified directly: calling
+`solve_section()` on this device's own output taper+access band with
+`n_modes_in=n_modes_out=6` returned exactly `np.eye(6)`.
+
+This means `solve_section()` is only ever valid over a genuinely **uniform**
+region end to end — exactly what `solve_section_length_sweep()`'s own
+docstring already requires for the body, and exactly why `mmi_1x2_hybrid.py`/
+`mmi_2x2_hybrid.py` use **FDTD**, not EME `solve_section()`, for every taper
+band (`INPUT_METHOD = OUTPUT_METHOD = "fdtd"`, only `BODY_METHOD = "eme"`).
+There is no all-EME shortcut cheaper than that for a device with real tapers.
+The established all-EME device examples don't take one either:
+`mmi_1x2_eme.py` calls `EMESolver.solve()`/`solve_length_sweep()` — the
+**full multi-cell** device solve (`num_cells=[1,8,1,8,1]`, each taper
+genuinely staircased into 8 sub-cells with real mode-mixing interfaces
+between them) — never `solve_section()` on a taper span directly.
+
+**Fix (v2), MEASURED working 2026-08-04 (job 11662670):** rewrote
+`mmi_1x4_sin_body_length_sweep.py` on `mmi_1x2_eme.py`'s actual pattern — one
+`EMESolver` with 5 regions (`wg_in | taper_in | MMI body | taper_out |
+wg_out`), tapers subdivided into real cells, one `output_idx` call per output
+branch (four calls, no mirror-symmetry shortcut — this device's one input
+side is structurally different from its four-branch output side, same
+reasoning v1 already had right). The length sweep rides
+`solve_length_sweep(sweep_region=2)` — the multi-cell generalization of the
+single-cell trick — so it stays free regardless of grid size. Reduced-scope
+smoke test (`N_BODY=6`, `N_TAPER=4`, `C_TAPER=2`, `N_WL=3`, 5 lengths) now
+returns genuinely length-dependent, non-trivial T: per-output band-mean T =
+[0.0924, 0.1210, 0.1210, 0.0924] at `mm_length=40` — note the exact
+left-right mirror pairing (output 0 ↔ 3, 1 ↔ 2), which is the geometry's own
+y-symmetry showing up correctly, not a bug. `total T = 0.4267` at this
+severely truncated mode count is expected to rise substantially at the real
+`N_BODY=20` (most of an MMI's self-imaging power lives across many
+interfering modes, not the top 6).
+
+**Compute cost, MEASURED:** the smoke config took ≈15–17 min/branch even at
+this reduced scope; scaling to the real config (`N_BODY=20`, `N_TAPER=10`,
+`C_TAPER=8`, mode-solve cost dominated) projects to roughly a full day if all
+four branches ran sequentially in one job. Restructured into one script that
+solves a single branch selected by an `MMI1X4_OUTPUT_IDX` env var, submitted
+as a 4-task SLURM job array (`run_mmi1x4_body_sweep.batch`, one task per
+`output_idx`, `-t 08:00:00` each, run in parallel) — turning a ~1-day
+sequential job into a few-hour wall-clock one at the same total CPU cost.
+`mmi_1x4_sin_body_length_sweep_merge.py` combines the four saved
+`mm_length_sweep_branch{k}.npz` files into the final `mm_length` pick +
+evidence plot once all four tasks finish. `N_WL` also reduced from 11 to 5
+for this exploratory design-tool pass (final validation is step 6's job, not
+this script's).
+
+Real run submitted 2026-08-04 as job array 11667114 (tasks 0–3). Results
+pending — this section will be updated with the measured `mm_length` and
+evidence plot once the array completes.
+
 ### Step 6 — the three example scripts
 
 Directory `BEEF/examples/mmi_1x4/python/`, mirroring `mmi_1x2/`:
@@ -910,7 +980,34 @@ and `output_monitor_widths` are already lists — supply four of each. The 1×2 
 half-domain windows (`[2.5/2, -2.5/2]`, widths `[2.5, 2.5]`); **four monitors
 cannot each take half the domain**, so the windows must be sized to the actual
 port pitch without overlapping. This is the one place the 1×4 FDTD script is not
-a mechanical copy of the 1×2.
+a mechanical copy of the 1×2. **Use `use_neighbor_aperture=True`** on the `MMI`
+geometry (not `half_domain_aperture`) — `beef/geometry/mmi.py`'s own docstring
+is explicit that the fixed half-domain rule only works when a simple two-way
+symmetry split isolates each port, which fails here (`output_ys` = [-3.6,
+-1.2, +1.2, +3.6] µm — a y=0 split still groups ports 0&1 together and 2&3
+together). `use_neighbor_aperture` instead sizes each port's aperture to the
+distance to its *nearest* neighbor specifically, generalizing past two ports.
+
+**6b/6c/6d crosstalk check — MEASURED 2026-08-04, done in parallel with step
+5 (job 11667138), since it does not depend on `mm_length`.** The plan's own
+concern here ("the 1×2's 0.65 µm edge-to-edge justification must be
+recomputed for nitride, where a weakly-confined mode couples across a gap
+that would be safe in silicon") turned out NOT to be a problem at this
+design's actual spacing. Even/odd supermode analysis (Ansys/Lumerical
+"Evanescent waveguide couplers" method, same as `directional_coupler_mode.py`
+— `compute_modes_tidy3d`, not `compute_modes_meep`, per step 4's fix) on two
+1.1 µm SIN_300 strips at `waveguide_offset − waveguide_width = 2.4 − 1.1 =
+1.3 µm` edge-to-edge gap: `n_eff,even=1.58798`, `n_eff,odd=1.58671`,
+`L_c = 614.2 µm`. Over the actual propagation length these four waveguides
+sit this close together in the modeled device (`taper_length + stub ≈
+5.5 µm`), `T_cross = sin²(πL/2L_c) = 0.000198` — negligible by three orders
+of magnitude. Gap sweep confirms comfortable margin even far tighter than
+this device's actual spacing (0.5 µm gap: still only 2.3%). **Conclusion:
+`waveguide_offset=2.4` does not need revision for crosstalk, and no
+mode-basis contamination is expected in either the EME per-branch solves
+(already geometrically isolated via `output_idx`/`to_gds_eme`) or the FDTD
+monitors (`use_neighbor_aperture=True` is a numerical-isolation convenience,
+not compensating for a real physical coupling problem).**
 
 **6d. `mmi_1x4_hybrid.py`.** Model on `mmi_1x2_hybrid.py` — FDTD sections on the
 tapered input/output, EME on the uniform body, per-output solves as in 6b.
@@ -919,6 +1016,29 @@ explicit that a shared resolution knob is how a 7% error survived for months, an
 the 1×2's check 2 actually *failed* at `N_MODES=12` until it was dropped to 8. A
 1×4 body is wider and supports more modes than either existing MMI, so neither
 device's numbers transfer.
+
+**All three drafted 2026-08-04, in parallel with step 5's mm_length sweep
+(job array 11667114), since nothing about their structure depends on the
+exact `mm_length` value.** `mmi_1x4_eme.py` (`solver.solve()` once per
+`output_idx`, `N_BODY=20`/`N_TAPER=10`/`C_TAPER=8` carried over from the
+now-validated step 5 design tool), `mmi_1x4_fdtd.py` (four fixed
+`output_monitor_centers`/`widths` at `mmi.output_ys`, 2.0 µm windows — <
+2.4 µm spacing, per 6c), and `mmi_1x4_hybrid.py` (FDTD input/output +
+EME body, `use_neighbor_aperture=True`, four `hybrid.solve()` calls sharing
+one `cache` dict, `N_MODES=20`) each carry `MM_LENGTH = None` with a guard
+that raises `NotImplementedError` until step 5's real value is filled in —
+deliberately not a silent placeholder. **Structurally validated** (not
+solved): a temporary copy of each script with a stand-in `mm_length=150.0`
+and an early exit right after its geometry plot ran clean through MMI
+construction, solver instantiation (`FDTDSolver`/`EMESolver`/`HybridSolver`),
+and `plot_*_geometry` (including `mmi_1x4_hybrid.py`'s `sub_region_configs`,
+one per output branch) with no errors — the call signatures are right, only
+the real `mm_length` and an actual solve are outstanding. `mode_solver=
+"tidy3d"` throughout (never `"meep"`) per step 4's fix, including in the
+hybrid's EME body sub-solver, where the established precedent
+(`mmi_1x2_hybrid.py`/`mmi_2x2_hybrid.py`) uses `"meep"` — flagged in
+`mmi_1x4_hybrid.py`'s own docstring as a `calibrate_body_neff` risk to
+revisit at step 8 if the engine-agreement check finds it matters.
 
 ### Step 7 — wiring
 

@@ -1,7 +1,69 @@
 # Active SLURM jobs — snapshot
 
-**★ TWENTY-THIRD SNAPSHOT — 2026-08-03 (even later), verified against
+**★ TWENTY-FIFTH SNAPSHOT — 2026-08-04, verified against
 `squeue -u jhiesener3`. This is the current one.**
+
+| job | state | what |
+|---|---|---|
+| **11670540** `[0-3]` | 🏃 RUNNING (all 4 tasks) | `beef_modal_mux_engine_agreement` — `modal_multiplexer_validation.md` gap 5 (README.md check 1), never measured before. One SLURM array task per section length (2/4/6/8 µm) cut inside MMI 1's body, `-t 480`, `gts-sr108-ece`, deliberately bare `python` (no MPI rank guards in this script — see its own docstring). Smoke-tested on the login node first: object construction + the real (not mocked) EME half, 1237 s, sensible descending n_eff and smooth Δβ_EME(λ). Merge job **11670544** (`--dependency=afterok:11670540`) will assemble the FDTD/EME ratio once all 4 land |
+| **11670282** | 🏃 RUNNING | `beef_hcg` — high contrast grating full-band production run, unrelated to this thread, unchanged this snapshot |
+| **11667114_0..3** | 🏃 RUNNING (job array, 4 tasks) | `beef_mmi1x4_body_sweep` — 1x4 MMI on 300nm Si3N4, step 5's `mm_length` design sweep, one task per output branch (`MMI1X4_OUTPUT_IDX=0..3`). Real (full-scope) run of the v2 script: `N_BODY=20`, `N_TAPER=10`, `C_TAPER=8`, `N_WL=5`, 281-point `mm_length` sweep (analytically free). `-t 08:00:00`/task, projected ~3.5-4 hrs/task from smoke-test scaling. Run `mmi_1x4_sin_body_length_sweep_merge.py` once all 4 tasks land. |
+
+### 11670540 `[0-3]` + 11670544 — `beef_modal_mux_engine_agreement`, this device resumed out of `deferred/`
+
+At the user's direction, `modal_multiplexer_validation.md` moved out of
+`deferred/` back to the top level of `validation_markdown/` today, and work
+restarted with gap 5 (check 1, engine agreement) rather than picking up where
+gap 6's exercise run left off (the 25 h/three-timeout campaign) or gap 3's
+`CompoundGeometry.polygons()` library gap — gap 5 is unblocked, cheap relative
+to this device's other campaigns, and answers a localized question (does the
+body's own uniform cross-section accumulate phase the same way in both
+engines) independent of those two open items. See the validation doc's
+"Re-ordered 2026-08-04" note under Order for the full reasoning.
+
+`examples/verification/python/verify_modal_multiplexer_engine_agreement.py`
+is a direct adaptation of `verify_mmi_2x2_engine_agreement.py` (same
+mechanism as `resolved/directional_coupler_validation.md` item 6): cut MMI
+1's body (mm_length=16.92, gap 1 already established both of this device's
+bodies share an identical cross-section) at 2/4/6/8 µm, fit
+`Δβ_FDTD` from FDTD's accumulated phase via `dbeta_from_phases()`, compare
+against `Δβ_EME` from the same cross-section's eigenvalues — at the shipped
+`RESOLUTION = 40` and this device's own O-band grid, unlike the coupler/2×2
+scripts' C-band. Shipped already in the array-per-length + merge shape from
+the start, learning from the 2×2 sibling's own history (its first attempt,
+11591249, timed out at 5h with 2/4 lengths done) rather than rediscovering
+it. Deliberately bare `python`, not `srun --mpi=pmi2` — no rank guards in
+this script, and both MMI siblings already proved a single meep process
+finishes a problem this size inside an 8h budget.
+
+### 11667114 — a real bug found and fixed first, not a routine sweep
+
+The design-tool script for this sweep went through two versions before this
+run. v1 (all-EME via `EMESolver.solve_section()` on the taper bands) was
+**wrong, not imprecise** — smoke test 11660322 returned T=1.0000 for every
+output/length/wavelength (`total T=4.0000`, violating energy conservation).
+Root cause, confirmed both empirically (job 11661894: `solve_section()` on
+this device's own output band, 6 modes, returned exactly `np.eye(6)`) and by
+reading meow's source: a single `Ls=[length]` cell samples one cross-section
+and shares one mode basis between both its "ports", so `compute_s_matrix()`
+has no adjacent interface to mix modes across — the result is the identity
+matrix **by construction**, regardless of the geometry's real complexity.
+`solve_section()` is only valid on genuinely uniform regions (as
+`solve_section_length_sweep()`'s own docstring already required for the
+body) — exactly why `mmi_1x2_hybrid.py`/`mmi_2x2_hybrid.py` use FDTD, not EME
+`solve_section()`, on every taper band. v2 rewrote the script on
+`mmi_1x2_eme.py`'s actual all-EME pattern (`EMESolver.solve_length_sweep()`,
+tapers genuinely subdivided into real cells via `num_cells`) — smoke-tested
+working (job 11662670: T now varies with length, shows the expected
+left-right mirror symmetry). Smoke timing also surfaced a real cost problem
+(~1 day if all 4 output branches ran sequentially in one job), fixed by
+splitting into this 4-task job array instead. Full chain of evidence in
+`mmi_1x4_sin300_validation.md` step 5.
+
+---
+
+**TWENTY-THIRD SNAPSHOT — 2026-08-03 (even later), verified against
+`squeue -u jhiesener3`.**
 
 | job | state | what |
 |---|---|---|
@@ -843,12 +905,12 @@ of billing minutes; `gts-sr108-gedc_main` had headroom). Cancelled all five
 
 | job | name | state (at snapshot) | for |
 |---|---|---|---|
-| 11575516 | `beef_mode_spec_converge` | ✅ **COMPLETED** 21:17, 3:36:13 — results folded in, entry retained for provenance | [resolved/fdtd_vs_EME_mode_validation.md](resolved/fdtd_vs_EME_mode_validation.md) item 1 + [modal_multiplexer_validation.md](deferred/modal_multiplexer_validation.md) gap 2 |
+| 11575516 | `beef_mode_spec_converge` | ✅ **COMPLETED** 21:17, 3:36:13 — results folded in, entry retained for provenance | [resolved/fdtd_vs_EME_mode_validation.md](resolved/fdtd_vs_EME_mode_validation.md) item 1 + [modal_multiplexer_validation.md](modal_multiplexer_validation.md) gap 2 |
 | ~~11577985~~ → **11585844** `[1-2]` | `beef_mmi_2x2_examples` | ✅ **COMPLETED** — `_1` 1:16:45, `_2` 4:11:55; both SMatrix files on disk | [resolved/mmi_2x2_validation.md](resolved/mmi_2x2_validation.md) gap 5 (data) |
 | ~~11577986~~ → **11585849** | `beef_mmi_2x2_gap5` | ✅ **COMPLETED** 12:46, 0:18 — **worst max\|ΔT\| 0.0043 (0.82%), sign FLIPS across the band (not the 1×2's uniform signature); results folded in** | [resolved/mmi_2x2_validation.md](resolved/mmi_2x2_validation.md) gap 5 (comparison) |
 | ~~11578018~~ → **11585845** `[1-2]` | `beef_mmi_1x2_examples` | ✅ **COMPLETED** — `_1` 8:57, `_2` 1:46:59; both SMatrix files on disk | [resolved/mmi_1x2_validation.md](resolved/mmi_1x2_validation.md) gap 5 (data) |
 | ~~11578019~~ → **11585850** | `beef_mmi_1x2_gap5` | ✅ **COMPLETED** 10:28, 0:09 — **max\|ΔT\| 0.0359 (9.11%), results folded in** | [resolved/mmi_1x2_validation.md](resolved/mmi_1x2_validation.md) gap 5 (comparison) |
-| ~~11578026~~ → ~~11585847~~ → **11590663** `[0]` | `beef_modal_mux_examples` | 11585847 ❌ **TIMEOUT** 13:42 (full 5h, 4 nodes) — sections 0-3 cached to disk before it died mid-section-4; resubmitted unchanged as 11590663 → ❌ **TIMEOUT again**, 18:58, full 5h — got further (deep into a per-port section-4 eigenmode-overlap monitor, band 13/14) but still did not finish or reach the item-8 `warn_on_transfer_duplicate` scan this run exists to exercise → reshaped as **11597177** `[0-2]` → ❌ **THIRD TIMEOUT 2026-08-01**, all 3 tasks, full 5h × 4 nodes each. **Cause found: the reshaped batch script dropped `srun --mpi=pmi2`, so meep ran on 1 rank instead of 96 (~42× slower per step) with 96 cores idle**; and the "sections 0-3 are cached" premise it rested on is false — every task recomputed them. **NOT resubmitted, device is deferred**; merge 11597199 orphaned on `DependencyNeverSatisfied`, cancel it. ~25 h of compute spent, gap 6 still unanswered | [modal_multiplexer_validation.md](deferred/modal_multiplexer_validation.md) gap 6 (exercise run) |
+| ~~11578026~~ → ~~11585847~~ → **11590663** `[0]` | `beef_modal_mux_examples` | 11585847 ❌ **TIMEOUT** 13:42 (full 5h, 4 nodes) — sections 0-3 cached to disk before it died mid-section-4; resubmitted unchanged as 11590663 → ❌ **TIMEOUT again**, 18:58, full 5h — got further (deep into a per-port section-4 eigenmode-overlap monitor, band 13/14) but still did not finish or reach the item-8 `warn_on_transfer_duplicate` scan this run exists to exercise → reshaped as **11597177** `[0-2]` → ❌ **THIRD TIMEOUT 2026-08-01**, all 3 tasks, full 5h × 4 nodes each. **Cause found: the reshaped batch script dropped `srun --mpi=pmi2`, so meep ran on 1 rank instead of 96 (~42× slower per step) with 96 cores idle**; and the "sections 0-3 are cached" premise it rested on is false — every task recomputed them. **NOT resubmitted, device is deferred**; merge 11597199 orphaned on `DependencyNeverSatisfied`, cancel it. ~25 h of compute spent, gap 6 still unanswered | [modal_multiplexer_validation.md](modal_multiplexer_validation.md) gap 6 (exercise run) |
 | ~~**11586046**~~ → **11588309** | `beef_diagnose_items_11_12` | 11586046 ❌ **CANCELLED** 11:12 (hung, not slow); refixed → **11588309 ✅ COMPLETED 11:50, 34:55 — BOTH ITEMS RESOLVED:** item 11 closed (all four grids agree at res 40 too), item 12 decisive (laddering recovers a 14th guided mode at equal cost) | [resolved/fdtd_vs_EME_mode_validation.md](resolved/fdtd_vs_EME_mode_validation.md) items 11 + 12; it also opened item 14 |
 | **11586098** | `beef_diagnose_item_13` | ✅ **COMPLETED** 10:50, 1:54:50 — **C vs A inert (max \|Δn_eff\| 0.000e+00), cost 3.2×; results folded in** | [resolved/fdtd_vs_EME_mode_validation.md](resolved/fdtd_vs_EME_mode_validation.md) item 13 |
 | ~~11586986~~ → ~~11588997~~ | `beef_dispersive_convergence` | 11586986 ❌ **CANCELLED** 12:00 — **it was measuring nothing**, `dispersive=` never reached the mode solve (library bug, fixed); refixed → **11588997 ✅ COMPLETED** 13:56, 1:56:53 — **pin holds at centre, holds at the edge only up to the 1e-3 tolerance production actually uses (needs res 80, not 60, under dispersion — which is what's already shipped); does not fully converge at 3e-5 at the edge within res 20–120** | [material_model_validation.md](resolved/material_model_validation.md) work item 4 (cheap half) |
@@ -860,7 +922,7 @@ of billing minutes; `gts-sr108-gedc_main` had headroom). Cancelled all five
 | **11591249** → **11596845** `[0-3]` + **11596851** | `beef_mmi_2x2_engine_agreement` | ✅ **CLOSED 2026-08-01 by the reshape** — array all 4 COMPLETED (`_0`/`_1` 36 s cache hits, `_2` 3:35:10, `_3` 5:07:14) + merge 25:29. **Ratio 0.9953 — engines agree to 0.47%, `calibrate_body_neff` NOT indicated on this device.** T diagonal to 1.21e-05, fit residual 4.02e-06 rad (log shows both as `0.0000` at `:.4f`; real values read from the `.npz`). Gap 4 was this device's last open check. Original attempt below: ❌ **TIMEOUT** 19:46, full 5h — 4 of the 4 lengths' first run completed (2/4/6/8 µm all show a `run 0 finished` line), a 5th run (second pass, presumably for the reverse-direction or FDTD-vs-EME comparison half) was ~5,300 of a likely ~30,000 timestep run when killed — well under half done on that leg. Gap 4 (this device's last open check) did **not** close | [resolved/mmi_2x2_validation.md](resolved/mmi_2x2_validation.md) gap 4 / [README.md](README.md) check 1 — never measured for either MMI; 4 real FDTD solve_section() runs, adapted from the coupler's item 6 script |
 | **11592462** `[0-2]` | `beef_dc_examples` | `_0` (hybrid) ❌ **TIMEOUT** 21:34, full 5h — see detail section below, not yet diagnosed; `_1` (mode) ✅ **COMPLETED 16:37, 3:49** — legit, not flagged: serial MPB even/odd supermode sweep (1 process), inherently cheap, no BEEF solver/cache involved; L_c = 32.813 µm at λ=1.55, gap sweep 0.15–0.5 µm recorded, `_2` (fdtd) ✅ **COMPLETED 16:33, 0:00:17** — **flagged, not yet trusted as a clean result:** 17s for a full 3-D broadband FDTD sweep is a cache hit, not a fresh compute. Confirmed NOT the item-8 fingerprint bug (`FDTDSolver.solve()` does splat `resolved_material_config()` into its cache key, `fdtd.py:707`, inside `solve()` itself) — so whatever it hit was already computed post-item-8, most likely the ground-truth length_sweep's own 15.13 µm grid point. Printed numbers (T=0.5061/0.4933, IL≈-3 dB) look physically sane, but this has not been cross-checked against that sweep's stored value yet — do that before citing this run's output as the "outstanding — not yet run" regeneration `resolved/directional_coupler_validation.md`'s Verification section calls for | `resolved/directional_coupler_validation.md` Verification → Outstanding (example-output regeneration) |
 | **11592463** | `beef_golden_dc_hybrid` | ✅ **COMPLETED** 17:42, 1:09:17 | `resolved/directional_coupler_validation.md` Verification → Standing (goldens stale since item 8) |
-| ~~11589771~~ ~~11589899~~ ~~11589936~~ | `beef_modal_mux_fdtd` | ❌ **BLOCKED, do not resubmit** — three cheap failures (~15 s each) converged on a real library gap: `CompoundGeometry` cannot back `FDTDSolver.solve()` at all | [modal_multiplexer_validation.md](deferred/modal_multiplexer_validation.md) gap 3 |
+| ~~11589771~~ ~~11589899~~ ~~11589936~~ | `beef_modal_mux_fdtd` | ❌ **BLOCKED, do not resubmit** — three cheap failures (~15 s each) converged on a real library gap: `CompoundGeometry` cannot back `FDTDSolver.solve()` at all | [modal_multiplexer_validation.md](modal_multiplexer_validation.md) gap 3 |
 
 **Six items resolved today; three jobs cancelled as unproductive, two refixed
 and rerun, one left blocked.** Since the 12:05 snapshot: the **2×2 MMI's whole

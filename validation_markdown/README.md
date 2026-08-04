@@ -10,12 +10,13 @@ One file per example device, recording what has to hold before that device's
     resolved/fdtd_vs_EME_mode_validation.md     cross-device — the mode-correspondence MECHANISM itself
     running_jobs.md                    snapshot — active SLURM jobs and which gap/item each is for
     mmi_1x4_sin300_validation.md       1×4 MMI on 300 nm Si3N4 — BUILD PLAN, device does not exist yet
+    high_contrast_grating_validation.md HCG reflector, FDTD-only (no EME/hybrid) — convergence measured, production run in flight
+    modal_multiplexer_validation.md    modal multiplexer — resumed 2026-08-04, gap list against the four checks
     archive/                           closed items, kept whole
     resolved/                          whole docs sufficiently addressed (open to-dos may remain)
     resolved/directional_coupler_validation.md  directional coupler — the worked example
     resolved/material_model_validation.md       cross-device — shared Si/SiO2 model, both engines
-    deferred/                          work intentionally postponed, not blocked or closed
-    deferred/modal_multiplexer_validation.md    modal multiplexer — postponed until the others are verified
+    deferred/                          work intentionally postponed, not blocked or closed (currently empty)
 
 Every per-device file for an **existing** device lives in `resolved/`.
 
@@ -30,6 +31,41 @@ n_outputs=4, …)`) and the real work is in the shared material model:
 `beef/materials/stack.py` is hardwired Si-core/SiO2-clad, and `_SELLMEIER` has no
 nitride. Read its measured-vs-argued section before quoting any number from it —
 the material model numbers are measured, every device dimension is not.
+
+**`high_contrast_grating_validation.md` (2026-08-04) is also a plan, not a
+gap list, but for a different reason than the 1×4's** — the device (loaded
+from `examples/gds_files/HCG_seeded_TO.gds`) exists and runs; nothing in
+the [four checks](#the-four-checks) below applies to it, because it is
+FDTD-only by design (no EME, no `HybridSolver`, per the user's request) and
+because the GDS turned out to be a **one-port** device (a single access
+waveguide feeding a freeform topology-optimized mirror region, not a
+two-port through structure) — `FDTDSolver.solve()` cannot report anything
+physical for it at all. Two real library gaps blocked using it with FDTD
+in the first place (`gdstk` missing from the `jmh` env; `GdsGeometry` had
+no `polygons()`, only the EME-only `to_gds_eme()`), both fixed this
+session, plus a new `FDTDSolver.solve_reflection()` method for the
+one-port reflection measurement itself.
+
+**Same day, later: a real 3-D resolution + x/y/z PML convergence sweep
+landed** (19 SLURM array tasks, `gts-sr108-ece`), after catching and fixing
+two real mistakes — the whole sweep had first been run at the **wrong
+band** (O-band, copying every other `SOI_160` example, when the paper this
+device is from reports a **C-band** design peaked at 1569 nm), and the
+x-domain (PML clearance) sweep was briefly self-corrupting (`source_margin`/
+`monitor_margin` are PML-edge-relative, not geometry-edge-relative, so
+sweeping `edge_clearance` alone moved the source outside the physical
+waveguide). Both fixed; see the doc's own top-of-file box for the full
+story. Corrected, the resolution series (`res` 10→60) converges
+geometrically to **R=0.9789 at `res=60`** — matching the paper's own
+reported C-band minimum reflectance (97.9%) to three decimals — while x/y/z
+domain-size sensitivity is negligible by comparison. The full-band (21 λ,
+1.50–1.60 µm) production run at these settled settings is **submitted, job
+11670282, not yet landed**. Comparison against the design's own published
+spectrum (Hiesener, Pesch, Ralph, *IEEE Photonics Technology Letters*
+**36**(9), 597–600, 2024) is single-wavelength-confirmed already and
+full-band once that job lands — see that file's step 10 for what's still
+open (the production run itself, where the non-reflected power goes, and
+generalizing the domain plot).
 
 **`ring_resonator_validation.md` moved into `resolved/` on 2026-08-03.** It carries
 a `📁 FILED INTO resolved/` box at the top listing exactly what is closed, what is
@@ -83,18 +119,34 @@ doc between these folders, re-check its relative links.**
 
 **`modal_multiplexer_validation.md` moved into the new `deferred/` on
 2026-07-31**, at the user's direction: verify the other devices first, come
-back to the mux after. Unlike `resolved/`, this is not a claim that its work
+back to the mux after. Unlike `resolved/`, this was not a claim that its work
 is addressed — check 4 is flat-out blocked (`CompoundGeometry` can't back
 `FDTDSolver.solve()`, `notes.md` Geometry item 8), check 3 is the worst of
 any device (shipped res 40 can't even supply the requested 16-mode basis),
 and the item-12/14 library fix means its own hybrid script will now raise on
 its next run until `N_MODES`/`RESOLUTION` are decided jointly. `deferred/`
-exists so that's legible at a glance — "not started/blocked" reads
-differently from "postponed by choice," and this device is genuinely the
-latter as of today, not just the least-finished one. Same citation
-convention as both moves below: the 3 actual markdown-link references (all
-in `running_jobs.md`) were repointed, bare-backtick citations elsewhere are
-left as-is.
+existed so that was legible at a glance — "not started/blocked" reads
+differently from "postponed by choice," and this device was genuinely the
+latter, not just the least-finished one. Same citation convention as both
+moves below: the 3 actual markdown-link references (all in `running_jobs.md`)
+were repointed, bare-backtick citations elsewhere were left as-is.
+
+**Moved back out of `deferred/` to the top level on 2026-08-04**, at the
+user's direction, and work resumed starting with check 1 (gap 5, engine
+agreement — see the file's own status box and `running_jobs.md`). Reviewed
+against the live repo before the move: nothing changed underneath it since
+the 2026-08-01 snapshot above — same blocked check 4, same check-3 basis
+shortfall, same shipped `N_MODES=16`/`RESOLUTION=40`. It sits at the top
+level rather than back in `resolved/` for the same reason `mmi_1x4_sin300_
+validation.md`/`high_contrast_grating_validation.md` do: real open gaps
+remain, so neither `resolved/` (sufficiently addressed) nor `deferred/`
+(postponed by choice) describes it — it is simply active, like the coupler
+and both MMIs were before their own checks closed. `deferred/` is now empty;
+nothing else in this tree is currently postponed. Same link-repointing
+discipline as the move in: its one internal relative link
+(`[README.md](../README.md)` → `[README.md](README.md)`) and the 3
+markdown-link references in `running_jobs.md` were fixed, checked by walking
+them, not by reading.
 
 **`material_model_validation.md` moved into `resolved/` on 2026-07-31**, once
 its five work items (`beef.materials.stack.reparam_lorentz()` committed, the
@@ -334,7 +386,7 @@ audit).
 | directional coupler | ✅ **closed** — β-calibrated, L₅₀ 0.11% off reference | ✅ identity, worst 0.0023 | done, engines split | done, with provenance |
 | 1×2 MMI | ✅ **CLOSED 2026-08-01** — first run ever (11608875 `[0-3]` + merge 11609686), dispersive, cache-cold. Mean Δβ_FDTD/Δβ_EME = **0.9946** (0.54% bias, monotone over 10 of 11 points, no sign change), worst fit residual **3.01e-06 rad**, worst off-diagonal **1.12e-05**. Lands within 0.07 points of the 2×2's 0.9953 in a different band — **an engine-level bias, not a device artifact.** Res-40 caveat applies (P3) | ✅ **fixed** — `N_MODES` 12→8, identity, worst 0.0003 | measured, worst of the three | ✅ **RE-MEASURED DISPERSIVE 2026-08-01** (11609215 `[1-2]` + 11609687) — hybrid **10.18%** under full-device FDTD, uniform negative sign. Frozen-era was 9.11% (11585850, preserved): **the gap got marginally worse under the more correct material model**, while the mean offset barely moved (−0.025304 → −0.025413), so the residual is material-model-independent. Calibration attempt FAILED (11589770); root cause **fixed 2026-08-01** — a 2π turn-count bug in `beta_from_phases`, **not** the π sign flip this cell previously asserted (that reading is withdrawn — see `resolved/mmi_1x2_validation.md` gap 5 for the degeneracy that made it look confirmed). Calibrated rerun ✅ **succeeded 2026-08-01** (11608690) — **7.30%** (frozen-era, still owed dispersive), only ~20% better than uncalibrated, so the residual here is structural rather than calibratable |
 | 2×2 MMI | ✅ **closed 2026-08-01** — Δβ_FDTD/Δβ_EME = **0.9953** (0.47%, monotone across band), T diagonal to 1.2e-05, fit residual 4e-06 rad; **21× tighter than the coupler's ~10%, so `calibrate_body_neff` is NOT indicated here** (11596845 `[0-3]` + 11596851, gap 4). Measured at res 40, which gap 2 says is not converged in absolute n_eff — both engines read at the same mesh, so the ratio partially cancels it | ✅ identity, worst 0.0007 — **re-confirmed 2026-07-31 at `N_MODES` 14 with both guards live, neither fired** (11588569, gap 6) | ✅ **closed 2026-07-31** — absolute n_eff still moves at res 100, but Δβ_01 (the quantity the self-imaging length actually depends on) converges to 0.05% by res 120 (11590785, gap 2) | ✅ **RE-MEASURED DISPERSIVE 2026-08-01** (11609211_1 + 11609680 + 11609681) — hybrid **0.76%** / 0.59% under full-device FDTD, **sign still FLIPS across band, in the same grid interval**. Frozen-era was 0.82%/0.62% (11585849, preserved). The material change moved the FDTD reference by at most 0.00033 and the hybrid by 0.00011 — **P4's candidate mechanism is REFUTED**; the residual is structural |
-| modal multiplexer | not run | run, failed, root cause fixed — **one pair-member disagreement open**; guard confirmed firing on the *production* path 2026-07-31 (11585847) | **measured** — EME converged res 60, FDTD not at 60, and as of 2026-07-31 shipped res 40 **cannot supply** the requested 16-mode basis — at most 14 distinct guided modes are reachable there, and today's fixed k-seed finds only 13 (gap 2) | ⚠️ **BLOCKED 2026-07-31** — script written, cannot run: `CompoundGeometry` can't back `FDTDSolver.solve()` (`notes.md` Geometry item 8) |
+| modal multiplexer | ⏳ **submitted 2026-08-04** — job 11670540 `[0-3]` + merge 11670544, uniform section of MMI 1's body (gap 5), smoke-tested (EME half real, sensible descending n_eff) before submission | run, failed, root cause fixed — **one pair-member disagreement open**; guard confirmed firing on the *production* path 2026-07-31 (11585847) | **measured** — EME converged res 60, FDTD not at 60, and as of 2026-07-31 shipped res 40 **cannot supply** the requested 16-mode basis — at most 14 distinct guided modes are reachable there, and today's fixed k-seed finds only 13 (gap 2) | ⚠️ **BLOCKED 2026-07-31** — script written, cannot run: `CompoundGeometry` can't back `FDTDSolver.solve()` (`notes.md` Geometry item 8) |
 | ring resonator | not applicable | not applicable | shared knob | **no FDTD script** |
 
 ## Parity backlog — what the MMIs still lack versus the coupler

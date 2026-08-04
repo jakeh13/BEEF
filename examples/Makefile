@@ -43,7 +43,7 @@ DEVICES = mmi_1x2 mmi_2x2 directional_coupler modal_multiplexer ring_resonator
 # EXAMPLES for the same reason the sweeps are (nothing else's cleanup should
 # touch its output). Delete this target, clean_verification, and
 # examples/verification/ once those items are signed off.
-VERIFICATION = verify_items_1_2 verify_cache_multirank verify_item_5_ground_truth verify_item_6_engine_agreement
+VERIFICATION = verify_items_1_2 verify_cache_multirank verify_item_5_ground_truth verify_item_6_engine_agreement hcg_reflection_convergence
 
 .PHONY: all $(DEVICES) $(EXAMPLES) $(VERIFICATION) clean clean_verification
 
@@ -118,6 +118,16 @@ verify_item_6_engine_agreement:
 	$(runner) $(my_python) verification/python/verify_item_6_engine_agreement.py \
 		$(EA_INDEX) $(VERIFY_ARGS)
 
+# HCG reflection resolution/PML-domain convergence
+# (high_contrast_grating_validation.md step 8, items 1-4). HCG_CONV_INDEX
+# selects one of the 6 points (0..5), mirroring GT_INDEX/EA_INDEX above;
+# empty runs the whole grid serially. VERIFY_ARGS=--aggregate-only
+# re-aggregates without simulating, safe on a login node.
+HCG_CONV_INDEX ?=
+hcg_reflection_convergence:
+	$(runner) $(my_python) verification/python/hcg_reflection_convergence.py \
+		$(HCG_CONV_INDEX) $(VERIFY_ARGS)
+
 modal_multiplexer_hybrid:
 	$(runner) $(my_python) modal_multiplexer/python/modal_multiplexer_hybrid.py
 
@@ -131,6 +141,16 @@ ring_resonator_hybrid:
 
 ring_resonator_hybrid_cascaded:
 	RING_TEST_MODE=0 $(runner) $(my_python) ring_resonator/python/ring_resonator_hybrid_cascaded.py
+
+# FDTD only (FDTDSolver.solve_reflection() — no EME, no HybridSolver; see
+# validation_markdown/high_contrast_grating_validation.md). Deliberately NOT
+# added to EXAMPLES/DEVICES/`all`, same reasoning as modal_multiplexer_fdtd
+# above: a new one-off target should not silently reshape the positionally-
+# indexed root EXAMPLES array other SLURM array jobs read by index.
+# HCG_TEST_MODE=0 forces the full-res 3-D production run (defaults to the
+# fast 2-D smoke test otherwise — see the script's own TEST_MODE docstring).
+high_contrast_grating_fdtd:
+	HCG_TEST_MODE=0 $(runner) $(my_python) high_contrast_grating/python/high_contrast_grating_fdtd.py
 
 clean:
 	rm -rf ../../example_output

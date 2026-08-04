@@ -127,6 +127,24 @@ class GdsGeometry(DeviceGeometry):
     def eme_lengths(self, straight_length: float) -> List[float]:
         return list(self.region_lengths)
 
+    def polygons(
+        self, stub_length: float = 0.0
+    ) -> Dict[Tuple[int, int], List[List[Tuple[float, float]]]]:
+        """Waveguide polygons as imported from the GDS, centered at x=0 (see
+        __init__).
+
+        stub_length is accepted for interface compatibility with
+        DeviceGeometry.to_meep_prisms() but, like to_gds_eme()'s
+        straight_length, is otherwise ignored — see the class docstring.
+        Synthesizing an extra straight run here would need a local waveguide
+        width to extrude, which this geometry cannot supply in general (a
+        freeform/topology-optimized import has no well-defined width_at() at
+        an arbitrary cut); the caller must size FDTDSolver's source/monitor
+        margins to land inside whatever real input waveguide the GDS itself
+        already drew, not rely on stub_length to extend it.
+        """
+        return {layer: [list(poly) for poly in polys] for layer, polys in self._polys.items()}
+
     def to_gds_eme(
         self, straight_length: float, oxide_width: float,
         x_start: float = 0.0, **kwargs
