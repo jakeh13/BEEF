@@ -443,6 +443,130 @@ class TestCompoundGeometryMMIFrameOffset:
         assert max(xs) - min(xs) == pytest.approx(2 * half)
 
 
+class TestCompoundGeometryPolygonsStub:
+    """Regression guard for notes.md Geometry item 8, part 2: `polygons(
+    stub_length>0)` used to raise `NotImplementedError` unconditionally,
+    on the premise that an arbitrary segment type has no single well-defined
+    port width to extend. That premise was wrong -- `_end_ports()` already
+    answers the question for `to_gds_eme()`'s own stub handling by returning
+    EVERY port at that end rather than picking one, and a leaf geometry with
+    several ports already draws one stub per port for its own `polygons()`
+    (e.g. `MMI.polygons()`). The fix reuses `_end_ports()` the same way
+    `to_gds_eme()` already does. This is also what unblocks
+    `modal_multiplexer_fdtd.py` (`modal_multiplexer_validation.md` gap 3):
+    `FDTDSolver.solve()`'s single-domain path calls exactly this method.
+    """
+
+    def _simple_compound(self):
+        # Same fixture as TestCompoundGeometry._compound(): single-port ends.
+        return CompoundGeometry([
+            Taper(length=4.0, width_start=0.35, width_end=0.8),
+            WaveguideRun(length=3.0, ports=[(0.0, 0.8)]),
+            Taper(length=4.0, width_start=0.8, width_end=0.35),
+        ])
+
+    def test_no_longer_raises(self):
+        g = self._simple_compound()
+        g.polygons(stub_length=1.5)  # must not raise NotImplementedError
+
+    def test_stub_length_zero_is_unchanged(self):
+        g = self._simple_compound()
+        d0 = g.polygons(stub_length=0.0)
+        d_explicit = g.polygons()
+        assert d0[(2, 0)] == d_explicit[(2, 0)]
+
+    def test_single_port_ends_add_exactly_one_stub_polygon_each(self):
+        g = self._simple_compound()
+        d_bare = g.polygons(stub_length=0.0)
+        d_stub = g.polygons(stub_length=1.5)
+        assert len(d_stub[(2, 0)]) == len(d_bare[(2, 0)]) + 2  # one per end
+
+    def test_stub_polygons_sit_at_the_true_outer_edges_with_terminal_width(self):
+        g = self._simple_compound()
+        half = g.total_length / 2  # 5.5 -- seg1 width_start=0.35, seg3 width_end=0.35
+        d_bare = g.polygons(stub_length=0.0)
+        n_bare = len(d_bare[(2, 0)])
+        stubs = g.polygons(stub_length=1.5)[(2, 0)][n_bare:]
+        assert len(stubs) == 2
+        xs_by_poly = [[v[0] for v in poly] for poly in stubs]
+        left, right = sorted(xs_by_poly, key=min)
+        assert min(left) == pytest.approx(-half - 1.5)
+        assert max(left) == pytest.approx(-half)
+        assert min(right) == pytest.approx(half)
+        assert max(right) == pytest.approx(half + 1.5)
+        for poly in stubs:
+            ys = [v[1] for v in poly]
+            assert max(ys) - min(ys) == pytest.approx(0.35)  # terminal width both ends
+
+    def test_multi_port_end_adds_one_stub_per_port_not_one(self):
+        """The case this fix exists for: a multi-port end (here, an MMI's 3
+        outputs) must get one stub polygon per port, at each port's own
+        width and y -- not a single arbitrarily-chosen winner."""
+        mmi_in = MMI(
+            n_inputs=1, n_outputs=1, mm_length=5.0, mm_width=2.0,
+            inputs=[MMIPort(y=0.0, waveguide_width=0.5, taper_length=2.0, taper_width=1.0)],
+            outputs=[MMIPort(y=0.0, waveguide_width=0.5, taper_length=2.0, taper_width=1.0)],
+        )
+        branch_specs = [(+1.0, 0.33, 0.7), (0.0, 0.35, 1.1), (-1.0, 0.33, 0.7)]
+        mmi_out = MMI(
+            n_inputs=1, n_outputs=3, mm_length=6.0, mm_width=3.0,
+            inputs=[MMIPort(y=0.0, waveguide_width=0.5, taper_length=2.0, taper_width=1.0)],
+            outputs=[MMIPort(y=y, waveguide_width=ww, taper_length=2.0, taper_width=tw)
+                     for y, ww, tw in branch_specs],
+        )
+        g = CompoundGeometry([mmi_in, mmi_out])
+        d_bare = g.polygons(stub_length=0.0)
+        n_bare = len(d_bare[(2, 0)])
+        stubs = g.polygons(stub_length=0.75)[(2, 0)][n_bare:]
+        # 1 input stub (mmi_in's single input) + 3 output stubs (mmi_out's
+        # three branches) = 4, not 1.
+        assert len(stubs) == 4
+        half = g.total_length / 2
+        widths_at_right_edge = sorted(
+            round(max(v[1] for v in poly) - min(v[1] for v in poly), 6)
+            for poly in stubs if min(v[0] for v in poly) == pytest.approx(half)
+        )
+        assert widths_at_right_edge == sorted([0.33, 0.35, 0.33])
+        # Every output stub starts exactly at the true right edge and
+        # extends outward by stub_length, never inward.
+        for poly in stubs:
+            xs = [v[0] for v in poly]
+            if min(xs) == pytest.approx(half):
+                assert max(xs) == pytest.approx(half + 0.75)
+
+    def test_input_stub_respects_mmi_frame_offset(self):
+        """Same asymmetric-taper MMI as TestCompoundGeometryMMIFrameOffset:
+        frame_offset != 0, so a naive bbox-midpoint stub placement would land
+        1 um off the true left edge. The stub must land at the true edge."""
+        mmi = MMI(
+            n_inputs=1, n_outputs=1, mm_length=5.0, mm_width=2.0,
+            inputs=[MMIPort(y=0.0, waveguide_width=0.35, taper_length=3.0, taper_width=0.8)],
+            outputs=[MMIPort(y=0.0, waveguide_width=0.35, taper_length=1.0, taper_width=0.8)],
+        )
+        run = WaveguideRun(length=2.0, ports=[(0.0, 0.35)])
+        g = CompoundGeometry([mmi, run])
+        half = g.total_length / 2  # 5.5, the TRUE (frame_offset-corrected) edge
+        d_bare = g.polygons(stub_length=0.0)
+        n_bare = len(d_bare[(2, 0)])
+        stubs = g.polygons(stub_length=1.0)[(2, 0)][n_bare:]
+        left_stub = min(stubs, key=lambda poly: min(v[0] for v in poly))
+        xs = [v[0] for v in left_stub]
+        assert min(xs) == pytest.approx(-half - 1.0)
+        assert max(xs) == pytest.approx(-half)  # not -half+1.0 (the bbox-only midpoint bug)
+        ys = [v[1] for v in left_stub]
+        assert max(ys) - min(ys) == pytest.approx(0.35)  # true input access width
+
+    def test_to_meep_prisms_no_longer_raises(self):
+        """The actual crash chain this fix clears: FDTDSolver.solve() ->
+        to_meep_prisms() -> polygons(stub_length>0). modal_multiplexer_fdtd.py
+        was the first script in the repo to hit this."""
+        pytest.importorskip("meep")
+        import meep as mp
+        g = self._simple_compound()
+        prisms = g.to_meep_prisms(mp.Medium(index=3.45), stub_length=0.75, wg_height=0.22)
+        assert len(prisms) > 0
+
+
 # ---------------------------------------------------------------------------
 # arc_polygon
 # ---------------------------------------------------------------------------

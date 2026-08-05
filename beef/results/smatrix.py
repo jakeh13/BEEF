@@ -8,7 +8,7 @@ from __future__ import annotations
 import pickle
 import warnings
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -132,6 +132,88 @@ class SMatrix:
                         stacklevel=2,
                     )
         return ok
+
+    # ------------------------------------------------------------------
+    # Coherent-receiver metrics.
+    #
+    # Added for the 4x4 MMI 90-degree hybrid (validation_markdown/
+    # mmi_4x4_90_hybrid_validation.md, finding A8): every existing helper
+    # above reads only |coeff|^2 (power). imbalance_db/excess_loss_db/
+    # cmrr_db are still power-only and generalize cleanly to a single
+    # SMatrix (one input excitation, several output ports). Phase error
+    # (paper Eq. 15) is different in kind: it needs the phase DIFFERENCE
+    # between two SEPARATELY-excited inputs, and every SMatrix in this repo
+    # so far holds exactly one input excitation's results (e.g. mmi_2x2_
+    # hybrid.py's single `smat` for its one driven arm) -- so that one takes
+    # a second SMatrix explicitly rather than pretending to be a single-
+    # instance method. The paper's own reference-port subtraction and
+    # hardcoded target angles (phi~_5=-45 deg, etc.) are device-specific, not
+    # generalized here -- cross_excitation_phase_diff_deg is the reusable
+    # primitive; building Eq. 15 from it is the example script's job.
+    # ------------------------------------------------------------------
+
+    def imbalance_db(self, ports: Sequence[str], in_mode: int = 1, out_mode: int = 1) -> np.ndarray:
+        """Power imbalance across several output ports of ONE input excitation
+        (paper Eq. 10, generalized from a fixed pair to any number of ports):
+        ``-10*log10(min_j T_j / max_j T_j)`` [M]. 0 dB = perfectly balanced;
+        larger is worse."""
+        if len(ports) < 2:
+            raise ValueError(f"imbalance_db needs >= 2 ports, got {list(ports)!r}")
+        Ts = np.stack([self.transmission(p, in_mode, out_mode) for p in ports])
+        tmax = np.clip(Ts.max(axis=0), 1e-20, None)
+        tmin = np.clip(Ts.min(axis=0), 1e-20, None)
+        return -10 * np.log10(tmin / tmax)
+
+    def excess_loss_db(self, ports: Sequence[str], in_mode: int = 1, out_mode: int = 1,
+                        p_in: float = 1.0) -> np.ndarray:
+        """Excess loss summed over several output ports of ONE input
+        excitation (paper Eq. 11): ``-10*log10(sum_j T_j / p_in)`` [M].
+
+        Positive = loss -- the paper's own sign convention, and the OPPOSITE
+        of this class's own insertion_loss_db() (negative = loss). Kept as
+        written so a value can be compared directly against a paper table
+        without a sign flip; do not mix the two conventions in one report.
+        """
+        total = np.clip(sum(self.transmission(p, in_mode, out_mode) for p in ports), 1e-20, None)
+        return -10 * np.log10(total / p_in)
+
+    def cmrr_db(self, port_a: str, port_b: str, in_mode: int = 1, out_mode: int = 1) -> np.ndarray:
+        """Common-mode rejection ratio between two output ports of ONE input
+        excitation (paper Eqs. 13-14 -- CMRR_I compares a 4x4 90-degree
+        hybrid's ports 5/8, CMRR_Q compares 6/7, but the formula itself is
+        generic to any balanced two-port pair):
+        ``-20*log10(|T_a - T_b| / (T_a + T_b))`` [M]. Larger (dBe) is better
+        (more common-mode rejection)."""
+        Ta = self.transmission(port_a, in_mode, out_mode)
+        Tb = self.transmission(port_b, in_mode, out_mode)
+        total = np.clip(Ta + Tb, 1e-20, None)
+        diff = np.clip(np.abs(Ta - Tb), 1e-20, None)
+        return -20 * np.log10(diff / total)
+
+    def cross_excitation_phase_diff_deg(self, other: "SMatrix", port: str,
+                                         in_mode: int = 1, out_mode: int = 1) -> np.ndarray:
+        """Phase difference [M, degrees, wrapped to (-180, 180]] between two
+        SMatrix instances built from DIFFERENT input excitations of the same
+        multi-input device, at the same (port, in_mode, out_mode):
+        ``angle(other.coeff) - angle(self.coeff)``.
+
+        This is the ingredient paper Eq. 15's ``phi_j(lambda) = angle(S_j3) -
+        angle(S_j1)`` needs -- pass ``self`` as the port-1-excited SMatrix and
+        ``other`` as the port-3-excited one to reproduce phi_j exactly. The
+        paper's own reference-port subtraction (``- (phi~_j - phi~_5)``) and
+        target angles are device-specific and are NOT applied here; compute
+        them in the caller from this primitive plus the device's own target
+        angles.
+
+        Output is wrapped to (-180, 180]. A target stated in [0, 360)
+        (e.g. this paper's own phi~_6 = 225 deg) will not compare equal by
+        direct subtraction against this range -- compare modulo 360, not by
+        assuming a shared quadrant.
+        """
+        a = self.coeff(port, in_mode, out_mode)
+        b = other.coeff(port, in_mode, out_mode)
+        diff = np.degrees(np.angle(b) - np.angle(a))
+        return ((diff + 180.0) % 360.0) - 180.0
 
     # ------------------------------------------------------------------
     # Serialization

@@ -30,14 +30,16 @@ The 1×4 geometry is nearly free. **The material model is the whole job.**
 | Silicon nitride as a material | ✅ **DONE 2026-08-03 (step 1)** — `"si3n4"` in `_SELLMEIER`, from meep's `Si3N4_NIR`, tested |
 | A non-Si core in `MaterialStack` | ✅ **DONE 2026-08-03 (step 2)** — `core_kind`/`clad_kind`, `SIN_300` singleton |
 | 300 nm core height | ✅ **DONE 2026-08-03 (step 4)** — `SIN_300 = MaterialStack(wg_height=0.30, sz=5.0, core_kind="si3n4")`, `sz` measured-converged at the design width |
-| Device dimensions for a 1×4 on nitride | ❌ unknown — must be derived, not copied from the 1×2 |
+| Device dimensions for a 1×4 on nitride | ✅ **DONE 2026-08-04 (steps 4-5)** — `waveguide_width=1.1`, `taper_width=2.2`, `taper_length=5.0`, `waveguide_offset=2.4`, `mm_width=12.0`, `mm_length=206.0` (user-selected — a genuine footprint/throughput/balance tradeoff, not the pure argmin) |
+| Example scripts | ⚠ **drafted, structurally validated, not yet solved for real (step 6)** — `mmi_1x4_eme.py`, `mmi_1x4_hybrid.py`. `mmi_1x4_fdtd.py` dropped: `mm_length=206` makes whole-device single-domain FDTD impractical |
 
 So the ordered work is: **material model → stack generalization → cache
-fingerprint → cross-section design → body design → three scripts → the four
-checks.** Steps 1–3 are library changes shared by every device in the repo and
-are where the risk is; steps 4–5 are device design; step 6 is largely copy-work.
-**Steps 1–3 are now done** (2026-08-03) — the library work is fully closed;
-everything left is device-specific design and measurement.
+fingerprint → cross-section design → body design → two scripts (not three)
+→ the four checks.** Steps 1–3 are library changes shared by every device in
+the repo and are where the risk is; steps 4–5 are device design; step 6 is
+largely copy-work. **Steps 1–5 are now done** (2026-08-03/04) — all of the
+design work is closed; what's left is running the two example scripts for
+real, wiring (step 7), and the four validation checks (step 8).
 
 ---
 
@@ -952,11 +954,60 @@ evidence plot once all four tasks finish. `N_WL` also reduced from 11 to 5
 for this exploratory design-tool pass (final validation is step 6's job, not
 this script's).
 
-Real run submitted 2026-08-04 as job array 11667114 (tasks 0–3). Results
-pending — this section will be updated with the measured `mm_length` and
-evidence plot once the array completes.
+**Real run completed 2026-08-04 — job array 11667114, all 4 tasks succeeded
+(~5:49–6:29 hrs each, within the 8-hr budget).**
+`mmi_1x4_sin_body_length_sweep_merge.py` combined the four
+`mm_length_sweep_branch{0,1,2,3}.npz` files: pure `argmin(spread)` lands at
+`mm_length=280.0 µm` (`spread=0.0013`), a genuine, sharp interior minimum —
+verified NOT a sweep-boundary artifact by inspecting the 240–300 µm tail:
+spread falls smoothly from 0.13 at both 270 and 290 µm down to 0.0013 exactly
+at 280, a clean symmetric dip, not a value still trending toward the 300 µm
+edge.
 
-### Step 6 — the three example scripts
+**But the pure spread-minimum is not obviously the best design point.**
+Every local minimum in the swept range trades footprint, split balance, and
+total throughput against each other differently:
+
+| `mm_length` | spread | relative imbalance | `T_total` | IL |
+|---|---|---|---|---|
+| 45.0 µm  | 0.0123 | 8.2%  | 0.6024 | −2.20 dB |
+| 115.0 µm | 0.0144 | 9.5%  | 0.6095 | −2.15 dB |
+| 206.0 µm | 0.0052 | 3.7%  | 0.5696 | −2.44 dB |
+| 280.0 µm | 0.0013 | **1.0%** | 0.5211 | −2.83 dB |
+
+(relative imbalance = `spread / (T_total/4)`; the other local minima in the
+sweep — 24, 31, 63, 97, 132, 161, 188, 224 µm — all carry ≥40% relative
+imbalance and are not competitive.) Longer body → better split precision but
+*worse* total throughput and a larger device — the opposite of what a naive
+"longer is safer" intuition would suggest, because points further from a
+self-imaging condition bleed more power into modes this design tool's
+`N_BODY=20` (of 23 guided) truncation doesn't carry cleanly.
+
+**User-selected 2026-08-04: `mm_length = 206.0 µm`** — the balanced middle
+option, not the pure `argmin(spread)` winner (280.0 µm). Reasoning: 3.7%
+relative imbalance is already good; 280 µm buys the last ~3x reduction in
+imbalance at the cost of 0.4 dB more loss and 1.36x the length. Confirmed
+exactly on the sweep's own grid (`linspace(20,300,281)`, integer spacing) —
+no splice needed, asserted in both final example scripts per the coupler-bug
+lesson.
+
+**Design consequence, also decided by the user:** at `mm_length=206 µm` the
+device's total length (`≈216 µm` with tapers) makes a **single-domain,
+whole-device FDTD simulation impractical** — 3-D time-domain FDTD scales
+with volume, and 200+ µm of propagation length in full 3-D is a different
+cost class than the ~5 µm devices `mmi_1x2_fdtd.py`/`mmi_2x2_fdtd.py`
+simulate whole. **`mmi_1x4_fdtd.py` was dropped from the plan** — this
+device ships as EME + hybrid only (`mmi_1x4_eme.py`, `mmi_1x4_hybrid.py`),
+not all three methods step 6's original framing assumed. The hybrid script
+still gets FDTD validation on the short input/output taper sections; only
+the whole-device single-domain FDTD reference is out of scope for this
+`mm_length`.
+
+Evidence: `mm_length_sweep.png` (both panels — band-mean transmission per
+output vs. length, and log-scale spread vs. length) in
+`example_output/verification/mmi_1x4_sin_body_length_sweep/`.
+
+### Step 6 — the example scripts (two, not three — see 6c) ✅ **DONE 2026-08-04**
 
 Directory `BEEF/examples/mmi_1x4/python/`, mirroring `mmi_1x2/`:
 
@@ -975,18 +1026,26 @@ than a supermode), then merges the results into one `SMatrix` via
 that would be safe in silicon. If the four branches are not decoupled at the
 chosen offset, that invalidates the per-branch method, not just the number.
 
-**6c. `mmi_1x4_fdtd.py`.** Model on `mmi_1x2_fdtd.py`. `output_monitor_centers`
-and `output_monitor_widths` are already lists — supply four of each. The 1×2 uses
-half-domain windows (`[2.5/2, -2.5/2]`, widths `[2.5, 2.5]`); **four monitors
-cannot each take half the domain**, so the windows must be sized to the actual
-port pitch without overlapping. This is the one place the 1×4 FDTD script is not
-a mechanical copy of the 1×2. **Use `use_neighbor_aperture=True`** on the `MMI`
-geometry (not `half_domain_aperture`) — `beef/geometry/mmi.py`'s own docstring
-is explicit that the fixed half-domain rule only works when a simple two-way
-symmetry split isolates each port, which fails here (`output_ys` = [-3.6,
--1.2, +1.2, +3.6] µm — a y=0 split still groups ports 0&1 together and 2&3
-together). `use_neighbor_aperture` instead sizes each port's aperture to the
-distance to its *nearest* neighbor specifically, generalizing past two ports.
+**6c. `mmi_1x4_fdtd.py` — ❌ REMOVED FROM THE PLAN, 2026-08-04 (user decision).**
+Originally planned to model on `mmi_1x2_fdtd.py` (`output_monitor_centers`/
+`output_monitor_widths` as four-element lists, sized to the actual port pitch
+instead of the 1×2's half-domain trick — see the aperture reasoning kept
+below, since it still applies to 6d's FDTD sections). Dropped once step 5
+settled `mm_length=206 µm`: total device length ≈216 µm makes a
+**single-domain, whole-device FDTD simulation impractical** — 3-D
+time-domain FDTD cost scales with volume, and 200+ µm of propagation is a
+different cost class than the ~5 µm devices `mmi_1x2_fdtd.py`/
+`mmi_2x2_fdtd.py` simulate whole. This device ships as **EME + hybrid only**.
+The aperture design below still matters for 6d's FDTD input/output
+*sections* (short, ~5.5 µm — not the whole device), just not for a
+whole-device FDTD reference. **Use `use_neighbor_aperture=True`** on the
+`MMI` geometry (not `half_domain_aperture`) — `beef/geometry/mmi.py`'s own
+docstring is explicit that the fixed half-domain rule only works when a
+simple two-way symmetry split isolates each port, which fails here
+(`output_ys` = [-3.6, -1.2, +1.2, +3.6] µm — a y=0 split still groups ports
+0&1 together and 2&3 together). `use_neighbor_aperture` instead sizes each
+port's aperture to the distance to its *nearest* neighbor specifically,
+generalizing past two ports.
 
 **6b/6c/6d crosstalk check — MEASURED 2026-08-04, done in parallel with step
 5 (job 11667138), since it does not depend on `mm_length`.** The plan's own
@@ -1017,34 +1076,69 @@ the 1×2's check 2 actually *failed* at `N_MODES=12` until it was dropped to 8. 
 1×4 body is wider and supports more modes than either existing MMI, so neither
 device's numbers transfer.
 
-**All three drafted 2026-08-04, in parallel with step 5's mm_length sweep
+**Both scripts drafted 2026-08-04, in parallel with step 5's mm_length sweep
 (job array 11667114), since nothing about their structure depends on the
-exact `mm_length` value.** `mmi_1x4_eme.py` (`solver.solve()` once per
+exact `mm_length` value; `mmi_1x4_fdtd.py` was drafted the same way and then
+removed per 6c above.** `mmi_1x4_eme.py` (`solver.solve()` once per
 `output_idx`, `N_BODY=20`/`N_TAPER=10`/`C_TAPER=8` carried over from the
-now-validated step 5 design tool), `mmi_1x4_fdtd.py` (four fixed
-`output_monitor_centers`/`widths` at `mmi.output_ys`, 2.0 µm windows — <
-2.4 µm spacing, per 6c), and `mmi_1x4_hybrid.py` (FDTD input/output +
-EME body, `use_neighbor_aperture=True`, four `hybrid.solve()` calls sharing
-one `cache` dict, `N_MODES=20`) each carry `MM_LENGTH = None` with a guard
-that raises `NotImplementedError` until step 5's real value is filled in —
-deliberately not a silent placeholder. **Structurally validated** (not
-solved): a temporary copy of each script with a stand-in `mm_length=150.0`
-and an early exit right after its geometry plot ran clean through MMI
-construction, solver instantiation (`FDTDSolver`/`EMESolver`/`HybridSolver`),
-and `plot_*_geometry` (including `mmi_1x4_hybrid.py`'s `sub_region_configs`,
-one per output branch) with no errors — the call signatures are right, only
-the real `mm_length` and an actual solve are outstanding. `mode_solver=
-"tidy3d"` throughout (never `"meep"`) per step 4's fix, including in the
-hybrid's EME body sub-solver, where the established precedent
-(`mmi_1x2_hybrid.py`/`mmi_2x2_hybrid.py`) uses `"meep"` — flagged in
-`mmi_1x4_hybrid.py`'s own docstring as a `calibrate_body_neff` risk to
+now-validated step 5 design tool) and `mmi_1x4_hybrid.py` (FDTD input/output
++ EME body, `use_neighbor_aperture=True`, four `hybrid.solve()` calls
+sharing one `cache` dict, `N_MODES=20`) initially carried `MM_LENGTH = None`
+with a guard that raised `NotImplementedError` until step 5's real value was
+filled in — deliberately not a silent placeholder. **Structurally validated
+at that stage** (not solved): a temporary copy of each script with a
+stand-in `mm_length=150.0` and an early exit right after its geometry plot
+ran clean through MMI construction, solver instantiation
+(`FDTDSolver`/`EMESolver`/`HybridSolver`), and `plot_*_geometry` (including
+`mmi_1x4_hybrid.py`'s `sub_region_configs`, one per output branch) with no
+errors. **`MM_LENGTH=206.0` filled in 2026-08-04** once step 5 landed, spliced
+onto the sweep's own grid and asserted exact (coupler-bug lesson) in both
+scripts; re-ran the same structural check with the real value — still clean.
+`mode_solver="tidy3d"` throughout (never `"meep"`) per step 4's fix,
+including in the hybrid's EME body sub-solver, where the established
+precedent (`mmi_1x2_hybrid.py`/`mmi_2x2_hybrid.py`) uses `"meep"` — flagged
+in `mmi_1x4_hybrid.py`'s own docstring as a `calibrate_body_neff` risk to
 revisit at step 8 if the engine-agreement check finds it matters.
+
+**`mmi_1x4_eme.py` run for real 2026-08-04 — MEASURED, job 11678090.**
+Sequential per-branch execution would have cost ~1 day+ (each `solve()`
+call redoes all 19 mode-solve cells across 11 wavelengths — see the
+session's own cost breakdown), so the run was split the same way step 5
+was: `_prewarm_mmi_1x4_eme.py` (temporary, `MMI1X4_OUTPUT_IDX` env var)
+solved each of the 4 output branches into the persistent `save_dir` cache
+via a 4-task SLURM array (job 11672738) — **all 4 tasks succeeded in
+~2:45 hrs each**, well under the pessimistic ~13 hr/branch extrapolation
+from step 5's own design-tool timing. The real, unmodified `mmi_1x4_eme.py`
+then ran against the warm cache in 38 seconds (job 11678090), producing the
+actual deliverable (`smatrix.pkl`, `performance.png`):
+
+| output | y (µm) | T | IL (dB) |
+|---|---|---|---|
+| 0 | −3.60 | 0.1415 | −8.49 |
+| 1 | −1.20 | 0.1598 | −7.97 |
+| 2 | +1.20 | 0.1598 | −7.97 |
+| 3 | +3.60 | 0.1415 | −8.49 |
+| **total** | | **0.6025** | **−2.20** |
+
+(at λ=1.550 µm, band center of the 11-point C-band sweep). Exact left-right
+mirror symmetry (0↔3, 1↔2) holds, matching both the prewarm results and the
+design tool's own step-5 measurements at this `mm_length` (band-mean
+`T_total=0.5696`, `IL=−2.44` dB there vs. this single-center-wavelength
+`T_total=0.6025`/`IL=−2.20` dB here — a mean-over-band vs. single-wavelength
+comparison, not a discrepancy). `mmi_1x4_eme.py` is now genuinely done, not
+just structurally validated. **Uses `res=40`, the still-open resolution
+question from step 8 check 3's preliminary finding above — a real caveat on
+these numbers until that check lands.**
+
+**`mmi_1x4_hybrid.py` — prewarm array 11672739 in flight** (4 tasks,
+`-t 24:00:00`, no timing precedent available before submission). Will be
+run for real the same way once that array lands.
 
 ### Step 7 — wiring
 
-- `BEEF/examples/Makefile`: add `MMI_1X4_EXAMPLES = mmi_1x4_eme mmi_1x4_fdtd
-  mmi_1x4_hybrid`, add to `EXAMPLES` and `DEVICES`, add the `mmi_1x4` aggregate
-  target and the three per-script targets.
+- `BEEF/examples/Makefile`: add `MMI_1X4_EXAMPLES = mmi_1x4_eme mmi_1x4_hybrid`
+  (two, not three — `mmi_1x4_fdtd` was dropped, step 6c), add to `EXAMPLES` and
+  `DEVICES`, add the `mmi_1x4` aggregate target and the two per-script targets.
 - `batch/run_mmi_1x4_examples.batch`: copy an existing device runner. **Use
   `--account=gts-sr108-ece`** (the balance account; most existing scripts still
   hardcode `gts-sr108-gedc_main`). Index order in the `EXAMPLES` array must match
@@ -1067,7 +1161,7 @@ cheap:
 | check | 1×4-specific note |
 |---|---|
 | **2. Mode identity** | Do this **first** — it is mode solves only, no time-stepping, and it is the check that actually failed on the 1×2. A wider nitride body supports more near-degenerate modes than either existing MMI, so this is *more* likely to fail here, not less. |
-| **3. Resolution convergence, per engine** | Sweep FDTD and EME resolution **independently**. Sweep a Δβ-like quantity, not just output power. Expect nitride to need different resolution than silicon — lower contrast means the index step is easier to resolve, but the mode is larger, so the two effects push opposite ways and it must be measured. |
+| **3. Resolution convergence, per engine** | Sweep FDTD and EME resolution **independently**. Sweep a Δβ-like quantity, not just output power. Expect nitride to need different resolution than silicon — lower contrast means the index step is easier to resolve, but the mode is larger, so the two effects push opposite ways and it must be measured. **⚠ Preliminary attempt made 2026-08-04 (job 11675082), inconclusive, deferred — not the real check.** Swept `res=[15,20,25,30,35,40]` on the body cross-section (mm_width=12.0, 23 guided modes), tracking modes 0/10/19/22 (fundamental through near-cutoff). Result: `n_eff` does NOT converge monotonically anywhere in that range — successive `\|dn_eff\|` bounce around ~1-2e-3 instead of shrinking (e.g. mode 0: 1.6720→1.6715→1.6725→1.6737→1.6726→1.6724), unlike step 4's clean monotonic `sz` convergence. This means `res=40` (what step 6's real example runs currently use) has **not actually been shown to be converged either** — the scatter spans the whole tested range, not just the low end. Leading hypothesis, NOT yet verified: mode-index correspondence swapping between near-degenerate higher-order modes in this densely-multimoded cross-section (23 guided modes in a fairly narrow index range) rather than a genuine solver-convergence failure — this codebase's own `mode_identity.py` field-overlap tools could confirm/refute this directly but have not been run against it. **User decision 2026-08-04: proceed with `res=40` as a working assumption for step 6's real runs (already in flight, jobs 11672738/11672739), run the real resolution-convergence check afterward.** This is a real open risk on the step-6 results until that check lands, not a closed question. |
 | **1. Engine agreement on the shared cross-section** | `verify_item_6_engine_agreement.py` on the MMI body. Both MMIs measured a ~0.5% engine bias (0.9946 / 0.9953); whether that is material-independent is an open and interesting question this device can answer. |
 | **4. Full-device FDTD reference** | `mmi_1x4_fdtd.py` vs `mmi_1x4_hybrid.py` at the identical `mm_length`. Record provenance in the doc — config, solver fingerprint, geometry — per the coupler's item 5 lesson. |
 

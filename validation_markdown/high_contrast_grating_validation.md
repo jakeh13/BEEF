@@ -6,19 +6,32 @@ Opened **2026-08-04**, at the user's request: an FDTD-only example (no EME, no
 160 nm SOI, with a script and a notebook version.
 
 > **This doc mixes the plan and gap-list conventions** (see [README.md](README.md)).
-> **Updated 2026-08-04 (later the same day).** Steps 8–10 below now carry a
-> real, measured 3-D resolution/PML(x/y/z) convergence sweep (17 SLURM array
-> tasks total, `gts-sr108-ece`) at the **corrected C-band wavelength** — see
-> the ⚠ box immediately below — and the full-band production run is
-> submitted (job 11670282). The single-wavelength convergence series at
-> `res=60` lands at **R=0.9789**, matching the paper's own reported C-band
-> minimum (97.9%) to three decimals; extrapolating the delta sequence's own
-> decay rate puts the asymptote close to the paper's peak (98.9%). This is
-> real, independent agreement with the published device, not merely "the
-> pipeline runs."
+> **Updated 2026-08-04 (evening) — the RE-RUN production run has landed, and
+> the honest number is worse, not better.** A third real issue was found,
+> this time by the user directly, after the first two mistakes were already
+> fixed and a paper-matching production run had already landed: the input
+> waveguide was ending abruptly instead of continuing through the PML — a
+> real physical defect (see ⚠ item 3 below), not a cosmetic one, that
+> changes the actual simulated geometry. Every downstream number needed
+> re-measuring. **Corrected: peak R = 97.14% at 1.580 µm, against the
+> paper's 98.9% at 1.569 nm — a 1.76-point gap, LARGER than the (flawed)
+> pre-fix run's 0.8-point gap.** The old, better-looking number was
+> partly an artifact: removing the facet reflection also moved the
+> resonance peak by ~30 nm (from 19 nm blue of the paper's to 11 nm red of
+> it), which the pre-fix magnitude comparison alone did not reveal. This is
+> reported as the honest current result, not smoothed over — see step 9 for
+> the full spectrum and step 10 for what it opens (chiefly: does resolution
+> above `res=60` keep moving the resonance position).
 >
-> ⚠ **Two real mistakes were caught and fixed while producing that number —
-> both are load-bearing for reading anything below:**
+> **Updated 2026-08-05 — partially checked, still open.** A single-wavelength
+> `res=70`/`80` probe (job 11688701) shows R still climbing by a non-trivial
+> amount through res=80, with the deceleration that looked clean through
+> res=60 stalling rather than continuing — evidence the resolution residual
+> has NOT settled by res=60, making the peak-position question MORE open,
+> not resolved. See step 8's current-numbers table and step 10 item 1.
+>
+> ⚠ **Three real mistakes were caught and fixed while building this
+> example — all three are load-bearing for reading anything below:**
 > 1. **Wrong band, most of a day's work.** Everything through step 7 (and
 >    this session's first convergence sweep, since deleted) used **O-band**
 >    (1.26–1.36 µm), matching every other `SOI_160` example in this repo. The
@@ -46,20 +59,51 @@ Opened **2026-08-04**, at the user's request: an FDTD-only example (no EME, no
 >    the baseline (cache hit, identical R) and confirmed correct once fixed
 >    (`edge_clearance=0.5` reproduces the baseline `R=0.8962` exactly). See
 >    step 8.
+> 3. **The input waveguide ended abruptly instead of continuing through the
+>    PML — a real physical defect, not a cosmetic one.** Before this fix,
+>    `GdsGeometry.polygons()` never extended the input waveguide (A2's own
+>    "appends nothing" contract), so it simply stopped at the GDS's own
+>    edge, sitting in the `edge_clearance` gap (or right at the PML if
+>    `edge_clearance=0`) as a clean-cut Si/oxide facet. **That facet
+>    reflects part of the guided mode on its own, independent of the
+>    grating** — a real backward-traveling wave the monitor cannot
+>    distinguish from an actual reflection off the structure under test.
+>    Caught by the user directly ("extend the input waveguide into the pml
+>    so that it is not abruptly cut off"). Fixed: `GdsGeometry` gained
+>    `input_width`/`input_y` (the GDS's own known input-stub cross-section,
+>    0.5 µm) and now honors `polygons(stub_length>0)` by extending that ONE
+>    waveguide (input side only — the far side is an arbitrary freeform cut
+>    with no defined cross-section to extend) by `stub_length`;
+>    `solve_reflection()` gained `extend_input_waveguide=True`, which
+>    computes `stub_length = edge_clearance + dpml` — enough to run the
+>    waveguide fully through the PML to the true cell boundary — and feeds
+>    it through to both the actual meep geometry and the cache fingerprint.
+>    Verified visually (a rendered ε-map shows the waveguide now passing
+>    continuously through the PML with no cut) before spending any real
+>    compute on it. **Removing this artifact changed the actual simulated
+>    geometry, so every cached result was invalidated** — the full 17-point
+>    convergence sweep and the production run both needed re-running, not
+>    re-labelling. See step 8/9.
 >
-> Both were caught by the user asking a direct question at the right moment
-> ("is this the correct band — check paper, should be c-band"; implicitly,
-> by asking for x/y/z convergence rather than accepting the y-only check)
-> rather than by anything in this pipeline catching itself. Neither has an
-> automated guard now either — worth keeping in mind for the next device
-> built this way.
+> All three were caught by the user asking directly or requesting a specific
+> check (band; x/y/z convergence rather than y-only; the waveguide
+> extension) rather than by anything in this pipeline catching itself on its
+> own. **Mistakes 2 and 3 (source/monitor outside the real silicon; a
+> geometry that claims `extend_input_waveguide` support but doesn't actually
+> reach the domain boundary) now DO have an automated guard** —
+> `check_reflection_layout()` in `solve_reflection()`, added 2026-08-04,
+> raises before `mp.Simulation` is even built. See step 10 item 6. Mistake 1
+> (wrong band) has no equivalent guard and likely can't — nothing in the
+> codebase encodes what band a given device was designed for to check a
+> requested wavelength range against.
 >
 > **Placement.** Top level, not `resolved/` or `deferred/`, for the same
-> reason `mmi_1x4_sin300_validation.md` sits there: this is not yet
-> "sufficiently addressed" (production run still in flight) and it is not
-> "postponed by choice" (it is active, with concrete next steps in step 10).
-> It differs from that doc's precedent in one way — the device already
-> *exists* and *runs*, it just isn't fully validated yet.
+> reason `mmi_1x4_sin300_validation.md` sits there: the four checks in
+> [README.md](README.md#the-four-checks) don't apply (FDTD-only, no
+> EME/hybrid), so this doc's own step 10 stands in for a gap list. Held back
+> from `resolved/` by the now-larger, unresolved paper gap (step 9/10) and
+> the three unguarded-mistake items in the box
+> above.
 
 ## Reference — what this device is
 
@@ -74,9 +118,8 @@ topology-optimization methodology and the HCG reflector device published in:
 Cited in both the script (`examples/high_contrast_grating/python/high_contrast_grating_fdtd.py`)
 and the notebook's header cell. Comparing a converged run of this example
 against that paper's own reported spectrum is the natural correctness
-check — **step 8 below does this at a single wavelength (agreement to 3
-decimals at `res=60`); the full-band comparison waits on job 11670282**
-(step 9).
+check — see step 9 for current status (a production run is in flight as
+of the ⚠ box's latest update, following the waveguide-extension fix).
 
 ## Summary — where the work actually was
 
@@ -90,19 +133,25 @@ decimals at `res=60`); the full-band comparison waits on job 11670282**
 | Script + notebook | ✅ **DONE**, both run to completion, byte-identical results |
 | Full fast test suite after the two library changes | ✅ **611 passed, 19 skipped** (2026-08-04) — no regression |
 | Correct band (C-band, not O-band) | ❌ → ✅ **FIXED 2026-08-04** — see the ⚠ box above; a real mistake, not a preemptive check |
-| 3-D resolution convergence (single wavelength, C-band peak) | ✅ **MEASURED 2026-08-04** — res 10→60, `R` 0.5144→0.9789, geometric decay — step 8 |
-| PML/domain convergence, x/y/z independently | ✅ **MEASURED 2026-08-04** — x fully converged (0.0000 spread), y converged at res=25 (±0.001), z small (±0.004) — step 8 |
 | x-domain sweep self-corrupting (source outside waveguide) | ❌ → ✅ **CAUGHT AND FIXED 2026-08-04** — see the ⚠ box above — step 8 |
-| Full-band (21 λ, C-band) 3-D production run | 🔄 **SUBMITTED 2026-08-04** — job 11670282, `gts-sr108-ece`, in flight — step 9 |
-| Comparison against the published paper's own spectrum | 🟡 **PARTIAL** — single-wavelength agreement to 3 decimals at `res=60`; full-band comparison waits on job 11670282 |
+| Input waveguide abruptly cut off instead of extended through PML | ❌ → ✅ **CAUGHT AND FIXED 2026-08-04** — see the ⚠ box above (item 3) — step 8/9 |
+| 3-D resolution convergence (single wavelength, C-band peak) | ✅ **MEASURED 2026-08-04, RE-MEASURED same day after the waveguide fix** — res 10→60, `R` 0.4468→0.9697 (post-fix; systematically lower than the pre-fix 0.5144→0.9789), same geometric-decay shape — step 8 |
+| PML/domain convergence, x/y/z independently | ✅ **RE-MEASURED 2026-08-04 post-fix** — x fully converged (0.0000 spread), y converged at res=25 (±0.0001), z converged at res=25 (±0.0002) — even tighter than pre-fix — step 8 |
+| Full-band (21 λ, C-band) 3-D production run | ✅ **RE-MEASURED 2026-08-04** — job 11673560 COMPLETED (54 min), peak R=0.9714 at 1.580 µm (job 11670282's 0.9810/1.550µm superseded) — step 9 |
+| Comparison against the published paper's own spectrum | ✅ **RE-MEASURED 2026-08-04** — gap WIDENED to ~1.8 pt (was ~0.8 pt pre-fix) and peak flipped from blue- to red-shifted — reported honestly, not smoothed over — step 9/10 |
 
 So the ordered work was: **geometry inspection → two library gaps → why
 `solve()` cannot work here → the reflection method → verified placement →
 script/notebook → test suite → smoke test → [band correction] → real 3-D
-x/y/z/resolution convergence → [x-sweep bug + fix] → production run
-submitted.** What remains is the production run landing, the full-band
-comparison against the paper, and the two items step 10 was always going to
-carry (where the non-reflected power goes; generalizing the domain plot).
+x/y/z/resolution convergence → [x-sweep bug + fix] → production run →
+comparison against the paper → [waveguide-extension bug + fix] →
+convergence RE-measured → production RE-measured → comparison
+RE-measured, honestly worse.** What remains is step 10's genuinely open
+items — chiefly whether resolution above `res=60` keeps moving the
+resonance position (the ~30 nm shift from the waveguide fix alone is the
+strongest signal yet that it might), plus whether this GDS is the paper's
+final design or a staged seed, where the non-reflected power goes, and
+generalizing the domain plot.
 
 ---
 
@@ -362,7 +411,7 @@ two library changes (`gds_import.py`'s new `polygons()`, `fdtd.py`'s new
 changes are additive (new method / new method), so this is the expected
 result, confirmed rather than assumed.
 
-### Step 8 — real 3-D resolution + x/y/z PML convergence ✅ MEASURED 2026-08-04, C-band
+### Step 8 — real 3-D resolution + x/y/z PML convergence ✅ MEASURED 2026-08-04, C-band, RE-MEASURED after the waveguide-extension fix
 
 **Tool:** `examples/verification/python/hcg_reflection_convergence.py`
 (temporary, delete once a production resolution/domain is settled — see its
@@ -375,117 +424,354 @@ Every point is a genuine 3-D `solve_reflection()` call — confirmed via
 (the production value, not loosened for the sweep — so every point's own
 wall time *is* the decay_tol-behavior check, item 3 of the old plan).
 
-19 array tasks total across four submissions (11668597, 11668881 — the
-x-domain fix, 11668965 — the res 50/60 tail extension), all landing clean
-after the two mistakes in the top-of-doc box were caught and corrected.
+#### Current numbers — WITH `extend_input_waveguide=True` (job 11672082, 17 tasks; res=70/80 added 2026-08-05 via job 11688701, all landed)
 
 **Resolution series** (`sim_width=7.5`, `edge_clearance=0.3`, `sim_height=1.5`):
 
 | res (pts/µm) | R | \|ΔR\| vs prev | wall (min, 24 ranks) |
 |---|---|---|---|
-| 10 | 0.5144 | — | 0.4 |
-| 15 | 0.7386 | 0.2242 | 0.9 |
-| 20 | 0.8434 | 0.1048 | 1.8 |
-| 25 | 0.8962 | 0.0528 | 5.1 |
-| 30 | 0.9266 | 0.0304 | 6.7 |
-| 35 | 0.9466 | 0.0200 | 11.5 |
-| 40 | 0.9557 | 0.0091 | 21.7 |
-| 50 | 0.9705 | 0.0148 (over a +10 step — ~0.00148/unit, still decelerating per-unit) | 44.0 |
-| 60 | 0.9789 | 0.0084 (over a +10 step — ~0.00084/unit) | 90.1 |
+| 10 | 0.4468 | — | 0.4 |
+| 15 | 0.7030 | 0.2562 | 1.2 |
+| 20 | 0.8164 | 0.1133 | 4.3 |
+| 25 | 0.8757 | 0.0594 | 3.5 |
+| 30 | 0.9081 | 0.0323 | 6.5 |
+| 35 | 0.9323 | 0.0242 | 11.9 |
+| 40 | 0.9450 | 0.0128 | 18.3 |
+| 50 | 0.9592 | 0.0142 (over a +10 step — ~0.00142/unit) | 58.9 |
+| 60 | 0.9697 | 0.0105 (over a +10 step — ~0.00105/unit) | 74.5 |
+| 70 | 0.9741 | 0.0044 (over a +10 step — ~0.00044/unit) | 133.3 |
+| 80 | 0.9780 | 0.0039 (over a +10 step — ~0.00039/unit) | 262.2 |
 
-Deltas shrink geometrically (~0.55–0.6× per doubling of step size), and
-**`res=60`'s R=0.9789 matches the paper's own reported C-band minimum
-reflectance (97.9%) to three decimals.** Extrapolating the same decay rate
-(remaining ≈ last Δ × r/(1−r), r≈0.55–0.6) puts the asymptote at **R≈0.99**,
-close to the paper's reported peak (98.9%). This is real, independent
-agreement with the published device — not merely "the pipeline runs" the
-way step 6's O-band smoke test was.
+**Systematically lower than the pre-fix sweep at every single point** (see
+"superseded" table below) — expected, since the pre-fix numbers included a
+spurious facet-reflection contribution the fix removes.
 
-Cost escalates steeply (~2× wall time per 10-unit step by `res=50`+, faster
-than the 2×-per-5-units trend seen at lower resolution — consistent with
-total cost scaling faster than `res³` once the CFL-limited timestep count
-is folded in). `res=60` (90 min/point) was judged the practical stopping
-point: pushing to `res=70–80` would cost multiple hours per point for a
-residual already estimated at ~1%, and `res=60` independently reproduces
-the paper's own number to 3 decimals, which is stronger evidence than a
-tighter self-consistency bracket alone would have been.
-**`res=60` is a cost/accuracy tradeoff, stated as such — not a claim of
-exact convergence** (same posture this repo's README takes toward every
-other device's resolution knob, e.g. the coupler's own res 40 vs measured-
-need-120 gap).
+**res=70/80, added 2026-08-05 to settle step 10's single most load-bearing
+open question (does resolution above res=60 keep moving the resonance),
+give an honest, not a reassuring, answer: R is still climbing by a
+non-trivial amount, and the deceleration that looked clean through res=60
+did NOT continue cleanly.** The res=60→70 step decelerated sharply (ratio
+0.0044/0.0105 ≈ 0.42, faster deceleration than any earlier step) — read in
+isolation that looked like the residual was collapsing. The res=70→80 step
+then decelerated only mildly (ratio 0.0039/0.0044 ≈ 0.89) — almost flat,
+not a continuation of the res=60→70 trend. **This non-monotonic
+deceleration ratio means a single geometric extrapolation is not
+trustworthy here** — naively continuing the res=70→80 ratio (~0.89) sums
+to an asymptote *above* 1.0, which is unphysical and just shows the
+extrapolation has broken down this close to the noise floor, not that R
+genuinely exceeds 1. **Read honestly: R has not clearly plateaued by
+res=80, wall time has grown from 74.5 min (res=60) to 262.2 min (res=80,
++252% for a +33% resolution increase — steep, consistent with 3-D FDTD's
+usual worse-than-`res⁴` blowup near a resolution's practical ceiling), and
+whether it continues climbing toward the 1.0 end of the previously-stated
+R≈0.98–1.00 bracket or is genuinely near-converged in the high-0.97s to
+0.98 range is still not settled.** Pushing to res=90/100 to settle it
+further would very plausibly cost multiple additional hours per point on
+this trend — a real resource decision, not attempted here without asking.
+
+**Consequence for step 10's open question (does the resonance PEAK
+*position* keep moving, not just R's magnitude at this one probe
+wavelength):** this sweep only ever measures R at the single fixed
+wavelength 1.569 µm — it cannot directly confirm or rule out a peak-position
+shift on its own. But R at 1.569 µm moving by 0.0083 total from res=60 to
+res=80 (comparable in size to the ~0.03 magnitude change the
+waveguide-extension fix itself caused, which is what produced the
+documented ~30 nm peak shift) is a real signal that the full-band
+lineshape — and very plausibly the peak's own wavelength — has likely NOT
+fully settled by res=60 either. **This makes the open question more
+concerning, not less**: the existing production spectrum (step 9, peak
+R=97.14% at 1.580 µm) was run at res=60, and this new data suggests that
+result's peak position and magnitude may both still move at higher
+resolution. Not re-run here (a full 21-wavelength production sweep at
+res=70/80 would cost proportionally more than this single-wavelength
+convergence point already did) — flagged as the natural next step if this
+question needs closing, not closed by this update.
+
+**`res=60`'s R=0.9697 sits further from the paper's 97.9% than the pre-fix
+`res=60`'s R=0.9789 did** — worth reading plainly: removing a real
+modeling artifact made the raw number *agree less well* with the paper at
+this resolution, which means the resolution residual is doing more of the
+work than the pre-fix comparison suggested, not that the fix was wrong
+(the fix is independently verified correct by the ε-map render and by
+x-domain sensitivity going to *exactly* zero, both reported below/above).
 
 **Domain (PML) series, all at a single resolution:**
 
 | series | swept | R values | spread |
 |---|---|---|---|
+| y @ res=10 | `sim_width` 7.5/8.5/9.5 | 0.4468 / 0.4425 / 0.4462 | ±0.004 |
+| y @ res=25 | `sim_width` 7.5/8.5/9.5 | 0.8757 / 0.8760 / 0.8761 | ±0.0004 — converged |
+| x @ res=25 | `edge_clearance` 0.3/0.5/0.8 | 0.8757 / 0.8757 / 0.8757 | **0.0000 — fully converged** |
+| z @ res=25 | `sim_height` 1.5/2.0/2.5 | 0.8757 / 0.8758 / 0.8755 | ±0.0003 |
+
+**All three domain axes converged even tighter than the pre-fix sweep**
+(y: ±0.0004 vs ±0.001; z: ±0.0003 vs ±0.004; x: still exactly 0.0000) —
+resolution is even more clearly the dominant, and now essentially the only,
+source of remaining uncertainty.
+
+`res=60` (74.5 min for this run's single point, comparable to the pre-fix
+90.1 min) remains the practical production choice on the same cost/accuracy
+tradeoff logic as before — not a claim of exact convergence, now stated
+with a wider, more honest residual estimate.
+
+#### ⚠ Superseded — pre-fix numbers (WITHOUT waveguide extension), kept for the record
+
+The input waveguide simply ended at the GDS's own edge in this round —
+see the top-of-doc box's item 3 for why that's a real physical defect (a
+clean-cut Si/oxide facet reflects part of the guided mode on its own).
+19 array tasks across four submissions (11668597, 11668881 — the x-domain
+fix, 11668965 — the res 50/60 tail extension).
+
+| res (pts/µm) | R | \|ΔR\| vs prev |
+|---|---|---|
+| 10 | 0.5144 | — |
+| 15 | 0.7386 | 0.2242 |
+| 20 | 0.8434 | 0.1048 |
+| 25 | 0.8962 | 0.0528 |
+| 30 | 0.9266 | 0.0304 |
+| 35 | 0.9466 | 0.0200 |
+| 40 | 0.9557 | 0.0091 |
+| 50 | 0.9705 | 0.0148 |
+| 60 | 0.9789 | 0.0084 |
+
+| series | swept | R values | spread |
+|---|---|---|---|
 | y @ res=10 | `sim_width` 7.5/8.5/9.5 | 0.5144 / 0.5249 / 0.5154 | ±0.010 |
-| y @ res=25 | `sim_width` 7.5/8.5/9.5 | 0.8962 / 0.8954 / 0.8952 | ±0.001 — converged |
-| x @ res=25 (corrected) | `edge_clearance` 0.3/0.5/0.8 | 0.8962 / 0.8962 / 0.8962 | **0.0000 — fully converged** |
+| y @ res=25 | `sim_width` 7.5/8.5/9.5 | 0.8962 / 0.8954 / 0.8952 | ±0.001 |
+| x @ res=25 (corrected for the §2 bug) | `edge_clearance` 0.3/0.5/0.8 | 0.8962 / 0.8962 / 0.8962 | 0.0000 |
 | z @ res=25 | `sim_height` 1.5/2.0/2.5 | 0.8962 / 0.8919 / 0.8945 | ±0.004 |
 
-**Reading this together:** at `res=25`, x-clearance is a complete non-issue
-(exactly zero sensitivity once the source-placement bug — box above — was
-fixed), y-clearance is converged to 0.1%, and z has a small ~0.4% spread —
-all three are sub-dominant to the resolution series' own ~0.9% residual at
-`res=40` (and smaller still relative to `res=60`'s estimated ~1% residual).
-**Resolution, not domain size, is the dominant source of remaining
-uncertainty** — the opposite conclusion from what step 4's un-swept ~0.26
-µm y-clearance flag might have suggested, and only knowable by actually
-running the sweep rather than eyeballing the geometry plot.
+This round's `res=60` (R=0.9789) coincidentally matched the paper's
+reported C-band minimum (97.9%) to three decimals — read that agreement as
+**superseded, not as evidence the pre-fix pipeline was more accurate**; the
+facet-reflection artifact it carried was a real error that happened to
+partially cancel against the resolution residual at this one resolution.
 
-### Step 9 — full-band 3-D production run 🔄 SUBMITTED 2026-08-04, in flight
+### Step 9 — full-band 3-D production run ✅ MEASURED 2026-08-04 (job 11673560, after the waveguide-extension fix)
 
-`examples/high_contrast_grating/python/high_contrast_grating_fdtd.py`'s
-production default updated to **`RESOLUTION=60`** (from the old unvalidated
-placeholder `40`) and **C-band `WL_MIN=1.50`/`WL_MAX=1.60`** (from the wrong
-O-band), matching step 8's settled resolution and the corrected band. The
+`examples/high_contrast_grating/python/high_contrast_grating_fdtd.py` now
+carries `extend_input_waveguide=True` by default (the top-of-doc box's item
+3) alongside `RESOLUTION=60` and **C-band `WL_MIN=1.50`/`WL_MAX=1.60`**. The
 notebook was regenerated from the script (single source of logic, per step
 5's own convention) to match.
 
-Submitted via a new batch script, `batch/run_high_contrast_grating_fdtd.batch`
-(`gts-sr108-ece`, 1 node/24 ranks, `-t 300`) — **job 11670282**. Cost
-estimate: step 8's single-wavelength `res=60` point took 90 min on 24
-ranks; this script's 21-wavelength sweep is the *same* physical run (one
-broadband pulse, every wavelength's DFT captured for free), so wall time
-should land in the same ballpark — the 5 h cap leaves real margin, not a
-tight bound.
+**Job 11673560, COMPLETED in 54:23** (faster than the pre-fix run's 93.8
+min, despite the corrected single-wavelength `res=60` sweep point costing
+more (74.5 vs 90.1 min) — full-band DFT-decay behavior is not simply "the
+slowest wavelength's cost," consistent with the tutorial's own "one
+broadband pulse, decay is a property of the whole simulation" framing).
 
-**Not yet landed as this section was written.** Once it does: read
-`R(λ)` across the full 1.50–1.60 µm band from
-`example_output/high_contrast_grating/high_contrast_grating_fdtd/smatrix.pkl`,
-compare its peak and its band-minimum directly against the paper's 98.9%/
-97.9%, and fold the result into this section with a MEASURED tag — this
-paragraph is the placeholder for that update, not a substitute for it.
+**Full spectrum** (`example_output/high_contrast_grating/high_contrast_grating_fdtd/{smatrix.pkl,reflection.png}`):
+
+| λ (µm) | R | | λ (µm) | R |
+|---|---|---|---|---|
+| 1.500 | 0.9284 | | 1.555 | 0.9661 |
+| 1.505 | 0.9326 | | 1.560 | 0.9679 |
+| 1.510 | 0.9368 | | 1.565 | 0.9693 |
+| 1.515 | 0.9409 | | 1.570 | 0.9704 |
+| 1.520 | 0.9449 | | 1.575 | 0.9711 |
+| 1.525 | 0.9488 | | **1.580** | **0.9714 (peak)** |
+| 1.530 | 0.9524 | | 1.585 | 0.9713 |
+| 1.535 | 0.9558 | | 1.590 | 0.9708 |
+| 1.540 | 0.9588 | | 1.595 | 0.9699 |
+| 1.545 | 0.9616 | | 1.600 | 0.9686 |
+| 1.550 | 0.9640 | | | |
+
+Still a smooth, single-humped resonance, but **shifted and broadened
+relative to the pre-fix spectrum**: rises more gradually across almost the
+entire band before peaking near the red edge (1.580 µm, not 1.550 µm),
+then turns over only in the last two points. `check_passive()` raised no
+warning.
+
+**Comparison against the paper (98.9% peak at 1569 nm, ≥97.9% over
+C-band) — and against the now-superseded pre-fix run:**
+
+| | this run (post-fix) | pre-fix (superseded) | paper |
+|---|---|---|---|
+| Peak R | **97.14%** | 98.10% | 98.9% |
+| Peak λ | **1.580 µm** (+11 nm red of paper) | 1.550 µm (−19 nm blue of paper) | 1.569 nm |
+| Min R, 1.50–1.60 µm | 92.84% at 1.500 µm | 91.80% at 1.500 µm | 97.9% (band undefined) |
+| Min R, narrower 1.53–1.565 µm | 95.24% at 1.530 µm | 96.77% at 1.530 µm | 97.9% |
+
+**Read this plainly: the corrected, more physically sound run agrees LESS
+well with the paper than the flawed pre-fix run did — 1.76 percentage
+points off at peak, versus 0.8 before.** This is not evidence the fix was
+wrong (independently confirmed correct: the ε-map render, x-domain
+sensitivity going to exactly 0.0000, and every domain-convergence check
+tightening rather than loosening — step 8). It means the facet-reflection
+artifact the fix removed was *coincidentally* pulling the peak magnitude
+closer to the paper's number while pulling its *position* the wrong way —
+removing one confounding error does not by itself close every gap, and
+pretending otherwise would be worse than reporting the larger gap honestly.
+
+**The peak wavelength did not just shift, it flipped sides**: from 19 nm
+blue of the paper's 1569 nm to 11 nm red of it — a genuine ~30 nm change in
+resonance position from removing the artifact, not merely a magnitude
+correction. That degree of movement, on top of the still-only-partially-
+bracketed resolution residual (step 8: asymptote estimated at R≈0.98–1.00,
+a wider range than before the fix, not a tighter one), is the strongest
+evidence yet that **resolution above `res=60` would move the resonance
+*position*, not just its magnitude** — untested here, and now the most
+load-bearing open question for taking this comparison further (step 10).
+
+#### ⚠ Superseded — pre-fix production run, kept for the record
+
+Job **11670282**, COMPLETED in 93.8 min, run WITHOUT the waveguide
+extension (top-of-doc box item 3) — the input waveguide ended abruptly at
+the GDS's own edge, a real physical defect that contaminates a reflection
+measurement specifically. Its full spectrum and paper comparison below are
+**superseded, not merely re-labelled** — read them as "what the pipeline
+produced before a real artifact was removed," not as the device's actual
+performance.
+
+**Full spectrum** (from job 11670282's own output, which job 11673560 has since overwritten on disk — these numbers are preserved here as text, not re-derivable from the live files anymore):
+
+| λ (µm) | R | | λ (µm) | R |
+|---|---|---|---|---|
+| 1.500 | 0.9180 | | 1.555 | 0.9809 |
+| 1.505 | 0.9265 | | 1.560 | 0.9803 |
+| 1.510 | 0.9353 | | 1.565 | 0.9796 |
+| 1.515 | 0.9441 | | 1.570 | 0.9790 |
+| 1.520 | 0.9526 | | 1.575 | 0.9783 |
+| 1.525 | 0.9606 | | 1.580 | 0.9774 |
+| 1.530 | 0.9677 | | 1.585 | 0.9763 |
+| 1.535 | 0.9735 | | 1.590 | 0.9748 |
+| 1.540 | 0.9777 | | 1.595 | 0.9730 |
+| 1.545 | 0.9801 | | 1.600 | 0.9707 |
+| **1.550** | **0.9810 (peak)** | | | |
+
+A smooth, single-humped resonance — rising steeply from the blue edge,
+peaking near 1.55 µm, falling gently toward the red edge. `check_passive()`
+raised no warning.
+
+**Comparison against the paper (98.9% peak at 1569 nm, ≥97.9% over
+C-band):**
+
+- **Peak: 98.10% at 1.550 µm vs. the paper's 98.9% at 1.569 nm.** 0.8
+  percentage points low, roughly consistent with step 8's own estimated
+  ~1% resolution residual at `res=60` — this is the number step 8's
+  single-wavelength check (0.9789 at exactly 1.569 µm, matching the
+  paper's *minimum*, not peak) already flagged as close-but-not-fully-
+  converged. **The resonance also sits ~19 nm blue of the paper's** (peak
+  at 1.550 µm vs. 1.569 nm) — the 21-point grid (5 nm spacing) means the
+  true sampled peak could be off by up to half a grid step from this
+  alone, but 19 nm is more than that; a genuine small blue-shift is more
+  likely, and step 8's own resolution sweep was checked at 1.569 µm
+  specifically *because* that's where the paper's peak is, not because
+  the geometry-under-test peaks there. **Not fully explained — candidates,
+  none confirmed:** (a) the ~1% resolution residual could plausibly shift
+  the resonance wavelength as well as its peak magnitude, not checked here;
+  (b) `HCG_seeded_TO.gds`'s filename ("seeded TO") suggests this may be an
+  intermediate seed geometry in the paper's staged optimization pipeline
+  (parameter optimization → seeded topology optimization) rather than the
+  exact final published design — plausible given how close the magnitude
+  match already is, but not confirmed against the paper's own figures; (c)
+  small material-model differences (this repo's Sellmeier Si/SiO2 vs.
+  whatever the paper used).
+- **"Minimum over band": 91.80% at 1.500 µm vs. the paper's 97.9% — NOT a
+  fair comparison as stated.** The paper does not give its own C-band
+  edges; this script's 1.50–1.60 µm span (chosen to match this repo's own
+  `directional_coupler`/`mmi_2x2` C-band convention) is wider than the
+  standard ITU C-band (~1530–1565 nm) the paper more likely means.
+  Restricted to that narrower window, **this run's own minimum is 96.77%
+  at 1.530 µm** — much closer to the paper's 97.9%, and still consistent
+  with "peak slightly low and slightly blue-shifted" rather than a
+  qualitatively different result. Below ~1.53 µm this device's reflectivity
+  drops off faster than the plateau suggests — genuinely useful information
+  the paper's own summary statistic ("min over C-band") would not surface,
+  and worth keeping in mind if `WL_MIN`/`WL_MAX` are ever narrowed to match
+  a stricter C-band definition.
+
+**Overall: a real, independently-run 3-D FDTD pipeline reproduces the
+published device's peak reflectivity to within ~1 percentage point and its
+overall band shape qualitatively, with two specific, stated, unconfirmed
+discrepancies (peak wavelength, band-edge definition) rather than a vague
+"close enough."** That is the standard this repo's own culture asks for —
+a number with a source, not a match asserted from a plot. **All of this
+paragraph describes the superseded, pre-waveguide-fix run — see step 9's
+main section above for the corrected result, which agrees LESS well with
+the paper, not more, once the artifact this paragraph didn't know about
+yet was removed.**
 
 ### Step 10 — what remains ❌ NOT DONE
 
-1. **The full-band production run landing** (step 9) and its comparison
-   against the paper's own spectrum shape, not just the single-wavelength
-   peak value step 8 already agrees with.
-2. **Where does `1 − R` go?** This example makes no attempt to separately
+1. ~~The RE-RUN full-band production run landing, and a fresh comparison
+   against the paper's own spectrum.~~ ✅ **DONE — step 9.** The corrected
+   comparison is the one to quote (peak 97.14% at 1.580 µm) — **NOT** the
+   superseded pre-fix number (98.10% at 1.550 µm), which agreed with the
+   paper *better* only because of the facet-reflection artifact. What that
+   comparison itself opened, carried forward:
+   - ⚠ **Resolution above `res=60` likely still moves the resonance
+     *position*, not just its magnitude — PARTIALLY CHECKED 2026-08-05,
+     still open.** The peak moved ~30 nm (from 19 nm blue of the paper's
+     to 11 nm red of it) purely from removing the waveguide-facet artifact
+     at fixed `res=60`. A `res=70`/`80` single-wavelength check (job
+     11688701, see step 8's current-numbers table) shows R at the fixed
+     1.569 µm probe wavelength is STILL climbing by a non-trivial amount
+     through res=80 (+0.0083 total from res=60), with a deceleration ratio
+     that stalled rather than continuing to shrink cleanly — evidence the
+     full-band lineshape, and plausibly the peak position too, has likely
+     NOT settled by res=60. **This makes the question MORE open, not
+     less** — a real full-band production re-run at res=70/80 (not just
+     the single-wavelength probe done here) is what would actually confirm
+     or rule out further peak movement, and has not been attempted (cost:
+     the res=80 single-wavelength point alone took 262 min; a 21-wavelength
+     production sweep at that resolution would cost proportionally more).
+   - **Is `HCG_seeded_TO.gds` the paper's final published design, or an
+     intermediate seed from the staged optimization pipeline?** Still
+     unconfirmed against the paper's own figures/text; a ~1.8 percentage
+     point gap (larger than the pre-fix ~0.8 pt) is easier to attribute to
+     "this is a seed, not the final optimized device" than the smaller
+     pre-fix gap was, but that's a plausibility argument, not a check.
+   - Small material-model differences (this repo's Sellmeier Si/SiO2 vs.
+     whatever the paper used) remain an unconfirmed, unranked candidate.
+2. **The resolution residual is now a wider, more honestly-stated range
+   (~R 0.98–1.00 extrapolated, step 8) than the pre-fix estimate (~0.99) —
+   not narrowed down.** `res=70`/`80` would tighten this bracket; not done
+   here on a cost basis (`res=60` alone is already 75–90 min/point, and
+   this session already ran the sweep twice end-to-end).
+4. **Where does `1 − R` go?** This example makes no attempt to separately
    measure out-of-plane radiated power vs. residual forward leakage vs.
    absorption — `check_passive()` only bounds R itself. A flux-box or
    top/bottom-flux-plane diagnostic (3-D only) would need its own addition
    to `solve_reflection()` or a second, separate `mp.Simulation` call;
    scoped out of this session deliberately rather than half-built.
-3. **Generalize `plot_hcg_domain()`** (step 5) into `beef.plot` if a second
+5. **Generalize `plot_hcg_domain()`** (step 5) into `beef.plot` if a second
    `solve_reflection()`-style device shows up — one example is not enough
-   evidence for the right general API yet.
-4. **Neither of the two mistakes in the top-of-doc box has an automated
-   guard.** A future device swept the same way could reintroduce either —
-   wrong band (no check that a requested wavelength range is anywhere near
-   a device's own design intent) or the source-outside-waveguide bug (no
-   assertion, in `solve_reflection()` itself, that the source/monitor
-   actually land inside drawn silicon before running). Worth a cheap
-   defensive check in `solve_reflection()` at some point: verify
-   `geometry.polygons()`'s silicon actually contains the computed
-   `(src_x, src_yo)` and `(mon_x, src_yo)` points before building the
-   `mp.Simulation`, and raise clearly if not — this session found the bug
-   only by rendering an ε-map and reasoning about it by hand, which is not
-   how the *next* geometry's author should have to catch it.
-5. **`res=60`'s ~1% estimated residual is exactly that — estimated,
-   extrapolated from a decay ratio, not bracketed by a point beyond it.**
-   If a future need calls for it, `res=70`/`80` would settle whether the
-   asymptote is really ~0.99 or the deceleration trend breaks down — not
-   done here on a cost basis (per-point cost was already tens of minutes
-   to 1.5 h by `res=60`).
+   evidence for the right general API yet. Now also draws the extended
+   waveguide and top/bottom PML (step 5 update), so the generalization
+   surface is a bit larger than when first scoped.
+6. ~~None of the three mistakes in the top-of-doc box has an automated
+   guard.~~ ✅ **DONE 2026-08-04 for mistakes 2 and 3** — `beef/solvers/
+   fdtd.py` gained `_point_in_polygon()` and `check_reflection_layout()`,
+   called from `solve_reflection()` right after `src_x`/`mon_x` are
+   computed and before `mp.Simulation` is built (so a bad layout fails in
+   milliseconds, not after a full solve). It checks, against the exact
+   `(2, 0)`-layer polygons `to_meep_prisms()` is about to extrude:
+   - the source and monitor both land inside real silicon (guards the
+     bug-2 class: `source_margin`/`monitor_margin` are PML-relative, not
+     geometry-relative, so a source/monitor position that looks fine in
+     isolation can land in bare oxide once `edge_clearance` or any other
+     domain-size parameter changes);
+   - when `extend_input_waveguide=True`, the silicon actually reaches the
+     domain boundary on the excited side (guards the bug-3 class: a
+     geometry could claim to honor `extend_input_waveguide` while silently
+     ignoring `stub_length` for its input side, leaving the exact cut
+     facet the flag exists to remove).
+
+   `tests/test_fdtd_reflection_layout_guard.py` (7 tests, no meep import
+   needed — pure point-in-polygon geometry) locks in both checks,
+   including reconstructions of the *actual* historical bug-2 and bug-3
+   numbers from this device (not just synthetic cases). Separately
+   verified against the real production `HCG_seeded_TO.gds` layout
+   (`res=60`, `edge_clearance=0.3`, `extend_input_waveguide=True`): passes
+   clean; and confirmed it *would* have caught bug 2 (source at
+   `edge_clearance=0.8` with unadjusted `source_margin`, the real historical
+   `R=0.7530` case) and bug 3 (checked against the pre-extension polygons)
+   had it existed then. Full suite: 625 passed, 19 skipped (was 618/19
+   before this addition).
+
+   **Mistake 1 (wrong band) still has no automated guard** — a requested
+   wavelength range being "near" a device's own design intent isn't
+   something this codebase has any representation of to check against;
+   left as a genuinely open gap, not attempted here.

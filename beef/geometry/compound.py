@@ -141,27 +141,55 @@ class CompoundGeometry(DeviceGeometry):
         return result, lo, hi
 
     # ------------------------------------------------------------------
-    # Whole-device polygons (plain FDTD / geometry preview) — stub_length
-    # not supported here (no generic way to know per-port stub width for an
-    # arbitrary segment type); use to_gds_eme()/section_gds() instead, which
-    # get their stub width from each end segment's own ports.
+    # Whole-device polygons (plain FDTD / geometry preview).
     # ------------------------------------------------------------------
 
     def polygons(self, stub_length: float = 0.0) -> Dict[Tuple[int, int], List[List[Tuple[float, float]]]]:
-        if stub_length > 0:
-            raise NotImplementedError(
-                "CompoundGeometry.polygons(stub_length>0) is not supported — "
-                "use to_gds_eme()/section_gds(), whose stub handling reads "
-                "port width from the end segments themselves."
-            )
+        """`stub_length` extends an access-waveguide stub at BOTH outer ends
+        of the whole composite (the first segment's input side, the last
+        segment's output side) — the interior join between segments never
+        gets a stub, matching every leaf geometry's own `polygons()`.
+
+        Fixed 2026-08-04 (notes.md Geometry item 8, part 2). Previously
+        raised `NotImplementedError` for stub_length > 0, on the belief that
+        an arbitrary segment type (e.g. a multi-port `WaveguideRun`) has no
+        single well-defined port width to extend. That premise was wrong,
+        not just unimplemented: `_end_ports()` already answers this
+        question for `to_gds_eme()`'s own stub handling below, and it
+        answers it by NOT picking a single winner — it returns every port
+        at that end (one (y, width) pair per port), and a leaf geometry
+        with several ports already draws one stub polygon per port for its
+        own `polygons(stub_length>0)` (see e.g. `MMI.polygons()`, which
+        loops `for i, p in enumerate(self.inputs)`/`.outputs`). This mirrors
+        that: one stub polygon per port returned by `_end_ports()`, at
+        every one of them, since the top-level FDTD path this feeds
+        (`FDTDSolver.solve()`, the only caller of a bare `polygons()` with
+        `stub_length>0`) needs the WHOLE physical device — every branch, not
+        one selected port — the same reason `_end_ports()` is called here
+        with no `output_idx` restriction (that kwarg exists for
+        `to_gds_eme()`'s per-port EME cross-section, a different use).
+        """
+        placements = list(self._placements())
         wg: List[List[Tuple[float, float]]] = []
-        for seg, seg_lo, seg_hi in self._placements():
+        for seg, seg_lo, seg_hi in placements:
             if isinstance(seg, WaveguideRun):
                 for (y, w) in seg.ports:
                     wg.append([(seg_lo, y-w/2), (seg_hi, y-w/2), (seg_hi, y+w/2), (seg_lo, y+w/2)])
             else:
                 center = (seg_lo + seg_hi) / 2 + seg.frame_offset
                 wg.extend(shift_polys(seg.polygons(stub_length=0.0)[_WG_LAYER], center))
+
+        if stub_length > 0:
+            sl = stub_length
+            first_seg, first_lo, _ = placements[0]
+            last_seg, _, last_hi = placements[-1]
+            for y, w in self._end_ports(first_seg, "input"):
+                wg.append([(first_lo-sl, y-w/2), (first_lo, y-w/2),
+                           (first_lo, y+w/2), (first_lo-sl, y+w/2)])
+            for y, w in self._end_ports(last_seg, "output"):
+                wg.append([(last_hi, y-w/2), (last_hi+sl, y-w/2),
+                           (last_hi+sl, y+w/2), (last_hi, y+w/2)])
+
         return {_WG_LAYER: wg}
 
     @staticmethod

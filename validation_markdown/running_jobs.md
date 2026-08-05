@@ -1,25 +1,65 @@
 # Active SLURM jobs — snapshot
 
-**★ TWENTY-FIFTH SNAPSHOT — 2026-08-04, verified against
+**★ TWENTY-SIXTH SNAPSHOT — 2026-08-05, verified against
 `squeue -u jhiesener3`. This is the current one.**
 
 | job | state | what |
 |---|---|---|
-| **11670540** `[0-3]` | 🏃 RUNNING (all 4 tasks) | `beef_modal_mux_engine_agreement` — `modal_multiplexer_validation.md` gap 5 (README.md check 1), never measured before. One SLURM array task per section length (2/4/6/8 µm) cut inside MMI 1's body, `-t 480`, `gts-sr108-ece`, deliberately bare `python` (no MPI rank guards in this script — see its own docstring). Smoke-tested on the login node first: object construction + the real (not mocked) EME half, 1237 s, sensible descending n_eff and smooth Δβ_EME(λ). Merge job **11670544** (`--dependency=afterok:11670540`) will assemble the FDTD/EME ratio once all 4 land |
+| ~~11688645~~ → **11693107** | ❌→🏃 | `beef_modal_mux_fdtd` — the real (non-smoke) res=20 full-device FDTD run (gap 3, README.md check 4). **11688645 TIMED OUT at 4h**, still mid-way through just the first input mode (TE0) — a real, unconfirmed resolution-dependent decay-time finding, not just the expected res⁴ cost scaling; no caching in this script, so all 96 core-hours were a total loss. See the detail section below for the full account and the options presented to the user. **Resubmitted at `-t 1440` (24h) as 11693107**, running |
+| **11688701** `_[..]` | 🏃 RUNNING | `beef_hcg` — unrelated to this thread, another session's work, not independently verified this snapshot |
+| **11691379** | 🏃 RUNNING | `beef_dc_...` — unrelated to this thread, another session's work, not independently verified this snapshot |
+| **11693043** | 🏃 RUNNING | `beef_mmi...` — unrelated to this thread, another session's work, not independently verified this snapshot |
+| **11672739** `_[0-3]` | 🏃 RUNNING, 22h+ elapsed | `beef_prewarm_mmi1x4_hybrid` — unrelated to this thread, another session's work (see prior snapshot for detail), not independently re-verified this snapshot |
+
+---
+
+**★ TWENTY-FIFTH SNAPSHOT — 2026-08-04, verified against
+`squeue -u jhiesener3`. Superseded by the snapshot above for job states;
+still current for full context on the modal multiplexer's earlier jobs.**
+
+| job | state | what |
+|---|---|---|
+| **11670540** `[0-3]` + **11678100** | ✅ **CLOSED** — mean ratio **0.9958** | `beef_modal_mux_engine_agreement` — `modal_multiplexer_validation.md` gap 5 (README.md check 1), first measurement ever. All 4 array tasks completed (3:07–5:33 hrs); merge **11670544 TIMED OUT** at 30 min (all 4 cached lengths loaded instantly, then hung on the ~20-min EME half with no margin left); re-budgeted to 90 min + thread-pinned, resubmitted as **11678100 — COMPLETED 30:37**. Result: Δβ_FDTD/Δβ_EME = 0.9958 (0.42% bias, monotone 0.9978→0.9948 across the O-band), worst off-diagonal/fit residual both 0.0000 — within 0.05–0.12 points of both MMIs' own engine bias (0.9946/0.9953). `calibrate_body_neff` NOT indicated. Check 1 CLOSED for this device |
+| ~~11673180~~ → **11673526** | ✅ **COMPLETED** 4:51:09 | `beef_mode_spec_converge` — extended `MEEP_RESOLUTIONS` to include 80/100 (gap 2). 11673180 FAILED at res 20 (duplicate-band guard, fixed in the script, see detail section below). **Result: clean 14/16 guided at every resolution 20–100 (an improvement), but meep's absolute n_eff does NOT plateau by 100** — 60→80 looked converged (14/14 agree) but 80→100 breaks completely (0/14, shifts 2–3× larger). Full account in the validation doc's gap 2 and the detail section below |
+| **11673498** | ✅ **COMPLETED** 11:34 | `beef_modal_mux_fdtd_SMOKE` — first-ever real run of `modal_multiplexer_fdtd.py`, at `MUX_FDTD_RES=10` (gap 3, README.md check 4). Pipeline ran end to end: both broadband input-mode solves completed, `check_passive()` held, real `SMatrix` saved. TE0 in → 56% total transmission, TE1 in → 1% (expected at this deliberately crude smoke resolution, not a device property). Real res=20 run not yet submitted |
 | **11670282** | 🏃 RUNNING | `beef_hcg` — high contrast grating full-band production run, unrelated to this thread, unchanged this snapshot |
-| **11667114_0..3** | 🏃 RUNNING (job array, 4 tasks) | `beef_mmi1x4_body_sweep` — 1x4 MMI on 300nm Si3N4, step 5's `mm_length` design sweep, one task per output branch (`MMI1X4_OUTPUT_IDX=0..3`). Real (full-scope) run of the v2 script: `N_BODY=20`, `N_TAPER=10`, `C_TAPER=8`, `N_WL=5`, 281-point `mm_length` sweep (analytically free). `-t 08:00:00`/task, projected ~3.5-4 hrs/task from smoke-test scaling. Run `mmi_1x4_sin_body_length_sweep_merge.py` once all 4 tasks land. |
+| **11667114_0..3** | ✅ **COMPLETED** (all 4 tasks, ~5:49-6:29 hrs each) | `beef_mmi1x4_body_sweep` — 1x4 MMI on 300nm Si3N4, step 5's `mm_length` design sweep. Merged: `argmin(spread)`=280.0 µm, but **user picked `mm_length=206.0 µm`** instead (footprint/throughput/balance tradeoff — `mmi_1x4_sin300_validation.md` step 5) and asked to drop `mmi_1x4_fdtd.py` (infeasible at this length). |
+| **11672738_0..3** | 🏃 RUNNING (job array, 4 tasks) | `beef_prewarm_mmi1x4_eme` — temporary cache-prewarm for `mmi_1x4_eme.py`'s real deliverable run (step 6b), one task per output branch, `-t 20:00:00`/task. See detail section below. |
+| **11672739_0..3** | 🏃 RUNNING (job array, 4 tasks) | `beef_prewarm_mmi1x4_hybrid` — temporary cache-prewarm for `mmi_1x4_hybrid.py`'s real deliverable run (step 6d), one task per output branch, `-t 24:00:00`/task (no timing precedent for this device's FDTD sections, generous margin). See detail section below. |
+
+### `modal_multiplexer_hybrid.py` N_MODES changed 16→14 — a judgment call, not a job
+
+Direct consequence of gap 2's resolution-sweep result: the item-12/14 guard
+means `N_MODES=16` will raise on this device's very next run (14 reachable
+at the shipped `RESOLUTION=40`, measured cleanly and consistently at every
+tested resolution 20–100). Changed `N_MODES` 16→14, kept `RESOLUTION=40`
+(no resolution 20–100 is demonstrably converged in absolute n_eff, so a
+finer mesh buys no demonstrated accuracy; this device's own check 1
+measured the engine ratio — not either engine's absolute value — at
+`RESOLUTION=40` and found it excellent, 0.9958). **Made without explicit
+user sign-off** — flagged loudly in the script's own comment and in
+`modal_multiplexer_validation.md`'s gap 2 boxed note for review. Not
+independently verified: whether 14 still carries several supermodes of
+each parity at every interface, the constraint the script's own comment
+states — predicted yes, not checked against a real run (gap 6's territory,
+not attempted this session). Job 11688645 (`run_modal_multiplexer_fdtd.
+batch`, res=20) submitted the same round, using the now-fixed
+`CompoundGeometry.polygons()` path — unrelated script, no N_MODES
+dependency, this is check 4's real (non-smoke) run.
 
 ### 11670540 `[0-3]` + 11670544 — `beef_modal_mux_engine_agreement`, this device resumed out of `deferred/`
 
 At the user's direction, `modal_multiplexer_validation.md` moved out of
 `deferred/` back to the top level of `validation_markdown/` today, and work
 restarted with gap 5 (check 1, engine agreement) rather than picking up where
-gap 6's exercise run left off (the 25 h/three-timeout campaign) or gap 3's
-`CompoundGeometry.polygons()` library gap — gap 5 is unblocked, cheap relative
-to this device's other campaigns, and answers a localized question (does the
-body's own uniform cross-section accumulate phase the same way in both
-engines) independent of those two open items. See the validation doc's
-"Re-ordered 2026-08-04" note under Order for the full reasoning.
+gap 6's exercise run left off (the 25 h/three-timeout campaign) — gap 5 is
+unblocked, cheap relative to this device's other campaigns, and answers a
+localized question (does the body's own uniform cross-section accumulate
+phase the same way in both engines) independent of everything else open on
+this device. See the validation doc's "Re-ordered 2026-08-04" note under
+Order for the full reasoning. Gap 3's `CompoundGeometry.polygons()` library
+gap was picked up the same day, once gap 5 and the gap-2 extension were both
+already in flight — see the detail section below.
 
 `examples/verification/python/verify_modal_multiplexer_engine_agreement.py`
 is a direct adaptation of `verify_mmi_2x2_engine_agreement.py` (same
@@ -35,6 +75,132 @@ the start, learning from the 2×2 sibling's own history (its first attempt,
 it. Deliberately bare `python`, not `srun --mpi=pmi2` — no rank guards in
 this script, and both MMI siblings already proved a single meep process
 finishes a problem this size inside an 8h budget.
+
+**✅ CLOSED — mean ratio 0.9958.** All 4 array tasks completed cleanly
+(3:07–5:33 hrs). The merge (**11670544**) TIMED OUT at its original 30-min
+budget: all 4 cached lengths loaded instantly (confirmed cache hits), then
+it hung on "running the EME half..." until the wall clock killed it —
+despite a login-node pre-submission measurement of that exact call
+finishing in 1237 s (~20.6 min), there wasn't enough margin left once SLURM
+startup overhead was added. Re-budgeted `-t` 30→90, pinned
+`OMP_NUM_THREADS=1`/`OPENBLAS_NUM_THREADS=1` to match the successful
+login-node conditions, resubmitted as **11678100 — COMPLETED in 30:37**:
+
+```
+     wl   dbeta_fdtd    dbeta_eme     ratio
+ 1.2600      0.13674      0.13704    0.9978
+ 1.3100      0.14379      0.14443    0.9955
+ 1.3600      0.15115      0.15193    0.9948
+
+mean ratio (FDTD/EME): 0.9958
+```
+
+Worst off-diagonal 0.0000, worst FDTD fit residual 0.0000. This lands
+within 0.05–0.12 points of both MMIs' own engine-level bias (1×2: 0.9946,
+2×2: 0.9953) — a third device confirming the same ~0.4–0.6% MPB/meep
+discretization bias on an MMI-body cross-section, strengthening the
+"engine-level, not device-specific" reading. `calibrate_body_neff` is NOT
+indicated here, same conclusion as the 2×2 MMI. **This is the first of the
+four checks to close for this device.**
+
+### 11673526 (was 11673180) — gap 2 extension, and a real guard-interaction finding
+
+`mode_spectrum_convergence.py`'s `MEEP_RESOLUTIONS` grew from `[20, 30, 40,
+60]` to `[20, 30, 40, 60, 80, 100]` — gap 2's own flagged "cheap next step,"
+answering whether meep/FDTD's mode spectrum plateaus by res 80/100 the way
+meow/EME already does at 60→80. First submission (**11673180**) FAILED after
+66 s, not from the extension itself but at res 20, the FIRST point in the
+(unchanged) low end of the sweep: `FDTDSolver: this cross-section supplies
+only 14 guided mode(s) of the 16 requested`. This script's original
+successful run (job 11575516) was 2026-07-30; items 12/14
+(`resolved/fdtd_vs_EME_mode_validation.md`) — which make the duplicate-band
+guard raise the instant it reaches an unguided band, instead of padding —
+were fixed the day after, 2026-07-31. Re-running the same script today hit
+that guard for the first time, at exactly the resolution where this
+cross-section has fewer than 16 guided modes. A real, useful confirmation
+(the guard is live here, corroborating gap 2's own account from a second
+angle), but the script's fixed `N_MODES=16` request across every resolution
+no longer works unmodified. Fixed `_meep_spectrum()` to catch that specific
+`RuntimeError`, parse the guard's own reported guided count, and retry at
+exactly that count — verified the regex against the real captured error
+text before resubmitting as **11673526** (same budget/account, unchanged
+otherwise).
+
+**✅ 11673526 COMPLETED, 4:51:09 — the retry-degrade fix worked at every
+resolution.** Clean, consistent **14 guided meep modes at every resolution
+20/30/40/60/80/100** — better than the pre-fix 13/13/13/14 record, since it
+comes from the same robust walk at every point rather than depending on
+where a duplicate happened to fall. But the actual question ("does it
+plateau?") came back **NO**: self-convergence (|Δn_eff|≤0.005, of 14)
+went 20→30: 1/14, 30→40: 0/14, 40→60: 1/14, **60→80: 14/14** (looked like a
+plateau!), **80→100: 0/14** — every one of the 14 modes shifted by
+0.0083–0.0127 between 80 and 100, roughly 2–3× the 60→80 step (max 0.0048),
+the wrong direction for ordinary mesh convergence. Checked by hand against
+the raw spectra, not read off the summary table: the shift is small,
+uniform in sign and monotonically increasing across all 14 modes — a real
+effect, not noise. No resolution from 20–100 is demonstrably converged in
+absolute n_eff at this cross-section. Matched-resolution meep-vs-meow
+agreement stayed good throughout (13–14/14) — the one residual is the
+already-tracked near-degenerate-pair defect (items 11–13), now confirmed to
+persist at res 80 too (previously only documented through res 60). Full
+account, including why the "orphans" column reads empty despite this,
+in the validation doc's gap 2.
+
+### 11673498 — `beef_modal_mux_fdtd_SMOKE`, gap 3/check 4 unblocked
+
+`CompoundGeometry.polygons(stub_length>0)` had raised `NotImplementedError`
+since 2026-07-31, blocking `modal_multiplexer_fdtd.py` (this device's only
+possible full-device FDTD reference, README.md check 4) entirely — the
+stated reason was "no generic way to know per-port stub width for an
+arbitrary segment type." That premise was wrong, not just unimplemented:
+`_end_ports()` already answers the question for `to_gds_eme()`'s own stub
+handling, by returning EVERY port at an end rather than picking a winner,
+and a multi-port leaf geometry already draws one stub per port for its own
+`polygons()`. Fixed by wiring `_end_ports()` into `polygons()` the same way
+`to_gds_eme()` already uses it (`beef/geometry/compound.py`,
+`notes.md` Geometry item 8 part 2). Confirmed against this exact device: the
+mux's `CompoundGeometry` now builds the correct 4 stub polygons (1 input + 3
+output, each at its own port's true width/position), and `to_meep_prisms()`
+— the actual call `FDTDSolver.solve()` makes — now succeeds. 7 new tests,
+`tests/test_geometry.py::TestCompoundGeometryPolygonsStub`; full fast suite
+still green (618 passed, 19 skipped).
+
+**This fixes geometry construction only — the script had never actually
+been run.** Per this repo's own two-step discipline for expensive, never-run
+scripts, submitted a smoke test first rather than the real run:
+`run_modal_multiplexer_fdtd_SMOKE.batch`, `MUX_FDTD_RES=10` (half the
+script's own already-reduced res=20 default, ~16× cheaper per its own res⁴
+cost scaling), `-t 60`.
+
+**✅ COMPLETED, 11:34 — the pipeline runs end to end, for the first time
+ever.** Both broadband input-mode runs finished (58,215 timesteps for TE0),
+`check_passive()` did not raise, a real `SMatrix` saved: TE0 in → top/mid/
+bot T=0.0902/0.1430/0.3284 (56% total), TE1 in → 0.0072/0.0027/0.0025 (1%
+total). Read the TE1 number as a smoke-resolution artifact, not a device
+property — `res=10` gives the 0.7 µm multi-mode input waveguide only ~7
+pixels across, not enough to launch a higher-order mode cleanly. One
+pre-existing, unfixed hazard noted: like `mmi_1x2_fdtd.py`/
+`mmi_2x2_fdtd.py`, this script has no `is_master()` gating, so all 24 MPI
+ranks wrote the same output files independently (~24 duplicate "saved →"
+lines) — harmless here (every rank computes identical results), not new,
+not in scope this session.
+
+**The real run — submitted as 11688645, ❌ TIMED OUT at 4h, a real cost
+finding, resubmitted at 24h as 11693107.** Still mid-way through just the
+FIRST input mode (TE0) when killed: 416,806 timesteps, t=10,420.2, flat
+~0.0336 s/step with no sign of approaching its decay stop — already 3.4×
+further in simulated time than the smoke test's ENTIRE TE0 run needed to
+decay (t≈2910–3217 at res=10), which is more than the ~2× step-count CFL
+scaling alone would predict for the same physical duration. Not merely a
+budgeting miss: something about decay behavior itself appears
+resolution-dependent here, mechanism unconfirmed (open question, not
+investigated further). No caching in this script by design, so all 96
+core-hours were a total loss. Presented to the user with 4 options (bigger
+budget / loosen `decay_tol` / refactor into an array job first / hold off);
+**chose bigger budget, unchanged otherwise** — `-t` 240→1440 (24h,
+matching this repo's largest existing precedent) in
+`run_modal_multiplexer_fdtd.batch`, resubmitted as **11693107**, not yet
+landed.
 
 ### 11667114 — a real bug found and fixed first, not a routine sweep
 
@@ -59,6 +225,27 @@ left-right mirror symmetry). Smoke timing also surfaced a real cost problem
 (~1 day if all 4 output branches ran sequentially in one job), fixed by
 splitting into this 4-task job array instead. Full chain of evidence in
 `mmi_1x4_sin300_validation.md` step 5.
+
+### 11672738 `[0-3]` + 11672739 `[0-3]` — cache-prewarm for the two real 1x4 example scripts
+
+`mmi_1x4_eme.py`/`mmi_1x4_hybrid.py` (step 6, `MM_LENGTH=206.0` now filled
+in, `mmi_1x4_fdtd.py` deleted) each loop over all 4 output branches
+SEQUENTIALLY in one process at full `N_WL=11` — the same pattern that made
+the step-5 design tool take ~1 day naively, except worse here (design tool
+used a reduced `N_WL=5`; this projects to 2+ days for the EME script alone
+by extrapolation). Rather than permanently restructure the final example
+scripts, temporary scripts `_prewarm_mmi_1x4_eme.py`/
+`_prewarm_mmi_1x4_hybrid.py` (in `examples/verification/python/`, NOT
+`examples/mmi_1x4/`) solve one branch each (`MMI1X4_OUTPUT_IDX` env var)
+into the same persistent `save_dir` the real scripts read. Once all 8 tasks
+land, the real, unmodified example scripts run normally and hit the warm
+cache for every solve call — near-instant, producing the actual
+`smatrix.pkl`/plots. Hybrid's per-branch input/body sections will be
+recomputed redundantly a few times (4 parallel jobs racing, no
+cross-process lock on which one "wins" the shared cache entry first) — a
+compute-time inefficiency, not a correctness issue; this codebase's
+`save_dir` cache is already used safely by other parallel job patterns.
+Prewarm scripts + their batch files deleted once the real scripts have run.
 
 ---
 

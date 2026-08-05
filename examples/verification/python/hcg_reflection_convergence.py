@@ -9,11 +9,25 @@ examples/high_contrast_grating/python/high_contrast_grating_fdtd.py.
 
 Every point is a real 3-D ("Working in 3D dimensions." in every point's own
 meep log -- the real 160 nm Si core, z-face at +-0.08 um = +-wg_height/2, PML
-on all six faces) FDTDSolver.solve_reflection() call, single wavelength
-(1.569 um -- the exact peak-reflectance wavelength the design paper reports,
-not a round band-centre guess) to keep each point's cost down; the tutorial
-script itself already demonstrates the full-band sweep is "free" once a
-resolution/domain is settled (one broadband pulse, many DFT frequencies).
+on all six faces) FDTDSolver.solve_reflection(extend_input_waveguide=True)
+call, single wavelength (1.569 um -- the exact peak-reflectance wavelength
+the design paper reports, not a round band-centre guess) to keep each
+point's cost down; the tutorial script itself already demonstrates the
+full-band sweep is "free" once a resolution/domain is settled (one
+broadband pulse, many DFT frequencies).
+
+extend_input_waveguide=True added 2026-08-04 (after the whole sweep below
+had already been run once without it): without it, the input waveguide
+simply ends at the GDS's own edge, leaving a clean Si/oxide facet sitting in
+the edge_clearance gap (or right at the PML if edge_clearance=0) that
+reflects part of the guided mode on its own -- an artifact independent of
+the grating, contaminating this exact measurement. With it,
+GdsGeometry(input_width=INPUT_WIDTH, ...) extends that one waveguide fully
+through the PML to the true cell boundary, where PML absorbs it as an
+ordinary guided mode instead. This changes the actual simulated geometry at
+every point (a real cache-fingerprint change, not just a label), so every
+number in the previous round -- included below for the record, but
+superseded -- needed re-running.
 
 WAVELENGTH was 1.31 um (O-band) through this sweep's first round (indices
 0-8, plus the tutorial script's own WL_MIN/WL_MAX) -- WRONG. The paper this
@@ -31,10 +45,11 @@ loosened for the sweep -- so whether that tolerance is reachable in a
 reasonable wall time at each resolution IS this sweep's own timing data
 (step 8 item 3), not a separate check.
 
-Grid (15 points, one per SLURM array task) -- see POINTS/SERIES below for the
+Grid (19 points, one per SLURM array task) -- see POINTS/SERIES below for the
 authoritative values; summary:
 
-    index 0-3, 6-8   resolution series      res in {10,15,20,25,30,35,40},
+    index 0-3, 6-8,  resolution series      res in {10,15,20,25,30,35,40,
+      15-16, 17-18                                   50,60,70,80},
                                              sim_width=7.5, edge_clearance=0.3,
                                              sim_height=1.5
     index 4-5        y (sim_width) @res=10  sim_width in {8.5, 9.5}
@@ -53,12 +68,25 @@ just the original y-only check. index 3 (res=25, the highest point that had
 landed then) is the shared baseline for all three res=25 domain series --
 same reuse pattern as index 0 for the original y-at-res=10 series.
 
+Indices 17-18 (res=70, res=80) added 2026-08-04 (later still), after the
+production run (validation_markdown/high_contrast_grating_validation.md
+step 9) showed the waveguide-extension fix (item 3 in this doc's own top-of-
+file box) shifted the resonance peak by ~30 nm relative to the pre-fix run,
+purely from removing the facet-reflection artifact at fixed res=60 -- raising
+the open question of whether resolution above res=60 keeps moving the peak
+*position*, not just refining R's magnitude. res=60 alone was already
+74.5 min at this single wavelength; res=70/80 are the next two round steps
+on the same series, not a re-derivation of a different quantity -- if R is
+still moving by a comparable fraction of the res=50->60 delta, that is
+itself evidence the peak (and not just this single-wavelength R value) has
+not settled.
+
 Run:
     # one point per array task (see batch/verification/):
-    sbatch batch/verification/run_hcg_reflection_convergence.batch
+    sbatch --array=17-18 batch/verification/run_hcg_reflection_convergence.batch
 
     # a single point by index, or the whole grid serially (slow):
-    python .../hcg_reflection_convergence.py <index 0..14>
+    python .../hcg_reflection_convergence.py <index 0..18>
 
     # re-aggregate whatever has finished, no simulation, safe on a login node:
     OMP_NUM_THREADS=1 python .../hcg_reflection_convergence.py --aggregate-only
@@ -125,12 +153,14 @@ POINTS = [
     dict(kind="domain_y",   res=25.0, sim_width=9.5, edge_clearance=0.3, sim_height=1.5),
     dict(kind="resolution", res=50.0, sim_width=7.5, edge_clearance=0.3, sim_height=1.5),
     dict(kind="resolution", res=60.0, sim_width=7.5, edge_clearance=0.3, sim_height=1.5),
+    dict(kind="resolution", res=70.0, sim_width=7.5, edge_clearance=0.3, sim_height=1.5),
+    dict(kind="resolution", res=80.0, sim_width=7.5, edge_clearance=0.3, sim_height=1.5),
 ]
 
 # name -> (indices incl. shared baseline, swept param key, axis label, plot title)
 SERIES = {
     "resolution": (
-        (0, 1, 2, 3, 6, 7, 8, 15, 16), "res", "Resolution (pts/um)",
+        (0, 1, 2, 3, 6, 7, 8, 15, 16, 17, 18), "res", "Resolution (pts/um)",
         "HCG reflection vs FDTD resolution\n(3-D, sim_width=7.5, edge_clearance=0.3, sim_height=1.5, lambda=1.569 um)",
     ),
     "domain_y_res10": (
@@ -183,11 +213,16 @@ def _tag(i):
     return f"idx{i}"
 
 
+INPUT_WIDTH = 0.5   # um -- the GDS's own straight input waveguide (verified by direct
+INPUT_Y = 0.0       # inspection); needed so GdsGeometry can extend it through the PML
+
+
 def make_grating():
     raw = load_gds_polygons(_GDS_PATH, layers=CORE_LAYERS)
     xs = [x for poly in raw[CORE_LAYERS[0]] for x, _y in poly]
     span = max(xs) - min(xs)
-    return GdsGeometry(gds_path=_GDS_PATH, core_layers=CORE_LAYERS, region_lengths=[span])
+    return GdsGeometry(gds_path=_GDS_PATH, core_layers=CORE_LAYERS, region_lengths=[span],
+                        input_width=INPUT_WIDTH, input_y=INPUT_Y)
 
 
 # source_margin/monitor_margin are measured from the PML INNER edge (see
@@ -272,7 +307,7 @@ def simulate_point(i, cached=True):
     t0 = time.time()
     smat = solver.solve_reflection(
         grating, np.array([WAVELENGTH]), port="top", input_mode=1,
-        edge_clearance=point["edge_clearance"],
+        edge_clearance=point["edge_clearance"], extend_input_waveguide=True,
         save_dir=_CACHE_DIR if cached else None,
     )
     elapsed = time.time() - t0

@@ -1,15 +1,25 @@
 # Modal multiplexer validation — to-do
 
 > **Status 2026-08-04 — resumed, moved out of `deferred/`.** Reviewed against
-> the live repo before touching anything: every claim below still matches —
-> `modal_multiplexer_hybrid.py` still ships `N_MODES=16`/`RESOLUTION=40`
-> unchanged, `modal_multiplexer_fdtd.py` still opens with its `BLOCKED — do
-> not run` docstring, only geometry-plot output exists on disk for either
-> script (no `smatrix.pkl` for either), and the orphaned merge job
-> (11597199, per `running_jobs.md`) is no longer in the queue. Nothing moved
-> here since the 2026-08-01 snapshot. At the user's direction this file
-> leaves `deferred/` and work restarts, beginning with gap 5/check 1 (engine
-> agreement) — see gap 5 below for the new script and its run status.
+> the live repo before touching anything: every claim below still matched at
+> the time of the review — `modal_multiplexer_hybrid.py` still shipped
+> `N_MODES=16`/`RESOLUTION=40` unchanged, `modal_multiplexer_fdtd.py` still
+> opened with its `BLOCKED — do not run` docstring, only geometry-plot
+> output existed on disk for either script (no `smatrix.pkl` for either),
+> and the orphaned merge job (11597199, per `running_jobs.md`) was no
+> longer in the queue. Nothing had moved since the 2026-08-01 snapshot. At
+> the user's direction this file left `deferred/` and work restarted,
+> beginning with gap 5/check 1 (engine agreement) — see gap 5 below for the
+> script and its result.
+>
+> **Same day, later: all of the above changed.** Check 1 closed (mean
+> ratio 0.9958), gap 2's resolution question got a real (if inconclusive)
+> answer, gap 3's library blocker was fixed and its script run for the
+> first time ever, and — as a direct consequence of gap 2's own finding —
+> `modal_multiplexer_hybrid.py`'s `N_MODES` was changed **16→14** (kept
+> `RESOLUTION=40`). That last change is a judgment call made without
+> explicit user sign-off; see the boxed note under gap 2 and the script's
+> own comment for the full reasoning, and treat it as open to revision.
 
 > **2026-07-28 — the material model changed under every device here.** Both engines
 > now evaluate one analytic Sellmeier model (Salzberg Si, Malitson SiO2) instead of
@@ -83,9 +93,10 @@ for this device. SOI_160, not SOI_220 like the coupler and MMIs.
 
 The **most demanding** hybrid device here and the **least supported**:
 
-- `N_MODES = 16` carried at **four** section interfaces (`:153`, `:208`) — more
-  modes and more joins than any other example. Every interface is another place
-  the FDTD and EME bases have to agree.
+- `N_MODES = 14` (originally shipped 16; changed 2026-08-04, see gap 2's
+  boxed note) carried at **four** section interfaces — more modes and more
+  joins than any other example. Every interface is another place the FDTD
+  and EME bases have to agree.
 - **No full-device FDTD script.** Unlike both MMIs and the coupler, there is
   nothing to compare the cascade against as a whole; check 4 has no starting
   point at all.
@@ -95,6 +106,76 @@ The **most demanding** hybrid device here and the **least supported**:
   ratio.
 
 So it has the most ways to be wrong and the fewest ways to find out.
+
+## Reference design — the author's own (unpublished) mode multiplexer paper
+
+Added 2026-08-05. The user supplied a figure from their own paper
+characterizing a fabricated 2-stage cascaded-MMI mode multiplexer —
+**unpublished as of this writing; citation to be added once it is.**
+Confirmed by the user directly (not inferred): the device is **O-band,
+160 nm silicon** — the same band and material system this repo's device
+already uses (`SOI_160`, `WL_MIN=1.26`/`WL_MAX=1.36 µm` in both
+`modal_multiplexer_hybrid.py` and `modal_multiplexer_fdtd.py`).
+
+**Same overall topology, confirmed via the legacy config this repo's device
+was built from.** The figure's panel (a) labels four longitudinal zones —
+`L_mm1 | L_taper | L_ps | L_mm2` — and body/taper widths `w_mm`/`w_in` (MMI
+body / multimode input access) and `w_t1`/`w_t2` (taper widths). Every one
+of these has a same-named counterpart already in
+`archive/FECES_Legacy/configs_mmi/config_mux.json`, the config this repo's
+`modal_multiplexer_hybrid.py`/`modal_multiplexer_fdtd.py` were built from
+(`mm_1_length=16.92`, `mm_2_length=34.24`, `mm_width=2.8`,
+`mm_waveguide_width=0.7`, `taper_length=2.0`,
+`between_waveguide_length=3.0`, `top_bot_taper_width=0.725`,
+`middle_taper_width=1.15`, `top_waveguide_width=0.33`,
+`waveguide_width=0.35`, `waveguide_offset=1.0375`) — this is the same
+device family, not a coincidental resemblance. **Not independently
+verified**: the exact correspondence between the figure's three port labels
+(`NC`/`A`/`B`) and this repo's `top`/`mid`/`bot` naming, or which of the
+figure's width labels lands on which specific port — the source image
+doesn't resolve that unambiguously from a flattened text extraction, and it
+was not worth guessing at when the topology-level match is already solid
+from the parameter names alone.
+
+**⚠️ Critical distinction, confirmed by the user: this repo's device is the
+paper's "Seed" design, NOT the "Optimized" one that was actually fabricated
+and measured.** The figure's panel (g) shows both — a plain MMI+taper
+"Seed" geometry (topologically identical to what `config_mux.json`/this
+repo's scripts implement) and a visibly different, free-form "Optimized"
+geometry the paper's design process produced from it (same relationship as
+the HCG device's `HCG_seeded_TO.gds` to its own published design, per
+`high_contrast_grating_validation.md` — except confirmed here, not still
+open). **Consequence: panels (e)/(f)'s measured and simulated S-parameter
+curves (S13/S24 ≈ −1 to −8 dB, S14/S23 ≈ −20 to −40 dB isolation, ~1280–
+1330 nm) characterize the OPTIMIZED device, not this one, and are NOT a
+valid direct ground-truth target for `modal_multiplexer_fdtd.py`'s own
+S-matrix or for a future golden fixture.** Quoting them as if they were
+would be exactly the kind of unearned precision this repo's own
+measured-not-argued standard exists to catch. This repo's Seed device has
+no independent published measurement of its own — only its topology, band,
+and material system are confirmed to trace to real, physically-motivated
+values rather than an arbitrary academic exercise.
+
+**What IS usefully confirmed by this reference, despite the seed/optimized
+gap:**
+- The 2-stage cascaded-MMI topology (1×3 MMI → 3 connecting single-mode
+  waveguides → 3×3 MMI) this repo implements is a real starting point for
+  an actual fabricated mode multiplexer, not an invented exercise.
+- O-band, 160 nm Si — exactly this repo's `SOI_160` stack and wavelength
+  range (this repo's own 1.26–1.36 µm sweep in fact covers a slightly wider
+  band than the ~1280–1330 nm shown in the paper's own panels e/f).
+- **Panel (d)'s characterization method** — cascade two copies of the mux
+  (`Mode Mux 1 → Mode Mux 2`), launch `TE00` and `TE01` separately at ports
+  1/2, and read the output pattern at ports 3/4 — is a reciprocity-based
+  self-test structurally similar to `ring_resonator_validation.md`'s own
+  cascaded-reciprocity check. That doc's own finding (a cascaded reciprocity
+  check can be a *tautology* rather than independent evidence) is worth
+  keeping in mind before treating an analogous check on this device as
+  strong evidence, should one ever be built.
+
+**Not acted on this session** — recorded for whoever next works gap 3/4 or
+considers a golden fixture, so the seed/optimized distinction is legible
+before either is attempted, not discovered after the fact.
 
 ## Gaps
 
@@ -303,19 +384,144 @@ So it has the most ways to be wrong and the fewest ways to find out.
    > raising a clear error the moment a cross-section can't supply the
    > requested count, which is exactly this device's situation (14 reachable,
    > 16 requested). The currently in-flight hybrid run (job 11590663) started
-   > before this change and is unaffected. Any *future* resubmission of
-   > `modal_multiplexer_hybrid.py` will fail immediately at whichever interface
-   > it reaches first, until `N_MODES`/`RESOLUTION` are actually decided
-   > jointly — see `resolved/fdtd_vs_EME_mode_validation.md` items 12/14 for the fix
-   > itself, and the two bullets just above for why 14 (not 16, not the
-   > unmeasured FDTD-converged count above res 60) is the number this
-   > decision has to reconcile.
+   > before this change and is unaffected.
+   >
+   > **✅ `N_MODES` changed 16→14 in `modal_multiplexer_hybrid.py`, 2026-08-04
+   > — a judgment call made without explicit user sign-off, flagged loudly in
+   > the script's own comment for review, not silently decided.** 14 because
+   > that is exactly what gap 2 measured as reachable at the shipped
+   > `RESOLUTION=40`, consistently across every tested resolution 20–100 —
+   > reducing further would discard real guided channels for no reason.
+   > `RESOLUTION` was deliberately left at 40, not raised: gap 2 also found
+   > no resolution 20–100 is demonstrably converged in absolute n_eff (60→80
+   > looked converged, misleadingly — 80→100 broke it completely), so a
+   > finer mesh buys no demonstrated accuracy here, while this device's own
+   > check 1 (gap 5) measured the engine ratio — the quantity this hybrid
+   > chain actually depends on, not either engine's absolute value — at
+   > exactly `RESOLUTION=40` and found it excellent (0.9958). **Not verified**:
+   > whether 14 (down from 16) still carries several supermodes of each
+   > parity at every interface, the constraint the script's own `N_MODES`
+   > comment states — predicted yes (dropping the two weakest-confined,
+   > highest-index modes removes one of each parity from an alternating
+   > sequence, not a whole parity) but not checked against a real run, which
+   > is gap 6's territory (a separate, expensive campaign, not attempted
+   > this session).
 
    Per check 3, the remaining question is which quantity *this device's*
    result depends on — the coupler's lesson was that sweeping an insensitive
    observable hid a 7% error in a sensitive one. A mode spectrum is not that
    observable; it is the precondition for choosing one. So this gap is
    measured, not closed.
+
+   **Extension submitted 2026-08-04 — job 11673180, the cheap next step
+   named above. FAILED at res 20, a real finding, script fixed, resubmitted
+   as 11673526.** `mode_spectrum_convergence.py`'s `MEEP_RESOLUTIONS` grew
+   from `[20, 30, 40, 60]` to `[20, 30, 40, 60, 80, 100]` (`meow` already
+   swept to 80; the FDTD/meep side had never been pushed past 60, where it
+   was still moving — 40→60 agreed on only 3/16). Same script, same
+   interface-0 cross-section, no other changes — this answers whether
+   meep's mode spectrum plateaus by 80/100 (discretization, per this
+   script's own docstring) or the mode-8+ gap survives at every resolution
+   (structural).
+
+   **11673180 FAILED after 66 s, at res 20 — before ever reaching the new
+   80/100 points.** `FDTDSolver: this cross-section supplies only 14 guided
+   mode(s) of the 16 requested -- band_num=15 returned n_eff=1.443140, at or
+   below the cladding index 1.446804.` This is items 12/14
+   (`resolved/fdtd_vs_EME_mode_validation.md`, fixed 2026-07-31 — AFTER this
+   script's own original successful run, job 11575516, on 2026-07-30): the
+   duplicate-band guard now raises the instant it reaches an unguided band
+   rather than silently padding, and this script's fixed `N_MODES=16`
+   request hits exactly that at res 20 (only 14 guided there). A real,
+   useful confirmation in its own right — the guard is live on this exact
+   cross-section, corroborating gap 2's own account from a second angle —
+   but it meant the script itself needed to adapt: `_meep_spectrum()`
+   (generator-based, so nothing partial survives the raise) now catches
+   this specific `RuntimeError`, parses the guard's own reported guided
+   count from its message, and retries at exactly that count — recovering
+   the real spectrum instead of crashing the whole sweep. Verified the
+   regex against the real captured error text before resubmitting.
+   Deliberately fixed at the (disposable) verification-script level, not by
+   loosening the guard itself, which stays exactly as strict as items 12/14
+   designed it. Resubmitted as **job 11673526** (same batch script,
+   unchanged budget/account).
+
+   **11673526 COMPLETED 2026-08-04, 4:51:09. The retry-degrade fix worked at
+   every resolution — and the answer to gap 2's original question is NO,
+   not the plateau this was hoping to confirm.**
+
+   | quantity | res 20 | 30 | 40 | 60 | 80 | 100 |
+   |---|---|---|---|---|---|---|
+   | meep guided (of 16) | 14 | 14 | 14 | 14 | 14 | 14 |
+   | meow guided (of 16) | 14 | 14 | 14 | 15 | 15 | *(not swept)* |
+
+   **First, a genuine improvement over the pre-fix record.** The retry
+   mechanism now reports a clean, consistent **14 guided modes at every
+   meep resolution from 20 to 100** — a cleaner answer than the pre-fix
+   13/13/13/14 sequence recorded above, because it comes from the same
+   robust duplicate-skip-then-hard-stop walk at every resolution rather
+   than depending on where a duplicate happened to land relative to the old
+   fixed-count enumeration. 14 is now a resolution-independent, confidently
+   measured number for this cross-section — a real input to the
+   `N_MODES`/`RESOLUTION` decision below.
+
+   **Second, meep's absolute n_eff does NOT plateau by res 100 — it looked
+   like it did at 60→80, and that was misleading.** Self-convergence
+   (matched mode index, |Δn_eff| ≤ 0.005, out of 14 guided):
+
+   | | 20→30 | 30→40 | 40→60 | 60→80 | 80→100 |
+   |---|---|---|---|---|---|
+   | meep (FDTD) | 1/14 | 0/14 | 1/14 | **14/14** | **0/14** |
+
+   60→80 agrees on all 14 modes (max |Δn_eff| = 0.0048, just inside
+   tolerance) — exactly what a genuine plateau would look like, and the
+   result gap 2's "Extending 2 to meep res 80/100 is cheap and comes first"
+   note was hoping for. **80→100 breaks it completely**: every one of the
+   14 modes shifted by 0.0083–0.0127, roughly 2–3× the 60→80 step, despite
+   covering a smaller *relative* resolution change (25% vs 33%) — the wrong
+   direction for ordinary mesh convergence, where the step should shrink,
+   not grow. This was checked by hand against the raw spectra, not read off
+   the summary table alone: the shift is small, uniform in sign (every mode
+   moved the same direction), and monotonically increasing, not scatter —
+   a real, repeatable effect, not noise. **The practical reading: there is
+   no resolution in {20, 30, 40, 60, 80, 100} at which meep's absolute
+   n_eff for this cross-section is demonstrably converged**, extending
+   README's Finding 3 ("no device's EME is converged in absolute n_eff,
+   even at res 100") to this device's FDTD side too, and specifically
+   contradicting the read that would have closed this gap.
+
+   **Third, matched-resolution engine agreement (meep vs meow, the
+   comparison check 1 actually cares about) stays good throughout** —
+   13–14 of 14 meep modes match a meow mode at every resolution tested, with
+   the sole residual being the already-tracked near-degenerate-pair defect
+   (`resolved/fdtd_vs_EME_mode_validation.md` items 11–13): at res 60/80,
+   meow resolves TWO closely-spaced modes near n_eff≈1.797 (differing from
+   each other by only ~0.0003) where meep's per-band ladder returns only
+   one — confirmed by hand-checking the raw spectra (the summary table's
+   "orphans" column reads empty here because a bare nearest-neighbour check
+   can't tell "matched" from "matched to the wrong twin of a degenerate
+   pair," exactly the limitation `field_overlap_matrix()`-based checks exist
+   to fix, per README's check 2 discussion). Not a new finding — it extends
+   the previously-documented res 20–60 range of this residue to res 80 —
+   but worth recording since it is the only source of engine
+   *dis*agreement in an otherwise clean picture.
+
+   **What this means for the `N_MODES`/`RESOLUTION` decision (still open,
+   boxed above):** `N_MODES = 14` is now well-supported and
+   resolution-independent — a confident downgrade from the shipped 16.
+   `RESOLUTION` has no obvious answer from this data: nothing tested is
+   demonstrably converged in absolute n_eff, and the one resolution that
+   looked converged (60→80) was misleading. What check 1 (gap 5, this same
+   session) actually measures — the *ratio* Δβ_FDTD/Δβ_EME at the shipped
+   `RESOLUTION = 40` — is a different, arguably more decision-relevant
+   quantity than either engine's absolute n_eff, since a ratio can stay
+   near 1 even while both engines individually keep drifting (as it does
+   for the coupler and both MMIs, all measured at their own shipped,
+   unconverged resolutions per README's Finding 3). Whether that pattern
+   holds here is what gap 5's own result will show, not yet known at the
+   time of this writing — see gap 5 for its status; this decision has
+   deliberately not been made unilaterally regardless, see the note under
+   Order.
 
 3. **No full-device FDTD reference.** Needs a `modal_multiplexer_fdtd.py` written
    before check 4 is possible. Cost is the concern — a multiplexer is long, and a
@@ -353,13 +559,102 @@ So it has the most ways to be wrong and the fewest ways to find out.
    `tests/test_geometry.py::TestCompoundGeometrySourceApertureClamps`) — real,
    but not sufficient on its own.
 
-   **Not fixed further.** The `polygons()` gap needs a genuine design decision
-   (which segment's stub-port width wins at an ambiguous end, e.g. a
-   multi-port `WaveguideRun`), not a mechanical patch — the same caution this
-   doc's own gap 6 already applied when declining to touch `solve_section()`
-   under-verified. See `notes.md` Geometry item 8. `modal_multiplexer_fdtd.py`
-   and its batch script are both marked BLOCKED; do not run either until this
-   is implemented.
+   **✅ FIXED 2026-08-04 — the premise was wrong, not just unimplemented.**
+   `_end_ports()` already answers exactly this "which port's width wins"
+   question for `to_gds_eme()`'s own stub handling, and it answers it by
+   *not* picking a single winner: it returns every port at that end (one
+   `(y, width)` pair per port), and a leaf geometry with several ports
+   already draws one stub per port for its own `polygons()` (e.g.
+   `MMI.polygons()`'s `for i, p in enumerate(self.inputs)`/`.outputs`
+   loops). There was no ambiguity requiring a value judgment. `polygons()`
+   now wires `_end_ports()` in the same way `to_gds_eme()` already does —
+   one stub polygon per port at each true outer end, no `output_idx`
+   restriction (the single-domain path needs every branch at once).
+
+   Confirmed against this exact device: the mux's `CompoundGeometry` now
+   builds the correct 4 stub polygons (1 input + 3 output, each at its own
+   port's true width/y, matching `BRANCH_SPECS`) where it previously raised
+   immediately, and `to_meep_prisms()` — the actual call
+   `FDTDSolver.solve()` makes — now succeeds end to end through prism
+   construction. 7 new tests, `tests/test_geometry.py::
+   TestCompoundGeometryPolygonsStub` (multi-port ends, the `frame_offset`
+   interaction, a `stub_length=0` no-op check, a real `to_meep_prisms()`
+   build). Full fast suite still green, 618 passed/19 skipped, no
+   regressions. Full account in `notes.md` Geometry item 8 part 2.
+
+   **✅ Smoke test COMPLETED 2026-08-04, 11:34 — the pipeline runs
+   end to end, for the first time ever.** Per this repo's own two-step
+   discipline for expensive, never-run scripts, submitted a smoke test
+   first rather than the real run: **job 11673498**,
+   `run_modal_multiplexer_fdtd_SMOKE.batch`, `MUX_FDTD_RES=10` (half the
+   script's own already-reduced res=20 default, ~16× cheaper per its own
+   res⁴ cost scaling). Both broadband input-mode runs completed
+   (58,215 timesteps for TE0, similar for TE1), `check_passive()` did not
+   raise, and a real `SMatrix` was saved:
+
+   | | top | mid [MUX out] | bot [MUX out] | total |
+   |---|---|---|---|---|
+   | TE0 in | T=0.0902 | T=0.1430 | T=0.3284 | 0.5616 |
+   | TE1 in | T=0.0072 | T=0.0027 | T=0.0025 | 0.0124 |
+
+   **Read these as pipeline evidence, not physics** — `res=10` is a
+   deliberately crude smoke-test mesh (half the script's own already-reduced
+   default), and TE1's near-total loss (98.8% unaccounted) is exactly the
+   kind of artifact expected there: a higher-order mode's transverse profile
+   needs more pixels to launch cleanly than a fundamental mode does, and
+   at 10 px/µm the 0.7 µm multi-mode input waveguide gets only ~7 pixels
+   across. This number should NOT be quoted as a device property; it is
+   evidence the mechanics work, not a measurement.
+
+   One latent, pre-existing hazard noted, not fixed: like
+   `mmi_1x2_fdtd.py`/`mmi_2x2_fdtd.py`, this script has no `is_master()`
+   gating on its file writes (`plot_fdtd_geometry`, `smat.save()`,
+   `fig.savefig()`), so all 24 MPI ranks in this run independently attempted
+   to write the same `geometry.png`/`smatrix.pkl`/`results.png` — the log
+   shows ~24 duplicate "saved →" lines. It did not corrupt anything here
+   (every rank computes byte-identical results after meep's own internal
+   synchronization, and this is the same pattern both other full-device
+   FDTD scripts already run in production), so it is not fixed as part of
+   this session's scope — flagged since it was visible in this run's log,
+   not because it is new or specific to this device.
+
+   **The real res=20 run — submitted 2026-08-05 as job 11688645, TIMED OUT
+   at 4h, a real cost finding, resubmitted at 24h as 11693107.** This is
+   the actual full-device FDTD reference check 4 needs; the smoke test only
+   proved the pipeline, not the physics at production resolution.
+
+   **11688645 TIMED OUT after the full 4h budget, still mid-way through
+   just the FIRST of two input modes (TE0)** — 416,806 timesteps, simulated
+   time t=10,420.2, a flat, unwavering ~0.0336 s/step throughout (no sign of
+   approaching its decay stop). This is NOT merely the expected ~16×
+   res⁴ per-step cost the smoke test's own scaling predicted: at res=10,
+   TE0 finished cleanly at t≈2910–3217 (58–64k steps, ~5 min of
+   timestepping); at res=20, the run had already reached **3.4× further in
+   simulated time** than that entire stopping point before being killed,
+   with the per-step cost itself only ~6.6× higher (0.0336 vs 0.00508
+   s/step) — CFL scaling alone would predict roughly 2× the *step count*
+   for the same simulated duration, not 3.4× *more simulated time before
+   decaying at all*. Read as an open, unconfirmed question rather than a
+   settled mechanism: either the coarse res=10 mesh was under-resolving a
+   slowly-decaying channel and stopped "too early" in a numerically
+   convenient but not fully physical sense, or finer resolution genuinely
+   sharpens some resonance/radiation-coupling feature that takes longer to
+   decay below `decay_tol=1e-11` — this run's own log gives no way to
+   distinguish the two, and it wasn't investigated further this session.
+   **No caching in this script** (by design, per its own module docstring),
+   so all 96 core-hours were a total loss, not partially salvageable.
+
+   Presented to the user with the finding before spending more compute:
+   resubmit with a much bigger budget, loosen `decay_tol` (the known
+   dominant cost knob), refactor into a per-input-mode array job first (like
+   `modal_multiplexer_hybrid.py`'s own reshape), or hold off entirely. **User
+   chose: resubmit with a bigger budget, unchanged otherwise.** `-t` raised
+   240→1440 (24h, matching this repo's largest existing precedent) in
+   `run_modal_multiplexer_fdtd.batch`; resubmitted as **job 11693107**, not
+   yet landed. `decay_tol` stays at `1e-11`, matching
+   `modal_multiplexer_hybrid.py`'s own setting, so this remains a fair
+   apples-to-apples reference once it completes — see `running_jobs.md` for
+   live status.
 
 4. **No golden.** Add a `modal_multiplexer_hybrid` target to
    `tests/test_golden_examples.py`'s `TARGETS`. As with the 2×2 MMI, do it after
@@ -413,7 +708,37 @@ So it has the most ways to be wrong and the fewest ways to find out.
    length per task, `batch/verification/run_modal_multiplexer_engine_
    agreement.batch`, `-t 480`, `gts-sr108-ece`) with merge job **11670544**
    dependent on it (`--dependency=afterok:11670540`,
-   `..._merge.batch`, `-t 30`). See `running_jobs.md` for live status.
+   `..._merge.batch`, `-t 30`).
+
+   **✅ CLOSED 2026-08-04 — all 4 array tasks completed cleanly (3:07–5:33
+   hrs each).** Merge job 11670544 TIMED OUT at its original 30-min budget
+   (all 4 cached lengths loaded instantly, then it hung on the ~20-min EME
+   half with too little margin left for SLURM startup overhead);
+   re-budgeted to 90 min, thread-pinned, resubmitted as **11678100 —
+   COMPLETED in 30:37**:
+
+   | wl (µm) | Δβ_FDTD | Δβ_EME | ratio |
+   |---|---|---|---|
+   | 1.26 | 0.13674 | 0.13704 | 0.9978 |
+   | 1.29 | 0.14094 | 0.14146 | 0.9963 |
+   | 1.31 | 0.14379 | 0.14443 | 0.9955 |
+   | 1.34 | 0.14816 | 0.14892 | 0.9949 |
+   | 1.36 | 0.15115 | 0.15193 | 0.9948 |
+
+   **Mean ratio 0.9958** (monotone decrease across the band, 0.9978→0.9948),
+   worst off-diagonal 0.0000, worst FDTD fit residual 0.0000 — as clean as
+   the 2×2 MMI's own result. This lands within 0.05–0.12 points of BOTH
+   MMI devices' own engine bias (1×2: 0.9946, O-band; 2×2: 0.9953, C-band) —
+   a THIRD device now clustering in the same ~0.4–0.6% band, on the same
+   kind of cross-section (this checked MMI 1's body, itself an MMI), which
+   strengthens the "engine-level bias, not device-specific" reading
+   `README.md`'s parity-backlog section already drew from the first two.
+   **`calibrate_body_neff` is NOT indicated for this device** — same
+   conclusion as the 2×2 MMI, for the same reason (the residual is far
+   below the coupler's ~10% that flag was built to correct). **Check 1 is
+   now closed for this device** — the first of the four checks to go from
+   "not run" to done this session. See `running_jobs.md` for the full job
+   history.
 
 6. **New, opened 2026-07-30 — `FDTDSolver`'s duplicate-eigenmode-band bug.
    DONE 2026-07-30 for `section_mode_neff()`/`section_mode_fields()`;
@@ -699,14 +1024,43 @@ Then **4**, to stop the numbers drifting unnoticed while the rest is worked on.
 
 **Re-ordered 2026-08-04, at the user's direction: start with 5, not last.**
 This reverses the sequencing above, for reasons that did not exist when it
-was written — **3** is now known-blocked on a real library gap (`notes.md`
-Geometry item 8), not merely expensive, so it cannot go next regardless of
-where the list puts it; and **4** (golden) is explicitly gated on the
-`N_MODES`/`RESOLUTION` decision that gap 2 raised, which has not been made.
-**5** (engine agreement), by contrast, is unblocked, cheap relative to the
-device's other campaigns (both MMI siblings closed their own version inside
-an 8h budget once reshaped), and — same reasoning `directional_coupler_
-validation.md` item 6 and both MMI gap-4s already used — is a localized
-question (does the body's own uniform cross-section accumulate phase the
-same way in both engines) that does not depend on **3** or **4** being
-settled first. See gap 5 for the script and run status.
+was written — at the time, **3** was known-blocked on a real library gap
+(`notes.md` Geometry item 8), not merely expensive, so it could not go next
+regardless of where the list put it; and **4** (golden) is explicitly gated
+on the `N_MODES`/`RESOLUTION` decision that gap 2 raised, which still has
+not been made. **5** (engine agreement), by contrast, was unblocked from the
+start, cheap relative to the device's other campaigns (both MMI siblings
+closed their own version inside an 8h budget once reshaped), and — same
+reasoning `directional_coupler_validation.md` item 6 and both MMI gap-4s
+already used — is a localized question (does the body's own uniform
+cross-section accumulate phase the same way in both engines) that does not
+depend on **3** or **4** being settled first. See gap 5 for the script and
+run status.
+
+Gap 2's own cheap extension (meep res 80/100) was submitted alongside 5, for
+the same reason: it is not a simulation campaign either, and its answer is a
+direct input to the `N_MODES`/`RESOLUTION` decision that gap 4 (the golden)
+and any future hybrid re-run both need.
+
+**Same day, later: 3's library blocker was fixed too** (`notes.md` Geometry
+item 8 part 2 — the "no generic way to know per-port stub width" premise
+was wrong, not just unimplemented; see gap 3 for the full account). This
+does not reopen the original sequencing question — 3 is still a real
+simulation campaign (a 62 µm single-domain 3-D FDTD run), still the most
+expensive of the three now in flight, and still needs a smoke test before
+the real run per this repo's own two-step discipline for never-run scripts.
+It was picked up anyway, in parallel with 5 and the gap-2 extension, because
+none of the three depend on each other and all three were unblocked at the
+same time.
+
+**All three landed the same day.** **5 is CLOSED** (mean ratio 0.9958,
+`calibrate_body_neff` not indicated — see gap 5). The **gap-2 extension**
+completed too, and answered its own question with a real "no": meep's
+absolute n_eff does not plateau by res 100 after all (60→80 looked
+converged, misleadingly — see gap 2). **Gap 3's smoke test** (`MUX_FDTD_RES
+=10`) completed — the pipeline runs end to end for the first time ever, a
+real S-matrix saved, `check_passive()` held — but the real res=20 run is
+still not submitted, so check 4 itself is not yet closed. Net effect on the
+`N_MODES`/`RESOLUTION` decision this doc keeps flagging as open: `N_MODES
+=14` is now solid; `RESOLUTION` still has no clean answer, and that
+decision remains deliberately unmade.

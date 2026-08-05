@@ -64,6 +64,8 @@ skips that entirely. Even so it is a batch job -- meow's mesh grows as res^2.
 """
 from __future__ import annotations
 
+import re
+
 import numpy as np
 
 from beef import (
@@ -79,7 +81,14 @@ HALF_SPAN = 0.05
 
 # Independent per engine, deliberately: a single shared knob is exactly the
 # defect directional_coupler_validation.md item 11 records.
-MEEP_RESOLUTIONS = [20.0, 30.0, 40.0, 60.0]
+#
+# Extended 2026-08-04 -- meep stopped at 60 in the original run (job
+# 11575516), where it was "still moving" (40->60 agreed on only 3/16) while
+# meow had already reached its own plateau at 60->80 (16/16). modal_
+# multiplexer_validation.md gap 2 flagged "extending to meep res 80/100" as
+# the cheap next step before the N_MODES/RESOLUTION decision that device
+# needs -- this is that step.
+MEEP_RESOLUTIONS = [20.0, 30.0, 40.0, 60.0, 80.0, 100.0]
 MEOW_RESOLUTIONS = [20.0, 30.0, 40.0, 60.0, 80.0]
 MATCH_TOL = 0.005   # |dn_eff| within which two modes are "the same mode"
 
@@ -104,14 +113,53 @@ def _build():
     return mmi1, CompoundGeometry([mmi1, connector, mmi2])
 
 
+_INSUFFICIENT_RE = re.compile(r"supplies only (\d+) guided mode")
+
+
 def _meep_spectrum(geometry, x_center, res):
+    """n_eff spectrum at this resolution, degrading N_MODES down to
+    whatever this cross-section actually supports.
+
+    Extended 2026-08-04: this sweep's whole PURPOSE is discovering how many
+    guided modes exist at a given resolution, but items 12/14
+    (`fdtd_vs_EME_mode_validation.md`, fixed 2026-07-31 -- AFTER this
+    script's original successful run, job 11575516, on 2026-07-30) made
+    `_iter_distinct_bands()` raise the moment it reaches an unguided band,
+    instead of silently padding with junk. Re-running this unchanged script
+    post-fix hit that guard immediately at res 20 (job 11673180, the meep
+    res 80/100 extension -- FAILED, 66 s, at the FIRST resolution point, not
+    even reaching the new ones): a real, useful finding in its own right
+    (confirms gap 2's account of the guard being live), but it means this
+    generator-based function can no longer be called with a fixed
+    `n_modes=N_MODES` across every resolution the way it originally was --
+    the accepted bands are discarded together with the exception (this is a
+    generator; nothing partial survives the raise), so the fix is a retry at
+    the guard's own reported count, not a workaround for the guard itself
+    (which stays exactly as strict as it was designed to be — this is a
+    disposable verification script adapting to it, not the other way
+    around).
+    """
     solver = FDTDSolver(res=res, sim_width=SIM_W, sim_height=SIM_H, dpml=DPML,
                         source_margin=0.0, monitor_margin=0.25, three_d=True,
                         material_stack=SOI_160, decay_tol=1e-11)
-    neff = solver.section_mode_neff(
-        geometry, np.array([WL]), x_center - HALF_SPAN, x_center + HALF_SPAN,
-        n_modes=N_MODES, monitor_center=0.0, monitor_size=SIM_W)
-    return np.asarray(neff[0], dtype=float)
+    n_req = N_MODES
+    while True:
+        try:
+            neff = solver.section_mode_neff(
+                geometry, np.array([WL]), x_center - HALF_SPAN, x_center + HALF_SPAN,
+                n_modes=n_req, monitor_center=0.0, monitor_size=SIM_W)
+            return np.asarray(neff[0], dtype=float)
+        except RuntimeError as exc:
+            m = _INSUFFICIENT_RE.search(str(exc))
+            if m is None:
+                raise  # a different failure -- don't mask it
+            n_guided = int(m.group(1))
+            if n_guided <= 0 or n_guided >= n_req:
+                raise  # genuinely zero guided modes, or no progress possible
+            print(f"  [res {res:g}] guard reports only {n_guided} guided modes "
+                  f"of {n_req} requested -- retrying at n_modes={n_guided}",
+                  flush=True)
+            n_req = n_guided
 
 
 def _meow_spectrum(geometry, x_center, res):

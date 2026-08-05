@@ -91,10 +91,24 @@ class GdsGeometry(DeviceGeometry):
         core_layers: Sequence[Tuple[int, int]],
         region_lengths: Sequence[float],
         cell_name: Optional[str] = None,
+        input_width: Optional[float] = None,
+        input_y: float = 0.0,
     ):
+        """
+        Args:
+            input_width: if given, the width (µm) of a straight waveguide the
+                GDS itself draws at the geometry's own LEFT edge — enables
+                polygons(stub_length>0) to extend that one waveguide further
+                left by stub_length (see polygons()'s docstring for why this
+                is one-sided, not the base class's usual symmetric stub).
+                None (default): stub_length stays a no-op, as before.
+            input_y: y-centre (µm) of that same input waveguide.
+        """
         self.gds_path = str(gds_path)
         self.core_layers = list(core_layers)
         self.region_lengths = list(region_lengths)
+        self.input_width = input_width
+        self.input_y = input_y
 
         raw = load_gds_polygons(self.gds_path, layers=self.core_layers, cell_name=cell_name)
 
@@ -131,19 +145,48 @@ class GdsGeometry(DeviceGeometry):
         self, stub_length: float = 0.0
     ) -> Dict[Tuple[int, int], List[List[Tuple[float, float]]]]:
         """Waveguide polygons as imported from the GDS, centered at x=0 (see
-        __init__).
+        __init__), optionally with the LEFT (input) waveguide extended by
+        stub_length.
 
-        stub_length is accepted for interface compatibility with
-        DeviceGeometry.to_meep_prisms() but, like to_gds_eme()'s
-        straight_length, is otherwise ignored — see the class docstring.
-        Synthesizing an extra straight run here would need a local waveguide
-        width to extrude, which this geometry cannot supply in general (a
-        freeform/topology-optimized import has no well-defined width_at() at
-        an arbitrary cut); the caller must size FDTDSolver's source/monitor
-        margins to land inside whatever real input waveguide the GDS itself
-        already drew, not rely on stub_length to extend it.
+        Deliberately ONE-SIDED, unlike every other geometry's polygons()
+        (which extends symmetrically): this class's own device has a real,
+        known-cross-section waveguide only on its input side (the GDS's own
+        straight stub) — the far/right edge is an arbitrary cut through a
+        freeform region with no well-defined width_at() there, so extending
+        it the same way would draw a waveguide where none physically exists.
+        See A3/step 8 in validation_markdown/high_contrast_grating_validation.md
+        for why this matters: without this extension, the input waveguide
+        ends in mid-air short of (or right at) the PML, and that clean-cut
+        Si/oxide facet reflects part of the guided mode right there —
+        contaminating exactly the reflection measurement
+        FDTDSolver.solve_reflection() exists to make. Extending the
+        waveguide THROUGH the PML (stub_length = edge_clearance + dpml, the
+        distance from the geometry's own edge to the simulation cell's true
+        boundary) lets the PML absorb it as an ordinary waveguide mode
+        instead.
+
+        stub_length > 0 requires input_width (set at construction) — without
+        it there is no known cross-section to extrude, and this raises
+        rather than silently drawing nothing (the pre-2026-08-04 behavior,
+        which is still what stub_length=0 or input_width=None gives).
         """
-        return {layer: [list(poly) for poly in polys] for layer, polys in self._polys.items()}
+        out = {layer: [list(poly) for poly in polys] for layer, polys in self._polys.items()}
+        if stub_length > 0:
+            if self.input_width is None:
+                raise ValueError(
+                    "polygons(stub_length>0) needs input_width set at "
+                    "GdsGeometry construction — there is no way to infer a "
+                    "freeform region's cross-section automatically"
+                )
+            x_left = -self._span / 2.0
+            y0, y1 = self.input_y - self.input_width / 2.0, self.input_y + self.input_width / 2.0
+            ext = [
+                (x_left - stub_length, y0), (x_left, y0),
+                (x_left, y1), (x_left - stub_length, y1),
+            ]
+            core_layer = self.core_layers[0]
+            out.setdefault(core_layer, []).append(ext)
+        return out
 
     def to_gds_eme(
         self, straight_length: float, oxide_width: float,

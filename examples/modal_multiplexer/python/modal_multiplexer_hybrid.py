@@ -120,7 +120,12 @@ save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_
 # ---------------------------------------------------------------------------
 # Global simulation parameters
 # ---------------------------------------------------------------------------
-RESOLUTION = 40.0   # mesh resolution (pixels/µm) — used by both the EME and FDTD sub-solvers
+RESOLUTION = 40.0   # mesh resolution (pixels/µm) — used by both the EME and FDTD sub-solvers.
+                    # Kept at the shipped value 2026-08-04 despite gap 2 finding no
+                    # resolution 20-100 fully converged in absolute n_eff -- see N_MODES'
+                    # own comment below for the full reasoning (this device's check-1
+                    # engine ratio, not either engine's absolute n_eff, is what this
+                    # chain's accuracy actually depends on).
 WL_MIN = 1.26       # wavelength sweep start (µm) — O-band, matching the legacy device
 WL_MAX = 1.36       # wavelength sweep end (µm)
 N_WL = 11           # number of wavelength points
@@ -187,15 +192,46 @@ PORTS = [("top", 0), ("mid", 1), ("bot", 2)]
 #    slot of its type in the chain — sections are told apart by their
 #    x-ranges (and cached per-section), not by which object solves them.
 # ---------------------------------------------------------------------------
-N_MODES = 16    # body supermodes carried at all four section interfaces. The
-                # legacy hybrid used 20–30; each extra mode costs one more
-                # FDTD run in the transition section, so this is the main
-                # accuracy/cost knob. Don't starve it: the on-axis input is
-                # symmetric about y=0, so TE0 excites only *symmetric* body
-                # supermodes and TE1 only *antisymmetric* ones (e.g. at the
-                # MMI 1 interface TE0 lands in supermodes 1+5, TE1 in 2+6) —
-                # the basis must keep several supermodes of EACH parity or
-                # one input mode's channel silently truncates to ~zero.
+N_MODES = 14    # body supermodes carried at all four section interfaces.
+                # CHANGED 16->14, 2026-08-04 (modal_multiplexer_validation.md
+                # gap 2/gap 6's item-12/14 fix) -- NOT OPTIONAL, a judgment
+                # call made without explicit user sign-off, flagged here for
+                # review. At RESOLUTION=40 this cross-section supplies only
+                # 14 real guided modes (measured cleanly and consistently at
+                # EVERY tested resolution 20-100, job 11673526); the library
+                # guard that used to pad the missing 2 with unguided/junk
+                # modes now raises instead (items 12/14), so 16 would crash
+                # on the very next run regardless of this choice. 14, not
+                # some other number <16, because it is exactly what gap 2
+                # measured as reachable -- reducing further would discard
+                # real guided channels for no reason. RESOLUTION stays 40
+                # (not raised) because gap 2 also found NO resolution
+                # 20-100 is demonstrably converged in absolute n_eff (60->80
+                # looked converged, misleadingly -- 80->100 broke it
+                # completely), so paying for a finer mesh buys no
+                # demonstrated accuracy here; meanwhile this device's own
+                # check 1 (gap 5, job 11678100) measured the engine-ratio
+                # Δβ_FDTD/Δβ_EME at this exact RESOLUTION=40 and found it
+                # excellent (0.9958, matching both MMIs' own shipped-but-
+                # unconverged-resolution results) -- the ratio, not the
+                # absolute value, is what this hybrid chain actually
+                # depends on. NOT independently re-verified: whether 14
+                # (down from 16) still keeps several supermodes of EACH
+                # parity at every interface -- the reasoning below predicts
+                # yes (dropping the two weakest-confined, highest-index
+                # modes removes one of each parity from an alternating
+                # sequence, not a whole parity), but this has not been
+                # checked against a real run of this device, which is a
+                # separate, expensive campaign (gap 6) not attempted this
+                # session. The legacy hybrid used 20-30 modes; each extra
+                # mode costs one more FDTD run in the transition section, so
+                # this is the main accuracy/cost knob. Don't starve it: the
+                # on-axis input is symmetric about y=0, so TE0 excites only
+                # *symmetric* body supermodes and TE1 only *antisymmetric*
+                # ones (e.g. at the MMI 1 interface TE0 lands in supermodes
+                # 1+5, TE1 in 2+6) -- the basis must keep several supermodes
+                # of EACH parity or one input mode's channel silently
+                # truncates to ~zero.
 BODY_STUB = 0.75  # µm of MMI body folded into each FDTD section past the
                   # taper/body discontinuity (legacy mm_monitor_position);
                   # must exceed the FDTD solver's monitor_margin.

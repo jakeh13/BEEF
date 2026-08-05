@@ -1449,7 +1449,7 @@ lives in "Current library reference" above, not here.
    mid-taper value (0.467).
 
 8. **New, 2026-07-31 — `CompoundGeometry` cannot back `FDTDSolver.solve()`'s
-   single-domain path at all. One part fixed, one part real and open.**
+   single-domain path at all. Both parts now fixed, 2026-08-04.**
    Found writing `modal_multiplexer_fdtd.py` (`modal_multiplexer_validation.md`
    gap 3) — the first script in this repo to call `.solve()` (as opposed to
    `.solve_section()`, the only thing `HybridSolver` ever calls) with a
@@ -1474,22 +1474,50 @@ lives in "Current library reference" above, not here.
    `tests/test_geometry.py::TestCompoundGeometrySourceApertureClamps`,
    mutation-checked against the pre-fix code.
 
-   **Part 2, NOT FIXED — `polygons(stub_length>0)`.** Clearing part 1 exposed
-   a second, unconditional crash: `solve()` → `to_meep_prisms()` →
+   **Part 2, FIXED 2026-08-04 — `polygons(stub_length>0)`.** Clearing part 1
+   exposed a second, unconditional crash: `solve()` → `to_meep_prisms()` →
    `geometry.polygons(stub_length=self.waveguide_length + self.dpml)`, and
-   `CompoundGeometry.polygons(stub_length>0)` raises `NotImplementedError` by
-   design — its own docstring says "no generic way to know per-port stub
-   width for an arbitrary segment type". This one is real, unfinished work,
-   not a mechanical patch: `to_gds_eme()`/`section_gds()` already solve the
-   equivalent problem via `_end_ports()`, but generalising that to plain
-   `polygons()` needs an actual decision for an ambiguous end (e.g. a
-   multi-port `WaveguideRun` — which port's width does the external stub
-   inherit?), which whoever wrote the existing `NotImplementedError` declined
-   to guess at. Left alone, same caution bar as Solver items 14 and 12's
-   guard fix this session: not touching production-adjacent, under-verified
-   geometry logic without a real design pass plus device-level verification.
-   `modal_multiplexer_fdtd.py` and its batch script are marked BLOCKED
-   pending this.
+   `CompoundGeometry.polygons(stub_length>0)` raised `NotImplementedError` by
+   design — its own docstring said "no generic way to know per-port stub
+   width for an arbitrary segment type," framing it as needing a real design
+   decision for an ambiguous end (e.g. a multi-port `WaveguideRun` — "which
+   port's width does the external stub inherit?").
+
+   **That framing was wrong, not just unimplemented.** `_end_ports()` already
+   answers exactly this question for `to_gds_eme()`'s own stub handling, and
+   it answers it by *not* picking a single winner: it returns every port at
+   that end as a `(y, width)` pair, one per port — a `WaveguideRun` end
+   returns all its ports, and a multi-input/output `MMI` end returns one
+   entry per `input_ys`/`output_ys`. There was no ambiguity to resolve by
+   judgment; a leaf geometry with several ports already draws one stub
+   polygon per port for its own `polygons(stub_length>0)` (see `MMI.
+   polygons()`'s own `for i, p in enumerate(self.inputs)`/`.outputs` loops).
+   The fix wires `_end_ports()` into `polygons()` the same way `to_gds_eme()`
+   already uses it — one stub polygon per port at each of the two true outer
+   ends (first segment's input side, last segment's output side), with no
+   `output_idx` restriction (unlike `to_gds_eme()`'s per-port EME use), since
+   the single-domain FDTD path this feeds needs the whole physical device,
+   every branch at once.
+
+   Confirmed against the real device this was blocking:
+   `modal_multiplexer`'s 1-input/3-output `CompoundGeometry` now builds 4
+   stub polygons (1 input + 3 output, each at its own port's true width and
+   y-position, verified against `BRANCH_SPECS`) where it previously raised
+   immediately, and `to_meep_prisms()` (the actual call chain
+   `FDTDSolver.solve()` uses) now succeeds end-to-end through prism
+   construction. 7 new tests, `tests/test_geometry.py::
+   TestCompoundGeometryPolygonsStub` — the simple single-port-ends case, the
+   multi-port-end case (one stub per port, not one), the `frame_offset`
+   interaction (an asymmetric-taper MMI's stub must land at the true edge,
+   not the naive bbox midpoint — same hazard as item 7), a `stub_length=0`
+   no-op check, and a real (not mocked) `to_meep_prisms()` build. Full fast
+   suite still green (618 passed, 19 skipped) with no regressions.
+
+   **Still open, and deliberately NOT attempted here**: this fixes geometry
+   construction only. `modal_multiplexer_fdtd.py` has never actually been
+   *run* — no smoke test, no real FDTD solve, no comparison against
+   `modal_multiplexer_hybrid.py`. See `modal_multiplexer_validation.md`
+   gap 3 for what that needs next.
 
 ### Plotting
 

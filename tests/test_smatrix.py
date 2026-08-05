@@ -71,6 +71,96 @@ class TestPassivity:
             s.total_power(in_mode=2)
 
 
+class TestCoherentReceiverMetrics:
+    """imbalance_db/excess_loss_db/cmrr_db/cross_excitation_phase_diff_deg --
+    added for the 4x4 MMI 90-degree hybrid (mmi_4x4_90_hybrid_validation.md
+    finding A8). Synthetic data only, hand-computable, no solver needed."""
+
+    def test_imbalance_db_balanced_is_zero(self):
+        s = SMatrix(wavelengths=_wavelengths())
+        s.set_power(np.full(3, 0.25), port="a")
+        s.set_power(np.full(3, 0.25), port="b")
+        np.testing.assert_allclose(s.imbalance_db(["a", "b"]), np.zeros(3), atol=1e-10)
+
+    def test_imbalance_db_unbalanced_matches_hand_calc(self):
+        s = SMatrix(wavelengths=_wavelengths())
+        s.set_power(np.full(3, 0.4), port="a")
+        s.set_power(np.full(3, 0.1), port="b")
+        # -10*log10(0.1/0.4) = -10*log10(0.25) = 6.0206 dB
+        np.testing.assert_allclose(s.imbalance_db(["a", "b"]), np.full(3, 6.0206), atol=1e-3)
+
+    def test_imbalance_db_generalizes_to_more_than_two_ports(self):
+        s = SMatrix(wavelengths=_wavelengths())
+        s.set_power(np.full(3, 0.4), port="a")
+        s.set_power(np.full(3, 0.25), port="b")
+        s.set_power(np.full(3, 0.1), port="c")
+        np.testing.assert_allclose(s.imbalance_db(["a", "b", "c"]), np.full(3, 6.0206), atol=1e-3)
+
+    def test_imbalance_db_needs_at_least_two_ports(self):
+        s = SMatrix(wavelengths=_wavelengths())
+        s.set_power(np.full(3, 0.4), port="a")
+        with pytest.raises(ValueError):
+            s.imbalance_db(["a"])
+
+    def test_excess_loss_db_matches_hand_calc(self):
+        s = SMatrix(wavelengths=_wavelengths())
+        s.set_power(np.full(3, 0.4), port="a")
+        s.set_power(np.full(3, 0.4), port="b")
+        # -10*log10(0.8/1.0) = 0.9691 dB, positive = loss (paper's own sign
+        # convention -- the OPPOSITE of insertion_loss_db()'s).
+        np.testing.assert_allclose(s.excess_loss_db(["a", "b"]), np.full(3, 0.9691), atol=1e-3)
+
+    def test_excess_loss_db_zero_when_lossless(self):
+        s = SMatrix(wavelengths=_wavelengths())
+        s.set_power(np.full(3, 0.6), port="a")
+        s.set_power(np.full(3, 0.4), port="b")
+        np.testing.assert_allclose(s.excess_loss_db(["a", "b"]), np.zeros(3), atol=1e-10)
+
+    def test_cmrr_db_matches_hand_calc(self):
+        s = SMatrix(wavelengths=_wavelengths())
+        s.set_power(np.full(3, 0.6), port="a")
+        s.set_power(np.full(3, 0.4), port="b")
+        # -20*log10(|0.6-0.4|/(0.6+0.4)) = -20*log10(0.2) = 13.9794 dBe
+        np.testing.assert_allclose(s.cmrr_db("a", "b"), np.full(3, 13.9794), atol=1e-3)
+
+    def test_cmrr_db_near_perfect_rejection_is_large(self):
+        s = SMatrix(wavelengths=_wavelengths())
+        s.set_power(np.full(3, 0.5), port="a")
+        s.set_power(np.full(3, 0.5), port="b")
+        assert np.all(s.cmrr_db("a", "b") > 100.0)
+
+    def test_cross_excitation_phase_diff_simple_offset(self):
+        s_in1 = SMatrix(wavelengths=_wavelengths())
+        s_in3 = SMatrix(wavelengths=_wavelengths())
+        s_in1.set(np.exp(1j * np.radians(0.0)) * np.ones(3), port="out6")
+        s_in3.set(np.exp(1j * np.radians(30.0)) * np.ones(3), port="out6")
+        phi = s_in1.cross_excitation_phase_diff_deg(s_in3, port="out6")
+        np.testing.assert_allclose(phi, np.full(3, 30.0), atol=1e-6)
+
+    def test_cross_excitation_phase_diff_wraps_to_180(self):
+        s_in1 = SMatrix(wavelengths=_wavelengths())
+        s_in3 = SMatrix(wavelengths=_wavelengths())
+        s_in1.set(np.exp(1j * np.radians(170.0)) * np.ones(3), port="out6")
+        s_in3.set(np.exp(1j * np.radians(-170.0)) * np.ones(3), port="out6")
+        # raw difference is -340 deg == +20 deg once wrapped
+        phi = s_in1.cross_excitation_phase_diff_deg(s_in3, port="out6")
+        np.testing.assert_allclose(phi, np.full(3, 20.0), atol=1e-6)
+
+    def test_cross_excitation_phase_diff_matches_paper_eq15_targets_in_range(self):
+        # phi~_5 = -45 deg, phi~_7 = 45 deg (both already inside (-180,180],
+        # unlike phi~_6/phi~_8 -- see the method's own mod-360 caveat).
+        s_in1 = SMatrix(wavelengths=_wavelengths())
+        s_in3 = SMatrix(wavelengths=_wavelengths())
+        s_in1.set(np.ones(3, dtype=complex), port="out5")
+        s_in3.set(np.exp(1j * np.radians(-45.0)) * np.ones(3), port="out5")
+        s_in1.set(np.ones(3, dtype=complex), port="out7")
+        s_in3.set(np.exp(1j * np.radians(45.0)) * np.ones(3), port="out7")
+        np.testing.assert_allclose(
+            s_in1.cross_excitation_phase_diff_deg(s_in3, port="out5"), np.full(3, -45.0), atol=1e-6)
+        np.testing.assert_allclose(
+            s_in1.cross_excitation_phase_diff_deg(s_in3, port="out7"), np.full(3, 45.0), atol=1e-6)
+
+
 class TestSerialization:
     def test_save_load_roundtrip(self, tmp_path):
         s = SMatrix(wavelengths=_wavelengths())

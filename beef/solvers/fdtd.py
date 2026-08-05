@@ -445,6 +445,63 @@ def check_source_coverage(fcen: float, fwidth: float, wavelengths: np.ndarray,
     return frac
 
 
+def _point_in_polygon(x: float, y: float, poly) -> bool:
+    """Even-odd ray-casting test, boundary-exclusive. `poly`: [(x, y), ...]."""
+    inside = False
+    x1, y1 = poly[-1]
+    for x2, y2 in poly:
+        if (y1 > y) != (y2 > y):
+            x_at_y = (x2 - x1) * (y - y1) / (y2 - y1) + x1
+            if x < x_at_y:
+                inside = not inside
+        x1, y1 = x2, y2
+    return inside
+
+
+def check_reflection_layout(core_polygons, src_x: float, mon_x: float, y0: float,
+                            extend_input_waveguide: bool, domain_x_edge: float) -> None:
+    """Guard against the two real, silent bugs `solve_reflection()` has
+    already shipped with once each (validation_markdown/
+    high_contrast_grating_validation.md step 10 item 6): `source_margin`/
+    `monitor_margin` are measured from the PML inner edge, not from the
+    geometry's own edge, so a source/monitor position that looks reasonable
+    in isolation can still land in bare oxide once `edge_clearance` (or any
+    other domain-size parameter) changes; and a geometry that claims to
+    honor `extend_input_waveguide` can silently ignore `stub_length` for its
+    input side, leaving the cut facet the flag was meant to remove.
+
+    Both checks are on the same `(2, 0)`-layer polygons `to_meep_prisms()`
+    is about to extrude, so a pass here means the *actual* simulated
+    silicon — not some other approximation of it — covers what the caller
+    assumed it would. Raises before `mp.Simulation` is built, not after, so
+    a bad layout fails in milliseconds instead of after a full solve.
+    """
+    for label, x in (("source", src_x), ("monitor", mon_x)):
+        if not any(_point_in_polygon(x, y0, poly) for poly in core_polygons):
+            raise ValueError(
+                f"solve_reflection(): {label} at (x={x:.4f}, y={y0:.4f}) falls "
+                f"outside the geometry's own silicon (layer (2, 0)) -- "
+                f"source_margin/monitor_margin are measured from the PML inner "
+                f"edge, not from the geometry's edge, so changing edge_clearance "
+                f"(or sim_width/dpml) without re-checking them can silently move "
+                f"the {label} into bare oxide. Check the geometry with a plot, "
+                f"or adjust source_margin/monitor_margin, before re-running."
+            )
+    if extend_input_waveguide:
+        probe_x = domain_x_edge + 1e-6
+        if not any(_point_in_polygon(probe_x, y0, poly) for poly in core_polygons):
+            raise ValueError(
+                f"solve_reflection(): extend_input_waveguide=True but the "
+                f"geometry's own silicon does not reach the domain boundary "
+                f"(x={domain_x_edge:.4f}) at y={y0:.4f} after "
+                f"geometry.polygons(stub_length=...) -- this geometry may be "
+                f"ignoring stub_length for its input side, which defeats the "
+                f"point of extend_input_waveguide: the cut facet the flag is "
+                f"meant to remove would still be there, just moved deeper into "
+                f"the PML instead of eliminated."
+            )
+
+
 @dataclass
 class SectionFDTDLayout:
     """Source/monitor position + size for one solve_section() call, in the
@@ -1031,6 +1088,7 @@ class FDTDSolver:
         port: str = "top",
         input_mode: int = 1,
         edge_clearance: float = 0.0,
+        extend_input_waveguide: bool = False,
         save_dir: Optional[str] = None,
         cache_only: bool = False,
         **kwargs,
@@ -1074,6 +1132,24 @@ class FDTDSolver:
         is no automatic guard for this, because the geometry does not
         generally expose its own stub length.
 
+        A geometry whose input waveguide simply ENDS at
+        ``geometry.total_length``'s own edge — the default, and the only
+        option before 2026-08-04 — leaves a clean Si/oxide facet sitting in
+        the ``edge_clearance`` gap (or right at the PML if
+        edge_clearance=0). That facet reflects part of the guided mode on
+        its own, independent of anything downstream — contaminating this
+        exact reflection measurement with an artifact that has nothing to
+        do with the device being characterized. ``extend_input_waveguide=
+        True`` fixes this by requesting ``geometry.polygons(stub_length=
+        edge_clearance + self.dpml)`` — enough to run the input waveguide
+        fully through the PML to the true simulation-cell boundary, where
+        PML absorbs it as an ordinary waveguide mode instead of reflecting
+        off a cut end. Requires the geometry to actually honor
+        ``stub_length`` for its input side (e.g. ``GdsGeometry`` with
+        ``input_width`` set at construction — see its own ``polygons()``
+        docstring for why that extension is one-sided, not symmetric);
+        raises whatever that geometry itself raises if it cannot.
+
         Args:
             geometry: device geometry (implements to_meep_prisms()).
             wavelengths: wavelengths to evaluate (µm), determines DFT frequencies.
@@ -1083,6 +1159,8 @@ class FDTDSolver:
             edge_clearance: plain-oxide gap (µm) between geometry.total_length's
                 bounding box and the PML, both sides. 0 (default) puts PML
                 flush against the geometry's own edges.
+            extend_input_waveguide: see above. False (default) preserves the
+                pre-2026-08-04 behavior (geometry.polygons(stub_length=0)).
             save_dir, cache_only: as solve().
             **kwargs: forwarded to geometry.source_aperture_at(), as solve().
 
@@ -1099,13 +1177,18 @@ class FDTDSolver:
         import meep as mp
 
         wavelengths = np.asarray(wavelengths)
-        stub_length = 0.0  # see docstring — GdsGeometry ignores this anyway
+        # 0.0 (default): pre-2026-08-04 behavior, geometry draws exactly what
+        # it imported/parametrized, nothing more. edge_clearance + self.dpml
+        # (extend_input_waveguide=True): run the input waveguide fully
+        # through the PML to the true cell boundary — see docstring above.
+        stub_length = (edge_clearance + self.dpml) if extend_input_waveguide else 0.0
 
         config = None
         if save_dir:
             config = build_whole_device_config(
                 self, "solve_reflection",
                 dict(port=port, input_mode=input_mode, edge_clearance=edge_clearance,
+                     extend_input_waveguide=extend_input_waveguide,
                      wavelengths=wavelengths, kwargs=kwargs,
                      **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor),
                      **resolved_material_config(
@@ -1158,6 +1241,12 @@ class FDTDSolver:
         )
 
         mon_x = -Sx / 2 + self.dpml + self.monitor_margin
+
+        core_polygons = geometry.polygons(stub_length=stub_length).get((2, 0), [])
+        check_reflection_layout(
+            core_polygons, src_x, mon_x, src_yo,
+            extend_input_waveguide=extend_input_waveguide, domain_x_edge=-Sx / 2,
+        )
 
         sim = mp.Simulation(
             resolution=self.res,

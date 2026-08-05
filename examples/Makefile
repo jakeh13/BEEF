@@ -84,6 +84,15 @@ directional_coupler_mode:
 directional_coupler_fdtd:
 	$(runner) $(my_python) directional_coupler/python/directional_coupler_fdtd.py
 
+# high_contrast_grating_fabry_perot_validation.md step 2 -- the directional
+# coupler re-derived on SOI_160 at duty/dc.gds's own real dimensions.
+# Deliberately NOT added to DIRECTIONAL_COUPLER_EXAMPLES/EXAMPLES/DEVICES --
+# same reasoning as modal_multiplexer_fdtd (don't reshape the
+# positionally-indexed root array); this is one physical half of a
+# still-in-progress build plan, not a settled device example yet.
+directional_coupler_soi160_hybrid:
+	$(runner) $(my_python) directional_coupler/python/directional_coupler_soi160_hybrid.py
+
 # TEMPORARY (see VERIFICATION above). VERIFY_ARGS=--static-only runs just the
 # no-meep checks, which is safe on a login node.
 VERIFY_ARGS ?=

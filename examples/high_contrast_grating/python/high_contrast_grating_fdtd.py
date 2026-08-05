@@ -24,8 +24,15 @@ domain edge and only ever reads the forward mode coefficient, so it cannot
 report anything physical for a device with no far-side port. See
 solve_reflection()'s docstring in beef/solvers/fdtd.py for the full
 forward/backward decomposition and why the domain is NOT sized the way
-solve() sizes it (GdsGeometry does not extend the imported waveguide for
-stub_length, unlike every parametric geometry in this repo).
+solve() sizes it.
+
+extend_input_waveguide=True (below) runs the input waveguide fully through
+the PML to the true simulation-cell boundary, via GdsGeometry's own
+input_width-aware polygons(stub_length=...). Without this the waveguide
+would end in mid-air short of (or right at) the PML, and that clean-cut
+Si/oxide facet reflects part of the guided mode on its own — an artifact
+that would contaminate this exact reflection measurement, independent of
+anything the grating itself does.
 
 Reference — the HCG reflector design itself (the seed this GDS is named for):
     J. M. Hiesener, R. P. Pesch, and S. E. Ralph, "On Topology Optimization
@@ -74,13 +81,15 @@ CORE_LAYERS = [(2, 0)]
 # Global simulation parameters
 # ---------------------------------------------------------------------------
 RESOLUTION = float(os.environ.get("HCG_FDTD_RES", 15.0 if TEST_MODE else 60.0))  # pts/um; MEASURED
-    # (validation_markdown/high_contrast_grating_validation.md step 8): single-wavelength (1.569 um,
-    # the paper's own reported peak) resolution sweep 10-60 gives R = 0.5144/0.7386/0.8434/0.8962/
-    # 0.9266/0.9466/0.9557/0.9705/0.9789 -- deltas shrink geometrically (~0.55-0.6x per doubling of
-    # step size), and res=60's R=0.9789 matches the paper's reported C-band minimum (97.9%) to 3
-    # decimals. Extrapolated asymptote lands close to the paper's peak (98.9%), so the residual above
-    # res=60 is estimated, not zero -- res=60 is a cost/accuracy tradeoff (90 min for that one point on
-    # 24 ranks), not a claim of exact convergence.
+    # (validation_markdown/high_contrast_grating_validation.md step 8, RE-MEASURED 2026-08-04 after the
+    # waveguide-extension-through-PML fix -- see extend_input_waveguide below): single-wavelength
+    # (1.569 um, the paper's own reported peak) resolution sweep 10-60 gives R = 0.4468/0.7030/0.8164/
+    # 0.8757/0.9081/0.9323/0.9450/0.9592/0.9697 -- systematically LOWER than the pre-fix sweep at every
+    # point (that sweep had a spurious facet-reflection artifact inflating R; removing it also means the
+    # corrected res=60 sits a bit further from the paper's 97.9% than the flawed number coincidentally
+    # did). Deltas still shrink geometrically but the residual above res=60 is larger than first
+    # estimated -- res=60 remains the cost/accuracy tradeoff (~75-90 min for that one point on 24
+    # ranks), not a claim of exact convergence; see the validation doc for the fuller extrapolation.
 THREE_D = not TEST_MODE            # real 160 nm Si core in oxide vs. fast 2-D planar smoke test
 WL_MIN = 1.50                      # C-band -- the paper this device is from (Hiesener, Pesch, Ralph,
 WL_MAX = 1.60                      # IEEE PTL 36(9), 597-600, 2024) reports "peak reflectance of 98.9%
@@ -98,6 +107,9 @@ MONITOR_MARGIN = 0.8    # GDS's own 1.082 um input stub (both do; see domain che
 SIM_WIDTH = 7.5         # y-span; the grating's arcs reach y = +-2.99 um
 SIM_HEIGHT = 1.5        # slab z-height reference (3-D only)
 DECAY_TOL = 1e-6 if TEST_MODE else 1e-11
+INPUT_WIDTH = 0.5       # um -- the GDS's own straight input waveguide (verified by direct
+INPUT_Y = 0.0           # inspection: a plain 4-vertex rectangle, y in [-0.25, 0.25]), needed
+                         # for GdsGeometry to extend it through the PML (see below)
 
 # ---------------------------------------------------------------------------
 # 1. Load geometry from the GDS
@@ -112,6 +124,8 @@ grating = GdsGeometry(
     gds_path=_GDS_PATH,
     core_layers=CORE_LAYERS,
     region_lengths=[_span],
+    input_width=INPUT_WIDTH,
+    input_y=INPUT_Y,
 )
 
 print(f"HCG total length (x-span of imported polygons): {grating.total_length:.4f} um")
@@ -141,9 +155,13 @@ solver = FDTDSolver(
 # GdsGeometry.polygons()'s docstring), so it would draw the source/monitor
 # markers in the wrong place here. This mirrors solve_reflection()'s own
 # domain formula directly instead.
-def plot_hcg_domain(geometry, solver, edge_clearance, output_path):
+def plot_hcg_domain(geometry, solver, edge_clearance, stub_length, output_path):
     Sx = geometry.total_length + 2 * (edge_clearance + solver.dpml)
-    polys = geometry.polygons()
+    Sy = solver.sim_width + 2 * solver.dpml
+    # stub_length=... draws the geometry AS ACTUALLY SIMULATED (input
+    # waveguide extended through the PML), not just the bare GDS import --
+    # otherwise this plot would show the pre-fix, facet-reflecting geometry.
+    polys = geometry.polygons(stub_length=stub_length)
     fig, ax = plt.subplots(figsize=(9, 8))
     patches = [MplPolygon(p, closed=True) for p in polys.get((2, 0), [])]
     pc = PatchCollection(patches, facecolor="steelblue", edgecolor="k", linewidths=0.3, alpha=0.85)
@@ -155,21 +173,26 @@ def plot_hcg_domain(geometry, solver, edge_clearance, output_path):
     ax.axvline(mon_x, color="tab:cyan", lw=1.5, label="reflection monitor")
     ax.axvline(-geometry.total_length / 2, color="tab:red", ls="--", lw=1, label="GDS bbox edge")
     ax.axvline(geometry.total_length / 2, color="tab:red", ls="--", lw=1)
-    ax.axvspan(-Sx / 2, -Sx / 2 + solver.dpml, color="orange", alpha=0.15)
-    ax.axvspan(Sx / 2 - solver.dpml, Sx / 2, color="orange", alpha=0.15, label="PML")
+    # x-PML (left/right, where the extended input waveguide passes through)
+    ax.axvspan(-Sx / 2, -Sx / 2 + solver.dpml, color="orange", alpha=0.15, label="PML (x)")
+    ax.axvspan(Sx / 2 - solver.dpml, Sx / 2, color="orange", alpha=0.15)
+    # y-PML (top/bottom)
+    ax.axhspan(-Sy / 2, -Sy / 2 + solver.dpml, color="purple", alpha=0.15, label="PML (y)")
+    ax.axhspan(Sy / 2 - solver.dpml, Sy / 2, color="purple", alpha=0.15)
     ax.set_xlim(-Sx / 2 - 0.2, Sx / 2 + 0.2)
-    ax.set_ylim(-solver.sim_width / 2 - solver.dpml - 0.2, solver.sim_width / 2 + solver.dpml + 0.2)
+    ax.set_ylim(-Sy / 2 - 0.2, Sy / 2 + 0.2)
     ax.set_aspect("equal")
     ax.set_xlabel("x (um)")
     ax.set_ylabel("y (um)")
-    ax.set_title("High-contrast grating — FDTD domain (solve_reflection)")
+    ax.set_title("High-contrast grating — FDTD domain (solve_reflection)\ninput waveguide extended through PML")
     ax.legend(loc="upper right", fontsize=8)
     ax.grid(True, alpha=0.3)
     fig.savefig(output_path, dpi=150)
     plt.close(fig)
 
 
-plot_hcg_domain(grating, solver, EDGE_CLEARANCE, os.path.join(output_dir, "geometry.png"))
+STUB_LENGTH = EDGE_CLEARANCE + DPML  # matches solve_reflection(extend_input_waveguide=True)
+plot_hcg_domain(grating, solver, EDGE_CLEARANCE, STUB_LENGTH, os.path.join(output_dir, "geometry.png"))
 print(f"Geometry/domain plot saved -> {output_dir}/geometry.png")
 
 # ---------------------------------------------------------------------------
@@ -187,7 +210,7 @@ if TEST_MODE:
 
 smat = solver.solve_reflection(
     grating, wavelengths, port="top", input_mode=1,
-    edge_clearance=EDGE_CLEARANCE, save_dir=save_dir,
+    edge_clearance=EDGE_CLEARANCE, extend_input_waveguide=True, save_dir=save_dir,
 )
 smat.check_passive()  # sanity: |R| must not exceed 1 at any wavelength
 

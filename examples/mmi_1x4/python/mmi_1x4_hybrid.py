@@ -50,8 +50,8 @@ unused by default here -- same reasoning mmi_1x2_hybrid.py's own
 CALIBRATE_BODY flag documents) if step 8's engine-agreement check finds it
 matters.
 
-*** MM_LENGTH IS A PLACEHOLDER, NOT YET THE MEASURED VALUE -- see
-mmi_1x4_eme.py's module docstring for the same note. ***
+MM_LENGTH = 206.0 um -- MEASURED 2026-08-04, see mmi_1x4_eme.py's module
+docstring and the constant's own comment below for the full provenance.
 
 Run:
     python /path/to/examples/mmi_1x4/python/mmi_1x4_hybrid.py
@@ -95,16 +95,25 @@ TAPER_LENGTH = 5.0
 WAVEGUIDE_OFFSET = 2.4
 MM_WIDTH = 12.0
 
-MM_LENGTH = None   # TODO: fill in from mmi_1x4_sin_body_length_sweep_merge.py
-                   # (job array 11667114) -- splice into that script's
-                   # mm_lengths grid and assert the hit is exact (coupler-bug
-                   # lesson) before trusting this value.
-if MM_LENGTH is None:
-    raise NotImplementedError(
-        "MM_LENGTH is still a placeholder -- fill in the measured equal-split "
-        "length from mmi_1x4_sin_body_length_sweep_merge.py (job array "
-        "11667114) before running this example."
-    )
+# MEASURED 2026-08-04, job array 11667114 + mmi_1x4_sin_body_length_sweep_merge.py.
+# mm_length=206.0 is on that sweep's integer grid exactly (linspace(20,300,281)
+# -> spacing 1.0), asserted below per the coupler-bug lesson (a "pinned" value
+# argmin'd onto a grid that didn't contain it exactly, differing by 0.0208 um
+# between two examples for weeks). NOT the pure argmin(spread) winner
+# (spread=0.0013 at 280.0 um) -- deliberately chosen instead for a better
+# balance of footprint, throughput, and split precision (spread=0.0052, 3.7%
+# relative imbalance, IL=-2.44 dB, vs. 280 um's 1.0% imbalance/-2.83 dB/6.2x
+# the length, and 45 um's 8.2% imbalance/-2.20 dB/shortest option). See
+# validation doc step 5 for the full three-way comparison this was picked
+# from -- a genuine design tradeoff, not a default.
+MM_LENGTH = 206.0
+_MM_LENGTH_GRID = np.linspace(20.0, 300.0, 281)   # mmi_1x4_sin_body_length_sweep.py's own grid
+_nearest = _MM_LENGTH_GRID[np.argmin(np.abs(_MM_LENGTH_GRID - MM_LENGTH))]
+assert _nearest == MM_LENGTH, (
+    f"MM_LENGTH={MM_LENGTH} is not an exact point on the measured sweep grid "
+    f"(nearest grid value: {_nearest}) -- do not silently snap, this is exactly "
+    f"the coupler bug (0.0208 um discrepancy shipped for weeks)."
+)
 
 mmi = MMI(
     n_inputs=1, n_outputs=4,

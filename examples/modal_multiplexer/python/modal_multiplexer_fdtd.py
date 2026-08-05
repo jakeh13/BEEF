@@ -1,24 +1,32 @@
 """
-BLOCKED 2026-07-31 -- do not run. `FDTDSolver.solve()` (the full
-single-domain path this script needs, as opposed to `solve_section()`, the
-only thing `HybridSolver` ever calls) is unconditionally incompatible with
+UNBLOCKED 2026-08-04 -- geometry construction now works; this script has
+still never been run for real. `FDTDSolver.solve()` (the full single-domain
+path this script needs, as opposed to `solve_section()`, the only thing
+`HybridSolver` ever calls) used to be unconditionally incompatible with
 `CompoundGeometry` as the top-level device: `solve()` -> `to_meep_prisms()`
 -> `geometry.polygons(stub_length=self.waveguide_length + self.dpml)`, and
-`CompoundGeometry.polygons(stub_length>0)` raises `NotImplementedError` by
+`CompoundGeometry.polygons(stub_length>0)` raised `NotImplementedError` by
 design -- "no generic way to know per-port stub width for an arbitrary
-segment type" (its own docstring). Confirmed live: this script crashes on its
-first `solver.solve()` call, every time, regardless of save_dir/caching (an
-earlier revision of this file wrongly attributed the crash to caching alone
--- `save_dir=None` clears ONE `polygons(stub_length>0)` call site, the
-cache-fingerprint one, but `to_meep_prisms()`'s own call is unconditional).
+segment type" (its own docstring said). That framing turned out to be wrong,
+not just unimplemented: `_end_ports()` already answers the question for
+`to_gds_eme()`'s own stub handling, by returning EVERY port at an end rather
+than picking a single winner, and a leaf geometry with several ports already
+draws one stub per port for its own `polygons()` (e.g. `MMI.polygons()`).
+Fixed by wiring `_end_ports()` into `polygons()` the same way `to_gds_eme()`
+already uses it. See `modal_multiplexer_validation.md` gap 3 and `notes.md`
+Geometry item 8 for the full account, evidence, and new tests
+(`tests/test_geometry.py::TestCompoundGeometryPolygonsStub`).
 
-This is real, unfinished library work, not a mechanical fix: `to_gds_eme()`/
-`section_gds()` already solve the equivalent problem for the EME/hybrid path
-via `_end_ports()`, but generalising that to plain `polygons()` needs a real
-design decision for an ambiguous end (e.g. a multi-port `WaveguideRun`), which
-whoever wrote `_locate()`'s sibling explicitly declined to guess at. See
-`modal_multiplexer_validation.md` gap 3 and `notes.md` Geometry item 8 for the
-current status and what implementing it would need.
+Confirmed cleared through geometry/prism construction only: this exact
+device's `CompoundGeometry` now builds the correct 4 stub polygons (1 input +
+3 output, each at its own port's true width/position) where it used to raise
+immediately, and `to_meep_prisms()` -- the actual call `FDTDSolver.solve()`
+makes -- now succeeds. **Not yet confirmed**: an actual FDTD solve of this
+script, end to end. Before trusting any output, this needs the same
+two-step discipline every other expensive device in this repo has used --
+a real (not login-node) smoke test at reduced scope, then the full run --
+not a login-node try (see the resolution note below for why even the
+reduced res=20 default here is not cheap).
 
 One separate, smaller bug found and FIXED while writing this script:
 `CompoundGeometry.source_aperture_at()` used to raise for any x past its own
@@ -78,11 +86,12 @@ verify_mmi_2x2_hybrid_vs_fdtd.py — needs this script's SMatrix to exist
 first, and both scripts' wavelength grids to match exactly, which they do
 here by construction).
 
-Do not run until the BLOCKED note at the top of this docstring is resolved --
-every solver.solve() call raises NotImplementedError today. Once
-CompoundGeometry.polygons(stub_length>0) supports this shape, run via the
-batch script (not a login-node smoke run — see the resolution note above for
-why even the reduced res=20 default is not cheap):
+Geometry construction no longer raises (see the UNBLOCKED note at the top),
+but this script has never actually been run -- no smoke test, no real solve,
+no evidence its output is sane, independent of the geometry fix being
+correct. Run via the batch script, not a login-node try (3-D FDTD at any
+resolution belongs in SLURM, not a background process — same lesson this
+device's own hybrid script's OOM history already recorded):
     python /path/to/examples/modal_multiplexer/python/modal_multiplexer_fdtd.py
 """
 
