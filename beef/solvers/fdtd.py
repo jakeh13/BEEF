@@ -724,7 +724,22 @@ class FDTDSolver:
         output_monitor_centers: y-centers of the output waveguide monitors (µm).
             Required; must match the output waveguide positions of the device.
         output_monitor_widths: y-spans of the output monitors (µm).
-            None → use sim_width for each (full cross-section).
+            None (default) → as wide as each monitor can be while staying
+            centered on its own output_monitor_centers entry and inside the
+            non-PML domain: sim_width - 2*abs(center) — full sim_width for
+            a centered (y=0) port, narrowing symmetrically for an off-axis
+            one so it never reaches into the PML on its far side. Matches
+            the clamp already used for the excited/source-side aperture
+            (`min(src_aperture, sim_width - 2*abs(src_yo))`, this method's
+            body) rather than an arbitrary fixed width — a monitor narrower
+            than this default risks clipping real field content (and, for
+            get_eigenmode_coefficients()'s own MPB solve, the surrounding
+            cladding context that eigenmode solve needs) before the overlap
+            integral runs. FIXED 2026-08-07 from a bare `[sim_width] *
+            len(...)` default, which was wrong for any off-axis port (it
+            would place a monitor of full sim_width off-center, reaching
+            past the PML on the far side) — not previously hit because
+            every caller to date passed an explicit override.
         half_domain_aperture: when True, solve_section()'s source+norm
             monitor on a side being excited with exactly 1 mode spans only
             *half* the domain — from the shared symmetry axis (y=0) out to
@@ -900,6 +915,7 @@ class FDTDSolver:
         input_mode: int = 1,
         save_dir: Optional[str] = None,
         cache_only: bool = False,
+        input_idx: Optional[int] = None,
         **kwargs,
     ) -> SMatrix:
         """Run a broadband FDTD simulation for one input port.
@@ -913,7 +929,8 @@ class FDTDSolver:
             port: input port label — "top" selects geometry.input_ys' last
                   (highest-y) entry, "bot" its first (lowest-y) entry; both
                   collapse to the same position for a single-input device
-                  (1×2 MMI), since input_ys has only one entry there.
+                  (1×2 MMI), since input_ys has only one entry there. Ignored
+                  when ``input_idx`` is given.
             input_mode: 1-based waveguide mode index to excite and normalize against.
             save_dir: persistent on-disk cache directory (see beef/cache/).
                 None/"" (default) disables the cache — see
@@ -923,6 +940,18 @@ class FDTDSolver:
             cache_only: if True, never run the simulation — return the
                 cached result or raise CacheMissError. See solve_section()'s
                 cache_only docstring for the full semantics (identical here).
+            input_idx: explicit 0-based index into ``geometry.input_ys`` to
+                excite, overriding ``port``. Added for devices with more than
+                two access ports (e.g. a 4x4 MMI, `mmi_4x4_90hybrid_fdtd.py`),
+                where "top"/"bot" can only ever reach the first/last entry —
+                an interior port (e.g. input_ys[2] of 4) was previously
+                unreachable through this method at all. None (default)
+                preserves the exact original port="top"/"bot" behaviour.
+                Also forwarded to geometry.source_aperture_at() (replacing
+                whatever the caller might separately pass via **kwargs under
+                that name — passing both raises immediately, so the aperture
+                width is never computed for a different port than the one
+                actually excited).
             **kwargs: forwarded to geometry.source_aperture_at() (e.g.
                   input_idx for DirectionalCoupler) when the geometry
                   provides one — see the source-width note in the body.
@@ -943,11 +972,21 @@ class FDTDSolver:
         wavelengths = np.asarray(wavelengths)
 
         config = None
+        if input_idx is not None and "input_idx" in kwargs:
+            raise TypeError(
+                "solve() got 'input_idx' both as a named argument and inside "
+                "**kwargs -- pass it once; the named argument selects the "
+                "excited port AND is what gets forwarded to "
+                "source_aperture_at(), so a second, different value in "
+                "kwargs would silently size the aperture for the wrong port."
+            )
+
         if save_dir:
             stub_length = self.waveguide_length + self.dpml
             config = build_whole_device_config(
                 self, "solve",
-                dict(port=port, input_mode=input_mode, wavelengths=wavelengths, kwargs=kwargs,
+                dict(port=port, input_idx=input_idx, input_mode=input_mode,
+                     wavelengths=wavelengths, kwargs=kwargs,
                      **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor),
                      **resolved_material_config(
                          self.material_stack, wavelengths,
@@ -982,8 +1021,16 @@ class FDTDSolver:
         # placed the source off-axis for a single-input device, whose one
         # true input sits at input_ys[0]=0.0, not +-waveguide_offset/2).
         input_ys = getattr(geometry, "input_ys", [0.0])
-        input_idx = len(input_ys) - 1 if port == "top" else 0
-        src_yo = input_ys[input_idx]
+        # input_idx param (if given) overrides the port="top"/"bot" string --
+        # that string can only ever reach input_ys' first/last entry, which
+        # is a real, previously-unfixable gap for any device with more than
+        # two access ports (an interior port, e.g. input_ys[2] of 4, was
+        # simply unreachable through this method before). See this method's
+        # own docstring for the full reasoning.
+        resolved_input_idx = input_idx if input_idx is not None else (
+            len(input_ys) - 1 if port == "top" else 0
+        )
+        src_yo = input_ys[resolved_input_idx]
         src_x = -Sx / 2 + self.dpml + self.source_margin
         # Default: the full non-PML domain — PML edge to PML edge, exclusive
         # of PML — correct for the usual case of one lone input waveguide
@@ -1001,7 +1048,11 @@ class FDTDSolver:
         src_width = self.sim_width
         _aperture_at = getattr(geometry, "source_aperture_at", None)
         if _aperture_at is not None:
-            src_aperture = _aperture_at(src_x, **kwargs)
+            # input_idx explicitly passed through (not left to whatever's in
+            # kwargs) so the aperture is always sized for the port actually
+            # excited above -- the mismatch the TypeError guard earlier in
+            # this method exists to prevent.
+            src_aperture = _aperture_at(src_x, input_idx=resolved_input_idx, **kwargs)
             if src_aperture is not None:
                 src_width = min(src_aperture, self.sim_width - 2.0 * abs(src_yo))
 
@@ -1040,7 +1091,7 @@ class FDTDSolver:
         out_widths = (
             self.output_monitor_widths
             if self.output_monitor_widths is not None
-            else [self.sim_width] * len(self.output_monitor_centers)
+            else [self.sim_width - 2.0 * abs(yc) for yc in self.output_monitor_centers]
         )
         out_fluxes = [
             sim.add_mode_monitor(

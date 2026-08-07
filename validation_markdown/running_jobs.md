@@ -5,11 +5,12 @@
 
 | job | state | what |
 |---|---|---|
-| ~~11688645~~ → **11693107** | ❌→🏃 | `beef_modal_mux_fdtd` — the real (non-smoke) res=20 full-device FDTD run (gap 3, README.md check 4). **11688645 TIMED OUT at 4h**, still mid-way through just the first input mode (TE0) — a real, unconfirmed resolution-dependent decay-time finding, not just the expected res⁴ cost scaling; no caching in this script, so all 96 core-hours were a total loss. See the detail section below for the full account and the options presented to the user. **Resubmitted at `-t 1440` (24h) as 11693107**, running |
+| ~~11688645~~ → ~~11693107~~ → **11707932** | ❌→❌(killed)→🏃 | `beef_modal_mux_fdtd` — the real (non-smoke) res=20 full-device FDTD run (gap 3, README.md check 4). **11688645 TIMED OUT at 4h; 11693107 (24h budget) killed by the user's own diagnosis at 18h53m**, both stuck in just the first input mode (TE0), never converging. User found a real comparison point — an archived TO campaign for this exact device (`04_weary_paw/`) completed a full forward+adjoint cycle at HIGHER resolution in ~70-80 min/iteration — and directed a core-count increase. **Rescaled 1 node/24 ranks → 4 nodes/96 ranks, resubmitted as 11707932**, confirmed launching on all 96 ranks. **Update 2026-08-06, ~9h06m elapsed: TE0 fully decayed (t=77,197.45, 3,087,898 timesteps, ~7.95h wall) — the first time this campaign has ever finished even the first input mode, far past both single-node attempts' kill points. Now into TE1, ~1h15m in, healthy. Still not landed, but this is real evidence core count (not `decay_tol`) was the dominant lever.** See the detail section below for the full account |
 | **11688701** `_[..]` | 🏃 RUNNING | `beef_hcg` — unrelated to this thread, another session's work, not independently verified this snapshot |
 | **11691379** | 🏃 RUNNING | `beef_dc_...` — unrelated to this thread, another session's work, not independently verified this snapshot |
 | **11693043** | 🏃 RUNNING | `beef_mmi...` — unrelated to this thread, another session's work, not independently verified this snapshot |
-| **11672739** `_[0-3]` | 🏃 RUNNING, 22h+ elapsed | `beef_prewarm_mmi1x4_hybrid` — unrelated to this thread, another session's work (see prior snapshot for detail), not independently re-verified this snapshot |
+| **11672738_0..3** | ✅ **COMPLETED** (all 4 tasks, ~2:45 hrs each) | `beef_prewarm_mmi1x4_eme` — cache-prewarm for `mmi_1x4_eme.py` (step 6b), much faster than the ~13h/branch extrapolation from step 5's design tool. Real run **11678090 COMPLETED in 38s** (cache hit for all 4 branches): T=[0.1415, 0.1598, 0.1598, 0.1415], total T=0.6025 (IL=-2.20 dB) at λ=1.550 µm — exact mirror symmetry, consistent with step 5. `mmi_1x4_eme.py` is genuinely done |
+| ~~11672739~~ → **11696233** | ❌→🏃 | `beef_prewarm_mmi1x4_hybrid` — **11672739 TIMED OUT at 24h** (all 4 tasks), only reached MPB band 14/20 on the FIRST of two body-adjacent interfaces (input↔body); true per-branch cost extrapolates to 60-80+ hrs at `N_MODES=20`. In `HybridSolver`, `interface_modes` IS the body's resolution for this cascade (not an independent interface-only knob — `EMESolver(num_modes=...)` for `body_solver` is an unused placeholder for the `solve_section_length_sweep()` call path), so there's no way to keep body accuracy at 20 while only shrinking the FDTD interface count. User-directed fix: reduced `N_MODES` 20→12 (preliminary, unvalidated — revisit at step 8), matching the same tradeoff `mmi_1x2_hybrid.py`/`mmi_2x2_hybrid.py` already accept at 8/14 modes. **Resubmitted as 11696233, `-t 48:00:00`**, running |
 
 ---
 
@@ -199,8 +200,82 @@ core-hours were a total loss. Presented to the user with 4 options (bigger
 budget / loosen `decay_tol` / refactor into an array job first / hold off);
 **chose bigger budget, unchanged otherwise** — `-t` 240→1440 (24h,
 matching this repo's largest existing precedent) in
-`run_modal_multiplexer_fdtd.batch`, resubmitted as **11693107**, not yet
-landed.
+`run_modal_multiplexer_fdtd.batch`, resubmitted as **11693107**.
+
+**11693107 also did not converge, and this time the user found a real
+external comparison point instead of authorizing another blind wait.**
+Killed at 18h53m, still stuck in TE0, t=49,375.9 — 4.7× further than
+11688645's own stopping point, same flat step rate, no sign of leveling
+off. The user pointed at `04_weary_paw/` — an archived output tree (config,
+logs, geometries; no driver code) from an actual seeded topology-
+optimization run of this exact device (`gds_name: "mux_MMI_2"`,
+`res=40`/`dr_res=80` — HIGHER resolution than this script). Its
+`logs/master.log` shows a full forward+adjoint gradient cycle (both TE0/TE1
+groups, plus constraints — much more work than this script's forward-only
+sweep) completing in **~70–80 minutes per iteration**, 56 iterations over
+~67.3h total. This repo's own simpler, lower-resolution run had already
+spent ~19h without finishing one mode — a ~15–20× gap too large to pin on
+core count alone (no core/node count was even recoverable from the
+archived logs to confirm), but core count is the one lever definitively
+under this repo's control, so at the user's direction: killed 11693107,
+rescaled `run_modal_multiplexer_fdtd.batch` 1 node/24 ranks → **4 nodes/96
+ranks** (matching `modal_multiplexer_hybrid.py`'s own scale for this
+device's FDTD sections), resubmitted as **11707932**. Confirmed at launch
+(`Using MPI version 4.1, 96 processes` / `Splitting into 96 chunks by
+voxels`) — the full 4-node allocation is actually being used. `decay_tol`
+(the more likely dominant lever, per the archived campaign's own much
+shorter per-iteration time despite doing more work at higher resolution)
+was NOT changed — still a methodology decision needing explicit sign-off.
+Not yet landed.
+
+**Live check 2026-08-06, ~1h02m elapsed — measured, not projected from the
+worry above.** `reports/11707932.out`: step 387,803, t=9695.08, steady
+~0.0089–0.0090 s/step. Average sim-time rate since launch ≈ **156.1
+units/min**, vs. 11693107's own flat whole-run rate ≈ **43.6 units/min** (1
+node/24 ranks) — a **~3.6× speedup for 4× the ranks** (~88–94% parallel
+efficiency), better than "parallel efficiency drops well before 4× more
+ranks buys 4× speedup" anticipated a paragraph above. At this rate, reaching
+t=49,375.9 (11693107's own kill point, still not decayed there) projects to
+≈5.3h elapsed, leaving ≈18.7h of the 24h budget as margin beyond that — a
+rate projection, not a completion; still no confirmation `stop_when_
+dft_decayed(tol=1e-11)` actually triggers before budget runs out.
+
+Also went back to `04_weary_paw/` for the rank-count question flagged above
+as unrecoverable from its own logs. Re-confirmed: zero hits grepping
+`logs/master.log`/`logs/group{0,1}.log` for process/mpi/chunk/rank/core/
+node/thread/parallel — the custom logger never captured meep's own startup
+banner. Found indirect corroboration instead: the only two surviving SLURM
+scripts from this repo's older Makefile-driven framework generation
+(`archive/FECES_Legacy/batch/run.batch`, `rum.batch` —
+`srun --mpi=pmi2`-launched, matching `04_weary_paw`'s implied launcher)
+both request `-N 4 --ntasks-per-node=24` (96 ranks) for their own full 3-D
+campaigns — but for sibling devices (`mmi_2x2_bend`/`mmi_2x2_gds`), not the
+mux, and the driver modules `04_weary_paw`'s own logs name (`Mux_MMI.py`,
+`engine.py`, `utils_s_mux.py`) match zero files anywhere in
+`archive/FECES_Legacy` — `masters/mmi_mux_master.py`, the only mux-related
+survivor, is a different, later rewrite (`class MMI_MUX`, direct `meow`/
+`meep` imports), not what produced `04_weary_paw`. Recorded as circumstantial
+corroboration of the framework generation's standard job scale, not proof of
+what the archived campaign itself used — full account in
+`modal_multiplexer_validation.md` gap 3.
+
+**✅ 2026-08-06, ~9h06m elapsed — TE0 fully decayed, first time ever in this
+campaign.** `run 0 finished at t = 77197.45 (3087898 timesteps)` — far past
+where either single-node attempt died (11688645 at t=10,420/4h;
+11693107 at t=49,375.9/18h53m). Wall time for TE0 alone ≈ **7.95h**
+(7,048 progress lines × meep's ~4.06 s/line default report cadence, measured
+directly from this run's own line-count-vs-elapsed-time, not assumed). This
+also explains the odd-looking near-stall between the two live checks above:
+not a stall — the per-`mp.Simulation` step counter resets to 0 at the start
+of each input mode, and TE0's finish plus ~55 eigenmode-coefficient MPB
+solves for its flux monitors landed in that window. Now into
+**input_mode=2 (TE1)**, ~1h15m in, same healthy ~0.0087 s/step. No S-matrix
+yet (script prints/saves only after both modes complete). Worth noting for
+the `decay_tol` debate above: TE0 hit `tol=1e-11` in well under half the 24h
+budget once given 4× the ranks, real evidence that core count — not
+necessarily `decay_tol` — was the dominant lever here, at least for this
+mode; TE1's own decay time is still unmeasured. Full account in
+`modal_multiplexer_validation.md` gap 3.
 
 ### 11667114 — a real bug found and fixed first, not a routine sweep
 

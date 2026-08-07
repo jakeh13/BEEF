@@ -67,6 +67,42 @@ repo's own already-shipped precedent. Reverted; the width range is now
 widened downward (0.10–0.70 µm, was 0.30–0.70) and the job resubmitted on
 the plain, repo-standard guided-mode count.
 
+**Update, same day — 11693043 COMPLETED (3:19:14). Step 1 is closed.**
+`waveguide_width` is DECIDED: 0.35 µm, the user's own choice, not derived
+from the search. 1c's `L_π/W²` came out essentially constant (3.026 →
+3.020 µm⁻¹ over 6–16 µm) — textbook self-imaging scaling, a real
+cross-check that these are genuine body modes. Full results, the
+2×2-precedent parallel that reframed Step 1a's own success criterion, and
+the caveat on 1b's box-size convergence (measured at 0.45 µm, not yet
+re-checked at the decided 0.35 µm) are all in the "Step 1 MEASURED" box
+right after A10 below.
+
+**Step 2 is now also done.** `W=6.0 µm` (the most compact measured point),
+`waveguide_offset=W/4=1.5 µm` (checked directly to reproduce paper Eq. 8
+exactly via `beef`'s own default port generator — no custom port lists
+needed), `L=(3/4)L_π=81.69 µm` — **5.6× shorter than the paper's own
+459 µm silica body**, which is the compactness A9 predicted, now measured
+rather than just expected. `taper_width`/`taper_length` are explicit,
+flagged placeholders (`MMI`'s own class defaults), not yet measured. Full
+parameter table and the geometry-overlap check (0.7 µm clearance, checked
+not assumed) are in Step 2's own box.
+
+**Step 3 is done (first pass) as of 2026-08-06.** Real production sweep
+(job 11708624, 48 ranks, 3:54h) hit a real bug on first read — max|Δφ|
+pinned near 180° across the entire ΔL sweep while imbalance behaved
+normally — diagnosed with ZERO new cluster time (every solve already
+cached) as a global S-parameter phase-sign-convention mismatch between
+meep/meow and the paper's own convention, not a device or code indexing
+bug (A8's own predicted cross-call phase-reference risk was checked
+directly and ruled out first). Fixed and reverified: **best point
+ΔL=-1.50 µm, max|Δφ|=8.28°, max imbalance=4.90 dB** — close to but not
+quite meeting the cited 5°/CMRR≥20dBe requirements, on a first pass with
+only 8 body modes and unmeasured placeholder tapers. Full diagnostic
+trail and corrected sweep table in **A11** below. **Step 4 (geometry with
+real numbers) is next**, though refining N_MODES/taper dimensions first
+may close the remaining phase gap — an open call, see A11's own closing
+paragraph.
+
 > ### A10. `Mode.te_fraction` does not match this repo's own "TE" convention — a dead end, recorded not hidden
 >
 > **The observation.** A first pass at 1a filtered guided modes by
@@ -117,6 +153,103 @@ the plain, repo-standard guided-mode count.
 > doesn't matter for this class of device. If a genuinely asymmetric
 > section is ever added to this device (it is not planned to be), this
 > reasoning would need revisiting.
+
+### ✅ Step 1 MEASURED 2026-08-05 — job 11693043, and `waveguide_width` DECIDED by the user (0.35 µm), not derived from the search
+
+**1a (single-mode width, plain guided-mode count, no polarization filter):
+empty across the whole swept range.** Every width from 0.10 to 0.70 µm shows
+≥2 guided modes at O-band on `SOI_220` — even 0.10 µm (second band margin
+only 0.0007 above cladding). The trend is smooth and monotonically
+increasing with width (not the flat, width-independent signature that
+flagged a real `compute_modes_meep` bug in the SiN 1×4 saga — see that doc's
+own step 4a/4b), so this is read as genuine physics, not a solver artifact.
+
+| width (µm) | guided | n_eff (highest → lowest) |
+|---|---|---|
+| 0.10 | 2 | 1.474411, 1.447551 |
+| 0.15 | 2 | 1.543006, 1.471209 |
+| 0.20 | 2 | 1.648716, 1.600483 |
+| 0.25 | 2 | 1.897532, 1.760734 |
+| 0.30 | 2 | 2.185559, 1.859633 |
+| 0.35 | 3 | 2.385726, 1.940421, 1.457579 |
+| 0.40 | 3 | 2.520250, 2.004680, 1.512177 |
+| 0.45 | 4 | 2.613334, 2.055597, 1.615018, 1.459231 |
+| 0.50 – 0.70 | 4 | (climbing further) |
+
+**This sharpened, not just failed to close, A10's structural argument.**
+Re-checking `mmi_2x2_hybrid.py`'s own shipped access waveguide (0.45 µm,
+C-band — used for A10's `te_fraction` sanity check) shows the *same*
+signature: 2 clearly-guided modes (n_eff 2.311740, 1.696198), not 1. **This
+repo's own already-validated, in-production SOI_220 device does not meet
+the "1 guided mode of any polarization" bar either** — it works because of
+A10's structural argument (exact symmetry decouples TE/TM regardless of
+what else is in the basis; the FDTD source explicitly launches one target
+eigenmode), not because its cross-section is literally single-band-guided.
+So Step 1a's own original success criterion was stricter than this repo's
+own working precedent actually requires — the goalpost, not just the
+search range, needed correcting.
+
+**Put to the user directly rather than decided unilaterally**, given the
+direct parallel to the SiN 1×4 plan's own "reconsider the design width —
+user's call" moment. **Decision: `waveguide_width = 0.35 µm`** — the user's
+own choice, not derived from the mode-count search above (0.35 is not the
+narrowest 2-guided-mode point measured — 0.30 is — and is not framed as a
+deliberate N-mode design either; it is stated as a direct design value).
+At 0.35 µm the real measured cross-section is **3 guided bands**: n_eff
+2.385726 (fundamental), 1.940421 (second), 1.457579 (third, weakly guided,
+margin 0.011 above cladding). Carried forward into Step 2 as-is.
+
+**1b (box convergence at 0.45 µm — the trial width `main()` picked before
+the user's decision above; not re-run at 0.35, see caveat below):**
+converges cleanly, settling to 6 decimal places by `sz=2.0` — already
+`SOI_220`'s shipped default, no change needed on this axis.
+
+| sz (µm) | n_eff[0] | step |
+|---|---|---|
+| 1.0 | 2.613445 | — |
+| 1.5 | 2.613335 | −0.000110 |
+| 2.0 | 2.613334 | −0.000000 |
+| 2.5 | 2.613334 | −0.000000 |
+| 3.0 | 2.613334 | −0.000000 |
+
+⚠ **Caveat, explicitly carried, not silently papered over:** this
+convergence was measured at 0.45 µm (the script's own `main()` picks the
+widest single-mode width from 1a, which was empty, so it fell back to its
+0.45 µm default) — *before* the user fixed `waveguide_width=0.35`. Given how
+fast and clean the 0.45 µm convergence was, and that 0.35 µm is narrower
+(a smaller, more tightly bound mode is not expected to need a *bigger* box),
+`sz=2.0` is very likely fine at 0.35 µm too — but this is an argued
+expectation, not a re-measurement at the real, decided width. Cheap to
+close if it ever matters (one more mode solve).
+
+**1c (L_π vs. candidate MMI body width):**
+
+| mm_width (µm) | n_eff[0] | n_eff[1] | Δβ (rad/µm) | L_π (µm) |
+|---|---|---|---|---|
+| 6.0 | 2.962350 | 2.956337 | 0.02884 | 108.92 |
+| 8.0 | 2.963225 | 2.959841 | 0.01623 | 193.56 |
+| 10.0 | 2.963630 | 2.961464 | 0.01039 | 302.34 |
+| 12.0 | 2.963851 | 2.962346 | 0.00722 | 435.25 |
+| 14.0 | 2.963984 | 2.962878 | 0.00530 | 592.30 |
+| 16.0 | 2.964070 | 2.963223 | 0.00406 | 773.21 |
+
+**✅ Job 11693043 COMPLETED 2026-08-05, 3:19:14 wall.** All 6 points landed.
+Both `n_eff[0]` and `n_eff[1]` climb toward the slab limit as the body
+widens (their difference, hence Δβ, shrinking correspondingly), and
+`L_π/W²` is essentially constant across the whole range —
+**3.026 → 3.020 µm⁻¹, a 0.2% drift over 6→16 µm** — exactly the `L_π ∝ W²`
+scaling self-imaging theory (Eq. 9, Soldano & Pennings) predicts. That
+clean a match is itself evidence these are genuine, well-behaved guided
+body modes, not an artifact — a real, independent cross-check the earlier
+`te_fraction` detour (A10) never had. **These are TE0/TE1-style body modes
+by the same reasoning A10 gives for why polarization mixing doesn't matter
+structurally here** — not independently re-verified per point, consistent
+with treating this as a non-issue for symmetric cross-sections throughout
+this device.
+
+**Step 1 is now closed.** Feeds directly into Step 2: pick a candidate
+`mm_width` and read `L_π` either from this table or via
+`L_π ≈ 3.02 × mm_width²` (µm), good to ~0.2% over 6–16 µm.
 
 ## Summary — what's free, what's new
 
@@ -502,6 +635,69 @@ a later fine-tuning knob only if Step 3's sweep needs it). `L = (3/4)L_π +
 **Evidence.** The computed starting values, with `L_π` from Step 1c, not
 copied from Table 2.
 
+### ✅ Step 2 DONE 2026-08-05 — first-pass dimensions computed and geometry-checked
+
+**Candidate `mm_width`: `W = 6.0 µm`** — the narrowest (most compact) point
+actually measured in Step 1c, not interpolated or extrapolated. Chosen
+because a strongly-guided platform's whole advantage over the paper's own
+weakly-guided silica (A3/A9) is compactness, so the starting point should
+lean into that rather than default to the middle of the swept range.
+Step 3's sweep may move this — this is a starting point, not a final value.
+
+**A clean derivation, checked directly rather than assumed:** paper Eq. 8,
+`y_i = ((2i−5)/8)·W` for `i=1..4`, is *exactly* what `beef`'s own default
+`MMI` port generator (`_port_ys`) produces when
+**`waveguide_offset = W/4`**. Algebra: `_port_ys` gives
+`y_j = offset·(j−1.5)` for 0-indexed `j=0..3`; matching term-by-term against
+Eq. 8 (`i=j+1`) gives `offset = W/4` for every port, not just one. Verified
+on a real `MMI(4,4)` instance, not just by hand:
+
+```
+paper Eq.8 y_i        : [-2.25, -0.75, 0.75, 2.25]
+beef default input_ys : [-2.25, -0.75, 0.75, 2.25]   # W=6.0, offset=1.5=W/4
+```
+
+This means Step 4's geometry needs no custom `inputs=`/`outputs=` port
+lists to satisfy Eq. 8 — the plain constructor with `waveguide_offset=W/4`
+does it exactly, on both faces (A5).
+
+**Computed first-pass parameter set:**
+
+| parameter | value | source |
+|---|---|---|
+| `w` (`waveguide_width`) | 0.35 µm | user's direct decision (Step 1) |
+| `W` (`mm_width`) | 6.0 µm | candidate, measured point (Step 1c) |
+| `waveguide_offset` | 1.5 µm (`= W/4`) | derived, reproduces Eq. 8 exactly |
+| `y_1..y_4` | −2.25, −0.75, 0.75, 2.25 µm | derived, Eq. 8, Δy_i = 0 |
+| `L_π` | 108.9195 µm | **measured**, job 11693043, at `W=6.0` |
+| `ΔL` | 0 µm | initial (Eq. 7); Step 3's refinement knob |
+| `L` (`mm_length`) | 81.6896 µm | derived, Eq. 7: `(3/4)·L_π + ΔL` |
+| `taper_width` | 0.8 µm | **placeholder** — `MMI`'s own class default, not measured |
+| `taper_length` | 1.0 µm | **placeholder** — `MMI`'s own class default, not measured |
+
+**taper_width/taper_length are flagged, not silently assumed.** Unlike
+every other row, these two are not derived from the paper or from a
+measurement — they are `MMI.__init__`'s own neutral defaults, carried
+forward exactly because Step 2's own plan named them "TBD — measure clean-
+transition length, not a default copy." Real values need either a quick
+adiabatic-transition check or fall out of Step 3's sweep; do not treat 0.8/
+1.0 as validated.
+
+**Geometry feasibility, checked directly (no meep — pure `MMI` construction):**
+
+```
+mm_length (Eq.7, ΔL=0) = 81.689625 um
+total_length           = 83.689625 um
+bbox                    = (83.689625, 6.0)
+widest port width = 0.8 um vs spacing (offset) = 1.5 um -> clearance = 0.700 um per side
+OK -- no taper overlap, checked directly
+```
+
+0.7 µm of clearance per side between adjacent taper edges at their widest
+point — comfortable margin, not a near-miss. **Step 2 is closed; Step 3
+(EME width/length refinement sweep) is next**, starting from this exact
+parameter set.
+
 ### Step 3 — EME width/length refinement (replaces the paper's μGA — see A3)
 
 **Deliverable.** A coarse grid or 1D sweep over `mm_width`/`ΔL` (and, only
@@ -522,6 +718,203 @@ device explicitly chose a *non*-optimal point for footprint/robustness
 reasons and said so). **If this sweep cannot reach the cited system
 requirement**, that is the trigger for A3's fallback (a real optimizer),
 not a reason to loosen the requirement quietly.
+
+#### In progress 2026-08-06
+
+Concretely, Step 3 needs: (3a) a real body mode-count audit at `W=6.0`
+(Step 1c only ever solved 2 modes there, just enough for `L_π`) to pin
+`N_MODES`; (3b) 4 real FDTD input-section solves, one per port index — not
+2, even though only ports 1/3 are driven (A4), because all 4 are needed as
+mirror-reused output matrices too (A5); (3c) the analytic body length
+sweep around Eq. 7's point; (3d) evaluate every length via the new
+`SMatrix` methods (Step 7/A8) and pick a `ΔL`. Script:
+`examples/verification/python/mmi_4x4_90hybrid_body_sweep.py` (drafted,
+not yet run — waiting on 3a for `N_MODES`). Its own `sub_region_configs`
+mirror-pairs argument was caught and fixed before ever running (`{2: k}`,
+wrong — section indices only go 0–2 in a 3-section `HybridSolver`; ports go
+0–3 — corrected to `{2: 0}`, section 2 always mirrors section 0 regardless
+of which port a config excited).
+
+**3a hit a real, informative cost surprise.** First attempt, job
+**11706986**, requested 16 modes (guessing "a few times" the 2-mode
+point's 874.6 s) — **TIMED OUT at the full 60 min with ZERO output**, not
+even a partial result. Whatever the true per-mode cost curve is here, "a
+few times more for 8× the modes" was wrong. Resubmitted as **11707835**
+requesting only 8 modes (a calibration point, not the final answer) at a
+90-min budget, specifically to measure the real scaling before guessing
+again. `W=6.0` is wider than the 2×2's own `mm_width=2.8`, and O-band's
+shorter wavelength packs in more modes than C-band at the same width, so
+this cross-section plausibly supports considerably more guided modes than
+any existing device's own `N_MODES` — worth knowing before picking a
+number, not assuming a small one transfers.
+
+**✅ 3a MEASURED 2026-08-06 — job 11707835 COMPLETED (55:58).** All 8
+requested modes guided, n_eff 2.962350 → 2.833452, cladding at 1.446804 —
+healthy, still-widening margin, no sign of approaching cutoff. Real cost:
+**3324.7 s for 8 modes vs. 874.6 s for 2 (job 11693043) — ~416 s/mode,
+close to linear**, not the "few times more" originally guessed. This
+cross-section evidently supports considerably more than 16 guided modes
+(the band-to-band spacing is still *growing*, not shrinking, at mode 8).
+
+**Consequence: `solve_section_length_sweep()` costs one full mode solve
+PER WAVELENGTH, so `N_MODES=16 × N_WL=11`** (this repo's usual convention,
+which the draft script had copied uncritically) **would have cost roughly
+20+ hours for the body alone.** Rescoped before submitting anything real:
+
+- **`N_MODES=8`**, reusing job 11707835 directly — a deliberate coarse
+  first pass, not an exhaustive audit (MMI self-imaging is typically
+  dominated by low-order modes). Flagged for revisiting with a real,
+  higher-mode-count audit later if this pass needs refinement.
+- **`N_WL=3`**, at `{1.26, 1.31, 1.36} µm`** — this is not an ad hoc cut;
+  it mirrors the **paper's own fitness convention exactly** (Sec. IV / Eq.
+  12: `Λ = {1520, 1550, 1580 nm}`, 3 points). The other MMI examples in
+  this repo used 11 points because their own cross-sections were cheap
+  enough to afford it; this one is not, and 3 has real precedent here.
+
+Brings the body sweep to ~3×55 min serial (or ~55 min array-parallelized,
+one wavelength per task — this repo's established pattern for this exact
+cost shape). `mmi_4x4_90hybrid_body_sweep.py` updated accordingly, plus
+`RESOLUTION`/`DECAY_TOL`/`N_WL` made env-var overridable
+(`MMI4X4_RES`/`MMI4X4_DECAY_TOL`/`MMI4X4_NWL`) for a smoke pass — same
+pattern `modal_multiplexer_fdtd.py`'s own `MUX_FDTD_RES` smoke test used.
+
+**Smoke test submitted, job 11708372** (`res=15`, `decay_tol=1e-9`,
+`N_WL=1`) — the input-section FDTD path (`FDTDSolver.solve_section()`,
+real time-stepping on this 4-port tapered access geometry) has never been
+exercised at all; only the pure EME mode-count path has (11693043/
+11707835). Per this repo's own two-step discipline for expensive,
+never-run scripts.
+
+**✅ Smoke test PASSED 2026-08-06, job 11708613 (18.4 s).** Geometry
+correct (`mm_length=81.6896`, matches Step 2 exactly), all 4 input-section
+solves and the body length-sweep produced correctly-shaped output
+(`(1,8,1)` per input, `(81,1,8,8)` for the body), the full evaluate/save/
+plot pipeline ran without error. The printed numbers themselves (best ΔL
+at the search-range edge, `max|Δφ|=86.8°`) are not meaningful — res=15,
+decay_tol=1e-9, N_WL=1 is a pure plumbing check, exactly as designed, and
+say nothing about the real device.
+
+**A real, measured confirmation the `srun --mpi=pmi2` fix mattered, not
+just a precaution.** Job **11708372** — the batch script's pre-fix version
+(`module load openmpi` + bare `python`, no `srun --mpi=pmi2`, caught and
+fixed before submission per the mux's own 42x-slowdown precedent — see the
+batch script's own comment) — happened to run too (submitted moments
+before the fix, from the same background drafting process) and returned
+**byte-identical results** in **592.6 s, a measured 32× slower** than the
+fixed version's 18.4 s. Correct answer either way at this tiny smoke
+scale (meep runs fine single-process, just far slower without proper
+launching) — but the penalty compounds with real settings (res 15→40 is
+already ~51× costlier per the res⁴ 3-D FDTD scaling; a further ~32×
+launcher penalty on top of that would plausibly turn a feasible 12h budget
+into an infeasible one). Worth having a real number for this, not just the
+mux's own precedent to point to.
+
+**Real production sweep submitted 2026-08-06, job 11708624**
+(`run_mmi_4x4_90hybrid_body_sweep.batch`, 48 ranks / 2 nodes, `-t 720`,
+`gts-sr108-ece`, `srun --mpi=pmi2`) — production settings, no env
+overrides: `RESOLUTION=40`, `DECAY_TOL=1e-11`, `N_WL=3` (the paper's own
+Eq. 12 wavelength convention). Budgeted generously rather than tightly,
+matching `run_mmi_2x2_hybrid_dispersive.batch`'s own real-hybrid-production
+scale — 18.4 s at res=15 does not extrapolate to a real-settings estimate.
+Every `solve_section()`/`solve_section_length_sweep()` call already passes
+`save_dir=save_dir`, so a timeout partway through the 4 sequential
+input-port solves would leave completed ones cached — a plain resubmission
+resumes rather than restarts; array/merge reshaping (this repo's own
+established fallback for exactly this cost shape, per the 2×2's own gap-4
+sweep) is the next move only if a plain resubmit turns out not to be
+enough, not the first one.
+
+**✅ Job 11708624 COMPLETED 2026-08-06 (3:53:59) — and the first read of
+the result triggered a real, diagnosed, and fixed bug (A11).**
+
+> ### A11. A global phase-sign-convention mismatch, found, diagnosed with cached data (no new FDTD), and fixed
+>
+> **The observation.** The raw result: `Best ΔL = -1.50 µm: max|Δφ|=
+> 179.857°, max imbalance=4.9044 dB`. Loading the full 81-point sweep from
+> `body_sweep.npz`: `max_dphi` sat between **172.4° and 180.0°across the
+> ENTIRE ±10 µm ΔL range** (mean 179.1°) — essentially the worst possible
+> value, nearly invariant to a parameter (body length) that should strongly
+> move real relative phase. `max_imbalance`, by contrast, varied sensibly
+> over the same sweep (4.9–39.6 dB) — a magnitude-only metric behaving
+> normally while a phase-only metric sits pinned near its theoretical
+> extreme is the signature of a **global sign-convention mismatch**, not a
+> per-length physical result.
+>
+> **Diagnosed using only cached data — zero new FDTD/cluster time.** Every
+> `solve_section()`/`solve_section_length_sweep()` call in the sweep script
+> already passes `save_dir`, so the 4 real FDTD input-port matrices and the
+> body length-sweep matrix were all pulled back with `cache_only=True` in
+> under a second each, on the login node.
+>
+> First checked A8's own predicted risk directly: do independently-run
+> `solve_section()` calls preserve a consistent absolute phase reference?
+> Compared the mirror-image port pair (`input_idx=1`/`2`, at y=∓0.75) across
+> all 8 body modes — **exactly** the physics a mirror-symmetric slab
+> predicts: even modes (0,2,4,6) show 0.00° phase difference between the
+> pair, odd modes (1,3,5,7) show ±180.00°, magnitude ratios 1.0000, all to
+> 2–3 decimal places. **This ruled out A8's cross-call phase-reference risk
+> directly** — separate `solve_section()` invocations do preserve a
+> consistent absolute phase reference; that was not the bug.
+>
+> **Then compared the actual measured `phi_j = ∠S_j3 − ∠S_j1` against the
+> paper's own target angles directly, not just the wrapped residual:**
+>
+> | j (port) | measured `phi_j` (wl=1.26) | paper target `φ̃_j` | `-φ̃_j` |
+> |---|---|---|---|
+> | 0 (out5) | +46.25° | −45° | **+45°** |
+> | 1 (out6) | +128.91° | 225° | **135°** (225 mod 360, sign-flipped) |
+> | 2 (out7) | −45.97° | 45° | **−45°** |
+> | 3 (out8) | −132.23° | 135° | **−135°** |
+>
+> Every measured value matches **the *negative* of its target** to within
+> 1–6° — not coincidence at this consistency across all four independently-
+> measured ports. **Conclusion: `meep`/`meow`'s own S-parameter phase
+> convention is conjugated relative to the paper's implicit one** (plausibly
+> a `exp(-iωt)` vs `exp(+iωt)` time-harmonic convention difference, a known,
+> standard source of exactly this kind of uniform phase-difference sign
+> flip) — a property of the solver pairing, not a device design failure and
+> not a bug in `cross_excitation_phase_diff_deg` itself (which correctly
+> computes `angle(other)-angle(self)` exactly as documented; it was called
+> with the paper's literal `self=port1, other=port3` ordering, which is
+> exactly the ordering that turns out to need negating here).
+>
+> **Fix, verified against the same cached data (recomputed in 5.5 s, no new
+> FDTD):** swap `self`/`other` (equivalently, `φ_j = ∠S_j1 − ∠S_j3`, the
+> negative of the paper's literal Eq. 15 as written — necessary because of
+> the convention mismatch just diagnosed, not a contradiction of the
+> paper). `mmi_4x4_90hybrid_body_sweep.py` corrected accordingly, with the
+> full diagnostic trail recorded in the code comment at the fix site so a
+> future reader sees the *why*, not just the *what*.
+>
+> **Corrected result — a real, clean local optimum, not noise:**
+>
+> | ΔL (µm) | max|Δφ| | max imbalance |
+> |---|---|---|
+> | −4.00 | 68.9° | 9.79 dB |
+> | −2.00 | 11.9° | 6.21 dB |
+> | **−1.50** | **8.28°** | **4.90 dB** |
+> | −0.75 | 8.46° | 7.08 dB |
+> | 0.00 (pure Eq. 7, no correction) | **7.35° (global min)** | 10.44 dB |
+> | +1.00 | 12.4° | 20.27 dB |
+> | +2.00 | 138.2° | 15.60 dB |
+>
+> A smooth trough, not scatter — `max|Δφ|` falls monotonically from 68.9°
+> at ΔL=−4 to a 7.3–8.5° minimum region between −1.75 and 0, then rises
+> again past +1. **This is real physics: self-imaging theory (A3's
+> hypothesis) gets this first-pass design — 8 body modes, unoptimized
+> `taper_width=0.8`/`taper_length=1.0` placeholders, a pure analytic Eq. 7
+> starting length — to within 2.3–3.3° of the paper's own cited 5°
+> requirement, without any optimizer.** Neither point in this ±10 µm sweep
+> quite clears 5° (global min 7.345° at ΔL=0.00, but with worse imbalance
+> there), and there's a genuine trade-off between the two metrics near the
+> optimum — worth refining (wider ΔL search, more body modes past the
+> coarse `N_MODES=8`, or real taper dimensions replacing the placeholders)
+> before concluding A3's fallback (a real optimizer) is or isn't needed.
+> **Best combined point: `ΔL = -1.50 µm` (`mm_length = 80.1896 µm`),
+> `max|Δφ|=8.28°`, `max imbalance=4.90 dB`.**
+>
+> Full corrected grids in `example_output/mmi_4x4_90hybrid/body_sweep/
+> body_sweep_FIXED.npz`; plot regenerated at `body_sweep.png`.
 
 **Carry forward `mmi_1x4_hybrid.py`'s grid-snap lesson explicitly:** that
 script's own comment records a **real, previously-shipped bug** — a
@@ -559,6 +952,18 @@ own 1×4 analogue flags — "the four output tapers at waveguide_offset spacing
 must not overlap, which is a real constraint at 1×4 that never binds at
 1×2" — doubly true here with tapers on *both* ends), and that the input and
 output faces are visually identical (A5's symmetry, checked, not assumed).
+
+**✅ Step 4 DONE 2026-08-06 — already satisfied by Step 3's own output, not
+duplicated here.** `mmi_4x4_90hybrid_body_sweep.py`'s `plot_hybrid_geometry`
+call already renders exactly this evidence: `example_output/
+mmi_4x4_90hybrid/body_sweep/geometry_hybrid.png` shows four tapered input
+ports fanning into the body on the left, an identical mirrored fan on the
+right (visually confirming A5, not just the port-position check from Step
+2), and the FDTD|EME|FDTD section boundaries. At the user's direction,
+proceeding with the current best design point (`ΔL=-1.50`, `N_MODES=8`,
+placeholder tapers) rather than spending more cluster time chasing the
+band-edge CMRR/phase gap (A11) before continuing — that gap is carried
+forward as a known, documented limitation, not silently dropped.
 
 ### Step 5 — interface mode audit
 
@@ -611,6 +1016,185 @@ simulated (mirroring `mmi_2x2_hybrid.py`'s own `sub_region_configs`
 convention for documenting *which* sub-region plots correspond to a real
 simulation vs. a mirrored reuse).
 
+**⚠ In progress 2026-08-06/07 — 6c only, at the user's direction (Step 4's
+"proceed now, refine later" decision).** `examples/mmi_4x4_90hybrid/python/
+mmi_4x4_90hybrid_hybrid.py` written: Step 1-3's settled parameters
+(`waveguide_width=0.35`, `mm_width=6.0`, `waveguide_offset=1.5`,
+`mm_length=80.1896` — the ΔL=-1.50 point), `N_MODES=8`, A11's phase-sign
+fix applied at the same call site with the diagnostic trail recorded
+in-line, and a headline CMRR/phase-error-vs-λ plot (Step 7's own
+deliverable) using the new `SMatrix` methods for real, not synthetic, data.
+
+**First submission (job 11716285) TIMED OUT at the full 4h budget** — not
+a bug, a genuinely new cache fingerprint. The script builds its own `mmi`
+object with `mm_length=80.1896` (the *settled* design point, matching
+`mmi_2x2_hybrid.py`'s own convention of the geometry object representing
+the reported point, e.g. its `mm_length=28.0`), which shifts the input/
+output section boundaries (`x0`/`x1`, part of `solve_section()`'s cache
+key) by 0.75 µm relative to Step 3's own exploration script (which used
+the un-corrected `mm_length=81.6896` as its geometry reference throughout
+the sweep) — a real, different fingerprint, not a mismatch to fix. All 4
+`input_idx=k solved` lines DID print before the timeout, meaning all 4 real
+FDTD input-section solves completed and were cached (cache writes are
+atomic — `beef._utils.atomic_replace_write`) before time ran out; only the
+(cheap, EME-only) body sweep never started. **Resubmitted unchanged as job
+11723505**, expecting cache hits on all 4 inputs this time and a fast
+finish.
+
+**✅ Job 11723505 COMPLETED 2026-08-07 (1:13:00)** — all 4 inputs hit
+cache as predicted (near-instant), the body sweep (reused Step 3's exact
+81-point grid, sliced at ΔL=-1.50) was the only real new work. Full,
+per-port results, not just the earlier scalar summary:
+
+| | 1.26 µm | 1.31 µm (centre) | 1.36 µm |
+|---|---|---|---|
+| CMRR_I, port 1 | 15.68 dBe | 33.32 dBe | 18.64 dBe |
+| CMRR_Q, port 1 | 12.94 dBe | 20.61 dBe | 12.65 dBe |
+| CMRR_I, port 3 | 12.94 dBe | 20.61 dBe | 12.65 dBe |
+| CMRR_Q, port 3 | 12.45 dBe | 29.46 dBe | 17.66 dBe |
+| Δφ_6 | 7.34° | 4.75° | 8.28° |
+| Δφ_7 | 2.22° | 0.14° | −0.63° |
+| Δφ_8 | −1.52° | −5.03° | −1.20° |
+| imbalance, port 1 | 1.99 dB | 0.81 dB | 2.06 dB |
+| imbalance, port 3 | 4.90 dB | 0.91 dB | 4.89 dB |
+| excess loss, port 1 | 3.09 dB | 2.06 dB | 2.66 dB |
+| excess loss, port 3 | 4.27 dB | 2.21 dB | 3.98 dB |
+
+**A more granular reading than the earlier scalar "max|Δφ|=8.28°"
+summary: only Δφ_6 actually breaches the cited 5° bar** (up to 8.28° at
+the band edges) — Δφ_7 stays under 2.2° throughout, Δφ_8 stays within
+~5.0° (touching the boundary at centre, −5.03°). CMRR clears 20 dBe
+comfortably at centre (up to 33.3 dBe) but falls to 12.5–19 dBe at both
+edges — the same wavelength-dependent pattern the phase error shows,
+consistent with a self-imaging condition that is well-tuned near centre
+and drifts at the band edges, exactly as expected for a first pass with
+no dispersion-aware refinement.
+
+**Excess loss (2.1–4.3 dB) is real and worth flagging even though it is
+not one of the paper's own cited pass/fail requirements** — the paper's
+own device achieved <0.68 dB, but that number belongs to a completely
+different platform/geometry (A9) and is not a fair comparison point; still,
+2-4 dB is a meaningful insertion-loss cost for a real receiver and a
+natural target for the same taper-refinement pass that would address the
+phase gap.
+
+Results plot: `example_output/mmi_4x4_90hybrid/mmi_4x4_90hybrid_hybrid/
+hybrid_results.png`. SMatrix saved for both driven ports. **Step 6c is
+done.**
+
+**6a and 6b started 2026-08-07, at the user's direction ("let's complete
+Step 6").**
+
+**6a (EME-only).** `mmi_4x4_90hybrid_eme.py` written: 8 independent full
+5-region-chain `EMESolver.solve()` calls (2 driven inputs x 4 outputs),
+matching `mmi_2x2_eme.py`'s own per-port-pair pattern generalized to 4
+ports — flagged in the script's own docstring that this device's port gap
+(0.7 µm, Step 2) is narrower than the 2×2's own 1.05 µm, so the "ports
+comfortably decoupled" approximation every EME-only script in this repo
+makes is less obviously safe here, not independently checked. Smoke-tested
+first: one `(input_idx=0, output_idx=0)` call at `RES=15`/
+`N_MODES_TAPER=2`/`N_MODES_BODY=4`/1 wavelength took 29.4 s on the login
+node — much cheaper than the hybrid script's own FDTD input-section
+solves, since `EMESolver.solve()` has no time-stepping. Extrapolated via
+res² (2-D eigensolve) × ~2× (mode count) × 3× (wavelengths, no per-
+wavelength reuse in `solve()`'s own loop) to ~15–25 min/call at production
+settings, ~2–4 h for all 8 serially. Real run submitted as **job
+11726819** (`-t 360`).
+
+**✅ Job 11726819 COMPLETED 2026-08-07 (0:40:46)** — faster than the
+conservative estimate. All 8 calls succeeded:
+
+| | 1.26 µm | 1.31 µm | 1.36 µm |
+|---|---|---|---|
+| CMRR_I, port 1 | 12.15 dBe | 37.15 dBe | 33.16 dBe |
+| CMRR_Q, port 1 | 8.59 dBe | 20.61 dBe | 15.23 dBe |
+| CMRR_I, port 3 | 8.59 dBe | 20.61 dBe | 15.23 dBe |
+| CMRR_Q, port 3 | 9.04 dBe | 41.96 dBe | 35.30 dBe |
+| Δφ_6 | 26.82° | 3.18° | 7.19° |
+| Δφ_7 | 4.10° | −0.10° | 1.44° |
+| Δφ_8 | −5.69° | −3.95° | −4.15° |
+| imbalance, port 1 | 3.39 dB | 0.81 dB | 1.52 dB |
+| imbalance, port 3 | 8.00 dB | 1.01 dB | 2.32 dB |
+
+**A real, meaningful divergence from 6c's own FDTD-hybrid results — not
+noise, a genuine cross-method finding.** At 1.26 µm, Δφ_6 is **26.82° in
+the EME script vs. 7.34° in the hybrid script** — a large gap. CMRR values
+also disagree by several dB at multiple points (e.g. port 1 CMRR_I at
+1.36 µm: 33.16 dBe EME vs. 18.64 dBe hybrid). This is consistent with the
+EME script's own flagged, unverified approximation: each of its 8 calls
+draws only ONE input port and ONE output port at a time, treating the
+other 6 as physically absent — a decoupling assumption this repo's own
+2×2 MMI example states outright ("comfortably decoupled" at its 1.05 µm
+gap), but this device's gap is narrower (0.7 µm, Step 2) and was
+explicitly flagged in the EME script's own docstring as *not*
+independently checked. **The size of this divergence is itself evidence
+the approximation is not free here** — the hybrid script's real FDTD
+input sections, which include all 4 ports' actual geometry simultaneously,
+are the more physically trustworthy of the two for anything beyond a
+quick sanity check. Not yet formally isolated (would need e.g. a direct
+crosstalk measurement between adjacent ports, mirroring `mmi_1x4_hybrid.py`'s
+own T_cross=0.0002 check for its output ports) — flagged as a real,
+open finding rather than either dismissed or over-interpreted.
+
+**6b (full-device FDTD).** Hit a real, genuine library gap, not a device
+design issue: `FDTDSolver.solve()`'s `port` parameter only ever accepted
+`"top"`/`"bot"` (`geometry.input_ys`' *last*/*first* entry) — fine for
+every existing 2-port MMI/coupler example, but this device needs the
+paper's own ports 1 **and** 3 (finding A4), and port 3 (`input_ys[2]` of
+4) is an *interior* port neither string can reach. Fixed properly, not
+worked around: `FDTDSolver.solve()` gained an explicit `input_idx`
+parameter that overrides `port` when given, plus a `TypeError` guard
+against passing it both as the new named argument and inside `**kwargs`
+(where it would silently size the source aperture for the wrong port).
+
+**An incidental, real bug caught and fixed in the same change:** before
+this, when a caller didn't pass `input_idx` via `**kwargs` at all —
+*every* existing example script, including this repo's own
+`mmi_2x2_fdtd.py` — the source **aperture width** was computed using
+`geometry.source_aperture_at()`'s own default `input_idx=0`, regardless
+of which port `port="top"`/`"bot"` actually excited. Invisible for the
+2×2 MMI specifically only because its aperture is symmetric between its
+two ports (both give the same width by construction) — a real latent
+mismatch for any asymmetric device, now closed for every caller, not just
+this one. Verified via source inspection of all 5
+`source_aperture_at()` implementations in the repo (`mmi.py`,
+`coupler.py`, `base.py`, `compound.py`, `uniform.py`) — all accept
+`input_idx` either explicitly or via a `**kwargs`/`**_kwargs` catch-all,
+so passing it explicitly cannot break any of them. Fast suite re-run
+clean (639 passed, 19 skipped) after the change. **Not yet independently
+re-verified with a real meep run against a known-good existing device**
+(the symmetric-aperture argument is why that's safe to defer, not a
+substitute for eventually doing it — flagged, not silently skipped).
+
+`mmi_4x4_90hybrid_fdtd.py` written: one output monitor per port
+(`width=waveguide_offset=1.5 µm`, touching neighbor midpoints exactly),
+`port="bot"` for port 1 (already reachable) and the new `input_idx=2` for
+port 3. Smoke-tested (`RES=10`, `DECAY_TOL=1e-6`, `N_WL=1`, `srun
+--mpi=pmi2`, job **11726835**) before any real cluster time, per this
+repo's own two-step discipline — the first-ever full single-domain FDTD
+run on this geometry AND the first real exercise of the new `input_idx`
+path.
+
+**Real production run submitted 2026-08-07 as array job 11733865**
+(`-t 360`, `-N 2 --ntasks-per-node=24` per task, `--array=0-1`, one task
+per driven input port: task 0 → `port="bot"` (port 1), task 1 →
+`input_idx=2` (port 3)). Two lower-resolution calibration attempts first
+(job 11726835, `RES=10`/`decay_tol=1e-6`: ~0 transmission; job 11726854,
+`RES=20`/`decay_tol=1e-8`, 24 ranks, 6:44: **still ~1e-17 transmission —
+essentially the noise floor**, not a smoothly improving trend to
+extrapolate from) showed this device's 0.35 µm waveguide genuinely does
+not guide at coarse resolution over an 84 µm propagation length — a real
+threshold effect, not evidence the full RES=40 run will also fail (the
+hybrid script's own short input-section smoke test showed real coupling
+already at `RES=15`, confirming this is about propagation *length*
+amplifying under-resolution loss over 84 µm, not this cross-section being
+fundamentally unguidable). Rather than keep calibrating at resolutions
+that aren't informative, sized directly from this repo's own best
+precedent for a comparable-length device: **the directional coupler's own
+~78 µm device took ~3 h on 48 ranks at full production settings** — this
+device is 84 µm, closely comparable. Budgeted at `-t 360` (2× that
+precedent) per task.
+
 ### Step 7 — metrics helper (A8) — ✅ math primitives landed 2026-08-05; the plot/report itself still pending Step 6
 
 **Deliverable.** Imbalance, excess loss, CMRR_I/Q, and phase-error
@@ -630,6 +1214,132 @@ their own.
 shape of the paper's own Fig. 3, annotated against the **cited system
 requirements** (CMRR ≥ 20 dBe, |Δφ_j| ≤ 5°) — not against the paper's own
 silica numbers (A9). Not yet produced — needs Step 6's real S-matrices.
+
+### Plotting/reporting improvements — added 2026-08-07, at the user's request
+
+Every one of the three scripts' results plots (`hybrid_results.png`,
+`eme_results.png`, `fdtd_results.png`) was a 1×2 (CMRR, phase error) —
+extended to a 2×2, adding:
+
+- **Excess loss vs. wavelength** (Eq. 11), one curve per driven input port.
+- **Quadrature phase vs. wavelength** — the *actual* measured
+  `φ_j = ∠S_j3 − ∠S_j1` (A11's sign-corrected direction) for all four
+  output ports, each against its own paper-cited target angle (dotted
+  reference line, wrapped to the same `(-180, 180]` range
+  `cross_excitation_phase_diff_deg()` returns) — a more direct view of the
+  I/Q structure than the existing Δφ (residual-only) panel: shows the
+  actual ~90°-spaced port phases, not just their error from target.
+
+Regenerated for the two scripts that already have real data
+(`mmi_4x4_90hybrid_hybrid.py`/`_eme.py`, jobs 11723505/11726819) **from
+their already-saved `SMatrix` `.pkl` files — zero new cluster time**, via
+a one-off loader script; the printed metrics matched the previously-
+recorded values exactly, confirming no drift. Visually, both plots show
+the four ports sitting close to their expected quadrature positions
+(hybrid: φ_5≈−45°, φ_6≈−130°, φ_7≈+46°, φ_8≈+134°, each within a few
+degrees of its target dotted line). `mmi_4x4_90hybrid_fdtd.py` got the
+same plotting code, ready for when job 11733865 lands — nothing to
+regenerate there yet.
+
+**Notebooks added for all three scripts**, `examples/mmi_4x4_90hybrid/
+notebooks/*.ipynb`, matching this repo's own established per-device
+convention (`notes.md`'s own item 6 flags this hand-copy pattern as a real
+source of past drift across 12 other examples — mitigated here, not
+solved repo-wide, by generating all three mechanically from a small
+converter script rather than hand-copying: module docstring → markdown
+title cell, code split at the scripts' own `# ---...---` section
+delimiters, `matplotlib.use("Agg")` dropped. Verified byte-identical
+code content against each script directly, not just visually).
+
+### Excess-loss investigation — started 2026-08-07, at the user's request ("is there any way to reduce the loss?")
+
+**Hypothesis going in:** `taper_width=0.8`/`taper_length=1.0` are unmeasured
+placeholders (Step 2) — over just 1.0 µm the access waveguide widens
+0.35→0.8 µm, a ~12° per-side taper half-angle, aggressive for an adiabatic
+transition in strongly-guided 220 nm SOI. Proposed a taper_length scoping
+sweep, EME-only, to check cheaply before committing FDTD time. User: "sure."
+
+**Built** `examples/verification/python/mmi_4x4_90hybrid_taper_sweep.py` —
+same method/geometry as `mmi_4x4_90hybrid_eme.py`, sweeping `taper_length`
+only (taper_width fixed), ONE driven input (port 1) to keep it cheap (taper
+loss is local physics near the access waveguide, not expected to depend on
+edge- vs. interior-port position the way phase/CMRR do — flagged, not
+independently checked for this side investigation).
+
+**Smoke test (login node, RES=15, N_MODES_TAPER=2, N_MODES_BODY=4, N_WL=1,
+taper_length∈{1.0,3.0}): cheap (29-39s per 4-call point) but the excess
+loss AND imbalance came back IDENTICAL to 3 decimals between the two
+lengths** — not just similar, exactly equal. Suspicious rather than
+reassuring; investigated with zero further cluster cost (isolated
+single-port-pair `solve()` calls on the login node) before trusting or
+discarding the sweep:
+
+- **At fixed `num_cells=15` (this device's taper cell count, inherited
+  unexamined from `mmi_2x2_eme.py`'s own convention), `|S|²` for one
+  representative port pair is invariant to `taper_length` to 3-4 decimal
+  places** — confirmed at both `N_MODES_TAPER=2` (0.010538 at tl=1, 3, 10 µm)
+  and `N_MODES_TAPER=4` (0.063994-0.063997 at tl=1, 3, 10 µm). Only the
+  *phase* moves substantially with length (as expected — propagation phase
+  accumulates over distance); the *transmitted power* does not.
+- **Root cause, confirmed directly: it's a discretization artifact, not
+  real taper-length physics.** At `N_MODES_TAPER=4`, fixing `taper_length`
+  and sweeping `num_cells` instead (5→15→30→60→100) gave |S|² = 0.05910 →
+  0.06400 → 0.06559 → 0.06645 → 0.06679 — a clear, still-climbing trend
+  with diminishing increments (+0.0049, +0.0016, +0.0009, +0.0003), and
+  **identical values (to 4 decimals) between taper_length=1.0 and 3.0 at
+  every one of those `num_cells` settings.** The taper's linear width
+  profile is discretized into `num_cells` uniform steps of FIXED width-jump
+  size `(taper_width−waveguide_width)/num_cells`, independent of physical
+  length — so with `num_cells` fixed, lengthening the taper changes nothing
+  about the per-step mismatch loss this model computes; only a finer
+  staircase (more `num_cells`) does.
+- **`num_cells=15` is measurably under-converged.** The 15→100 climb
+  (+0.00279, diminishing but not flat) is roughly a 0.18 dB improvement in
+  transmitted power at just one taper interface, not yet plateaued at 100
+  (extrapolating the shrinking increments, perhaps another ~0.1 dB left
+  before a true asymptote).
+- **Correction, checked directly before acting on this (2026-08-07):
+  this artifact does NOT touch Step 6c's reported 2.1-4.3 dB excess loss.**
+  Grepped `num_cells` across all three official scripts + the body sweep:
+  only `mmi_4x4_90hybrid_eme.py` (Step 6a, `num_cells=[1,15,1,15,1]`)
+  subdivides its tapers via this EME staircase at all. The hybrid script
+  (`mmi_4x4_90hybrid_hybrid.py`, Step 6c — the more physically complete,
+  already-reported result) and `mmi_4x4_90hybrid_body_sweep.py` both use
+  `INPUT_METHOD="fdtd"` for their input/taper section (`num_cells=[1]` only
+  ever appears for their own uniform, taper-free EME *body* sub-solver) —
+  real time-stepped FDTD over the continuous taper geometry, resolved by
+  grid `RES` the normal way, no discretization staircase of this kind.
+  **This finding is scoped to Step 6a's own EME-only numbers only** — an
+  initial framing of this as touching the settled 2.1-4.3 dB hybrid figure
+  was wrong and has been corrected here before it propagated further.
+  Each signal path in the EME-only script crosses two tapers (in + out),
+  so **a rough 0.3-0.6 dB slice of Step 6a's own reported numbers**
+  (already flagged as the less-trusted of the two methods, per the
+  EME-vs-hybrid divergence finding above) **is plausibly this numerical
+  artifact, not physical radiation loss** — not measured to a firm number,
+  extrapolated from a clear,
+  monotonic, diminishing-returns trend on a coarse (RES=15, N_MODES_BODY=4)
+  proxy, not the production settings.
+- Cost escalates fast with `num_cells`: 100 cells took 759s (12.7 min)
+  serial on the login node for ONE port pair at these coarse settings; 200
+  was killed after >28 min still running (not needed — the diminishing
+  increments already say enough without chasing the last ~0.05 dB).
+
+**Net finding: taper_length is not (yet) a demonstrated lever in this
+model — num_cells is, and only in `mmi_4x4_90hybrid_eme.py` (Step 6a).**
+The originally-planned taper_length sweep can't show a real physical
+trend until `num_cells` is bumped to something more converged first (the
+effect was being masked entirely in this EME-only script).
+
+**Actioned 2026-08-07, user's direction ("err on the lower side as 60
+cells is a lot"): bumped `mmi_4x4_90hybrid_eme.py`'s taper `num_cells`
+from 15 to 30** — a 2× step, not the 60-100 the convergence check used,
+trading some residual under-convergence for cost (the diminishing-returns
+data above says 30 already captures roughly half of the measured 15→100
+gain). Only this one script changed — the hybrid (6c) and body-sweep
+(Step 3) scripts don't use this parameter for their tapers at all (they
+use FDTD there), so nothing about their own already-reported numbers is
+affected or needs re-running.
 
 ### Step 8 — the four checks
 

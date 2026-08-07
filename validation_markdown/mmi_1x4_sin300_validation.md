@@ -1130,11 +1130,140 @@ just structurally validated. **Uses `res=40`, the still-open resolution
 question from step 8 check 3's preliminary finding above — a real caveat on
 these numbers until that check lands.**
 
-**`mmi_1x4_hybrid.py` — prewarm array 11672739 in flight** (4 tasks,
-`-t 24:00:00`, no timing precedent available before submission). Will be
-run for real the same way once that array lands.
+**`mmi_1x4_hybrid.py` — first prewarm attempt (job array 11672739,
+`N_MODES=20`, `-t 24:00:00`) TIMED OUT 2026-08-05, MEASURED.** All 4 tasks
+hit the wall-time limit having only reached MPB band 14 of 20 on the FIRST
+of the two body-adjacent interfaces (input↔body) — the second interface
+(body↔output) and all FDTD time-stepping hadn't even started. Extrapolating
+the observed rate (~14 bands in 24h) puts the true per-branch cost at
+60-80+ hours, not the ~24h the walltime was sized against; the original
+4-parallel-job structure also redundantly repeats the shared input+body
+work (identical across all 4 branches) once per task instead of once
+total, since nothing enforces an ordering between the 4 racing jobs.
 
-### Step 7 — wiring
+**Fix, user-directed: reduce `N_MODES` (`interface_modes`), not just add
+walltime.** In `HybridSolver`, `interface_modes` directly sets
+`solve_section_length_sweep()`'s `n_modes_in`/`n_modes_out` for the body
+section — i.e. it IS the body's resolution in this cascade, not an
+independent interface-only knob (the `EMESolver(num_modes=...)` constructor
+value for `body_solver` is an unused placeholder for this call path, exactly
+as `mmi_1x2_hybrid.py`'s/`mmi_2x2_hybrid.py`'s own comment already said).
+So there is no way to keep the body at the standalone EME script's 20 modes
+while only shrinking the FDTD interface count — reducing `N_MODES` to 12
+genuinely trades some self-imaging accuracy for tractability, the same
+tradeoff `mmi_1x2_hybrid.py` (`N_MODES=8`) and `mmi_2x2_hybrid.py`
+(`N_MODES=14`) already accept relative to their own fully-guided mode
+counts. **Preliminary, unvalidated choice — revisit at step 8's
+resolution/mode-count convergence check**, alongside the still-open
+`res=40` question. MPB's own log from the timed-out run showed near-cutoff
+modes taking far more iterations to converge than well-confined ones (up to
+191 vs. 8-10), so dropping the marginal top modes should cut cost by more
+than the naive 12/20 ratio — not yet confirmed.
+
+**Second prewarm attempt submitted 2026-08-05: job array 11696233**
+(`N_MODES=12`, `-t 48:00:00` — still an estimate, no data yet on the second
+interface or actual FDTD time-stepping cost, chosen with real margin over a
+naive linear scaling of the first attempt's partial-progress rate). Will be
+run for real the same way `mmi_1x4_eme.py` was once that array lands.
+
+**⚠ MEASURED, ~15.5 hrs in: `N_MODES=12` fixed the MPB-band-count bottleneck,
+but exposed a SECOND, larger one — `decay_tol=1e-11`'s time-stepping cost on
+a weakly-confined material.** All 4 tasks: input section's FDTD run
+(`Computational cell is 6.75 x 21 x 6`, the short taper+stub, NOT the whole
+216 µm device) took **`run 0 finished at t = 213.275 (17062 timesteps)`
+— roughly 11.85 hrs of real wall time** (17062 steps at the observed
+~2.3-3.0 s/step, accelerating slightly near the end) just to satisfy
+`decay_tol=1e-11` on this one short section. That is a real, direct
+confirmation of A7's original prediction ("more PML clearance and a longer
+decay tail... `decay_tol` may need revisiting") — not the MPB band count
+diagnosed from the first (`N_MODES=20`) timeout, which is a separate cost
+that `N_MODES` reduction did successfully fix (this run reached time-stepping
+within ~20 min, vs. never in 24h before). Both bottlenecks were real; fixing
+one exposed the other.
+
+After `run 0` finished, all 4 tasks moved into the input section's mode
+decomposition (`get_eigenmode_coefficients`-driven `MPB solved for
+frequency_N(...)` calls, N_MODES=12 bands × 11 wavelengths = 132 solves per
+task) — reached band ~9-10 of 12 by ~15.5 hrs, i.e. ~3.5 hrs for ~9 bands,
+roughly 25-30 min/band. **Extrapolated remaining budget, not yet confirmed**:
+~1-1.5 hrs to finish input decomposition, then the body's EME solve (tidy3d,
+no time-stepping — expected fast), then the OUTPUT section's own FDTD run
+(same cell class, so plausibly another ~12 hrs if similarly weakly-confined)
+plus its own ~3.5 hr decomposition. Rough total estimate **~30-33 hrs**,
+inside the 48 hr budget with some margin — but this assumes the output
+section's decay behaves like the input section's, which has NOT been
+measured and is the next thing to check once it starts. All 4 array tasks
+redundantly repeat the input+body work independently (flagged as a known
+inefficiency, not fixed here — see the first-attempt diagnosis above), so
+this ~12 hr cost is paid 4 times in parallel, not once.
+
+**Update, ~26 hrs in: the output section's own FDTD run has started —
+confirms the "two comparable time-stepping phases" extrapolation above.** A
+second `Computational cell is 6.75 x 21 x 6 with resolution 40` line appears
+in all 4 logs (input decomposition + the body's tidy3d EME solve both
+completed in between, no separate log markers for either but both are fast
+by construction). Tasks 1-3 are at t≈108-111 of what was 213.275 for input's
+own full decay (steps ~8700-8940 of the ~17062 input needed) — roughly
+halfway, and at the same ~2.3 s/step rate, consistent with the output
+section decaying similarly to the input section as hypothesized. **Task 0 is
+notably behind** (t≈41.7, step 3339) — same task that was slowest through
+input decomposition too; worth watching in case it is heading for the 48 hr
+wall, though nothing indicates a stall (steady step rate, not stuck).
+Revised total-time picture: if output decays like input, tasks 1-3 finish
+output time-stepping around ~32-35 hrs elapsed, then need output
+decomposition (~4-8 hrs by input's own pattern) — landing somewhere around
+~38-43 hrs, inside the 48 hr budget with real but not huge margin. Task 0's
+slower pace is the actual risk to watch, not the other three.
+
+**Update, ~38 hrs in: output section's FDTD run finished, all 4 tasks —
+`run 0 finished at t = 223.8625 (17909 timesteps)`, essentially matching
+input's own `t = 213.275 (17062 timesteps)` (~5% longer).** Confirms the
+"output decays like input" hypothesis directly rather than by extrapolation.
+Task 0, previously the laggard, caught back up enough to finish its own
+output run at the same elapsed time as the other three. All 4 tasks are now
+in output-section mode decomposition (bands 8-11 of 12 as of this check) —
+the last phase before each task's own cache write completes. Comfortably
+inside the 48 hr budget at this point.
+
+**All 4 tasks COMPLETED 2026-08-07** (task 1: 1d16h57m; task 2: 1d16h59m;
+task 3: 1d16h49m; task 0, the persistent laggard: 1d21h13m) — well inside the
+48 hr budget. `mmi_1x4_hybrid.py` run for real (job **11734486**) against the
+now fully-warm cache: **23.5 s**, hit cache for every section of every
+branch.
+
+| output | y (µm) | T | IL (dB) |
+|---|---|---|---|
+| 0 | −3.60 | 0.1541 | −8.12 |
+| 1 | −1.20 | 0.1409 | −8.51 |
+| 2 | +1.20 | 0.1409 | −8.51 |
+| 3 | +3.60 | 0.1541 | −8.12 |
+| **total** | | **0.5898** | **−2.29** |
+
+(at λ=1.550 µm, band center.) Mirror symmetry (0↔3, 1↔2) holds, and total
+throughput is close to EME's own 0.6025 (−2.20 dB) — within ~2%, comparable
+to the ~0.5% engine bias measured on the existing MMIs, though on the higher
+side.
+
+**⚠ But the SPLIT SHAPE disagrees, not just the magnitude — flagged here,
+not yet explained.** EME sends MORE power to the inner ports (1, 2: 0.1598)
+than the outer ports (0, 3: 0.1415). Hybrid does the OPPOSITE: outer ports
+(0, 3: 0.1541) get MORE than inner (1, 2: 0.1409). Both preserve the
+device's own mirror symmetry and both sum to a similar total, but which pair
+of ports is favored flips between engines — a qualitative disagreement, not
+just a quantitative one. Leading unconfirmed hypothesis: `mmi_1x4_hybrid.py`
+uses `N_MODES=12` for the body's self-imaging interference (reduced from the
+EME script's own `N_BODY=20` purely for the prewarm's tractability, per the
+step-6 narrative above) — a coarser modal basis could plausibly redistribute
+power between the near-imaging output positions differently, not just lose
+some to radiation. **Not yet verified.** This is exactly the kind of
+disagreement step 8 check 1 (engine agreement) exists to characterize;
+record it there rather than resolving it here from reasoning alone.
+
+Temporary prewarm files (`_prewarm_mmi_1x4_hybrid.py`,
+`batch/verification/run_prewarm_mmi1x4_hybrid.batch`) deleted 2026-08-07,
+same cleanup EME's own prewarm files got once its real run succeeded.
+
+### Step 7 — wiring ✅ **DONE 2026-08-05**
 
 - `BEEF/examples/Makefile`: add `MMI_1X4_EXAMPLES = mmi_1x4_eme mmi_1x4_hybrid`
   (two, not three — `mmi_1x4_fdtd` was dropped, step 6c), add to `EXAMPLES` and
@@ -1152,6 +1281,34 @@ run for real the same way once that array lands.
   timed out one coupler job at 05:00:26.
 - `beef/__init__.py` docstring + `__all__` for `SIN_300` (step 2).
 
+#### What landed
+
+- `BEEF/examples/Makefile`: `MMI_1X4_EXAMPLES = mmi_1x4_eme mmi_1x4_hybrid`
+  (two, not three — `mmi_1x4_fdtd` dropped per step 6c), added to `EXAMPLES`
+  and `DEVICES`, plus the `mmi_1x4` aggregate target and the two per-script
+  targets (`mmi_1x4_eme`, `mmi_1x4_hybrid`). Verified with
+  `make -n mmi_1x4_eme mmi_1x4_hybrid mmi_1x4` — prints the expected two
+  `srun`/`mpirun` command lines, nothing else.
+- `batch/run_mmi_1x4_examples.batch` — new, copied from
+  `run_mmi_2x2_examples.batch`'s array-of-`make`-targets pattern
+  (`--account=gts-sr108-ece`, `EXAMPLES=(mmi_1x4_eme mmi_1x4_hybrid)` in
+  Makefile index order, per-task `rm -rf .../example_output/mmi_1x4/${NAME}`
+  — safe here since this device has no `*_FROZEN` baseline to protect,
+  unlike the coupler). **Resourced differently from the 1x2/2x2 examples
+  batches on purpose**: those request `-N 2 --ntasks-per-node=24` because
+  their array includes a whole-device FDTD run; this device ships EME +
+  hybrid only, both of which are cache-hit-dependent solves once prewarmed,
+  so it mirrors `run_mmi1x4_eme_real.batch`'s much smaller footprint
+  (`-N 1 --cpus-per-task=8`) instead. `-t 60` is sized off the EME side's
+  real measured warm-cache cost (38 s, job 11678090); the hybrid side's
+  warm-cache cost is still unmeasured (prewarm job array 11696233 was still
+  running at the time this batch script was written) — flagged in the
+  script's own comment to revisit if that task times out.
+- `beef/__init__.py`/`beef/materials/__init__.py` exports for `SIN_300` —
+  already done as part of step 2/4's work (`si3n4` platform singleton and
+  its docstring/`__all__` entries), confirmed present, no further change
+  needed.
+
 ### Step 8 — the four checks
 
 Only now does this device get a normal gap list. From
@@ -1160,7 +1317,7 @@ cheap:
 
 | check | 1×4-specific note |
 |---|---|
-| **2. Mode identity** | Do this **first** — it is mode solves only, no time-stepping, and it is the check that actually failed on the 1×2. A wider nitride body supports more near-degenerate modes than either existing MMI, so this is *more* likely to fail here, not less. |
+| **2. Mode identity** | Do this **first** — it is mode solves only, no time-stepping, and it is the check that actually failed on the 1×2. A wider nitride body supports more near-degenerate modes than either existing MMI, so this is *more* likely to fail here, not less. **✅ MEASURED 2026-08-05, and the prediction landed.** `audit_interface_modes.py` extended for this device (job **11697897**, res=40, N_MODES=12, wl=1.55 — pinned exactly to `mmi_1x4_hybrid.py`'s real config, on the body cross-section at `mm_width=12.0`). One real bug caught while wiring it up: `meow_neff()` hardcoded `mode_solver="meep"`, but this device's own hybrid script deliberately uses `"tidy3d"` for its EME body sub-solver (step 4's MPB-wrong-for-nitride finding) — auditing with meep would have checked a basis the real `HybridSolver` chain never builds. Fixed by threading `cfg.get("mode_solver", "meep")` through (default unchanged, inert for the other three devices). **Result: 12/12 guided; consistent meep-vs-meow n_eff bias of −0.0022 to −0.0024 (bands 0–8), narrowing to −0.0008 (bands 9–11) — comparable in magnitude to the ~0.5% engine bias measured on both existing MMIs. But `ORDER PRESERVED: False`**: the naive nearest-neighbour-in-n_eff correspondence maps BOTH meep bands 0 and 1 onto the same meow band (1) — the top two guided modes are only 0.0036 apart in n_eff, smaller than the systematic engine bias itself, so a 1-D scalar match cannot resolve them. This is exactly the crowding failure `mode_identity.py`'s own docstring names (observed before on the modal multiplexer's bands 8–10) and exactly what this row predicted — the failure just shows up at the very TOP of the spectrum here rather than the middle. **Resolved, ✅ MEASURED 2026-08-06, job 11706990 — a scalar-check artifact, not a real mismatch.** `verify_mmi1x4_mode_overlap.py`'s field-overlap check (same `mode_identity.py` machinery, `cmp_res=20` per its own cost-driven default — deliberately a different resolution than job 11697897's res=40, since a shape-based check does not need matched-resolution agreement the way nearest-neighbour n_eff does) found **`ORDER PRESERVED: True`, worst overlap on the matched diagonal 0.9979** — every one of the 12 guided bands corresponds 1:1 (identity permutation) between meep and meow, with overlap magnitudes 0.990–0.998 across the board, no ambiguous pairing anywhere. The top two modes that fooled the scalar check (0.0036 apart in n_eff, smaller than the ~0.0023 engine bias) are, by mode SHAPE, unambiguously distinct and correctly ordered — exactly the failure `mode_identity.py`'s docstring predicts nearest-neighbour-in-n_eff cannot resolve but a field-overlap match can. **Check 2 passes for this device.** The interface basis `HybridSolver` actually contracts is sound; the earlier `ORDER PRESERVED: False` finding is now understood and closed, not an open risk. |
 | **3. Resolution convergence, per engine** | Sweep FDTD and EME resolution **independently**. Sweep a Δβ-like quantity, not just output power. Expect nitride to need different resolution than silicon — lower contrast means the index step is easier to resolve, but the mode is larger, so the two effects push opposite ways and it must be measured. **⚠ Preliminary attempt made 2026-08-04 (job 11675082), inconclusive, deferred — not the real check.** Swept `res=[15,20,25,30,35,40]` on the body cross-section (mm_width=12.0, 23 guided modes), tracking modes 0/10/19/22 (fundamental through near-cutoff). Result: `n_eff` does NOT converge monotonically anywhere in that range — successive `\|dn_eff\|` bounce around ~1-2e-3 instead of shrinking (e.g. mode 0: 1.6720→1.6715→1.6725→1.6737→1.6726→1.6724), unlike step 4's clean monotonic `sz` convergence. This means `res=40` (what step 6's real example runs currently use) has **not actually been shown to be converged either** — the scatter spans the whole tested range, not just the low end. Leading hypothesis, NOT yet verified: mode-index correspondence swapping between near-degenerate higher-order modes in this densely-multimoded cross-section (23 guided modes in a fairly narrow index range) rather than a genuine solver-convergence failure — this codebase's own `mode_identity.py` field-overlap tools could confirm/refute this directly but have not been run against it. **User decision 2026-08-04: proceed with `res=40` as a working assumption for step 6's real runs (already in flight, jobs 11672738/11672739), run the real resolution-convergence check afterward.** This is a real open risk on the step-6 results until that check lands, not a closed question. |
 | **1. Engine agreement on the shared cross-section** | `verify_item_6_engine_agreement.py` on the MMI body. Both MMIs measured a ~0.5% engine bias (0.9946 / 0.9953); whether that is material-independent is an open and interesting question this device can answer. |
 | **4. Full-device FDTD reference** | `mmi_1x4_fdtd.py` vs `mmi_1x4_hybrid.py` at the identical `mm_length`. Record provenance in the doc — config, solver fingerprint, geometry — per the coupler's item 5 lesson. |
@@ -1242,7 +1399,7 @@ writeup as *more* load-bearing here than on any single-mode existing device).
 | 5 — body design (`mm_length` sweep) | 1 short job | blocks 6 |
 | 6a — geometry plot | none | blocks 6b–d |
 | 6b–d — three scripts | 1 array job (3 tasks) | blocks 8 |
-| 7 — Makefile/batch/exports | none | — |
+| ~~7 — Makefile/batch/exports~~ | none | ✅ **done 2026-08-05** |
 | 8 — four checks + material gate | several jobs | — |
 
 The critical path is **1 → 2 → 3 → 4 → 5 → 6**. Steps 1 and 3 need no cluster

@@ -12,7 +12,7 @@ One file per example device, recording what has to hold before that device's
     mmi_1x4_sin300_validation.md       1×4 MMI on 300 nm Si3N4 — BUILD PLAN, device does not exist yet
     mmi_4x4_90_hybrid_validation.md    4×4 MMI 90° optical hybrid, SOI 220nm/O-band — BUILD PLAN, device does not exist yet; ref: Yasui et al., ACES J. 36(5), 2021
     high_contrast_grating_validation.md HCG reflector, FDTD-only (no EME/hybrid) — corrected: peak R 97.1% vs paper's 98.9%, gap widened after fix; 2/3 caught mistakes now have an automated guard; res=70/80 probe shows resolution residual has NOT settled by res=60
-    high_contrast_grating_fabry_perot_validation.md HCG Fabry-Perot cavity + DC tap — BUILD PLAN, device does not exist yet; platform/geometry pinned; Steps 3-5 wiring+closed-form verified with synthetic data (real from_transfer_matrix bug caught+fixed); Step 2 (real DC coupling) running
+    high_contrast_grating_fabry_perot_validation.md HCG Fabry-Perot cavity + DC tap — BUILD PLAN; real Circuit assembly + closed form agree to fp precision; genuine but under-sampled resonance at 1.570um; dense linewidth sweep running
     modal_multiplexer_validation.md    modal multiplexer — resumed 2026-08-04, gap list against the four checks
     archive/                           closed items, kept whole
     resolved/                          whole docs sufficiently addressed (open to-dos may remain)
@@ -136,30 +136,73 @@ follow-up measurement (exciting the real S-bend with mode 1, a real
 `res=25` FDTD run) found **<0.01% of the launched power reaches the
 2nd-order-mode pair**, so the user's call was to treat the whole device as
 single-mode (`N_MODES=2`) — a measured simplification, not an assumed one.
-Step 1 (cavity length/FSR) is now pinned — 20 µm/arm, ~9.5 nm FSR
-estimated from a measured group index — provisionally, per the user's own
-framing: revisit once Step 4 actually simulates something and the real
-resonance spacing can be judged directly. **Step 2 (re-deriving the DC for
-`SOI_160` at `N_MODES=2`) is running** (job 11691379, `FDTD_RESOLUTION=40`/
-`EME_RESOLUTION=80` assumed from the `SOI_220` script per explicit user
-instruction, not re-measured here).
+Step 1 (cavity length/FSR) is pinned — 20 µm/arm, ~9.5 nm FSR estimated
+from a measured group index — provisionally, per the user's own framing.
+**Step 2 (re-deriving the DC for `SOI_160` at `N_MODES=2`) landed for
+real 2026-08-07, after timing out twice.** Job 11691379 (`-t 300`)
+TIMEOUT — 5 of 6 expensive FDTD sub-solves had already cached cleanly.
+Resubmit job 11706987 (`-t 240`) correctly cache-hit all 5 of those and
+ALSO timed out anyway, apparently inside two nominally "seconds, not
+minutes" `section_mode_neff()` calls whose real cost was never fully
+diagnosed. Shown both timeouts, the user's call was to resubmit with a
+much larger margin — job **11716260** (`-t 720`) **COMPLETED in 4h56m
+real walltime**: `T_through=0.8989`, `T_cross=0.0979` at λ=1.55 µm (≈10%
+coupling ratio), passive, body-calibration confirmed doing real work
+(MPB vs. FDTD-measured Δn_eff differ ~12%, same class of disagreement the
+`SOI_220` script's own docstring documents).
 
-**While that job runs, Steps 3-5's design landed and is verified with
-synthetic data** (`tests/test_fabry_perot_network_crosscheck.py`, 3 tests)
-— including a real bug caught before any real device numbers were
-involved: `beef.network.convert.from_smatrix()` cannot represent a 1-port
-self-reflecting mirror (the HCG, in network terms) by its own documented
-design, so its block needs direct construction instead — and separately,
-`beef.network.convert.from_transfer_matrix()` (originally planned for the
-connecting waveguide) is one-directional BY DESIGN and silently zeroes out
-a mirror's reflection when connected to it (verified: reduces to exactly
-`0+0j` where physics says `r*p`) — fixed with a direct, genuinely
-bidirectional waveguide block. The full 5-block `Circuit` wiring this
-device needs, and a hand-derived Fabry-Pérot-with-DC-tap closed form, are
-now cross-checked against each other and against a brute-force 4-port
-solve, all to floating-point precision. Full suite: 628 passed, 19
-skipped. Real device numbers are not substituted into any of this yet —
-only the network-composition CODE is verified, not the physical spectrum.
+**Steps 3-5 also landed with real data.** A real bug was caught before
+any real numbers were involved: `beef.network.convert.from_transfer_matrix()`
+(planned for the connecting waveguide) is one-directional BY DESIGN and
+silently zeroes a mirror's reflection when connected to it — fixed with a
+direct bidirectional block. A hand-derived Fabry-Pérot-with-DC-tap closed
+form was verified against a brute-force 4-port solve and the real 5-block
+`Circuit` wiring, both to floating-point precision
+(`tests/test_fabry_perot_network_crosscheck.py`, 3 tests; full suite: 628
+passed, 19 skipped). **Fed entirely real numbers (HCG mirror + real
+waveguide `n_eff` + real DC coupling), that closed form produces the
+first real predicted cavity spectrum — and finds a genuine resonance at
+λ=1.570 µm** (transmission drops to 0.7395 from an elsewhere-flat
+~0.97–0.99; reflection spikes to 0.1710 from ~0.001–0.02; passive
+everywhere). **Read this honestly, not triumphantly: the 11-point/10 nm
+grid is comparable to the ~9.5 nm estimated FSR, so the resonance is
+almost certainly under-sampled** — this establishes the model produces
+real resonant behavior, not that the resonance is characterized. A denser
+linewidth sweep (job 11726827, 601 points at 0.05 nm spacing, sized from
+this run's own measured finesse ~23 / FWHM ~0.41 nm) is running now.
+
+**Step 4 (the `Circuit` assembly) is now also done with entirely real
+data, not just synthetic-verified** — new permanent script
+`examples/high_contrast_grating_fabry_perot/python/
+hcg_fabry_perot_hybrid.py` loads the HCG's and DC's real production
+`SMatrix` files directly, runs a fresh ~5 min real waveguide mode-solve,
+and assembles all five real blocks through the actual `Circuit` wiring.
+Along the way, the DC's own port-mapping question was resolved by
+checking rather than assuming: the `isolated`-excited branch (`k'`/`t'`,
+never separately saved by `directional_coupler_soi160_hybrid.py`) was
+reconstructed from cached solver pieces and found to match the saved
+`in`-excited branch (`t`/`k`) to machine precision — confirming the
+standard symmetric-coupler equality holds for this real device rather
+than assuming it. **Result: the real `Circuit` assembly matches Step 5's
+real closed-form spectrum to floating-point precision**
+(`max|ΔR|=5.6e-17`, `max|ΔT|=4.4e-16`, asserted in the script itself) —
+two independent code paths, same real data, identical answer.
+
+**While the linewidth sweep ran: A4/Step 6 (the full-device FDTD control
+run) picked up a direct precedent from `ring_resonator_validation.md`,
+not just a cost estimate.** That doc didn't just find its own full-device
+FDTD check slow — it found the reference itself reported T>1 in a passive
+device (up to +8.4%) and a comb that shifted 18% of an FSR between two
+resolutions, and retired the check outright, with a stated mechanism:
+round-trip phase error is amplified ~F× by finesse, and FDTD's staircased
+boundaries ARE a round-trip path-length error, so the reference is subject
+to exactly what it's supposed to be checking. This device's own measured
+finesse (F≈23) is ~5× more tolerant than the ring's (F≈120), but its HCG
+mirrors are gratings — many staircased tooth-edges per round trip, plausibly
+more discretization surface per bounce than the ring's smooth bends. Net
+direction is unmeasured — flagged honestly as argued-by-analogy, with a
+recommendation to pilot cheaply (2-D, checking only for the same two tells)
+before ever committing to a 3-D full-device attempt.
 
 **`mmi_4x4_90_hybrid_validation.md` (2026-08-05) is a build plan for a new
 device — a 4×4 MMI optical 90° hybrid on 220 nm SOI at O-band, with real
@@ -530,7 +573,7 @@ audit).
 | directional coupler | ✅ **closed** — β-calibrated, L₅₀ 0.11% off reference | ✅ identity, worst 0.0023 | done, engines split | done, with provenance |
 | 1×2 MMI | ✅ **CLOSED 2026-08-01** — first run ever (11608875 `[0-3]` + merge 11609686), dispersive, cache-cold. Mean Δβ_FDTD/Δβ_EME = **0.9946** (0.54% bias, monotone over 10 of 11 points, no sign change), worst fit residual **3.01e-06 rad**, worst off-diagonal **1.12e-05**. Lands within 0.07 points of the 2×2's 0.9953 in a different band — **an engine-level bias, not a device artifact.** Res-40 caveat applies (P3) | ✅ **fixed** — `N_MODES` 12→8, identity, worst 0.0003 | measured, worst of the three | ✅ **RE-MEASURED DISPERSIVE 2026-08-01** (11609215 `[1-2]` + 11609687) — hybrid **10.18%** under full-device FDTD, uniform negative sign. Frozen-era was 9.11% (11585850, preserved): **the gap got marginally worse under the more correct material model**, while the mean offset barely moved (−0.025304 → −0.025413), so the residual is material-model-independent. Calibration attempt FAILED (11589770); root cause **fixed 2026-08-01** — a 2π turn-count bug in `beta_from_phases`, **not** the π sign flip this cell previously asserted (that reading is withdrawn — see `resolved/mmi_1x2_validation.md` gap 5 for the degeneracy that made it look confirmed). Calibrated rerun ✅ **succeeded 2026-08-01** (11608690) — **7.30%** (frozen-era, still owed dispersive), only ~20% better than uncalibrated, so the residual here is structural rather than calibratable |
 | 2×2 MMI | ✅ **closed 2026-08-01** — Δβ_FDTD/Δβ_EME = **0.9953** (0.47%, monotone across band), T diagonal to 1.2e-05, fit residual 4e-06 rad; **21× tighter than the coupler's ~10%, so `calibrate_body_neff` is NOT indicated here** (11596845 `[0-3]` + 11596851, gap 4). Measured at res 40, which gap 2 says is not converged in absolute n_eff — both engines read at the same mesh, so the ratio partially cancels it | ✅ identity, worst 0.0007 — **re-confirmed 2026-07-31 at `N_MODES` 14 with both guards live, neither fired** (11588569, gap 6) | ✅ **closed 2026-07-31** — absolute n_eff still moves at res 100, but Δβ_01 (the quantity the self-imaging length actually depends on) converges to 0.05% by res 120 (11590785, gap 2) | ✅ **RE-MEASURED DISPERSIVE 2026-08-01** (11609211_1 + 11609680 + 11609681) — hybrid **0.76%** / 0.59% under full-device FDTD, **sign still FLIPS across band, in the same grid interval**. Frozen-era was 0.82%/0.62% (11585849, preserved). The material change moved the FDTD reference by at most 0.00033 and the hybrid by 0.00011 — **P4's candidate mechanism is REFUTED**; the residual is structural |
-| modal multiplexer | ✅ **CLOSED 2026-08-04** — job 11670540 `[0-3]` + merge 11678100. Mean ratio Δβ_FDTD/Δβ_EME = **0.9958** (0.42% bias, monotone across the O-band), worst off-diagonal/fit residual both 0.0000. Within 0.05–0.12 points of both MMIs' own bias (0.9946/0.9953) — a third device in the same engine-level band. `calibrate_body_neff` NOT indicated | run, failed, root cause fixed — **one pair-member disagreement open**, now confirmed persisting to res 80 too (gap 2) | ✅ **N_MODES=14 now confidently measured, resolution-independent** (job 11673526) — clean 14/16 guided at EVERY meep resolution 20–100, a cleaner answer than the pre-fix 13/13/13/14. But **RESOLUTION does NOT plateau by 100**: 60→80 looked converged (14/14 agree) — misleadingly, since 80→100 breaks completely (0/14 agree, shifts 2–3× larger than the 60→80 step). No resolution 20–100 is demonstrably converged in absolute n_eff | ✅ **library gap FIXED** (`notes.md` Geometry item 8 part 2) AND ✅ **smoke test COMPLETED** (job 11673498, `MUX_FDTD_RES=10`) — first-ever successful run of this script. ⏳ **Real res=20 run: 11688645 TIMED OUT at 4h** (a real, unconfirmed resolution-dependent decay-time finding, not just expected res⁴ cost — see gap 3), resubmitted at 24h as **11693107**, running |
+| modal multiplexer | ✅ **CLOSED 2026-08-04** — job 11670540 `[0-3]` + merge 11678100. Mean ratio Δβ_FDTD/Δβ_EME = **0.9958** (0.42% bias, monotone across the O-band), worst off-diagonal/fit residual both 0.0000. Within 0.05–0.12 points of both MMIs' own bias (0.9946/0.9953) — a third device in the same engine-level band. `calibrate_body_neff` NOT indicated | run, failed, root cause fixed — **one pair-member disagreement open**, now confirmed persisting to res 80 too (gap 2) | ✅ **N_MODES=14 now confidently measured, resolution-independent** (job 11673526) — clean 14/16 guided at EVERY meep resolution 20–100, a cleaner answer than the pre-fix 13/13/13/14. But **RESOLUTION does NOT plateau by 100**: 60→80 looked converged (14/14 agree) — misleadingly, since 80→100 breaks completely (0/14 agree, shifts 2–3× larger than the 60→80 step). No resolution 20–100 is demonstrably converged in absolute n_eff | ✅ **library gap FIXED** (`notes.md` Geometry item 8 part 2) AND ✅ **smoke test COMPLETED** (job 11673498, `MUX_FDTD_RES=10`) — first-ever successful run of this script. ⏳ **Real res=20 run: two attempts timed out/killed** (11688645 at 4h, 11693107 killed at 18h53m — both stuck in TE0; an archived TO campaign for this device at higher resolution did far more work in ~70-80min/iteration, see gap 3). Rescaled 1→4 nodes (96 ranks) at user's direction, resubmitted as **11707932**, running |
 | ring resonator | not applicable | not applicable | shared knob | **no FDTD script** |
 
 ## Parity backlog — what the MMIs still lack versus the coupler

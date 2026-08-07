@@ -1,0 +1,253 @@
+"""Tutorial: 4x4 MMI 90-degree optical hybrid -- full single-domain FDTD
+reference simulation (BEEF method).
+
+validation_markdown/mmi_4x4_90_hybrid_validation.md Step 6b (check 4's own
+full-device reference). Same device as mmi_4x4_90hybrid_hybrid.py/
+mmi_4x4_90hybrid_eme.py -- see mmi_4x4_90hybrid_hybrid.py's own module
+docstring for the paper reference and first-pass-design caveats (N_MODES=8,
+unmeasured taper placeholders, mm_length=80.1896 the best point in a Step 3
+sweep, not a converged optimum -- A9/A11 in the validation doc).
+
+Method: single-domain FDTD via meep, the whole ~84 um device in one box --
+the most physically complete of the three simulation methods (unlike the
+EME script's per-port-pair decoupling approximation, or even the hybrid
+script's own section-by-section cascade, this one has every port's real
+geometry present simultaneously in a single run).
+
+A real library gap, found and fixed here, not worked around:
+FDTDSolver.solve()'s own `port` parameter only ever accepted the strings
+"top"/"bot" (geometry.input_ys' LAST or FIRST entry) -- fine for every
+existing 2-port MMI/coupler example in this repo, but this device needs
+ports 1 AND 3 (paper's own I={1,3}, finding A4), and port 3 (0-indexed 2 of
+4) is an INTERIOR port neither "top" nor "bot" can reach at all. Rather
+than restrict this script to only testing port 1 (which would silently
+skip half of what check 4 needs to verify -- including A8's own phase-
+consistency requirement, which specifically needs BOTH excitations),
+`FDTDSolver.solve()` gained an explicit `input_idx` parameter that
+overrides the port-string selection for any 0-based index into
+`geometry.input_ys()`. Verified: an incidental related bug fixed at the
+same time -- previously, when a caller didn't pass `input_idx` via
+**kwargs (every existing example script, including this repo's own
+mmi_2x2_fdtd.py), the source APERTURE width was computed for
+geometry.source_aperture_at()'s own DEFAULT input_idx=0 regardless of
+which port `port="top"/"bot"` actually excited -- invisible for the 2x2
+MMI specifically only because its aperture is symmetric between its two
+ports, but a real latent mismatch for any asymmetric device. Now always
+resolved and passed explicitly. Full fast suite re-run clean (639 passed,
+19 skipped) after the change; not independently re-verified with a real
+meep run on an existing device (the symmetric-aperture argument above is
+what makes that safe to defer, not a substitute for eventually doing it).
+
+Output monitors: one per output port, width=waveguide_offset=1.5 um
+(touching neighbor midpoints exactly, matching the same offset spacing
+that keeps ports from overlapping in the first place -- Step 2).
+
+Cost, flagged up front per the validation doc's own Step 6b entry: this is
+the longest, most complex single-domain FDTD box built for this device so
+far (~84 um long, 4 ports x 2 faces). RESOLUTION/DECAY_TOL/N_WL are env-var
+overridable (MMI4X4_FDTD_RES / MMI4X4_FDTD_DECAY_TOL / MMI4X4_FDTD_NWL) for
+a smoke pass -- run one BEFORE the real 2-port sweep, per this repo's own
+two-step discipline for expensive, never-run scripts.
+
+Run:
+    python /path/to/examples/mmi_4x4_90hybrid/python/mmi_4x4_90hybrid_fdtd.py
+"""
+import os
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+from beef import MMI, FDTDSolver, SMatrix, SOI_220, plot_fdtd_geometry
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_4x4_90hybrid", "mmi_4x4_90hybrid_fdtd"))
+os.makedirs(output_dir, exist_ok=True)
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
+
+# ---------------------------------------------------------------------------
+# Global simulation parameters -- env-var overridable for a smoke pass.
+# ---------------------------------------------------------------------------
+RESOLUTION = float(os.environ.get("MMI4X4_FDTD_RES", 40.0))
+DECAY_TOL = float(os.environ.get("MMI4X4_FDTD_DECAY_TOL", 1e-11))
+WL_MIN = 1.26
+WL_MAX = 1.36
+N_WL = int(os.environ.get("MMI4X4_FDTD_NWL", 3))   # matches the paper's own Eq. 12 convention
+
+# ---------------------------------------------------------------------------
+# 1. Geometry -- identical to the hybrid/EME scripts' settled parameters.
+# ---------------------------------------------------------------------------
+WAVEGUIDE_WIDTH = 0.35
+MM_WIDTH = 6.0
+WAVEGUIDE_OFFSET = MM_WIDTH / 4.0
+TAPER_WIDTH = 0.8
+TAPER_LENGTH = 1.0
+L_PI = 108.9195
+DELTA_L = -1.50
+MM_LENGTH = 0.75 * L_PI + DELTA_L   # = 80.1896
+
+mmi = MMI(
+    n_inputs=4, n_outputs=4,
+    mm_length=MM_LENGTH, mm_width=MM_WIDTH,
+    waveguide_width=WAVEGUIDE_WIDTH, taper_length=TAPER_LENGTH, taper_width=TAPER_WIDTH,
+    waveguide_offset=WAVEGUIDE_OFFSET, waveguide_height=0.22,
+    use_neighbor_aperture=True,
+)
+print(f"MMI total length: {mmi.total_length:.4f} µm (mm_length={mmi.mm_length:.4f})")
+print(f"Input ports at y = {mmi.input_ys} µm; outputs at y = {mmi.output_ys} µm")
+
+# ---------------------------------------------------------------------------
+# 2. FDTD solver -- one output monitor per port, width=waveguide_offset so
+#    adjacent monitors touch at the midpoint without overlapping.
+# ---------------------------------------------------------------------------
+solver = FDTDSolver(
+    res=RESOLUTION,
+    sim_width=MM_WIDTH + 3.0,
+    sim_height=2.0,             # Step 1b's converged sz
+    dpml=0.5,
+    source_margin=0.0,
+    monitor_margin=0.25,
+    three_d=True,
+    num_input_modes=1,
+    num_output_modes=1,
+    output_monitor_centers=list(mmi.output_ys),
+    output_monitor_widths=[WAVEGUIDE_OFFSET] * 4,
+    material_stack=SOI_220,
+    decay_tol=DECAY_TOL,
+)
+
+plot_fdtd_geometry(
+    mmi, solver=solver,
+    title="4×4 MMI 90° hybrid — Full-Device FDTD — Top-down Geometry",
+    output_path=os.path.join(output_dir, "geometry.png"),
+)
+print(f"Geometry plot saved → {output_dir}/geometry.png")
+
+# ---------------------------------------------------------------------------
+# 3. Sweep -- 2 driven inputs (paper's ports 1/3, A4). Port 1 (input_ys[0],
+#    the lowest-y entry) is reachable via the existing port="bot" string;
+#    port 3 (input_ys[2], an INTERIOR port of 4) needs the new input_idx
+#    parameter -- "top"/"bot" cannot reach it at all.
+# ---------------------------------------------------------------------------
+wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
+PORT_NAMES = ["out5", "out6", "out7", "out8"]
+
+print(f"\nSweeping {len(wavelengths)} wavelengths: {wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm")
+print("(single broadband pulse per input port; DFT monitors extract all wavelengths in one run)")
+
+smat_in1 = solver.solve(mmi, wavelengths, port="bot", input_mode=1, save_dir=save_dir)
+smat_in1.check_passive()
+print("  input port 1 (port='bot', input_ys[0]) solved")
+
+smat_in3 = solver.solve(mmi, wavelengths, input_idx=2, input_mode=1, save_dir=save_dir)
+smat_in3.check_passive()
+print("  input port 3 (input_idx=2, an interior port) solved")
+
+# Relabel FDTDSolver's own "out_0".."out_3" (order of output_monitor_centers,
+# which is mmi.output_ys, i.e. paper ports 5-8 in order) to this device's
+# PORT_NAMES for consistency with the hybrid/EME scripts' own SMatrix keys.
+smat = {0: SMatrix(wavelengths=wavelengths), 2: SMatrix(wavelengths=wavelengths)}
+for j in range(4):
+    smat[0].set(smat_in1.coeff(port=f"out_{j}", in_mode=1, out_mode=1), port=PORT_NAMES[j])
+    smat[2].set(smat_in3.coeff(port=f"out_{j}", in_mode=1, out_mode=1), port=PORT_NAMES[j])
+
+# ---------------------------------------------------------------------------
+# 4. Metrics (paper Eqs. 10-15), same SMatrix methods as the hybrid/EME
+#    scripts. A11's phase-sign fix applies identically here.
+# ---------------------------------------------------------------------------
+TARGET_DEG = {0: -45.0, 1: 225.0, 2: 45.0, 3: 135.0}
+DRIVEN = [0, 2]
+
+imbalance = {i: smat[i].imbalance_db(PORT_NAMES) for i in DRIVEN}
+excess_loss = {i: smat[i].excess_loss_db(PORT_NAMES) for i in DRIVEN}
+cmrr_I = {i: smat[i].cmrr_db("out5", "out8") for i in DRIVEN}
+cmrr_Q = {i: smat[i].cmrr_db("out6", "out7") for i in DRIVEN}
+
+phi = {j: smat[2].cross_excitation_phase_diff_deg(smat[0], port=PORT_NAMES[j]) for j in range(4)}
+dphi = {}
+for j in [1, 2, 3]:
+    raw = phi[j] - phi[0] - (TARGET_DEG[j] - TARGET_DEG[0])
+    dphi[j] = ((raw + 180.0) % 360.0) - 180.0
+
+print(f"\nResults at mm_length={MM_LENGTH:.4f} µm (full-device FDTD reference):")
+for i, port_label in zip(DRIVEN, ["1", "3"]):
+    print(f"  Input port {port_label}: imbalance={imbalance[i]} dB  "
+          f"excess_loss={excess_loss[i]} dB  CMRR_I={cmrr_I[i]} dBe  CMRR_Q={cmrr_Q[i]} dBe")
+print(f"  Phase error Δφ_6/7/8 = {dphi[1]} / {dphi[2]} / {dphi[3]} deg")
+
+# ---------------------------------------------------------------------------
+# 5. Save.
+# ---------------------------------------------------------------------------
+smat[0].save(os.path.join(output_dir, "smatrix_fdtd_port1.pkl"))
+smat[2].save(os.path.join(output_dir, "smatrix_fdtd_port3.pkl"))
+print(f"\nSMatrix saved → {output_dir}/smatrix_fdtd_port{{1,3}}.pkl")
+
+np.savez(os.path.join(output_dir, "fdtd_results.npz"),
+         wavelengths=wavelengths, mm_length=MM_LENGTH,
+         imbalance_in1=imbalance[0], imbalance_in3=imbalance[2],
+         excess_loss_in1=excess_loss[0], excess_loss_in3=excess_loss[2],
+         cmrr_I_in1=cmrr_I[0], cmrr_Q_in1=cmrr_Q[0],
+         cmrr_I_in3=cmrr_I[2], cmrr_Q_in3=cmrr_Q[2],
+         dphi_6=dphi[1], dphi_7=dphi[2], dphi_8=dphi[3],
+         phi_5=phi[0], phi_6=phi[1], phi_7=phi[2], phi_8=phi[3])
+print(f"Results saved → {output_dir}/fdtd_results.npz")
+
+# ---------------------------------------------------------------------------
+# 6. Plot -- same 2x2 layout as the hybrid/EME scripts' own results plots
+#    (CMRR, phase error, excess loss, quadrature phase), so all three
+#    simulation methods' results are directly, visually comparable.
+# ---------------------------------------------------------------------------
+WRAPPED_TARGET_DEG = {j: ((v + 180.0) % 360.0) - 180.0 for j, v in TARGET_DEG.items()}
+
+fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+
+ax = axes[0, 0]
+ax.plot(wavelengths, cmrr_I[0], "o-", label="CMRR_I (port 1)", color="steelblue")
+ax.plot(wavelengths, cmrr_Q[0], "o-", label="CMRR_Q (port 1)", color="darkorange")
+ax.plot(wavelengths, cmrr_I[2], "s--", label="CMRR_I (port 3)", color="steelblue", alpha=0.5)
+ax.plot(wavelengths, cmrr_Q[2], "s--", label="CMRR_Q (port 3)", color="darkorange", alpha=0.5)
+ax.axhline(20.0, color="red", linestyle=":", lw=1.0, label="cited requirement (20 dBe)")
+ax.set_xlabel("Wavelength (µm)")
+ax.set_ylabel("CMRR (dBe)")
+ax.set_title("CMRR vs Wavelength")
+ax.legend(fontsize=7)
+ax.grid(True)
+
+ax = axes[0, 1]
+ax.plot(wavelengths, dphi[1], "o-", label="Δφ_6", color="steelblue")
+ax.plot(wavelengths, dphi[2], "o-", label="Δφ_7", color="darkorange")
+ax.plot(wavelengths, dphi[3], "o-", label="Δφ_8", color="seagreen")
+ax.axhline(5.0, color="red", linestyle=":", lw=1.0, label="cited requirement (5°)")
+ax.axhline(-5.0, color="red", linestyle=":", lw=1.0)
+ax.set_xlabel("Wavelength (µm)")
+ax.set_ylabel("Phase error Δφ_j (deg)")
+ax.set_title("Phase Error vs Wavelength")
+ax.legend(fontsize=7)
+ax.grid(True)
+
+ax = axes[1, 0]
+ax.plot(wavelengths, excess_loss[0], "o-", label="Input port 1", color="steelblue")
+ax.plot(wavelengths, excess_loss[2], "s--", label="Input port 3", color="darkorange")
+ax.set_xlabel("Wavelength (µm)")
+ax.set_ylabel("Excess loss (dB)")
+ax.set_title("Excess Loss vs Wavelength (Eq. 11)")
+ax.legend(fontsize=7)
+ax.grid(True)
+
+ax = axes[1, 1]
+_phi_labels = ["φ_5 (ref)", "φ_6", "φ_7", "φ_8"]
+_phi_colors = ["gray", "steelblue", "darkorange", "seagreen"]
+for j in range(4):
+    ax.plot(wavelengths, phi[j], "o-", label=_phi_labels[j], color=_phi_colors[j])
+    ax.axhline(WRAPPED_TARGET_DEG[j], color=_phi_colors[j], linestyle=":", lw=1.0, alpha=0.6)
+ax.set_xlabel("Wavelength (µm)")
+ax.set_ylabel("Quadrature phase φ_j (deg)")
+ax.set_title("Quadrature Phase vs Wavelength\n(dotted = paper's target angle, Eq. 15)")
+ax.legend(fontsize=7)
+ax.grid(True)
+
+plt.suptitle(f"4×4 MMI 90° hybrid — full-device FDTD — mm_length={MM_LENGTH:.2f} µm", fontsize=11)
+plt.tight_layout()
+fig.savefig(os.path.join(output_dir, "fdtd_results.png"), dpi=300)
+plt.close("all")
+print(f"Results plot saved → {output_dir}/fdtd_results.png")

@@ -65,7 +65,7 @@ import meow as mw
 from beef import (
     MMI, MMIPort, CompoundGeometry, WaveguideRun,
     DirectionalCoupler, EMESolver, FDTDSolver,
-    SOI_160, SOI_220, extrude_polygons,
+    SOI_160, SOI_220, SIN_300, extrude_polygons,
     best_correspondence, field_overlap_matrix, mesh_cell_centers, stack_meow_mode_fields,
 )
 
@@ -147,10 +147,38 @@ def _mmi_2x2():
     )
 
 
+def _mmi_1x4():
+    # Pinned to examples/mmi_1x4/python/mmi_1x4_hybrid.py exactly (SIN_300,
+    # C-band, N_MODES=12 after the 20->12 prewarm-timeout reduction --
+    # validation_markdown/mmi_1x4_sin300_validation.md step 6d).
+    mmi = MMI(
+        n_inputs=1, n_outputs=4,
+        mm_length=206.0, mm_width=12.0, waveguide_width=1.1,
+        taper_length=5.0, taper_width=2.2, waveguide_offset=2.4,
+        waveguide_height=0.30, use_neighbor_aperture=True,
+    )
+    # Body half-length is 103 um; [-1, 1] sits well clear of either taper
+    # seam, same "short cut inside the uniform body" convention the other
+    # three devices use above.
+    return dict(
+        geometry=mmi, n_modes=12, wl=1.55, stack=SIN_300,
+        section=(-1.0, 1.0), sim_width=20.0, sim_height=SIN_300.sz, dpml=0.5, res=40.0,
+        # tidy3d, NOT meep -- the one thing that differs from every other
+        # device's audit config. mmi_1x4_hybrid.py's own body EME sub-solver
+        # uses mode_solver="tidy3d" (step 4's compute_modes_meep-silently-
+        # wrong-for-weakly-confined-nitride finding), so auditing this device
+        # with meep/MPB (the other three devices' real configuration) would
+        # check a basis the real HybridSolver chain never actually builds.
+        mode_solver="tidy3d",
+        note="12.0 x 0.30 um SiN slab body, mm_length 206 um, C-band, tidy3d EME backend",
+    )
+
+
 DEVICES = {
     "directional_coupler": _dc,
     "mmi_1x2": _mmi_1x2,
     "mmi_2x2": _mmi_2x2,
+    "mmi_1x4": _mmi_1x4,
 }
 
 
@@ -280,10 +308,19 @@ def _atomic_write(path, text):
 
 # ---------------------------------------------------------------------------
 def meow_neff(cfg, res, n_modes):
+    # mode_solver defaults to "meep" -- matched to what every existing
+    # device's own hybrid script actually configures its body EME sub-solver
+    # with (mmi_1x2_hybrid.py/mmi_2x2_hybrid.py: "matches FDTDSolver's own
+    # eigenmode basis"). mmi_1x4 is the one exception (cfg sets "tidy3d") --
+    # its own hybrid script deliberately does NOT use meep/MPB here (step 4's
+    # compute_modes_meep-silently-wrong-for-weakly-confined-nitride finding),
+    # so auditing it with the wrong backend would check a configuration the
+    # real device never runs, not this device's actual basis.
     eme = EMESolver(
         num_modes=[n_modes], num_cells=[1], lengths=[1.0],
         oxide_width=cfg["sim_width"], oxide_height=cfg["sim_height"],
-        res=float(res), material_stack=cfg["stack"], mode_solver="meep",
+        res=float(res), material_stack=cfg["stack"],
+        mode_solver=cfg.get("mode_solver", "meep"),
     )
     x0, x1 = cfg["section"]
     L = x1 - x0

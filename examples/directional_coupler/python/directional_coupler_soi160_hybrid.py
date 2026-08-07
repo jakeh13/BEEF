@@ -59,8 +59,33 @@ it and calls it non-optional (dc_validation.md item 6): meep's own
 time-stepped phase and MPB's mode index disagree by a few percent on Δβ,
 and Δβ is what sets the coupling ratio.
 
+WAVELENGTH WINDOW (added 2026-08-07, high_contrast_grating_fabry_perot_
+validation.md step 5's follow-up): the first run of this script (job
+11716260, N_WL=11 across the full 1.50-1.60 um C-band) fed into the
+Fabry-Perot closed-form check and turned up a real resonance near
+1.570 um -- but 11 points at 10 nm spacing cannot resolve it. A finesse
+estimate from that SAME real run's own numbers (|rho|^2=0.9714,
+|t|^2=0.8989, round-trip power |rho^2 t^2|=0.8732) gives
+F = pi*sqrt(0.8732)/(1-0.8732) ~ 23, and with Step 1's ~9.5 nm FSR
+estimate that puts FWHM ~ 0.41 nm -- some 24x narrower than the original
+10 nm grid, not just "a bit coarse." DC160_WL_MIN/DC160_WL_MAX/DC160_N_WL
+override WL_MIN/WL_MAX/N_WL below (unset keeps the original full-band
+production behavior exactly) so a narrow, dense window can bracket the
+found resonance without re-paying the cost of densifying the whole
+100 nm band: the same single broadband FDTD pulse captures every
+requested wavelength's DFT coefficient "for free" regardless of how many
+are requested, so this is not N_WL separate solves, but a real,
+independent SLURM run all the same (a different wavelength array is a
+different cache fingerprint, so nothing from job 11716260's cache
+carries over except the geometry- and length-only sub-solves that don't
+depend on wavelengths, e.g. section_mode_beta()'s calibration-length
+FDTD runs, still valid unchanged). A non-default window redirects
+output_dir to its own subfolder (see below) so it can never overwrite the
+original full-band production result job 11716260 already produced.
+
 Run:
     python /path/to/examples/directional_coupler/python/directional_coupler_soi160_hybrid.py
+    DC160_WL_MIN=1.555 DC160_WL_MAX=1.585 DC160_N_WL=601 python .../directional_coupler_soi160_hybrid.py
 """
 
 import os
@@ -75,7 +100,6 @@ from beef import (
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "directional_coupler", "directional_coupler_soi160_hybrid"))
-os.makedirs(output_dir, exist_ok=True)
 save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
@@ -90,6 +114,29 @@ EME_RESOLUTION = 80.0    # pixels/um -- ASSUMED, not re-measured here
 WL_MIN = 1.50       # C-band, matches the HCG mirror's own band
 WL_MAX = 1.60
 N_WL = 11
+
+# DC160_WL_MIN/DC160_WL_MAX/DC160_N_WL override the full-band production
+# window above -- see module docstring's "WAVELENGTH WINDOW" section. Unset
+# (the default) reproduces job 11716260's original full-band behavior
+# exactly, output_dir unchanged. Any override redirects output_dir to its
+# own subfolder -- "the guard is the env var, not the value" (same pattern
+# ring_resonator_hybrid_cascaded.py's RING_FDTD_RES/RING_THREE_D use), so a
+# dense zoom run can never silently overwrite the full-band production
+# smatrix_hybrid.pkl this script already produced once.
+_win_env = (os.environ.get("DC160_WL_MIN"), os.environ.get("DC160_WL_MAX"), os.environ.get("DC160_N_WL"))
+if any(v is not None for v in _win_env):
+    if not all(v is not None for v in _win_env):
+        raise SystemExit(
+            "DC160_WL_MIN/DC160_WL_MAX/DC160_N_WL must be set together (or "
+            "not at all) -- got a partial override, which would silently "
+            "mix a custom window with the default WL_MIN/WL_MAX/N_WL above."
+        )
+    WL_MIN, WL_MAX, N_WL = float(_win_env[0]), float(_win_env[1]), int(_win_env[2])
+    output_dir = os.path.join(output_dir, "windows", f"{WL_MIN:.4f}-{WL_MAX:.4f}_n{N_WL}")
+    print(f"DC160 wavelength window override: WL_MIN={WL_MIN} WL_MAX={WL_MAX} "
+          f"N_WL={N_WL} -> output_dir={output_dir}")
+
+os.makedirs(output_dir, exist_ok=True)
 
 # The real fabricated coupler's own straight coupled-pair length -- FIXED,
 # not swept for a 50:50 split. See module docstring point 1.

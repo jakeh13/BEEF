@@ -15,6 +15,11 @@ endif
 # SLURM_ARRAY_TASK_ID selects a name positionally).
 MMI_1X2_EXAMPLES = mmi_1x2_eme mmi_1x2_fdtd mmi_1x2_hybrid
 MMI_2X2_EXAMPLES = mmi_2x2_eme mmi_2x2_fdtd mmi_2x2_hybrid
+# mmi_1x4_fdtd is deliberately NOT here -- mm_length=206 (216 with tapers)
+# makes single-domain whole-device FDTD impractical; this device ships as
+# EME + hybrid only (see validation_markdown/mmi_1x4_sin300_validation.md
+# step 6c).
+MMI_1X4_EXAMPLES = mmi_1x4_eme mmi_1x4_hybrid
 DIRECTIONAL_COUPLER_EXAMPLES = directional_coupler_hybrid directional_coupler_mode directional_coupler_fdtd
 MODAL_MULTIPLEXER_EXAMPLES = modal_multiplexer_hybrid
 # modal_multiplexer_fdtd (gap 3's full-device reference, added 2026-07-31) is
@@ -25,8 +30,8 @@ MODAL_MULTIPLEXER_EXAMPLES = modal_multiplexer_hybrid
 # live array.
 RING_RESONATOR_EXAMPLES = ring_resonator_hybrid ring_resonator_hybrid_cascaded
 
-EXAMPLES = $(MMI_1X2_EXAMPLES) $(MMI_2X2_EXAMPLES) $(DIRECTIONAL_COUPLER_EXAMPLES) $(MODAL_MULTIPLEXER_EXAMPLES) $(RING_RESONATOR_EXAMPLES)
-DEVICES = mmi_1x2 mmi_2x2 directional_coupler modal_multiplexer ring_resonator
+EXAMPLES = $(MMI_1X2_EXAMPLES) $(MMI_2X2_EXAMPLES) $(MMI_1X4_EXAMPLES) $(DIRECTIONAL_COUPLER_EXAMPLES) $(MODAL_MULTIPLEXER_EXAMPLES) $(RING_RESONATOR_EXAMPLES)
+DEVICES = mmi_1x2 mmi_2x2 mmi_1x4 directional_coupler modal_multiplexer ring_resonator
 
 # The five directional-coupler sweep drivers (brute-force FDTD coupling-
 # length, N_MODES, mesh-resolution x2, body-stub) moved to
@@ -53,6 +58,7 @@ all: $(EXAMPLES)
 # the same lists concurrently via SLURM job arrays instead).
 mmi_1x2: $(MMI_1X2_EXAMPLES)
 mmi_2x2: $(MMI_2X2_EXAMPLES)
+mmi_1x4: $(MMI_1X4_EXAMPLES)
 directional_coupler: $(DIRECTIONAL_COUPLER_EXAMPLES)
 modal_multiplexer: $(MODAL_MULTIPLEXER_EXAMPLES)
 ring_resonator: $(RING_RESONATOR_EXAMPLES)
@@ -75,6 +81,12 @@ mmi_2x2_fdtd:
 mmi_2x2_hybrid:
 	$(runner) $(my_python) mmi_2x2/python/mmi_2x2_hybrid.py
 
+mmi_1x4_eme:
+	$(runner) $(my_python) mmi_1x4/python/mmi_1x4_eme.py
+
+mmi_1x4_hybrid:
+	$(runner) $(my_python) mmi_1x4/python/mmi_1x4_hybrid.py
+
 directional_coupler_hybrid:
 	$(runner) $(my_python) directional_coupler/python/directional_coupler_hybrid.py
 
@@ -92,6 +104,15 @@ directional_coupler_fdtd:
 # still-in-progress build plan, not a settled device example yet.
 directional_coupler_soi160_hybrid:
 	$(runner) $(my_python) directional_coupler/python/directional_coupler_soi160_hybrid.py
+
+# high_contrast_grating_fabry_perot_validation.md step 4 -- assembles the
+# already-solved HCG mirror + DC + connecting waveguides via
+# beef.network.Circuit. No srun/MPI needed: reads existing SMatrix files
+# and runs a cheap (no-FDTD) MPB mode-solve for the connecting waveguide,
+# safe on a login node. Deliberately NOT added to EXAMPLES/DEVICES -- same
+# reasoning as directional_coupler_soi160_hybrid above.
+hcg_fabry_perot_hybrid:
+	$(my_python) high_contrast_grating_fabry_perot/python/hcg_fabry_perot_hybrid.py
 
 # TEMPORARY (see VERIFICATION above). VERIFY_ARGS=--static-only runs just the
 # no-meep checks, which is safe on a login node.

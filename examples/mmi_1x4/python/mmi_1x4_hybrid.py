@@ -144,8 +144,28 @@ _fdtd_common = dict(
     decay_tol=1e-11,
 )
 
-N_MODES = 20   # interface modes at input/output <-> body boundaries -- job
-               # 11660226 (23 guided body modes at mm_width=12.0, top 20 kept)
+# N_MODES=12, NOT the body's own 20-of-23-guided count (job 11660226) --
+# a preliminary, unvalidated reduction, not a re-derived optimum. First
+# attempt at N_MODES=20 (job array 11672739, 4 tasks, -t 24:00:00) hit the
+# wall-time limit having only reached MPB band 14/20 on the FIRST of two
+# interfaces (input<->body), with the second interface and all FDTD
+# time-stepping still ahead -- true per-branch cost extrapolates to 60-80+
+# hours, not the ~24h estimate that walltime was sized against. In
+# HybridSolver, interface_modes IS the body's resolution for this cascade
+# (drives solve_section_length_sweep()'s n_modes_in/out directly --
+# EMESolver(num_modes=...) below is an unused placeholder for this call
+# path, same as mmi_1x2_hybrid.py's/mmi_2x2_hybrid.py's own precedent
+# comment already says), so there is no way to keep body accuracy at 20
+# while only shrinking the FDTD interface count -- this genuinely trades
+# some self-imaging accuracy for tractability, the same tradeoff
+# mmi_1x2_hybrid.py (N_MODES=8) and mmi_2x2_hybrid.py (N_MODES=14) already
+# accept relative to their own fully-guided counts. MPB's own log from the
+# timed-out run showed near-cutoff modes taking far more iterations to
+# converge than well-confined ones (up to 191 vs 8-10) -- dropping the
+# marginal top modes should cut cost by more than the naive 12/20 ratio.
+# Revisit at step 8's resolution/mode-count convergence check, alongside
+# the still-open res=40 question that check already needs to answer.
+N_MODES = 12
 
 
 def make_section_solver(method: str):

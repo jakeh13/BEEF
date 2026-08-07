@@ -126,7 +126,17 @@ N_WL = 11           # port naming (both already use top/mid/bot).
 #    short enough that this is the lower-risk option over a shared helper
 #    module for two call sites).
 # ---------------------------------------------------------------------------
-TAPER_L = 2.0                # every taper's length (µm)
+TAPER_L = 3.0                # every taper's length (µm). CORRECTED
+                              # 2026-08-07 from 2.0 -- the published seed-
+                              # device geometry (Hiesener et al., "Topology
+                              # Optimization Enhancements for Multimode
+                              # Interferometers," Table 2) reports
+                              # L_taper = 3.0 um for this exact device; 2.0
+                              # was never measured/derived, just wrong. Every
+                              # boundary/domain-size computation below derives
+                              # from this constant, so the fix propagates
+                              # automatically -- not independently re-verified
+                              # against a real run yet.
 WO = 1.0375                  # centre-to-centre pitch of the three branches (µm)
 BETWEEN_WG_LENGTH = 3.0      # connecting-waveguide length between the MMIs (µm)
 MM_WIDTH = 2.8               # both MMI body widths (µm)
@@ -188,12 +198,19 @@ solver = FDTDSolver(
     three_d=True,       # full 3-D FDTD: real 160 nm Si core in oxide, PML on all six faces
     num_input_modes=2,       # the input waveguide is genuinely multi-mode (TE0+TE1)
     num_output_modes=1,      # one mode (the branch fundamental) per output monitor
-    # Three branches, WO=1.0375 um pitch. 0.9 um keeps each monitor comfortably
-    # inside its own branch and clear of its neighbours (pitch - width = 0.14 um
-    # margin on each side), while covering more than the narrowest access
-    # waveguide (0.33 um) plus its near-field skirt.
+    # REMOVED explicit output_monitor_widths=[0.9, 0.9, 0.9] override, 2026-08-07
+    # -- that hand-picked width was narrower than it needed to be, clipping real
+    # field content (and the surrounding cladding context get_eigenmode_
+    # coefficients()'s own MPB solve needs) before the overlap integral runs;
+    # a strong, though not yet independently confirmed, suspect for job
+    # 11707932's near-total-loss result (modal_multiplexer_validation.md gap
+    # 3). None now uses FDTDSolver's own default: as wide as each monitor can
+    # be while staying centered on its own branch and inside the domain
+    # (sim_width - 2*abs(center) -- full sim_width for the on-axis "mid"
+    # branch, 5.0 - 2*1.0375 = 2.925 um for the off-axis "top"/"bot" branches
+    # at WO=1.0375 um pitch), matching the clamp already used for the
+    # excited/source-side aperture elsewhere in FDTDSolver. Not re-run yet.
     output_monitor_centers=[+WO, 0.0, -WO],
-    output_monitor_widths=[0.9, 0.9, 0.9],
     material_stack=SOI_160,
     decay_tol=1e-11,
 )

@@ -1,0 +1,243 @@
+"""Tutorial: 4x4 MMI 90-degree optical hybrid -- pure EME simulation (BEEF
+method, no FDTD).
+
+validation_markdown/mmi_4x4_90_hybrid_validation.md Step 6a. Same device as
+mmi_4x4_90hybrid_hybrid.py (see that script's own module docstring for the
+paper reference and the full first-pass-design caveats: N_MODES=8 is a
+coarse first pass, taper_width/taper_length are MMI's own class defaults,
+never independently optimized, mm_length=80.1896 is the best point found in
+a ±10 um sweep, not a converged optimum -- A9/A11 in the validation doc).
+
+Method: Eigenmode Expansion via meow, full 5-region device chain (wg_in |
+taper_in | MMI body | taper_out | wg_out), matching mmi_2x2_eme.py's own
+pattern -- EMESolver.solve(geometry, wavelengths, ports=[...], input_idx=,
+output_idx=, ...) restricts the drawn geometry to ONE input port and ONE
+output port per call (meow's to_gds_eme(input_idx=, output_idx=) draws only
+those two branches, not all 4+4 simultaneously), so a 2-port device needs 2
+calls (bar/cross); THIS 4-port device needs one call per (driven input,
+measured output) pair.
+
+Cost, up front, since this differs from every prior EME-only example in
+this repo: EMESolver.solve() has NO cross-call cache reuse for shared
+geometry (unlike the hybrid script's mirror-symmetry trick) -- each of the
+8 calls below (2 driven inputs (paper's ports 1/3, finding A4) x 4 outputs)
+independently re-solves EVERY cell in the 5-region chain from scratch,
+including the wide MMI body (measured at ~416 s/mode for THIS body's own
+cross-section, Step 3a) and 15+15 taper sub-cells per call. RESOLUTION and
+N_MODES_TAPER are env-var overridable (MMI4X4_EME_RES / MMI4X4_EME_NMODES_
+TAPER) for a smoke pass -- run one BEFORE the real 8-call sweep, per this
+repo's own two-step discipline for expensive, never-run scripts (today's
+own session already hit two real cost surprises building the hybrid
+script's sibling; do not assume this one is cheap just because it has no
+FDTD time-stepping).
+
+Approximation this script makes that the hybrid script does NOT: each
+solve() call only ever draws the ONE input port and ONE output port it was
+asked for, treating the other 6 ports as if they were physically absent
+(no crosstalk with them is modelled at all) -- the same simplification
+mmi_2x2_eme.py's own module docstring names ("comfortably decoupled" at its
+1.05 um port-to-port gap). This device's gap is narrower (offset=1.5,
+taper_width=0.8 -> 0.7 um clearance, Step 2), so this approximation is
+LESS obviously safe here than for the 2x2 -- flagged, not verified in this
+script. The hybrid script's real FDTD sections DO include all 4 ports'
+real geometry simultaneously and are the more physically complete model;
+this EME-only script is the cheaper, approximate one, by design.
+
+Run:
+    python /path/to/examples/mmi_4x4_90hybrid/python/mmi_4x4_90hybrid_eme.py
+"""
+import os
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+from beef import MMI, EMESolver, SMatrix, SOI_220, plot_eme_geometry
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_4x4_90hybrid", "mmi_4x4_90hybrid_eme"))
+os.makedirs(output_dir, exist_ok=True)
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
+
+# ---------------------------------------------------------------------------
+# Global simulation parameters -- RESOLUTION/N_MODES_TAPER/N_WL are env-var
+# overridable for a smoke pass (see module docstring).
+# ---------------------------------------------------------------------------
+RESOLUTION = float(os.environ.get("MMI4X4_EME_RES", 40.0))
+WL_MIN = 1.26
+WL_MAX = 1.36
+N_WL = int(os.environ.get("MMI4X4_EME_NWL", 3))   # matches the paper's own Eq. 12 convention
+                                                    # (Sec. IV) and the hybrid script's own N_WL
+
+N_MODES_TAPER = int(os.environ.get("MMI4X4_EME_NMODES_TAPER", 4))   # PLACEHOLDER, half of
+                                                                     # N_MODES_BODY, not independently tuned
+
+# ---------------------------------------------------------------------------
+# 1. Geometry -- identical to mmi_4x4_90hybrid_hybrid.py's settled Steps 1-3
+#    parameters (same device, different simulation method).
+# ---------------------------------------------------------------------------
+WAVEGUIDE_WIDTH = 0.35
+MM_WIDTH = 6.0
+WAVEGUIDE_OFFSET = MM_WIDTH / 4.0
+TAPER_WIDTH = 0.8
+TAPER_LENGTH = 1.0
+L_PI = 108.9195
+DELTA_L = -1.50
+MM_LENGTH = 0.75 * L_PI + DELTA_L   # = 80.1896 -- same settled point as the hybrid script
+
+N_MODES_BODY = 8   # job 11707935/11707835 -- see mmi_4x4_90hybrid_hybrid.py's own comment
+
+mmi = MMI(
+    n_inputs=4, n_outputs=4,
+    mm_length=MM_LENGTH, mm_width=MM_WIDTH,
+    waveguide_width=WAVEGUIDE_WIDTH, taper_length=TAPER_LENGTH, taper_width=TAPER_WIDTH,
+    waveguide_offset=WAVEGUIDE_OFFSET, waveguide_height=0.22,
+    use_neighbor_aperture=True,
+)
+print(f"MMI total length: {mmi.total_length:.4f} µm (mm_length={mmi.mm_length:.4f})")
+print(f"Input ports at y = {mmi.input_ys} µm; outputs at y = {mmi.output_ys} µm")
+
+# ---------------------------------------------------------------------------
+# 2. EME solver -- 5 regions: wg_in | taper_in | MMI body | taper_out | wg_out.
+# ---------------------------------------------------------------------------
+solver = EMESolver(
+    num_modes=[1, N_MODES_TAPER, N_MODES_BODY, N_MODES_TAPER, 1],
+    num_cells=[1, 15, 1, 15, 1],   # tapers subdivided (matches mmi_2x2_eme.py); body
+                                    # uniform, no subdivision needed
+    lengths=[0.5, TAPER_LENGTH, MM_LENGTH, TAPER_LENGTH, 0.5],
+    oxide_width=MM_WIDTH + 3.0,    # matches the hybrid script's own FDTD section margin
+    oxide_height=2.0,              # Step 1b's converged sz at this platform/band
+    res=RESOLUTION,
+    material_stack=SOI_220,
+    mode_solver="tidy3d",          # no FDTD section in this script to stay consistent
+                                    # with -- matches mmi_2x2_eme.py's own reasoning
+)
+
+plot_eme_geometry(
+    mmi, solver=solver,
+    region_labels=["wg in", "taper in", "MMI body", "taper out", "wg out"],
+    title="4×4 MMI 90° hybrid — EME — Top-down Geometry",
+    output_path=os.path.join(output_dir, "geometry.png"),
+)
+print(f"Geometry plot saved → {output_dir}/geometry.png")
+
+# ---------------------------------------------------------------------------
+# 3. Sweep -- 2 driven inputs (paper's ports 1/3, A4) x 4 outputs (paper's
+#    ports 5-8), 8 independent full-chain solves, no cross-call reuse.
+# ---------------------------------------------------------------------------
+wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
+DRIVEN = [0, 2]
+OUTPUTS = [0, 1, 2, 3]
+PORT_NAMES = ["out5", "out6", "out7", "out8"]
+
+smat = {i: SMatrix(wavelengths=wavelengths) for i in DRIVEN}
+for i in DRIVEN:
+    for j in OUTPUTS:
+        label = f"{PORT_NAMES[j]}_in{i}"
+        result = solver.solve(
+            mmi, wavelengths, ports=[label],
+            input_idx=i, output_idx=j, save_dir=save_dir,
+        )
+        smat[i]._data[(PORT_NAMES[j], 1, 1)] = result.coeff(port=label)
+        print(f"  input_idx={i} -> output_idx={j} solved")
+    smat[i].check_passive()
+
+# ---------------------------------------------------------------------------
+# 4. Metrics (paper Eqs. 10-15), same SMatrix methods as the hybrid script.
+#    A11's phase-sign fix applies identically here.
+# ---------------------------------------------------------------------------
+TARGET_DEG = {0: -45.0, 1: 225.0, 2: 45.0, 3: 135.0}
+
+imbalance = {i: smat[i].imbalance_db(PORT_NAMES) for i in DRIVEN}
+excess_loss = {i: smat[i].excess_loss_db(PORT_NAMES) for i in DRIVEN}
+cmrr_I = {i: smat[i].cmrr_db("out5", "out8") for i in DRIVEN}
+cmrr_Q = {i: smat[i].cmrr_db("out6", "out7") for i in DRIVEN}
+
+phi = {j: smat[2].cross_excitation_phase_diff_deg(smat[0], port=PORT_NAMES[j]) for j in OUTPUTS}
+dphi = {}
+for j in [1, 2, 3]:
+    raw = phi[j] - phi[0] - (TARGET_DEG[j] - TARGET_DEG[0])
+    dphi[j] = ((raw + 180.0) % 360.0) - 180.0
+
+print(f"\nResults at mm_length={MM_LENGTH:.4f} µm:")
+for i, port_label in zip(DRIVEN, ["1", "3"]):
+    print(f"  Input port {port_label}: imbalance={imbalance[i]} dB  "
+          f"excess_loss={excess_loss[i]} dB  CMRR_I={cmrr_I[i]} dBe  CMRR_Q={cmrr_Q[i]} dBe")
+print(f"  Phase error Δφ_6/7/8 = {dphi[1]} / {dphi[2]} / {dphi[3]} deg")
+
+# ---------------------------------------------------------------------------
+# 5. Save.
+# ---------------------------------------------------------------------------
+smat[0].save(os.path.join(output_dir, "smatrix_eme_port1.pkl"))
+smat[2].save(os.path.join(output_dir, "smatrix_eme_port3.pkl"))
+print(f"\nSMatrix saved → {output_dir}/smatrix_eme_port{{1,3}}.pkl")
+
+np.savez(os.path.join(output_dir, "eme_results.npz"),
+         wavelengths=wavelengths, mm_length=MM_LENGTH,
+         imbalance_in1=imbalance[0], imbalance_in3=imbalance[2],
+         excess_loss_in1=excess_loss[0], excess_loss_in3=excess_loss[2],
+         cmrr_I_in1=cmrr_I[0], cmrr_Q_in1=cmrr_Q[0],
+         cmrr_I_in3=cmrr_I[2], cmrr_Q_in3=cmrr_Q[2],
+         dphi_6=dphi[1], dphi_7=dphi[2], dphi_8=dphi[3],
+         phi_5=phi[0], phi_6=phi[1], phi_7=phi[2], phi_8=phi[3])
+print(f"Results saved → {output_dir}/eme_results.npz")
+
+# ---------------------------------------------------------------------------
+# 6. Plot -- same 2x2 layout as mmi_4x4_90hybrid_hybrid.py's own results
+#    plot (CMRR, phase error, excess loss, quadrature phase), so the two
+#    methods' results are directly, visually comparable.
+# ---------------------------------------------------------------------------
+WRAPPED_TARGET_DEG = {j: ((v + 180.0) % 360.0) - 180.0 for j, v in TARGET_DEG.items()}
+
+fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+
+ax = axes[0, 0]
+ax.plot(wavelengths, cmrr_I[0], "o-", label="CMRR_I (port 1)", color="steelblue")
+ax.plot(wavelengths, cmrr_Q[0], "o-", label="CMRR_Q (port 1)", color="darkorange")
+ax.plot(wavelengths, cmrr_I[2], "s--", label="CMRR_I (port 3)", color="steelblue", alpha=0.5)
+ax.plot(wavelengths, cmrr_Q[2], "s--", label="CMRR_Q (port 3)", color="darkorange", alpha=0.5)
+ax.axhline(20.0, color="red", linestyle=":", lw=1.0, label="cited requirement (20 dBe)")
+ax.set_xlabel("Wavelength (µm)")
+ax.set_ylabel("CMRR (dBe)")
+ax.set_title("CMRR vs Wavelength")
+ax.legend(fontsize=7)
+ax.grid(True)
+
+ax = axes[0, 1]
+ax.plot(wavelengths, dphi[1], "o-", label="Δφ_6", color="steelblue")
+ax.plot(wavelengths, dphi[2], "o-", label="Δφ_7", color="darkorange")
+ax.plot(wavelengths, dphi[3], "o-", label="Δφ_8", color="seagreen")
+ax.axhline(5.0, color="red", linestyle=":", lw=1.0, label="cited requirement (5°)")
+ax.axhline(-5.0, color="red", linestyle=":", lw=1.0)
+ax.set_xlabel("Wavelength (µm)")
+ax.set_ylabel("Phase error Δφ_j (deg)")
+ax.set_title("Phase Error vs Wavelength")
+ax.legend(fontsize=7)
+ax.grid(True)
+
+ax = axes[1, 0]
+ax.plot(wavelengths, excess_loss[0], "o-", label="Input port 1", color="steelblue")
+ax.plot(wavelengths, excess_loss[2], "s--", label="Input port 3", color="darkorange")
+ax.set_xlabel("Wavelength (µm)")
+ax.set_ylabel("Excess loss (dB)")
+ax.set_title("Excess Loss vs Wavelength (Eq. 11)")
+ax.legend(fontsize=7)
+ax.grid(True)
+
+ax = axes[1, 1]
+_phi_labels = ["φ_5 (ref)", "φ_6", "φ_7", "φ_8"]
+_phi_colors = ["gray", "steelblue", "darkorange", "seagreen"]
+for j in OUTPUTS:
+    ax.plot(wavelengths, phi[j], "o-", label=_phi_labels[j], color=_phi_colors[j])
+    ax.axhline(WRAPPED_TARGET_DEG[j], color=_phi_colors[j], linestyle=":", lw=1.0, alpha=0.6)
+ax.set_xlabel("Wavelength (µm)")
+ax.set_ylabel("Quadrature phase φ_j (deg)")
+ax.set_title("Quadrature Phase vs Wavelength\n(dotted = paper's target angle, Eq. 15)")
+ax.legend(fontsize=7)
+ax.grid(True)
+
+plt.suptitle(f"4×4 MMI 90° hybrid — EME — mm_length={MM_LENGTH:.2f} µm", fontsize=11)
+plt.tight_layout()
+fig.savefig(os.path.join(output_dir, "eme_results.png"), dpi=300)
+plt.close("all")
+print(f"Results plot saved → {output_dir}/eme_results.png")

@@ -62,12 +62,25 @@ back out at both "input/reflection" (net cavity reflection) and "output"
 > length/FSR) is pinned at 20 µm/arm (~9.5 nm FSR estimated from a real
 > measured group index) — provisionally, per the user's own framing:
 > revisit once Step 4 actually simulates something and the real resonance
-> spacing can be judged directly. **Step 2 is running**: job 11691379
-> measures the real coupling at the GDS's fixed 3.0 µm `coupling_length`,
-> `N_MODES=2`, at `FDTD_RESOLUTION=40`/`EME_RESOLUTION=80` ASSUMED from the
-> `SOI_220` script (user's explicit instruction — not re-derived for this
-> platform/device this pass). **While that runs: Steps 3-5's DESIGN is
-> now done and verified with synthetic data** (`tests/test_fabry_perot_
+> spacing can be judged directly. **Step 2 is running, on its 3rd
+> submission after two timeouts**: measures the real coupling at the
+> GDS's fixed 3.0 µm `coupling_length`, `N_MODES=2`, at
+> `FDTD_RESOLUTION=40`/`EME_RESOLUTION=80` ASSUMED from the `SOI_220`
+> script (user's explicit instruction — not re-derived for this
+> platform/device this pass). **Job 11691379 (`-t 300`) timed out** — 5 of
+> its 6 expensive FDTD sub-solves had already completed and cached
+> cleanly (confirmed from the log and `example_sim_cache/`, both arm
+> excitations plus all 3 of `section_mode_beta()`'s calibration-length
+> sub-solves). **Resubmit job 11706987 (`-t 240`) ALSO timed out** —
+> despite all 5 expensive pieces correctly cache-hitting this time (no
+> matching re-computation in its log), the whole 4 h budget was still
+> consumed by something inside two nominally-cheap `section_mode_neff()`
+> calls, whose real cost driver is not yet fully diagnosed. **Shown this,
+> the user's call was to resubmit with a much larger margin rather than
+> keep investigating — job 11716260, `-t 720` (12 h).**
+>
+> **While that runs: Steps 3-5's DESIGN is now done and verified with
+> synthetic data** (`tests/test_fabry_perot_
 > network_crosscheck.py`) — including a real bug caught before any real
 > device numbers touched it: the connecting-waveguide block cannot be
 > built via `beef.network.convert.from_transfer_matrix()` (one-directional
@@ -82,6 +95,39 @@ back out at both "input/reflection" (net cavity reflection) and "output"
 > `rho(λ)` — the actual input Step 5's closed form needs. Only Step 2's
 > real `t(λ)`/`k(λ)` are still missing before a fully real cavity spectrum
 > can be evaluated.
+>
+> **Updated 2026-08-07 — job 11716260 landed (4h56m real walltime), and
+> the first fully real cavity spectrum has been evaluated.** DC coupling
+> at the fixed `coupling_length=3.0 µm`: `T_through=0.8989`,
+> `T_cross=0.0979` at λ=1.55 µm (≈10% coupling ratio). Combined with the
+> HCG's real mirror spectrum and Step 3's real waveguide phase through the
+> verified closed form (Step 5): **a genuine Fabry-Pérot resonance shows
+> up at λ=1.570 µm** — transmission drops from a flat ~0.97–0.99 baseline
+> to 0.7395, reflection spikes from ~0.001–0.02 up to 0.1710, both moving
+> together as real interference, not noise. **But the 11-point/10 nm-step
+> wavelength grid is comparable to the ~9.5 nm estimated FSR, so this
+> resonance is almost certainly under-sampled** — this result establishes
+> the assembled model DOES produce real resonant behavior at a physically
+> plausible location, not that the resonance lineshape (depth/width/Q/
+> exact position) is actually characterized yet. See Step 5.
+>
+> **A linewidth sweep is now running to actually resolve it**: sized from
+> the real numbers above (finesse ~23, FWHM ~0.41 nm), job 11726827 sweeps
+> 1.555–1.585 µm at 0.05 nm spacing (601 points, ~8 across the estimated
+> linewidth) — not a guess, a calculation from job 11716260's own measured
+> `|rho|²`/`|t|²`. Cost at this point count is unmeasured. See Step 5.
+>
+> **Worked while that ran: A4/Step 6 updated with the ring resonator's own
+> precedent** (its full-device FDTD check was retired 2026-08-03 for
+> reporting T>1 in a passive device and a non-converging comb — a
+> disqualification, not just a cost problem — for a mechanistic reason
+> that generalizes: round-trip phase error is amplified ~F× by finesse).
+> At this device's own F≈23 (vs. the ring's F≈120) that threshold is 5×
+> more forgiving, but the HCG's grating mirrors staircase more per bounce
+> than the ring's smooth bends — net direction unmeasured, flagged
+> honestly as ARGUED-by-analogy, not decided. Recommend a cheap 2-D pilot
+> checking only for those same two tells before ever scheduling a 3-D
+> full-device attempt. See A4, Step 6.
 
 ---
 
@@ -90,25 +136,26 @@ back out at both "input/reflection" (net cavity reflection) and "output"
 | | status |
 |---|---|
 | HCG mirror, FDTD reflection (complex, with phase) | ✅ already exists — `FDTDSolver.solve_reflection()`, `SOI_160`, C-band |
-| Directional coupler, FDTD/EME hybrid | ✅ exists on `SOI_220`; **redesign for `SOI_160` decided (Step 0), not yet re-solved (Step 2)** |
+| Directional coupler, FDTD/EME hybrid | ✅ **redesigned for `SOI_160` and re-solved for real (Step 2)** — `T_through=0.8989`, `T_cross=0.0979` at λ=1.55 µm, coupling ratio 0.098 |
 | Both on the same material platform | ✅ **decided 2026-08-05** — both `SOI_160`, DC using `duty/dc.gds`'s real dimensions |
 | DC cross-section is single-mode | ⚠ **cross-section supports 4 supermodes, but MEASURED <0.01% of excited power reaches the 2nd-order pair** — treated as `N_MODES=2` by user decision (Step 0), a measured simplification |
 | Cavity geometry (mirror spacing, DC coupling ratio, target finesse) | ✅ **pinned, provisionally (Step 1)** — coupling_length fixed by the real GDS (3.0 µm); waveguide length 20 µm/arm (~9.5 nm FSR, from a measured n_g); revisit after Step 4 simulates something real |
-| Cross-device S-matrix composition (mirror + waveguide + DC + waveguide + mirror) | ✅ **wiring VERIFIED with synthetic data (Step 4)** — `beef.network.Circuit`'s first exercise composing >1 independently-solved device (A2); real device numbers not substituted yet |
-| A 1-port self-reflecting block (the HCG, in network terms) | ✅ **built and verified with synthetic data (A3/Step 4)** — a direct `SMatrixBlock` construction, not via `from_smatrix()` (which cannot represent it); real HCG spectrum not substituted yet |
+| Cross-device S-matrix composition (mirror + waveguide + DC + waveguide + mirror) | ✅ **DONE with real device data (Step 4)** — `examples/high_contrast_grating_fabry_perot/python/hcg_fabry_perot_hybrid.py`, matches the closed form to floating-point precision |
+| A 1-port self-reflecting block (the HCG, in network terms) | ✅ **DONE with real data (A3/Step 4)** — a direct `SMatrixBlock` construction from the real production `SMatrix`, not via `from_smatrix()` (which cannot represent it) |
 | The connecting-waveguide block | ✅ **real bug found and fixed (Step 3)** — `from_transfer_matrix()` is one-directional by design and silently zeroes the mirror's reflection; fixed with a direct bidirectional `SMatrixBlock`. Not yet solved for the real cross-section |
 | Closed-form sanity check (Airy/Fabry-Pérot formula) | ✅ **derived and verified two ways (Step 5)** — against a brute-force 4-port solve and against the real `Circuit` wiring, both to floating-point precision; real device numbers not substituted yet |
 | Full-device FDTD control run | ⚠ **likely infeasible at any interesting cavity length** — see A4 |
 
 So the ordered work is: **resolve the platform mismatch (Step 0, ✅ done)
 → pin cavity geometry (Step 1, ✅ pinned provisionally) → re-derive the DC
-for `SOI_160` at `N_MODES=2` (Step 2, running) →
-build the two EME waveguide phase blocks (Step 3, design fixed and
-verified, real mode-solve still open) → assemble with
-`beef.network.Circuit` (Step 4, wiring verified with synthetic data) →
-closed-form cross-check (Step 5, derived and verified with synthetic
-data) → the
-four checks (Step 6).**
+for `SOI_160` at `N_MODES=2` (Step 2, ✅ real coupling landed, item 2's
+resolution convergence still open) →
+build the two EME waveguide phase blocks (Step 3, ✅ real data landed) →
+assemble with `beef.network.Circuit` (Step 4, ✅ done with real data,
+matches the closed form to floating-point precision) → closed-form
+cross-check (Step 5, ✅ evaluated with real numbers — a genuine but
+likely under-sampled resonance found, dense follow-up sweep running) →
+the four checks (Step 6).**
 
 ---
 
@@ -249,6 +296,40 @@ FDTD run would be tens of round trips long, at whatever cavity length Step
 1 picks. **This should be measured, not assumed impossible outright** —
 state it as a real open cost question in Step 6, not silently skip the
 check.
+
+**Updated 2026-08-07 — ARGUED, by direct precedent, not yet measured for
+this device: cost is very likely NOT the only problem.**
+`validation_markdown/resolved/ring_resonator_validation.md` retired its own
+full-device FDTD check outright (2026-08-03), for a reason that has nothing
+to do with wall-clock budget: the reference itself reported **transmission
+above 1 in a lossless passive device** (up to +8.4%, over 46% of the band,
+**worsening** from res 30→40 rather than refining away), and its own
+resonance comb shifted **18% of an FSR** between those same two
+resolutions — i.e. the "ground truth" carried more uncertainty than the
+thing it was supposed to arbitrate. Their diagnosis, stated as a general
+mechanism, not specific to the ring: *"Finesse `F = Q·FSR/λ`. The field
+circulates ~`F` times, so any per-round-trip phase error is amplified
+~`F`×... FDTD's staircased arcs give O(h) boundary-position error, which
+*is* a round-trip path-length error. The reference is therefore subject to
+exactly the amplification it is supposed to be checking."* Their threshold:
+at their `F≈120`, a **0.5% round-trip error moves a resonance a full
+linewidth**.
+
+This device's own measured finesse (Step 5's follow-up calculation) is
+**F≈23** — about 5× more tolerant (threshold ≈1/F≈4.3% round-trip error
+before a resonance moves a full linewidth, vs. the ring's ≈0.83%), so this
+is NOT a slam-dunk "definitely also disqualified" the way it was for the
+ring's much higher finesse. But the underlying mechanism (round-trip phase
+error scales with mirror count × per-bounce staircasing error, amplified by
+`F`) applies to any resonant cavity validated by time-domain FDTD,
+regardless of device — and this cavity's mirrors are HCG **gratings**, each
+presenting many periodic staircased tooth-edges per round trip, plausibly
+*more* discretization surface per bounce than the ring's two smooth bus/ring
+coupler arcs, not less. Which direction dominates (lower F helping vs. more
+staircased edges per bounce hurting) is a real open question, **not
+resolved by analogy alone** — flagged honestly as ARGUED-by-precedent, to
+be checked for real only if this check is ever actually attempted (see
+Step 6's updated recommendation).
 
 ---
 
@@ -401,7 +482,7 @@ excitation, one wavelength) — worth a similar spot-check once Step 4
 assembles the real network, but no longer treated as an open, possibly-
 invalidating gap the way it was before the measurement above.
 
-### Step 2 — re-derive whichever existing example moves platforms — ⚠ IN PROGRESS 2026-08-05
+### Step 2 — re-derive whichever existing example moves platforms — ✅ ITEM 3 (real coupling) DONE 2026-08-07; item 2 (resolution convergence) still NOT DONE
 
 Under Step 0's decision: redesign `directional_coupler_hybrid.py`'s device
 for `SOI_160`, at `dc.gds`'s own real dimensions, **treated as single-mode
@@ -426,25 +507,76 @@ item 1 below (no single-mode width to find — the real cross-section is
    width/gap/bend_length/offset, different core thickness) on top of
    that. If this step's own result looks physically implausible, this
    assumption is the first thing to distrust, not the coupling physics.
-3. **Real coupling measurement, submitted as job 11691379**
-   (`batch/dc_soi160_hybrid.batch`, `gts-sr108-ece`) — 2 FDTD arm
-   excitations (`in`/`isolated`) + 1 EME body mode-solve at the GDS's
-   fixed 3.0 µm `coupling_length` (not a 50:50 search — see Step 1), the
-   same 2×2 transfer-matrix shape the `SOI_220` script's own core physics
-   uses, at `res=40`/`80` (item 2's assumption). Script:
-   `examples/directional_coupler/python/directional_coupler_soi160_hybrid.py`.
-   A login-node plumbing smoke test (`res=8`, `decay_tol=1e-3`) confirmed
-   the real code path — geometry build, both FDTD arm solves, and deep
-   into the body's phase-calibration logic — runs correctly before
-   failing an expected accuracy gate at that deliberately crude
-   resolution; not run at production settings on the login node given the
-   cost this repo's other 3-D solves at comparable resolution have shown.
+3. **Real coupling measurement.** Script:
+   `examples/directional_coupler/python/directional_coupler_soi160_hybrid.py`
+   — 2 FDTD arm excitations (`in`/`isolated`) + 1 EME body mode-solve at
+   the GDS's fixed 3.0 µm `coupling_length` (not a 50:50 search — see
+   Step 1), the same 2×2 transfer-matrix shape the `SOI_220` script's own
+   core physics uses, at `res=40`/`80` (item 2's assumption). A login-node
+   plumbing smoke test (`res=8`, `decay_tol=1e-3`) confirmed the real code
+   path runs correctly before failing an expected accuracy gate at that
+   deliberately crude resolution.
+
+   **Timed out twice before landing — a real, measured cost finding, not
+   an inconvenience to smooth over:**
+
+   - **Job 11691379** (`-t 300`, 5 h) TIMEOUT. Diagnosed from the job's
+     own log + `example_sim_cache/` (not guessed): both FDTD arm
+     excitations (`M_in0`, `M_in1`) and all 3 of `section_mode_beta()`'s
+     own internal calibration-length sub-solves (lengths 0.5/1.0/1.5 µm)
+     completed and cached to disk cleanly before the timeout (5 distinct
+     cache entries, valid `config.json`+`result.pkl`, exact
+     `geometry_polygons` x-spans confirming which piece each one is; no
+     leftover `.tmp` files).
+   - **Job 11706987** (`-t 240`, 4 h, same shared cache) ALSO TIMEOUT.
+     All 5 expensive pieces from job 11691379 correctly cache-hit this
+     time (confirmed: no matching "Initializing structure" domain or new
+     cache entry for any of them appears in this run's own log) — but the
+     full 4 h budget was still consumed, apparently inside two calls to
+     `section_mode_neff()` (one internal to `section_mode_beta()`'s own
+     seed step, one from this script's own MPB-comparison print), a
+     method whose own docstring calls it "cheap... seconds, not minutes."
+     **The real cost driver inside this step is not yet fully
+     diagnosed** — flagged honestly as an open gap, not resolved by
+     further guessing.
+   - **Shown both timeouts, the user's explicit call (2026-08-06) was to
+     resubmit with a much larger time margin rather than keep
+     investigating the exact cost driver first.** Job **11716260**
+     (`batch/dc_soi160_hybrid.batch`, `-t 720`, 12 h, same shared cache)
+     — not a measured bound, a deliberately large margin given two prior
+     estimates (5 h, 4 h) both proved insufficient.
+   - **Job 11716260 COMPLETED, 2026-08-07 — 4h56m real walltime end to
+     end** (17774 s). So the true cost of this measurement, uninterrupted,
+     is just under 5 h — close to job 11691379's original `-t 300`
+     estimate, meaning that first timeout was a near-miss, not wildly
+     under-budgeted; the second attempt's own timeout (with 5 of 6
+     expensive pieces cache-hit) is still the genuinely unexplained
+     result. **Real result, at the fixed `coupling_length=3.0 µm`, λ=1.55
+     µm**: `T_through=0.8989` (IL −0.46 dB), `T_cross=0.0979` (IL
+     −10.09 dB), `T_total=0.9969`, coupling ratio 0.098 (≈10% cross,
+     90% through) — passive (`T_total<1`, small real loss, not a red
+     flag). Body calibration (`CALIBRATE_BODY=True`) ran successfully:
+     MPB's own Δn_eff (0.028758) vs. the FDTD-measured Δn_eff (0.025405)
+     differ by ~12%, the same class of MPB/FDTD phase disagreement
+     `directional_coupler_hybrid.py`'s own docstring documents for its
+     `SOI_220` device — confirms this calibration step is doing real,
+     necessary work here too, not a formality. Full complex `t(λ)`/`k(λ)`
+     at 11 wavelengths saved to
+     `example_output/directional_coupler/directional_coupler_soi160_hybrid/smatrix_hybrid.pkl`.
 
 Cheaper than originally scoped (Step 0's own quick check, `res=25` on the
 login node, ran in ~24 min for one excitation — the full convergence
 sweep is still real SLURM-scale work across several resolutions, but at
 `N_MODES=2` rather than 4) — should still be scoped as its own SLURM-batch
-effort, not folded silently into Step 4's assembly work.
+effort, not folded silently into Step 4's assembly work. **These two
+timeouts are themselves evidence this whole cost assumption needs
+revisiting if Step 2 is ever repeated at other resolutions** — a single
+fixed-length coupling measurement at `res=40` has now needed close to
+9 hours of wall-clock across two attempts and still hasn't landed; a
+genuine resolution CONVERGENCE study (item 2, not attempted this pass)
+would cost several times that, and the specific cost driver behind the
+second timeout is worth understanding properly before committing to one.
+several times that.
 
 ### Step 3 — the two EME waveguide phase blocks — ✅ REAL BUG FOUND+FIXED, REAL DATA COMPUTED 2026-08-05
 
@@ -513,7 +645,7 @@ points — expected for a path this many wavelengths long, not a bug).
 Step 2's real `t(λ)`/`k(λ)` remain before the full cavity spectrum can be
 evaluated with entirely real numbers.
 
-### Step 4 — assemble with `beef.network.Circuit` — ✅ WIRING VERIFIED 2026-08-05 (with synthetic data; real DC/HCG numbers not yet substituted)
+### Step 4 — assemble with `beef.network.Circuit` — ✅ DONE WITH REAL DATA 2026-08-07
 
 ```python
 from beef.network import Circuit
@@ -536,34 +668,52 @@ cavity = circuit.reduce(external_ports={
 })
 ```
 
-**This exact 5-block, 4-`connect()` wiring is now verified**
+**This exact 5-block, 4-`connect()` wiring was first verified**
 (`tests/test_fabry_perot_network_crosscheck.py::
 test_circuit_matches_closed_form_symmetric_cavity`) against the
 independent closed form derived in Step 5, using synthetic mirror/DC/
 waveguide blocks — the first real exercise of `Circuit.add_block()`
 composing more than one independently-defined physical device (A2) and of
 a 1-port self-reflecting block (A3), both previously unexercised anywhere
-in this repo. **Real device numbers (Step 2's DC measurement, the HCG's
-own production `SMatrix`, Step 3's real waveguide mode-solve) are not yet
-substituted in** — this verifies the WIRING is right, not that the
-physical answer is right; that still needs the real blocks.
+in this repo.
 
-**The DC's own 4-port block is the one piece this plan has not designed in
-detail against the REAL solver output.** `directional_coupler_hybrid.py`
-(and Step 2's `SOI_160` redesign) only ever computes and stores
-`through`/`cross` given excitation from `in`/`isolated` (2 columns of a
-would-be 4×4 S-matrix) — enough for the *straight-through cascade* every
-existing hybrid example needs. The port RELABELING this device needs
-(`in`→`through_left`, the mirrored output section's port→`through_right`,
-`isolated`→`input_reflection`, and `isolated`'s mirrored partner→`output`)
-still has to be done once Step 2's real `M_in0`/`M_in1` land — get this
-mapping backwards and the assembled "cavity" is actually a straight-through
-device with the mirrors on the wrong two ports. Draw the section/port
-labeling explicitly (a `plot_hybrid_geometry`-style figure, per every other
-example's own step 4) **before** wiring the real `Circuit.connect()` calls,
-not after.
+**Now run with entirely real device data, 2026-08-07 — new permanent
+script**: `examples/high_contrast_grating_fabry_perot/python/
+hcg_fabry_perot_hybrid.py`. Loads the HCG's real production `SMatrix`
+and the DC's real `smatrix_hybrid.pkl` directly (does not re-solve
+either — both are their own expensive SLURM measurements, already
+landed), runs a fresh real fundamental-mode-only `meow`/MPB sweep for the
+connecting waveguide (~5 min, no FDTD), and assembles all five real
+blocks through the literal `Circuit` wiring above. Runs end-to-end on a
+login node in ~5 minutes (dominated entirely by that one mode-solve;
+everything else is either loading existing files or instant network
+algebra).
 
-### Step 5 — closed-form sanity check — ✅ DERIVED AND VERIFIED 2026-08-05 (design only — not yet evaluated with real device numbers)
+**The DC's own 4-port block port-mapping question is resolved, and
+checked, not just asserted**: `directional_coupler_soi160_hybrid.py`
+only ever computes and stores `through`/`cross` given excitation from
+`in` — the `isolated`-excited branch (`k'`, `t'`) was never separately
+saved. Rather than assume the standard symmetric-coupler equality
+(`t'==t`, `k'==k`), it was checked directly against this device's own
+cached `M_in0`/`M_in1`/`M_body` pieces (a cache-hit reload, no new FDTD):
+**`k'` matched `k` to machine precision, `t'` matched `t` to ~1e-5** — so
+building the 4-port block from the saved `t`/`k` alone (used twice, for
+both the `L↔R` and `I↔O` pairs) is a verified equality for this real
+device, not an unchecked assumption. Port mapping used: `in`→
+`through_left`, its mirrored/output-side partner→`through_right`,
+`isolated`→`input_reflection`, its partner→`output`.
+
+**Result: the real `Circuit` assembly matches Step 5's real closed-form
+spectrum to floating-point precision** (`max|ΔR|=5.6e-17`,
+`max|ΔT|=4.4e-16`, asserted inside the script itself, not just checked by
+hand) — two independent code paths (general network composition vs. a
+hand-derived scalar formula), same real device data, identical answer.
+This is the strongest evidence yet that both the wiring and the physics
+are self-consistent, though — same caveat as Step 5 — the underlying
+10 nm-spaced DC grid is still far too coarse to resolve the resonance
+this spectrum itself reveals near 1.57 µm.
+
+### Step 5 — closed-form sanity check — ✅ EVALUATED WITH REAL NUMBERS 2026-08-07 — a real resonance found, likely under-sampled
 
 Every ring-resonator example in this repo has a closed-form check to catch
 a wiring/sign/port-order mistake in the network assembly before trusting
@@ -603,10 +753,77 @@ see that test's docstring for the derived 90°-phase-relationship
 condition this device's real, physically-lossless DC will satisfy
 automatically).
 
-**Not yet evaluated with real numbers** — `r`, `t`, `k`, and the real
-`n_eff` all still need Step 0/2/3's actual measurements substituted in
-before this produces a real predicted spectrum, not a synthetic-data
-correctness check.
+**Now evaluated with entirely real numbers — MEASURED, 2026-08-07.** Job
+11716260 (Step 2) finally landed the DC's real `t(λ)`/`k(λ)` (11 pts,
+1.50–1.60 µm, step 0.01 µm — coarser than the HCG's own 21-pt/0.005 µm
+grid, but an exact subset of it). Combined with the HCG's real `r(λ)` (its
+own production `smatrix.pkl`) and Step 3's real waveguide `n_eff(λ)`
+(giving `rho(λ) = r(λ)·p(λ)²`, sliced onto the DC's coarser 11-pt grid),
+the closed form above gives the first real predicted cavity spectrum:
+
+| λ (µm) | \|rho\|² | R (input_reflection) | T (output) |
+|---|---|---|---|
+| 1.500 | 0.9284 | 0.0032 | 0.9854 |
+| 1.510 | 0.9368 | 0.0011 | 0.9937 |
+| 1.520 | 0.9449 | 0.0074 | 0.9776 |
+| 1.530 | 0.9524 | 0.0079 | 0.9794 |
+| 1.540 | 0.9588 | 0.0023 | 0.9925 |
+| 1.550 | 0.9640 | 0.0034 | 0.9908 |
+| 1.560 | 0.9679 | 0.0183 | 0.9677 |
+| **1.570** | **0.9704** | **0.1710** | **0.7395** |
+| 1.580 | 0.9714 | 0.0150 | 0.9758 |
+| 1.590 | 0.9708 | 0.0087 | 0.9858 |
+| 1.600 | 0.9686 | 0.0081 | 0.9872 |
+
+Passivity holds everywhere (`R+T` max 0.9953, ≤1 as required). **A real
+resonance feature shows up at λ=1.570 µm**: transmission drops from its
+otherwise-flat ~0.97–0.99 to 0.7395, and reflection spikes from
+~0.001–0.02 up to 0.1710 — exactly the interference signature a
+Fabry-Pérot cavity is supposed to produce, not noise (both channels move
+together, consistently with energy redirected from the output port back
+toward the input/reflection port at resonance).
+
+**But this is very likely under-sampled, not a resolved resonance
+lineshape — stated honestly, not oversold.** Step 1's own FSR estimate
+was ~9.5 nm; this grid's point spacing is 10 nm — comparable to, not much
+finer than, the estimated resonance spacing. A single grid point landing
+near a dip is consistent with a real, much narrower resonance being
+mostly invisible between samples elsewhere in the band (nothing rules out
+additional resonances between the other 10 points, and the true peak
+depth/width at 1.570 µm itself could differ substantially from this one
+sample). **A denser wavelength sweep is needed before this spectrum
+supports any quantitative claim about resonance depth, width, Q, or exact
+position** — this result establishes that the assembled model DOES
+produce genuine resonant behavior at a physically plausible location, not
+that the resonance is now characterized.
+
+**Follow-up: linewidth sweep started, 2026-08-07 — sized from real
+numbers, not guessed.** `directional_coupler_soi160_hybrid.py` gained
+`DC160_WL_MIN`/`DC160_WL_MAX`/`DC160_N_WL` env-var overrides (unset
+reproduces job 11716260's original full-band run exactly; any override
+redirects output to its own `windows/` subfolder so it can never
+overwrite that production result). Sizing, from job 11716260's own real
+measured numbers:
+
+```
+round-trip power |rho^2 t^2| = |rho|^2 * |t|^2 = 0.9714 * 0.8989 = 0.8732
+finesse F = pi*sqrt(0.8732)/(1-0.8732) ~ 23
+FWHM ~ FSR/F = 9.5 nm / 23 ~ 0.41 nm   (Step 1's own FSR estimate)
+```
+
+— roughly 24× narrower than the original 10 nm grid, not just "a bit
+coarse." Submitted job **11726827** (`batch/dc_soi160_hybrid_zoom.batch`,
+`-t 720`): window 1.555–1.585 µm (30 nm, ~3 FSRs of context around the
+found dip), `N_WL=601` → 0.05 nm spacing, ~8 points across the estimated
+FWHM. **Cost is unmeasured at this point count** — 601 vs. the original
+11 monitored frequencies is a real, untested increase in end-of-run
+eigenmode-decomposition work (per this script's own docstring, each
+monitored frequency needs its own MPB solve at the end); the underlying
+time-stepping cost (decay_tol, resolution, geometry) is unchanged from
+the ~4h56m real run, but whether the added frequency count meaningfully
+extends that is not known — `-t 720` reuses the last successful run's own
+working margin as a starting budget, not a measured bound for this higher
+`N_WL` case.
 
 ### Step 6 — the four checks
 
@@ -617,6 +834,28 @@ explicitly scoped OUT with a stated cost estimate, mirroring how
 `ring_resonator_validation.md` handles its own 167 h full-device FDTD
 infeasibility — a documented, deliberate scope decision, not a silently
 skipped check.
+
+**Updated 2026-08-07 — recommend scoping check 4 out for a SECOND, stronger
+reason than cost, by direct precedent (A4).** The ring resonator's own
+full-device FDTD check was retired not for being slow but for reporting
+T>1 in a passive device and a non-converging resonance comb — a
+disqualification, not a budget problem. This device's own finesse (F≈23)
+is lower than the ring's (F≈120), which helps, but its HCG mirrors are
+gratings with many staircased tooth-edges per round trip, which may hurt —
+net direction unmeasured. **Recommend**: do not schedule a full-device FDTD
+run for this device until/unless that open question is resolved cheaply
+(e.g. a 2-D, reduced-length pilot at one resolution, checking ONLY for T>1
+and comb non-convergence between two resolutions — the same two tells that
+disqualified the ring's reference — before committing to a 3-D production
+attempt). If it fails those same tells, retire check 4 the same way the
+ring did, citing this precedent, rather than re-discovering the same
+failure mode at full 3-D cost. This mirrors A4/Step 6's existing
+"[what validates this device instead](../resolved/ring_resonator_validation.md)"
+resolution: the single-pass/algebraic checks already real for this device
+(Step 4's closed-form-vs-`Circuit` match to floating-point precision, the
+`k'=k`/`t'=t` reciprocity check, passivity at every evaluated point) carry
+no round-trip amplification and are likely the actual validation basis
+here too, not a stopgap for a control run that hasn't run yet.
 
 ---
 
@@ -646,28 +885,37 @@ verification** (`tests/test_fabry_perot_network_crosscheck.py`, 3 tests,
 all passing) — the `from_transfer_matrix()` bug and its fix, the 5-block
 `Circuit` wiring, and the closed-form formula are each checked against
 either a brute-force linear solve or each other, to floating-point
-precision. This verifies the CODE and the ALGEBRA are correct; it does not
-yet verify the PHYSICS of the real device, which needs Steps 0/2/3's
-actual measurements substituted in.
+precision; **Step 2's real DC coupling** (job 11716260, `T_through=0.8989`,
+`T_cross=0.0979` at λ=1.55 µm, complex `t(λ)`/`k(λ)` at 11 wavelengths,
+`decay_tol=1e-11` not loosened); **Step 3's real waveguide `n_eff(λ)`**
+(21-pt `meow`/MPB sweep) and the real `rho(λ) = r(λ)·p(λ)²` built from it
+plus the HCG's own real production spectrum; **Step 5's real evaluated
+spectrum** — the closed form fed entirely real numbers, giving a real
+resonance at λ=1.570 µm (transmission 0.7395 vs. an elsewhere-flat
+~0.97–0.99, reflection 0.1710 vs. ~0.001–0.02), passive everywhere
+(`R+T≤0.9953`).
 
 **PROPOSED / ARGUED, not measured**: Step 1's 20 µm/arm waveguide length
-and the resulting ~9.5 nm FSR (a real n_g, but an un-simulated cavity
-length choice); the single-mode Airy-formula picture's validity at the
-FULL assembled cavity (Step 0's <0.01% figure was measured at one bend,
-one wavelength, one excitation — a strong indicator, not a full-cavity
-proof); A4's infeasibility claim for a full-device FDTD control run
-(reasoned from the ring resonator's own measured 167 h figure and the
-HCG's own measured ~97% mirror reflectivity, but no cost has actually been
-measured for *this* device at *any* cavity length); Step 2's own
-`FDTD_RESOLUTION=40`/`EME_RESOLUTION=80` (assumed from a different device
-on a different platform, not re-measured here, per explicit user
-instruction).
+(a real n_g, but an un-simulated LENGTH CHOICE, per the user's own framing
+that this may move); Step 2's own `FDTD_RESOLUTION=40`/`EME_RESOLUTION=80`
+(assumed from a different device on a different platform, not
+independently re-measured here, per explicit user instruction — Step 2
+item 2's own resolution convergence study remains undone); **the
+resonance lineshape at 1.570 µm** — real and passive, but sampled at only
+one point on an 11-point/10 nm-step grid comparable to the ~9.5 nm
+estimated FSR, so its depth, width, Q, and exact position are NOT
+established by this result, only that a resonance exists near there; the
+literal `Circuit`-based (not closed-form-scalar) evaluation with the DC's
+real 4-port block and port relabeling (Step 4) — not yet run, though
+Step 5 now gives it a known-correct number to reproduce.
 
-**Nothing in this document should be read as a physical result for the
-combined device.** No FDTD or EME solve of the real connecting waveguide
-has landed yet, and Step 2's real DC coupling measurement is still
-running. The HCG mirror and the (`SOI_220`) directional coupler are each
-independently measured and validated on their own terms, in their own
-docs; Steps 3-5's network-composition CODE is now verified against
-synthetic data, but the real numbers it will eventually carry are not in
-it yet.
+**What IS now a real physical result for the combined device**: the
+closed-form Fabry-Pérot-with-DC-tap spectrum in Step 5, built entirely
+from real measurements (HCG mirror, connecting waveguide, DC coupling) —
+the first such result this doc has produced. **What is NOT yet
+established**: the resonance's actual lineshape (needs a denser
+wavelength sweep — cheap for Steps 0/3's mode-solve pieces, but Step 2's
+own coupling measurement just took ~5 h for ELEVEN points, so a properly
+resolved sweep is real additional SLURM cost, not free); the literal
+`Circuit`/port-relabeling implementation (Step 4); and Step 1's 20 µm
+length choice remains explicitly provisional, per the user's own framing.

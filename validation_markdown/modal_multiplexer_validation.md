@@ -650,11 +650,193 @@ before either is attempted, not discovered after the fact.
    `modal_multiplexer_hybrid.py`'s own reshape), or hold off entirely. **User
    chose: resubmit with a bigger budget, unchanged otherwise.** `-t` raised
    240→1440 (24h, matching this repo's largest existing precedent) in
-   `run_modal_multiplexer_fdtd.batch`; resubmitted as **job 11693107**, not
-   yet landed. `decay_tol` stays at `1e-11`, matching
-   `modal_multiplexer_hybrid.py`'s own setting, so this remains a fair
-   apples-to-apples reference once it completes — see `running_jobs.md` for
+   `run_modal_multiplexer_fdtd.batch`; resubmitted as **job 11693107**.
+   `decay_tol` stayed at `1e-11`, matching
+   `modal_multiplexer_hybrid.py`'s own setting, meant to keep this a fair
+   apples-to-apples reference once it completed.
+
+   **11693107 ALSO did not converge — killed by the user's own diagnosis
+   after 18h53m, still stuck in TE0, having reached t=49,375.9 (nearly 5×
+   further than 11688645's own already-unconverged stopping point) with the
+   same flat ~0.0335 s/step throughout.** The user pointed at a real,
+   independent data point rather than authorizing another blind wait: an
+   actual prior topology-optimization campaign for this exact device family
+   exists on this cluster, uploaded to `04_weary_paw/` (the user does not
+   have the driver code, only the archived output — `config.json`,
+   `logs/master.log`, `logs/group{0,1}.log`, `geometries/`). Its config
+   confirms this is the same device (`gds_name: "mux_MMI_2"`, a `[64, 4] µm`
+   splitter design region spanning nearly this device's full 62–66 µm
+   length) at **`res=40`, `dr_res=80`** — HIGHER resolution than this
+   script's `res=20`, doing MORE work per iteration (a full forward +
+   adjoint gradient cycle across two mode groups, plus linewidth/
+   linespacing/area constraint evaluations, not just a forward-only sweep).
+   **That full cycle took ~70–80 minutes per iteration** (56 iterations
+   logged over ~67.3h total, `logs/master.log` timestamps 2025-03-23
+   11:58:24 → 2025-03-26 07:17:06; individual cycle times confirmed
+   directly from consecutive "Current iteration" timestamps, not estimated).
+   Compare: this repo's own forward-only, single-mode-so-far run had
+   already run **~19 hours** without finishing.
+
+   **This gap (roughly 15–20×, comparing a smaller task at lower resolution
+   against a larger one at higher resolution) is too large to attribute to
+   core count alone** — meep's parallel efficiency drops well before 4×
+   more ranks buys 4× wall-clock speedup on a domain this size, and no
+   core/node count was recoverable from the archived campaign's own logs to
+   even confirm it used more ranks than this script's original 24. The more
+   likely dominant factor, not yet acted on: `decay_tol=1e-11` is a strict
+   full-spectral-convergence criterion appropriate for a clean, quotable
+   S-matrix; a TO forward pass computing a *gradient* typically tolerates a
+   far less converged field (the archived campaign's own `nf=5` frequency
+   points over a narrower 1.295–1.325 µm band, versus this script's 11
+   points over 1.26–1.36 µm, is also suggestive but not proof by itself).
+   **Not changed here** — still a methodology decision needing explicit
+   sign-off, same reasoning as before.
+
+   At the user's direction, increased core count anyway — cheap, reversible,
+   directly attacks the one variable definitively under this repo's own
+   control, even though unlikely to close the full gap alone. Killed
+   11693107, rescaled `run_modal_multiplexer_fdtd.batch` from 1 node/24
+   ranks to **4 nodes/96 ranks** (matching `modal_multiplexer_hybrid.py`'s
+   own scale for this device's FDTD sections — the only precedent this repo
+   has for this device at this scale), same `-t 1440`, resubmitted as **job
+   11707932**. Confirmed at launch: `Using MPI version 4.1, 96 processes` /
+   `Splitting into 96 chunks by voxels` — the 4-node allocation is being
+   used, not silently falling back to 1 rank the way `modal_multiplexer_
+   hybrid.py`'s own reshape once did. Not yet landed — see `running_jobs.md`
+   for
    live status.
+
+   **Live check 2026-08-06, ~1h02m into 11707932 — the rescale is delivering
+   close to the full expected speedup, measured, not the a priori worry.**
+   `reports/11707932.out`: step 387,803 at elapsed 1:02:07, t=9695.08, steady
+   ~0.0089–0.0090 s/step. Average sim-time rate since launch (includes
+   MPB/structure-init startup overhead) = 9695.08/62.12 min ≈ **156.1
+   sim-time-units/min**, versus 11693107's own flat, whole-run rate of
+   49,375.9/1133 min ≈ **43.6 units/min** (1 node/24 ranks) — a **~3.6×
+   speedup for 4× the ranks** (~88–94% parallel efficiency depending on
+   whether the startup-inflated average or the settled instantaneous rate is
+   used), better than this section's own "parallel efficiency drops well
+   before 4× more ranks buys 4× speedup" worry anticipated. Projected time to
+   reach t=49,375.9 (11693107's own kill point, still not decayed there) at
+   this rate: ≈316 min ≈ 5.3h elapsed — leaving roughly 18.7h of the 24h
+   budget as margin beyond that point. **This is a rate projection, not a
+   completion** — still no confirmation of when (or whether, within budget)
+   `stop_when_dft_decayed(tol=1e-11)` actually triggers.
+
+   **Re-checked `04_weary_paw/` itself for the rank/core count this section
+   already flags as unrecoverable from its own logs — confirmed again, then
+   found indirect corroboration elsewhere.** `grep`ing
+   `logs/master.log`/`logs/group{0,1}.log` for
+   process/mpi/chunk/rank/core/node/thread/parallel returns zero hits — the
+   custom Python logger captured only its own INFO/DEBUG calls, never meep's
+   own C++ startup banner, so the exact rank count really is gone. What
+   does survive: `archive/FECES_Legacy/batch/run.batch` and `rum.batch`, the
+   only two SLURM scripts left from this repo's older Makefile-driven
+   framework generation (`archive/FECES_Legacy/Makefile`, `srun --mpi=pmi2`
+   launcher — the same launcher style `04_weary_paw`'s 2-group split
+   implies), both request **`-N 4 --ntasks-per-node=24` (96 ranks)** for
+   their own full 3-D campaigns (siblings `mmi_2x2_bend`/`mmi_2x2_gds`, not
+   the mux itself). **Two caveats, not glossed over**: no SLURM script for
+   the `mmi_mux` Makefile target survives in this archive at all, and the
+   driver modules `04_weary_paw`'s own logs name — `Mux_MMI.py`, `engine.py`,
+   `utils_s_mux.py` — match **zero** files anywhere in
+   `archive/FECES_Legacy` (grepped); `masters/mmi_mux_master.py`, the only
+   mux-related script that does survive, imports `meow`/`meep` directly under
+   a `class MMI_MUX` with its own `sim_type` dispatch (FDTD/HYBRID/EME/
+   FDTD_GDS) — a different, later rewrite, not the code that produced
+   `04_weary_paw`. So this is evidence about the framework generation's
+   *standard job template* for this device family's era, not a confirmed
+   measurement of the exact job that produced `04_weary_paw` — recorded
+   because it happens to agree with the scale already chosen for 11707932
+   (4 nodes/96 ranks), not because it settles the question the section above
+   already correctly marked open.
+
+   **✅ 2026-08-06, ~9h06m elapsed — TE0 fully decayed for the first time in
+   this campaign, a real landmark, and it reframes the `decay_tol`
+   question.** `reports/11707932.out`: `run 0 finished at t = 77197.45
+   (3087898 timesteps)`. Neither single-node attempt ever got close:
+   11688645 was killed at t=10,420 (4h budget), 11693107 at t=49,375.9
+   (18h53m) — both stuck in TE0, nowhere near this stopping point. At 4
+   nodes/96 ranks, TE0 actually reached `stop_when_dft_decayed(tol=1e-11)`
+   in **~7.95h wall time** (7,048 progress lines × the ~4.06 s/line cadence
+   measured directly from this run's own line count ÷ elapsed time —
+   meep's default ~4s progress-report interval, not step-count-based, which
+   is also why the earlier apparent "slowdown" between two live checks this
+   session turned out to be a false alarm: the step counter resets to 0 for
+   each new `mp.Simulation` object, and TE0's finish plus its ~55
+   eigenmode-coefficient MPB solves sat in between the two checks, not a
+   stall). The sim is now into **input_mode=2 (TE1)**, ~1h15m in, same
+   healthy ~0.0087 s/step instantaneous rate, no S-matrix printed yet
+   (the script only prints/saves once both modes finish).
+
+   **This is evidence against `decay_tol` being "the more likely dominant
+   factor"** in the reasoning recorded above and in `running_jobs.md`: TE0
+   reached full 1e-11 decay in well under half the 24h budget once given
+   4× the ranks, with the exact same `decay_tol=1e-11` both single-node
+   attempts never got near satisfying. That does not prove core count is
+   *sufficient* on its own for every case (TE1's own decay time is still
+   unmeasured, and could differ from TE0's), but it is a real, measured data
+   point that the earlier "likely need to loosen decay_tol" hypothesis was,
+   at minimum, not the only lever that mattered here — not changed
+   retroactively, recorded as-is for whoever revisits that reasoning next.
+
+   **❌ 2026-08-07, job 11707932 COMPLETED (15:51:32, well inside the 24h
+   budget) — but the result is not usable, and it is a serious, not cosmetic,
+   finding.** Both input modes finished (TE0 at t=77,197.45/3,087,898
+   timesteps as recorded above; TE1 finished too, total wall time 57,073 s).
+   `check_passive()` did not raise. But the saved `SMatrix`
+   (`example_output/modal_multiplexer/modal_multiplexer_fdtd/smatrix.pkl`,
+   read back and inspected directly, not just the one center-wavelength
+   line the script itself prints) shows near-total loss at **every** port,
+   input mode, and wavelength:
+
+   | in → out | T, all 11 wavelengths (1.26–1.36 µm) |
+   |---|---|
+   | TE0 → top | ~1.39–1.42 ×10⁻⁵, smooth in λ |
+   | TE0 → mid [MUX out] | **exactly 0.0** at all 11 points |
+   | TE0 → bot [MUX out] | ~1.05–1.18 ×10⁻⁵, smooth in λ |
+   | TE1 → top/mid/bot | **exactly 0.0** at all 11 points, every port |
+
+   Compare the smoke test's own sane numbers at the same ports (res=10,
+   job 11673498): TE0 → top/mid/bot = 0.0902/0.1430/0.3284 (56% total), TE1
+   → 0.0072/0.0027/0.0025 (1% total). This is not "the numbers changed with
+   resolution" — it is a qualitative collapse from a physically plausible
+   result to one indistinguishable from zero. Two things argue against
+   reading this as real device physics: (1) a genuinely near-total-loss
+   passive structure would not typically produce **exactly** 0.0 in
+   floating point at every one of 11 wavelength points for 4 of 6
+   channels — that pattern looks like underflow/non-detection, not a small
+   real number; (2) the *nonzero* channels are smooth, well-behaved
+   functions of wavelength (not scattered noise), which is the signature of
+   a real coefficient ratio computed correctly but scaled by something
+   badly wrong, not random garbage.
+
+   **Connects directly to this section's own still-open question about why
+   TE0 needed t=77,197 to decay** — 24-26× further in simulated time than
+   the res=10 smoke test's entire TE0 run needed (t≈2910–3217), a gap this
+   section already flagged as unexplained. Now there is a plausible
+   mechanism, **not yet confirmed**: `stop_when_dft_decayed(tol=1e-11)`
+   checks *relative* change in the DFT-accumulated field amplitude; if this
+   design's real coupling to the output ports is intrinsically weak at
+   production resolution, the tracked amplitude may be dominated by a
+   slowly-decaying spurious/resonant component long after the physically
+   meaningful signal has already decayed past it — meaning by the time the
+   1e-11 relative criterion is finally satisfied, the useful signal itself
+   may have decayed into numerical noise, explaining both the anomalously
+   long runtime AND the near-zero result as two symptoms of the same
+   underlying issue rather than two separate ones. **Not investigated
+   further yet** — `FDTDSolver.solve()`'s internal coefficient-extraction
+   code (the actual `src_coeff`/`get_eigenmode_coefficients` logic this
+   thin example script delegates to entirely) has not been read with this
+   failure in mind. This is the first time `FDTDSolver.solve()` (the
+   single-domain path, as opposed to `solve_section()`) has ever been
+   exercised at a real, non-smoke resolution for ANY device in this repo —
+   so a resolution-dependent bug specific to that code path, not just this
+   device, cannot be ruled out either.
+
+   **Check 4 (README) is NOT closed by this run.** A completed job with an
+   unusable result is not a reference; gap 3 stays open pending root-cause
+   investigation.
 
 4. **No golden.** Add a `modal_multiplexer_hybrid` target to
    `tests/test_golden_examples.py`'s `TARGETS`. As with the 2×2 MMI, do it after
@@ -988,6 +1170,251 @@ before either is attempted, not discovered after the fact.
    > `resolved/mmi_2x2_validation.md` gap 4). The array-plus-`cache_only`-merge pattern
    > is sound; this device's instance of it broke on the launcher, not the
    > pattern.
+
+7. **New, 2026-08-06 — `modal_multiplexer_hybrid.py`'s section 2 split from
+   one monolithic N_MODES-launch FDTD "transition" block into three:
+   FDTD taper-out | EME connector | FDTD taper-in. Implemented and
+   geometry-smoke-checked; NOT yet run for real, and its one new numeric
+   knob (`CONN_MODES`) is an unmeasured, flagged placeholder.**
+
+   Prompted by a user question about why section 2 (MMI 1's three output
+   tapers + the three connecting waveguides + MMI 2's three input tapers,
+   one monolithic FDTD domain) wasn't already split the way this device's
+   own docstring reasoning would suggest: the connecting waveguides are
+   themselves a uniform, straight `WaveguideRun` — exactly what EME
+   propagates for free, same as the two MMI bodies — and
+   `beef.geometry.compound.WaveguideRun` is explicitly documented as "safe
+   to cut anywhere." The old single section cost **N_MODES=14** FDTD
+   launches (confirmed directly from the shipped code, `interface_modes =
+   [N_MODES] * 4` — not just inferred from the module docstring's own
+   accounting) because both of its exposed interfaces were the full
+   N_MODES-wide body-supermode basis; `FDTDSolver.solve_section()` already
+   launches from whichever side of a section has fewer modes (the same
+   mechanism sections 0/4 already exploited for their 2/3-launch costs), so
+   exposing the connector's own much-narrower basis as a real interface lets
+   the two new taper sections each launch from that narrow side instead.
+
+   **Verified directly from the library code before touching the script**
+   (not assumed): `CompoundGeometry.section_gds()`/`section_prisms()` are
+   already fully generic over `WaveguideRun` segments, `EMESolver.
+   solve_section()` builds its cross-section from `geometry.section_gds()`
+   with no MMI-specific assumption anywhere, and `HybridSolver` already
+   supports per-interface mode counts and an arbitrary section count (its
+   own docstring: "any solver mix, any count >= 2") — so the entire change
+   is confined to this one example script's own `boundaries`/
+   `interface_modes`/`solvers` construction, no `beef` library changes
+   needed.
+
+   **What changed**: `modal_multiplexer_hybrid.py` now builds a 7-section
+   chain (was 5) — `FDTD-in | EME-MMI1 | FDTD-taper-out | EME-conn |
+   FDTD-taper-in | EME-MMI2 | FDTD-out` — reusing the same `fdtd_solver`/
+   `body_solver` instances for every slot of their type (no new solver
+   objects). Two new constants: `CONN_STUB = 0.25` µm (matching the
+   coupler/other MMI hybrid examples' own `body_stub` convention, not this
+   device's own more conservative `BODY_STUB = 0.75`, which was sized for
+   the MMI body's harder degenerate-multimode discontinuity) and
+   `CONN_MODES = 8` (see below). The three hardcoded `{4: {"output_idx":
+   ...}}` references to the output section (in the geometry-plot
+   `sub_region_configs`, the per-port array-task `solve()` call, and the
+   merge-step `solve()` call) all became `{6: ...}` — the output section's
+   index shifted from 4 to 6 now that two new sections sit before it.
+
+   **`CONN_MODES` — now MEASURED (2026-08-06/07, login-node
+   `EMESolver.section_modes()` on the connector's own cross-section) and
+   corrected 8→6, with a real cost finding alongside it.** The original
+   reasoning ("~3, one per arm") was a hand-wave, not a measurement, and it
+   was wrong: requesting 8 modes at wl=1.31 on the exact `CONN_STUB`-bounded
+   span returned n_eff `[2.10549, 2.09067, 2.03595, 1.56570, 1.54514,
+   1.52526, 1.42755, 1.41349]` — the last two sit below the SOI_160 cladding
+   index (~1.4468, this repo's own prior measurement), so only **6** are
+   guided. Each arm is apparently weakly bimodal (fundamental + first-order)
+   rather than strictly single-mode, giving 3 arms × 2 modes = 6 coupled
+   supermodes, not 3. `CONN_MODES` corrected 8→6 in the script (over-
+   requesting 8 was never wrong on its own, since `EMESolver.compute_modes()`
+   guards duplicates — but its guard is documented as duplicate/rank-
+   deficiency detection, NOT a guided-vs-cladding check the way
+   `FDTDSolver._iter_distinct_bands()` has post items-12/14, so shipping 8
+   unverified risked silently admitting 2 unguided modes into the basis; 6
+   is the safe, measured choice).
+
+   **Second, more consequential finding: this single-rank solve took 5050 s
+   (~84 min) for ONE wavelength — not "basically free."** The section-2
+   split's whole module-docstring rationale leaned on the connector EME
+   solve being cheap, by analogy with the MMI bodies' own fast slab solves.
+   Three separated, tightly-pitched (`WO=1.0375` µm) silicon islands with no
+   exploitable mirror symmetry is evidently a much harder MPB target than a
+   single wide slab. The script solves this cross-section once per
+   wavelength (`N_WL=11`), so total connector-EME cost in a real run is a
+   genuinely open question — **not** measured yet, and how much production's
+   many-rank MPI parallelism brings this single-rank number down is
+   unknown. This may claw back some of the FDTD-launch savings (14→6×2
+   instead of 14) the split was built to capture; treat the split's net
+   benefit as unproven until a real run measures both sides of that
+   trade-off, not just the FDTD half.
+
+   **Smoke-checked, not run for real.** Executed the real script's own
+   source (steps 1-4 only — geometry, solver config, `HybridSolver`
+   construction, `plot_hybrid_geometry`), truncated before step 5's actual
+   `hybrid.solve()` calls, so no physics solve ran. Section spans came out
+   exactly as hand-computed: taper-out/taper-in both 3.0 µm (0.75 body stub
+   + 2.0 taper + 0.25 conn stub), EME-conn 2.5 µm (3.0 − 2×0.25).
+   `HybridSolver(...)` construction raised nothing (validates
+   `boundaries`/`interface_modes` length agreement). `geometry_hybrid.png`
+   regenerated cleanly showing all 7 sections (labels overlap in the now-
+   busy ~8.5 µm middle stretch — cosmetic, not investigated).
+
+   **NOT done, deliberately, to avoid compounding unverified changes**:
+   - `mirror_pairs` — the two new taper sections are geometric mirror
+     images of each other about the connector's midpoint (verified by hand:
+     reflecting `[body1_end, conn_start]` about `(conn_start+conn_end)/2`
+     lands exactly on `[conn_end, body2_start]`), which `HybridSolver`
+     could exploit to solve only one and transpose-reuse it for the other —
+     roughly halving the new cost again. Left undone; would need its own
+     `mirror_axis` (the connector's midpoint, NOT the device's own overall
+     midpoint the default would use, since the whole device isn't globally
+     mirror-symmetric — MMI 1's body is 16.92 µm, MMI 2's is 34.24 µm).
+   - `check_mode_correspondence=True` at the two new interfaces — this
+     device's own gap 1 is the single highest-value reason to want this
+     (interface mode-identity bugs are its documented top failure mode),
+     but turning it on was not attempted this pass. `CONN_STUB=0.25` was
+     chosen to clear `FDTDSolver`'s `dpml=0.5` query padding *if*
+     `mode_correspondence_pad` is left unset, matching the coupler/other
+     MMI examples' own precedent — but per `notes.md` Solvers item 14, pass
+     `mode_correspondence_pad=0.1` to be safe, matching those examples'
+     own working configuration.
+   - No new SLURM submission of any kind — the smoke check above is
+     geometry-only (login-node, seconds), not a real hybrid solve; a real
+     run needs its own explicit go-ahead, and there is not yet a landed
+     full-device FDTD reference (gap 3, job 11707932, still running as of
+     this writing) to compare a new hybrid result against anyway.
+
+8. **New, 2026-08-07 — user-provided paper draft (Hiesener et al.,
+   "Topology Optimization Enhancements for Multimode Interferometers," the
+   TE modal multiplexer test case) cross-checked against this device's own
+   code, plus a real mode-monitor sizing bug fixed in the library. Three
+   real, confirmed changes; one open question sent back to the user.**
+
+   **(a) `TAPER_L` was wrong — 2.0 µm in the code, 3.0 µm in the paper's own
+   Table 2 (`L_taper`).** Every other geometric parameter cross-checked
+   cleanly against Table 2: `MM_WIDTH`=2.8 (`w_mm`), `mmi1.mm_length`=16.92
+   (`L_mm1`), `mmi2.mm_length`=34.24 (`L_mm2`), `BETWEEN_WG_LENGTH`=3.0
+   (`L_ps`), input taper width 1.4 (`w_in`), MM bus width 0.7 (`w_mmwg`),
+   `BRANCH_SPECS` taper widths 0.725/1.150 (`w_t1`/`w_t2`, and the paper's
+   own `w_t1 = (w_mm - w_t2 - 2*0.1)/2` formula checks out exactly:
+   (2.8-1.150-0.2)/2 = 0.725), branch waveguide widths 0.33/0.35 (`w_ps`/
+   `w_wg`). Only `TAPER_L` was off. **Fixed in both
+   `modal_multiplexer_hybrid.py` and `modal_multiplexer_fdtd.py`**
+   (2.0→3.0); `mux.total_length` moves 62.16→66.16 µm (4 tapers × +1.0 µm).
+   Confirmed by smoke-checking both scripts' geometry/solver construction
+   (login-node, no physics solve) — spans update correctly, nothing raises.
+   **Not yet re-run** — every prior result from this device (including
+   job 11707932's own, already-discarded-as-unusable run above) used the
+   wrong taper length; this alone would need a re-run regardless of the
+   monitor-width fix below. 160 nm SOI / O-band (1260–1360 nm) were already
+   correct, confirmed against the paper's own device description.
+
+   **(b) A real, likely-significant mode-monitor sizing bug, found while
+   checking (a) — plausible root cause (not yet confirmed) for job
+   11707932's near-total-loss result.** At the user's direction (general
+   rule: a mode monitor should span as much of the domain as it validly
+   can — full `sim_width` when centered, or the widest symmetric window
+   that still fits inside the domain when off-axis — rather than an
+   arbitrary narrower value). Two findings:
+   - `modal_multiplexer_fdtd.py` explicitly set
+     `output_monitor_widths=[0.9, 0.9, 0.9]`, far narrower than it needed
+     to be (branch centers at ±1.0375/0.0 inside a `sim_width=5.0` domain
+     allow up to 2.925/5.0/2.925). A monitor this narrow risks clipping
+     real field content — and, more seriously, the surrounding cladding
+     context `get_eigenmode_coefficients()`'s own MPB solve needs to find
+     the *correct* eigenmode shape in the first place — before the overlap
+     integral that produces the reported coefficient even runs. **Removed
+     the override entirely** — now uses the library default.
+   - That library default itself (`FDTDSolver.solve()`, `beef/solvers/
+     fdtd.py`) was ALSO wrong, and this is the more consequential fix:
+     `output_monitor_widths=None` resolved to a bare `[sim_width] *
+     len(centers)` — full `sim_width` centered on *every* monitor
+     regardless of its own `output_monitor_centers` offset. For any
+     off-axis output port (this device's "top"/"bot" branches at
+     ±1.0375 µm), that places a monitor asymmetric about y=0 but sized as
+     if centered there — extending past the valid domain on the far side
+     by `2×offset`. **Fixed** to match the clamp already used elsewhere in
+     the same method for the excited/source-side aperture
+     (`min(aperture, sim_width - 2*abs(center))`):
+     `sim_width - 2*abs(center)` per monitor. This is a **library-level
+     fix** (`FDTDSolver.solve()`'s own default), not device-specific — it
+     silently affects any *other* future caller relying on the default too,
+     though every existing example script to date passed an explicit
+     override, so no currently-shipped golden result is affected by this
+     specific change.
+
+   Both scripts smoke-checked clean after all three fixes (geometry/solver
+   construction only, login-node, no physics solve) —
+   `modal_multiplexer_fdtd.py`'s solver now resolves output widths to
+   `[2.925, 5.0, 2.925]` at solve() time, confirmed by inspection.
+   **Neither device script has been re-run with these fixes** — job
+   11707932's own near-zero result (above) was measured before all three
+   fixes existed, so it is NOT evidence either fix does or doesn't help;
+   that requires an actual re-run, not yet submitted.
+
+   **(c) Open question sent back to the user, NOT resolved unilaterally:**
+   the paper's own text says this device "cascades a 1×3 MMI splitter, a
+   phase shifter, and a 3×3 MMI splitter, **with the third port of each MMI
+   left unconnected**" (Section 3.2) — i.e., only 2 of each MMI's 3 ports
+   are real, connected single-mode waveguides (`A`/`B`); the third is
+   `NC`. This device's own code (`BRANCH_SPECS`, three entries: top/mid/
+   bot) builds all THREE ports as real, physically-taped waveguides —
+   inherited from the legacy `mmi_mux_master.py`/`config_mux.json` lineage
+   (`PORT_DEFS`: top/mid/bot, mid+bot tagged `[MUX out]`), not derived from
+   this paper. Whether "NC" in the paper means that third port is
+   physically absent from the mask (this device's code would then be
+   simulating an extra waveguide/taper that doesn't exist on the real
+   chip) or merely unused/unmeasured downstream (geometrically present,
+   functionally irrelevant — closer to what the code already builds) is
+   not resolvable from the paper text alone.
+
+   **✅ RESOLVED 2026-08-07 — user confirmed directly: the NC port is
+   physically present on the real device (taper + waveguide drawn), just
+   unused/unmeasured downstream — not absent from the mask.** The current
+   3-real-branch topology (`BRANCH_SPECS`: top/mid/bot, all real) is
+   therefore topologically correct as-is; no geometry change needed here.
+   Only (a) and (b) above were real bugs.
+
+   **✅ 2026-08-07, job 11726910 — re-ran the SMOKE test (res=10) with all
+   three fixes in place. Confirms the monitor-width diagnosis was right —
+   near-zero collapsed to physically sane numbers — but reveals one new,
+   real, smaller anomaly.** COMPLETED in 14m27s (well under the 60 min
+   budget):
+
+   | | top | mid [MUX out] | bot [MUX out] | total |
+   |---|---|---|---|---|
+   | TE0 in | T=0.0055 | T=0.5283 | T=0.5038 | **1.0375** |
+   | TE1 in | T=0.0101 | T=0.0109 | T=0.0105 | 0.0316 |
+
+   TE0 now correctly routes the large majority of its power to the two
+   real MUX-out ports (~53% each), with a small, plausible leak to "top" —
+   physically sane for a pre-optimization seed device, and a world away
+   from the prior run's uniform near-zero/exact-zero collapse. This is
+   real, measured evidence the `TAPER_L`/monitor-width fixes (this gap,
+   above) fixed the dominant problem, not just a plausible-sounding theory.
+
+   **But `check_passive()` now raises a warning it didn't get the chance to
+   before**: TE0's total hits **1.1113** (>1) at wavelength 1.33 µm
+   specifically — non-physical for a passive device, and not seen at the
+   other 10 wavelengths (the identical warning text repeats ~24× in the
+   log purely from this script's known, pre-existing lack of
+   `is_master()` gating — every MPI rank prints it, not 24 independent
+   violations). Plausible mechanism, **not confirmed**: the newly-widened
+   output monitors (2.925/5.0/2.925 µm for top/mid/bot) now overlap each
+   other substantially at this branch pitch (`WO`=1.0375 µm) — "mid"'s
+   window alone spans the full domain and geometrically contains "top"
+   and "bot" too — so some double-counting via imperfect orthogonality
+   between the requested per-branch eigenmodes, likely worst at whatever
+   makes 1.33 µm specifically prone to near-degeneracy, is a reasonable
+   suspect. Trades the old failure mode (catastrophic under-count) for a
+   much milder, single-wavelength over-count — a real improvement, but not
+   a fully clean result. **Not investigated further yet** — this is exactly
+   the kind of thing a smoke test (res=10, deliberately crude) exists to
+   surface cheaply before the real res=20 run commits real hours to it.
 
 ## Order
 
