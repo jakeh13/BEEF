@@ -1263,6 +1263,69 @@ Temporary prewarm files (`_prewarm_mmi_1x4_hybrid.py`,
 `batch/verification/run_prewarm_mmi1x4_hybrid.batch`) deleted 2026-08-07,
 same cleanup EME's own prewarm files got once its real run succeeded.
 
+#### Field visualization + a real, quantified port-alignment finding — MEASURED 2026-08-08
+
+`beef.plot_eme_fields()` existed in the codebase (`beef/plot/fields.py`) but
+had **zero call sites** anywhere in examples/tests before this session.
+`examples/verification/python/plot_mmi1x4_eme_fields.py` (new) rebuilds the
+same `cells`/`modes` `EMESolver.solve()` builds internally
+(`beef/solvers/eme.py:765-771`, discarded there once the S-matrix is
+extracted) for one wavelength/branch and calls the plotting utility — job
+**11736246**, ~18 min, 19 tidy3d eigensolves, no time-stepping. Produces a
+textbook self-imaging field pattern for output branch 0 at λ=1.55 µm: input
+focus at z=0, interference fan through the body, and a **single, tight
+refocus at z≈165 µm, y≈0**.
+
+**That interior refocus is NOT a 4-way split image and is not evidence a
+shorter body would help — confirmed, not assumed, with a follow-up
+annotated analysis (`analyze_mmi1x4_self_imaging.py`, job 11750449, ~16
+min).** The four real output ports sit at y = ±1.2, ±3.6 µm — none at y=0 —
+so a bright lobe centered on y=0 partway through the body is the classical
+"restored single image" every MMI shows at a fraction of its beat length,
+independent of the intended N-way split. Confirmed directly: annotating the
+same field with the real region boundaries (computed from the solver's own
+region lengths, not eyeballed: body spans z=[5.5, 211.5] µm, taper_out
+[211.5, 216.5]) shows the interference pattern re-fanning back out to the
+body's full ±6 µm width after the z≈165 spot, well before reaching the
+actual taper mouth at z=211.5. This is also consistent with — not merely
+argued from — the already-measured 281-point `mm_length` sweep (step 5):
+lengths near this interior spot (161, 188 µm) were explicitly measured as
+**not competitive** (≥40% relative imbalance), while 206 µm (landing the
+cut at the body's real end, not at the interior single-image point) is one
+of the genuinely competitive candidates. The field plot, read correctly,
+agrees with the sweep rather than contradicting it.
+
+**A real, previously unquantified finding, from the same job: a transverse
+cross-cut of the field taken exactly at the taper mouth (z=211.5 µm, not an
+arbitrary interior z) shows the self-imaging pattern's four peaks sitting
+systematically ~0.3–0.4 µm OUTWARD of the four ports' actual centers**
+(±1.2, ±3.6 µm), symmetric on both the inner and outer pairs. Against a
+1.1 µm-wide access waveguide and a 2.4 µm port pitch, an offset of this size
+is not negligible — plausibly a real contributor to the measured 3.7%
+relative imbalance / 0.5696 total T at this `mm_length`, though **not
+confirmed as such**: this is one wavelength, one output branch, no sweep.
+**Not yet actioned or further investigated — flagged here as a genuine,
+evidence-based candidate for a future `waveguide_offset` sweep** (analogous
+to step 5's own `mm_length` sweep), which has never been run for this
+device. If real, closing a ~0.3–0.4 µm mismatch could plausibly recover some
+of the gap between the chosen 206 µm point (3.7% imbalance) and 280 µm's
+1.0% — cheaper than lengthening the device, if the two effects are actually
+independent (also not yet checked).
+
+Companion field-plot scripts written the same session for the other
+existing EME examples, confirming `plot_eme_fields()` generalizes cleanly:
+`plot_mmi1x2_eme_fields.py` (job 11745434, 19 cells, ~1 min against a
+lightly-loaded node — cost varies more with node contention than the
+~18 min mmi_1x4 measurement suggested), `plot_mmi2x2_eme_fields.py` (job
+11745435, 33 cells, ~2 min) — both produced clean, textbook self-imaging
+patterns, visually confirmed. `plot_mmi4x4_90hybrid_eme_fields.py` (a
+different, concurrently-worked device — see its own
+`mmi_4x4_90_hybrid_validation.md`, not this doc) also written and run at
+that device's real config (job 11750455, 63 cells, ~4 min) — notably faster
+than that device's own docstring warned (~416 s/mode measured for its body
+cross-section alone, Step 3a); not investigated further here since it
+belongs to that other validation thread.
+
 ### Step 7 — wiring ✅ **DONE 2026-08-05**
 
 - `BEEF/examples/Makefile`: add `MMI_1X4_EXAMPLES = mmi_1x4_eme mmi_1x4_hybrid`

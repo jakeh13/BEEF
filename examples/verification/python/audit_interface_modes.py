@@ -99,6 +99,33 @@ def _dc():
     )
 
 
+def _dc_soi160():
+    # Pinned to examples/directional_coupler/python/
+    # directional_coupler_soi160_hybrid.py exactly (duty/dc.gds's own real
+    # dimensions -- high_contrast_grating_fabry_perot_validation.md step 2) --
+    # check 2 was never run for this device (check 3/Step 2 item 2's own
+    # resolution-convergence gap is separate and still open).
+    dc = DirectionalCoupler(
+        waveguide_width=0.5, gap=0.25, coupling_length=3.0, bend_length=10.0,
+        waveguide_offset=4.0, bend_type="euler", waveguide_height=0.16,
+    )
+    # Real body_length (coupling_length - 2*BODY_STUB) is only 2.5 um, far
+    # shorter than _dc()'s own 30 um -- boundaries sit at +/-1.25 (half_body
+    # 1.5 minus BODY_STUB 0.25). section_mode_neff() pads its own query box
+    # by dpml on both sides (see modal_multiplexer's own note below _dc()),
+    # so section=(-0.25,0.25) pads to +/-0.75, leaving a real 0.5 um margin
+    # from the +/-1.25 body edge -- same "half-span + dpml must stay clear
+    # of the real seam" reasoning the modal_multiplexer config uses, just
+    # re-derived for this device's own much shorter body.
+    return dict(
+        geometry=dc, n_modes=2, wl=1.55, stack=SOI_160,
+        section=(-0.25, 0.25), sim_width=7.0, sim_height=1.5, dpml=0.5, res=40.0,
+        note="coupled pair, duty/dc.gds real dims, N_MODES=2 (measured "
+             "simplification, Step 0) -- 2.5 um body, far shorter than the "
+             "SOI_220 worked example's 30 um",
+    )
+
+
 def _mmi_1x2():
     # Pinned to examples/mmi_1x2/python/mmi_1x2_hybrid.py:58.
     mmi = MMI(
@@ -176,6 +203,7 @@ def _mmi_1x4():
 
 DEVICES = {
     "directional_coupler": _dc,
+    "directional_coupler_soi160": _dc_soi160,
     "mmi_1x2": _mmi_1x2,
     "mmi_2x2": _mmi_2x2,
     "mmi_1x4": _mmi_1x4,

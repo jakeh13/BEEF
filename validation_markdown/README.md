@@ -12,7 +12,7 @@ One file per example device, recording what has to hold before that device's
     mmi_1x4_sin300_validation.md       1×4 MMI on 300 nm Si3N4 — BUILD PLAN, device does not exist yet
     mmi_4x4_90_hybrid_validation.md    4×4 MMI 90° optical hybrid, SOI 220nm/O-band — BUILD PLAN, device does not exist yet; ref: Yasui et al., ACES J. 36(5), 2021
     high_contrast_grating_validation.md HCG reflector, FDTD-only (no EME/hybrid) — corrected: peak R 97.1% vs paper's 98.9%, gap widened after fix; 2/3 caught mistakes now have an automated guard; res=70/80 probe shows resolution residual has NOT settled by res=60
-    high_contrast_grating_fabry_perot_validation.md HCG Fabry-Perot cavity + DC tap — BUILD PLAN; real Circuit assembly + closed form agree to fp precision; genuine but under-sampled resonance at 1.570um; dense linewidth sweep running
+    resolved/high_contrast_grating_fabry_perot_validation.md HCG Fabry-Perot cavity + DC tap — Steps 0-5 + checks 1-3 all closed with real data; 44 real resonances at the real (GDS-derived) cavity length, FSR 2.255nm; check 4 out of scope by decision
     modal_multiplexer_validation.md    modal multiplexer — resumed 2026-08-04, gap list against the four checks
     archive/                           closed items, kept whole
     resolved/                          whole docs sufficiently addressed (open to-dos may remain)
@@ -136,8 +136,12 @@ follow-up measurement (exciting the real S-bend with mode 1, a real
 `res=25` FDTD run) found **<0.01% of the launched power reaches the
 2nd-order-mode pair**, so the user's call was to treat the whole device as
 single-mode (`N_MODES=2`) — a measured simplification, not an assumed one.
-Step 1 (cavity length/FSR) is pinned — 20 µm/arm, ~9.5 nm FSR estimated
-from a measured group index — provisionally, per the user's own framing.
+**Step 1 (cavity length) is now pinned for real, 2026-08-08** — 53.08 µm/arm
+(average of two real arms, 54.583/51.583 µm), traced instance-by-instance
+from `duty/Mux_lpbk_9$4.gds`, a real fabricated test structure with this
+exact mirror-DC-mirror topology (bend radius `R=10.0 µm`, confirmed two
+independent ways; user's instruction: treat bends as straight waveguide).
+Not the original 20 µm placeholder.
 **Step 2 (re-deriving the DC for `SOI_160` at `N_MODES=2`) landed for
 real 2026-08-07, after timing out twice.** Job 11691379 (`-t 300`)
 TIMEOUT — 5 of 6 expensive FDTD sub-solves had already cached cleanly.
@@ -167,9 +171,45 @@ first real predicted cavity spectrum — and finds a genuine resonance at
 everywhere). **Read this honestly, not triumphantly: the 11-point/10 nm
 grid is comparable to the ~9.5 nm estimated FSR, so the resonance is
 almost certainly under-sampled** — this establishes the model produces
-real resonant behavior, not that the resonance is characterized. A denser
-linewidth sweep (job 11726827, 601 points at 0.05 nm spacing, sized from
-this run's own measured finesse ~23 / FWHM ~0.41 nm) is running now.
+real resonant behavior, not that the resonance is characterized.
+
+**Now fully resolved, 2026-08-08 — via interpolation, not more FDTD
+compute.** A first attempt to densify (job 11726827, a brute-force
+601-point re-run) TIMED OUT at its full 12 h budget after completing only
+3 of ~7+ needed expensive sub-solves — going 11→601 wavelength points
+multiplies each one's own eigenmode-decomposition cost by ~55x. Fixed
+instead by measuring which quantities are actually safe to interpolate:
+the real cached data shows the mode-basis pieces (`M_in0`/`M_in1`, the
+DC body's calibrated `beta(λ)`) each have modest phase steps (~65-69°/10nm,
+~15-16°/10nm) safe to interpolate directly, and only their COMBINATION
+(~153°/10nm) looked dangerous — because this device's own mirror-symmetry
+reuse counts one S-bend's phase twice. Standard practice, confirmed
+against the literature (Lumerical's own EME docs and coupled-mode theory
+both describe exactly this "solve modes sparsely, handle phase
+analytically" split), and validated for real: 2 of job 11726827's own
+pieces finished before its timeout, and interpolating the sparse data
+reproduces that real measurement to ≤1.3% error. **Result: 22 real
+resonances resolved across the C-band, mean FSR 4.500 nm** — the original
+~9.5 nm FSR estimate turns out to have had a missing round-trip factor of
+2. The resonance near the original sparse sample (read as T=0.7395 at
+1.570 µm) is real but was ~18× shallower than its true depth
+(T_min=0.0415 at 1.5698 µm, FWHM=0.235 nm, Q≈6680) — confirming the
+under-sampling concern. New permanent scripts:
+`directional_coupler_soi160_hybrid_dense.py` and a new "section 8"
+appended to `hcg_fabry_perot_hybrid.py`.
+
+**Superseded again, same day — Step 1's cavity length is now real, not a
+20 µm placeholder.** The paragraph above (22 resonances, FSR 4.5 nm) was
+computed at that placeholder length. Traced instead from
+`duty/Mux_lpbk_9$4.gds` (a real fabricated test structure sharing this
+device's own mirror-DC-mirror topology), `L_ARM=53.08 µm` — average of
+two real arms (54.583/51.583 µm), each `straight → bend(R=10.0 µm,
+confirmed two independent ways) → straight`, bends treated as straight
+waveguide per the user's instruction. Re-running the same interpolation
+scheme (unaffected by the length — only the phase term changes) at this
+real length gives **44 real resonances, mean FSR 2.255 nm, Q≈9990-16000**
+— roughly double the resonance count and Q of the placeholder-length
+case, consistent with a ~2.05× longer real cavity.
 
 **Step 4 (the `Circuit` assembly) is now also done with entirely real
 data, not just synthetic-verified** — new permanent script
@@ -188,21 +228,69 @@ real closed-form spectrum to floating-point precision**
 (`max|ΔR|=5.6e-17`, `max|ΔT|=4.4e-16`, asserted in the script itself) —
 two independent code paths, same real data, identical answer.
 
-**While the linewidth sweep ran: A4/Step 6 (the full-device FDTD control
-run) picked up a direct precedent from `ring_resonator_validation.md`,
-not just a cost estimate.** That doc didn't just find its own full-device
-FDTD check slow — it found the reference itself reported T>1 in a passive
-device (up to +8.4%) and a comb that shifted 18% of an FSR between two
-resolutions, and retired the check outright, with a stated mechanism:
-round-trip phase error is amplified ~F× by finesse, and FDTD's staircased
-boundaries ARE a round-trip path-length error, so the reference is subject
-to exactly what it's supposed to be checking. This device's own measured
-finesse (F≈23) is ~5× more tolerant than the ring's (F≈120), but its HCG
-mirrors are gratings — many staircased tooth-edges per round trip, plausibly
-more discretization surface per bounce than the ring's smooth bends. Net
-direction is unmeasured — flagged honestly as argued-by-analogy, with a
-recommendation to pilot cheaply (2-D, checking only for the same two tells)
-before ever committing to a 3-D full-device attempt.
+**Separately: check 4 (full-device FDTD control run) was decided OUT OF
+SCOPE outright, 2026-08-07 — not deferred, not piloted, skipped.** The reasoning (A4/Step 6) picked up a direct precedent from
+`ring_resonator_validation.md`: that doc didn't just find its own
+full-device FDTD check slow, it found the reference itself reported T>1 in
+a passive device (up to +8.4%) and a comb that shifted 18% of an FSR
+between two resolutions, and retired the check outright, with a mechanism
+that generalizes — round-trip phase error is amplified ~F× by finesse, and
+FDTD's staircased boundaries ARE a round-trip path-length error, so the
+reference is subject to exactly what it's supposed to be checking. This
+device's own measured finesse (F≈23) is ~5× more tolerant than the ring's
+(F≈120), but its HCG mirrors are gratings — many staircased tooth-edges per
+round trip, plausibly more discretization surface per bounce than the
+ring's smooth bends. Net direction unmeasured either way — but between the
+likely disqualification and the likely cost (the ring's 167 h is a floor,
+not a ceiling, for a smaller/lower-finesse device), the user's call was to
+skip it rather than spend SLURM time confirming either. This device's
+validation now rests entirely on the single-pass/algebraic checks that
+carry no round-trip amplification (Step 4's closed-form-vs-`Circuit` match
+to floating-point precision, DC reciprocity, passivity) — the same
+resolution the ring resonator's own doc reached, for the same reason.
+
+**Check 2 (mode identity/ordering) is now closed, 2026-08-08 — measured,
+not assumed.** Extended `examples/verification/python/
+audit_interface_modes.py` (the same cheap, no-time-stepping tool already
+used for the SOI_220 coupler and both MMIs, one of which it caught a real
+bug on) with this device's own real geometry. Result: identity
+correspondence, worst `|dn_eff|=0.00048` — no mode-mixing risk.
+
+**Check 1 (engine agreement) is now partially closed too, same day, at
+zero new compute.** `section_mode_beta()` already computes a
+per-wavelength FDTD/MPB comparison internally but only ever returned the
+aggregate result. Recovered the full grid by reusing already-cached
+calibration phases with the library's own `beta_fit_from_phases()`: the
+`Δβ_FDTD/Δβ_MPB` ratio is **0.8801 ± 0.00084 across the entire 100 nm
+band** — the ~12% discrepancy `CALIBRATE_BODY` compensates for is a
+smooth, stable, physically real effect confirmed over the whole
+operating range, not a one-wavelength fluke.
+
+**Both remaining real-cost checks landed, 2026-08-08 (job 11747764, 5-task
+array, 37 min–4h55m per task).** `directional_coupler_soi160_hybrid.py`
+gained `DC160_BODY_STUB` and `DC160_RES_SCALE` env-var overrides (both
+force a single-wavelength `N_WL=1` mode — these test numerical
+properties, not the spectrum). **Check 3 (resolution convergence): ✅
+MEASURED, converged.** `res=40→50` moves the coupling ratio by 0.00%
+while `res=30→40` moves it +7.35% — real, direct confirmation the
+production `FDTD_RESOLUTION=40`/`EME_RESOLUTION=80` (carried over
+unverified from the SOI_220 device since 2026-08-06) sits at or past the
+convergence knee. **Check 1's stub/cut-point sweep: ✅ CLOSED, resolved for real.**
+`T_cross` is stable to <1% across `BODY_STUB=0.1–0.75 µm`. The naive
+SOI_220-style formula predicted ~23× more drift than measured — but that
+formula was derived for the SOI_220 coupler's own PRE-calibration stub
+sweep (before `calibrate_body_neff` existed, specifically to expose the
+Δβ gap via MPB's uncalibrated body rate); this device already runs
+`CALIBRATE_BODY=True`, so the comparison was apples-to-oranges. Checked
+directly instead, with data already in hand: the arm sections' own real
+FDTD phase-accumulation rate (branch-safe fit, avoiding the wrap
+ambiguity a naive unwrap risks) matches the isolated calibration's rate
+to 0.3% per mode — meaning the stub-dependent terms in the combined
+coefficient cancel almost exactly BY CONSTRUCTION, because
+`CALIBRATE_BODY` makes the arm and body propagate on the same measured
+rate. The small residual drift is fully explained by that 0.3% gap. All
+four checks now have a real, resolved status (check 4 out of scope by
+documented decision, the other three closed with real measurements).
 
 **`mmi_4x4_90_hybrid_validation.md` (2026-08-05) is a build plan for a new
 device — a 4×4 MMI optical 90° hybrid on 220 nm SOI at O-band, with real

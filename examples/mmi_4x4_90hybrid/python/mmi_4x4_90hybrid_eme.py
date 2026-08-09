@@ -43,6 +43,22 @@ script. The hybrid script's real FDTD sections DO include all 4 ports'
 real geometry simultaneously and are the more physically complete model;
 this EME-only script is the cheaper, approximate one, by design.
 
+N_MODES_TAPER bumped 4->12, 2026-08-08, at the user's direction after
+visually inspecting this script's own field plots (examples/verification/
+python/plot_mmi4x4_90hybrid_eme_fields.py's output): at N_MODES_TAPER=4
+the launched mode stayed unphysically confined and speckly well into the
+MMI body instead of fanning out into a clean self-imaging interference
+pattern -- a visibly under-resolved taper mode basis, confirmed with a
+same-settings (RES=40/num_cells=30/N_MODES_BODY=8) before/after field-plot
+comparison (job 11745928 for the N_MODES_TAPER=12 render). Cost checked
+first, not assumed: coarse full-8-call timing (RES=15/N_MODES_BODY=4/N_WL=1)
+was 121s at N_MODES_TAPER=4 vs 221s at 12 -- only ~1.83x, consistent with
+the num_cells investigation's own finding that isolated-call cost
+comparisons are misleading here (JIT-compile cost is paid once and
+amortized across the 8 same-shape calls) -- applied to the num_cells=30
+production run's own 73:27, giving an estimated ~2.2h, well inside the
+existing -t 360 batch budget.
+
 Run:
     python /path/to/examples/mmi_4x4_90hybrid/python/mmi_4x4_90hybrid_eme.py
 """
@@ -69,8 +85,9 @@ WL_MAX = 1.36
 N_WL = int(os.environ.get("MMI4X4_EME_NWL", 3))   # matches the paper's own Eq. 12 convention
                                                     # (Sec. IV) and the hybrid script's own N_WL
 
-N_MODES_TAPER = int(os.environ.get("MMI4X4_EME_NMODES_TAPER", 4))   # PLACEHOLDER, half of
-                                                                     # N_MODES_BODY, not independently tuned
+N_MODES_TAPER = int(os.environ.get("MMI4X4_EME_NMODES_TAPER", 12))   # was 4 (PLACEHOLDER,
+                    # half of N_MODES_BODY, not independently tuned) -- bumped 2026-08-08,
+                    # see module docstring: field plots showed 4 was visibly under-resolved
 
 # ---------------------------------------------------------------------------
 # 1. Geometry -- identical to mmi_4x4_90hybrid_hybrid.py's settled Steps 1-3
@@ -100,9 +117,22 @@ print(f"Input ports at y = {mmi.input_ys} µm; outputs at y = {mmi.output_ys} µ
 # ---------------------------------------------------------------------------
 # 2. EME solver -- 5 regions: wg_in | taper_in | MMI body | taper_out | wg_out.
 # ---------------------------------------------------------------------------
+N_CELLS_TAPER = int(os.environ.get("MMI4X4_EME_NCELLS_TAPER", 30))
+# Taper staircase cell count -- was 15 (mmi_2x2_eme.py's own convention),
+# bumped to 30 2026-08-07 after the taper-length scoping sweep found
+# num_cells=15 measurably under-converged (a fixed-num_cells staircase's
+# per-step width-jump doesn't depend on taper_length, so the discretization
+# itself -- not physical taper length -- was the dominant loss driver;
+# see validation_markdown/mmi_4x4_90_hybrid_validation.md's "Excess-loss
+# investigation" section). 30, not the 60-100 the convergence check used,
+# per the user's own direction ("err on the lower side as 60 cells is a
+# lot") -- captures roughly half the measured 15->100 gain at a 2x cost
+# step instead of 4-7x. Scoped to THIS script only: the hybrid/body-sweep
+# scripts use FDTD (continuous geometry, no staircase) for their tapers.
+
 solver = EMESolver(
     num_modes=[1, N_MODES_TAPER, N_MODES_BODY, N_MODES_TAPER, 1],
-    num_cells=[1, 15, 1, 15, 1],   # tapers subdivided (matches mmi_2x2_eme.py); body
+    num_cells=[1, N_CELLS_TAPER, 1, N_CELLS_TAPER, 1],   # tapers subdivided; body
                                     # uniform, no subdivision needed
     lengths=[0.5, TAPER_LENGTH, MM_LENGTH, TAPER_LENGTH, 0.5],
     oxide_width=MM_WIDTH + 3.0,    # matches the hybrid script's own FDTD section margin

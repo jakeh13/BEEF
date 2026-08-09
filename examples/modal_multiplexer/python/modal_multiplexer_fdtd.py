@@ -73,10 +73,12 @@ BEEF_DIAG_RES convention.
 
 Output monitors sit at the three branches' y-positions (+WO, 0, -WO) with the
 SAME BRANCH_SPECS/WO the hybrid script uses, so "top"/"mid"/"bot" here are the
-same physical ports as there. Monitor width 0.9 µm is comfortably under the
-1.0375 µm branch pitch so neighbouring branches are not double-counted, while
-covering more than any single access waveguide's width (0.33-0.35 µm) plus
-its near-field skirt.
+same physical ports as there. UPDATED 2026-08-07: no longer an explicit
+0.9 um width -- that was narrower than it needed to be (a likely contributor
+to job 11707932's near-zero result) and has been removed in favor of
+FDTDSolver.solve()'s own (now-fixed) default: as wide as each monitor can be
+while staying centered on its own branch and inside the domain
+(sim_width - 2*abs(center)). See modal_multiplexer_validation.md gap 8.
 
 What this does NOT yet do: no golden (gap 4 — write after this is confirmed
 sane and, per every other device's Order section, only once the resolution
@@ -116,6 +118,52 @@ RESOLUTION = float(os.environ.get("MUX_FDTD_RES", "20.0"))
                     # reduced from modal_multiplexer_hybrid.py's 40 -- see
                     # module docstring. Override: MUX_FDTD_RES=40 for a later
                     # production-resolution re-run.
+DECAY_TOL = float(os.environ.get("MUX_FDTD_DECAY_TOL", "1e-9"))
+                    # CHANGED default 1e-11->1e-9, 2026-08-08, at the user's
+                    # explicit sign-off -- a methodology experiment, not a bug
+                    # fix. Two real res=20 runs (11707932, 11734286) both
+                    # decayed to catastrophic near-zero transmission
+                    # (~1e-6-1e-15) despite two confirmed, unrelated fixes
+                    # (TAPER_L, output monitor width) that independently made
+                    # the res=10 smoke test sane; TE0 needed t~77,175-77,197
+                    # to satisfy decay_tol=1e-11 in BOTH real runs (24-26x
+                    # longer than res=10's t~2910-3217), correlating the
+                    # failure with resolution/decay-time, not geometry.
+                    # Leading, NOT YET CONFIRMED hypothesis
+                    # (modal_multiplexer_validation.md gap 3): stop_when_
+                    # dft_decayed()'s relative-change criterion may force the
+                    # sim to keep running long after the real signal has
+                    # already exited, tracking some far smaller, slowly-
+                    # decaying spurious/resonant component instead -- by the
+                    # time that relative criterion is finally satisfied at
+                    # res=20, the genuine output-port signal may already have
+                    # decayed into numerical noise, while at res=10 the same
+                    # criterion happens to trip before that happens. 1e-9
+                    # matches this repo's own precedent as "the known
+                    # dominant cost knob" (run_modal_multiplexer_fdtd.batch's
+                    # own historical comments) -- loosening it should let the
+                    # sim stop while the real signal is still well above the
+                    # noise floor, if this hypothesis is right. Override:
+                    # MUX_FDTD_DECAY_TOL=1e-11 to reproduce the two prior
+                    # (broken) runs exactly.
+
+MIN_RUN_TIME = float(os.environ.get("MUX_FDTD_MIN_RUN_TIME", "1000.0"))
+                    # ADDED 2026-08-08, alongside the FDTDSolver.
+                    # minimum_run_time fix (beef/solvers/fdtd.py) -- found
+                    # BECAUSE testing DECAY_TOL=1e-9 above (job 11749567)
+                    # stopped the sim at t=107-112, not even one transit's
+                    # worth of time for a 66 um device, before the pulse
+                    # could physically have reached the output monitors.
+                    # 1000 is a generous floor: Sx (device + stubs + PML)
+                    # is ~68 um, and even a conservative silicon group index
+                    # ~4.5 only needs ~68*4.5=306 meep time units for one
+                    # transit -- 1000 leaves >3x margin for reflections/
+                    # multiple bounces before decay-checking is even
+                    # evaluated, while staying far below the ~77,175 that
+                    # decay_tol=1e-11 (no floor needed there -- tight enough
+                    # tolerance already rules out the trivial-early-stop) has
+                    # separately shown is needed regardless of this floor.
+
 WL_MIN = 1.26       # O-band, same grid as modal_multiplexer_hybrid.py so a
 WL_MAX = 1.36       # future comparison script needs no reconciliation beyond
 N_WL = 11           # port naming (both already use top/mid/bot).
@@ -179,6 +227,11 @@ print(f"MMI MUX total length: {mux.total_length:.2f} µm "
       f"width {MM_WIDTH:.2f} µm, branch pitch {WO:.4f} µm)")
 print(f"resolution = {RESOLUTION:.0f} px/um (shipped hybrid RESOLUTION = 40 -- "
       f"see module docstring)")
+print(f"decay_tol = {DECAY_TOL:.0e} (default changed 1e-11->1e-9, 2026-08-08 -- "
+      f"see module docstring/DECAY_TOL comment)")
+print(f"minimum_run_time = {MIN_RUN_TIME:.0f} (new 2026-08-08, guards against "
+      f"decay_tol being satisfied before the pulse crosses the device -- see "
+      f"module docstring/MIN_RUN_TIME comment)")
 
 # top -> mid -> bot, same index convention as modal_multiplexer_hybrid.py's
 # PORTS / the legacy master's PORT_DEFS (0=top, 1=mid, 2=bot).
@@ -212,7 +265,8 @@ solver = FDTDSolver(
     # excited/source-side aperture elsewhere in FDTDSolver. Not re-run yet.
     output_monitor_centers=[+WO, 0.0, -WO],
     material_stack=SOI_160,
-    decay_tol=1e-11,
+    decay_tol=DECAY_TOL,
+    minimum_run_time=MIN_RUN_TIME,
 )
 
 # ---------------------------------------------------------------------------

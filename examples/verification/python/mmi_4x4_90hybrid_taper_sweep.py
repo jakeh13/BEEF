@@ -19,25 +19,38 @@ between an edge port (1) and an interior port (3) the way phase/CMRR do.
 Scoping cheaply to see the TREND, not claiming full port coverage -- flag
 this simplification if a real refinement pass follows.
 
-Cost is UNMEASURED before this script's own smoke pass, deliberately, per
-this repo's own two-step discipline for a never-run script shape: unlike
-the ΔL body sweep (Step 3), which is analytically free per length via
-solve_section_length_sweep() (one mode solve per wavelength, reused across
-the whole 81-point grid), EMESolver.solve()'s disk cache is fingerprinted
-on the geometry's OWN drawn GDS (to_gds_eme()) per full 5-region chain call
--- changing taper_length changes that GDS, so each new taper_length is
-likely a genuine new solve, not a free analytic sweep point like ΔL was.
-Whether meow's own internal mode solver additionally caches by individual
-local cross-section (which would make the 15 per-taper cell mode solves
-reusable across different taper_length values, since the width AT EACH
-FRACTIONAL POSITION along a linear taper does not depend on the taper's
-overall length) is not established by reading beef's own solver code --
-measured directly below, not assumed.
+**First pass of this sweep (num_cells=15, this script's original default)
+found excess loss and imbalance IDENTICAL across taper_length -- not a
+real physical trend, a modeling artifact.** EMESolver.solve()'s disk cache
+is fingerprinted on the geometry's own drawn GDS (to_gds_eme()) per full
+5-region chain call, so each new taper_length is a genuine new solve, not
+a free analytic sweep point like the ΔL body sweep (Step 3) is. Root
+cause, confirmed directly (zero cluster time, isolated login-node calls):
+the taper's linear width profile is discretized into num_cells UNIFORM
+steps of fixed width-jump size (taper_width-waveguide_width)/num_cells,
+independent of physical length -- so with num_cells FIXED, lengthening
+the taper changes nothing about the per-step mismatch loss this model
+computes. Sweeping num_cells instead (at a fixed taper_length) showed the
+real, still-climbing trend; num_cells=15 was measurably under-converged.
+Full trail in validation_markdown/mmi_4x4_90_hybrid_validation.md's
+"Excess-loss investigation" section.
 
-RESOLUTION/N_MODES_TAPER/N_WL/TAPER_LENGTHS are env-var overridable for a
-smoke pass (MMI4X4_TAPER_RES / MMI4X4_TAPER_NMODES_TAPER / MMI4X4_TAPER_NWL
-/ MMI4X4_TAPER_LENGTHS) -- run a small, coarse smoke subset BEFORE the full
-sweep at production settings.
+Consequence for THIS script: it now defaults to num_cells=30, matching
+mmi_4x4_90hybrid_eme.py's own settled value (job 11736983, bumped from 15
+at the user's direction, "err on the lower side as 60 cells is a lot") --
+running this sweep at the old num_cells=15 default would just repeat the
+masking mistake, not test taper_length for real. Cost lesson carried over
+from that same investigation: an ISOLATED single solve() call is a
+misleading cost proxy (JAX pays a one-time JIT-compile cost per array
+shape, invisible to amortize against in a lone call) -- measure the actual
+multi-point sweep's real wall time, not a single point extrapolated by a
+naive multiplier.
+
+RESOLUTION/N_MODES_TAPER/N_MODES_BODY/N_WL/N_CELLS_TAPER/TAPER_LENGTHS are
+env-var overridable for a smoke pass (MMI4X4_TAPER_RES /
+MMI4X4_TAPER_NMODES_TAPER / MMI4X4_TAPER_NMODES_BODY / MMI4X4_TAPER_NWL /
+MMI4X4_TAPER_NCELLS_TAPER / MMI4X4_TAPER_LENGTHS) -- run a small, coarse
+smoke subset BEFORE the full sweep at production settings.
 
 Run:
     python examples/verification/python/mmi_4x4_90hybrid_taper_sweep.py
@@ -69,6 +82,12 @@ N_MODES_TAPER = int(os.environ.get("MMI4X4_TAPER_NMODES_TAPER", 4))   # matches
 N_MODES_BODY = int(os.environ.get("MMI4X4_TAPER_NMODES_BODY", 8))   # job 11707935/11707835
                     # at the default -- same body cross-section as every other script for
                     # this device, unaffected by taper_length; override down for a smoke pass
+N_CELLS_TAPER = int(os.environ.get("MMI4X4_TAPER_NCELLS_TAPER", 30))   # matches
+                    # mmi_4x4_90hybrid_eme.py's now-settled value (job 11736983) -- num_cells=15
+                    # (this script's original default) was the very thing that masked any real
+                    # taper_length trend in the first place (see module docstring/validation
+                    # doc's "Excess-loss investigation" section); re-running at 15 would repeat
+                    # that mistake, not correct it.
 
 TAPER_LENGTHS = [float(x) for x in
                   os.environ.get("MMI4X4_TAPER_LENGTHS", "1.0,2.0,3.0,4.0,5.0,7.0").split(",")]
@@ -113,7 +132,7 @@ for tl in TAPER_LENGTHS:
     )
     solver = EMESolver(
         num_modes=[1, N_MODES_TAPER, N_MODES_BODY, N_MODES_TAPER, 1],
-        num_cells=[1, 15, 1, 15, 1],
+        num_cells=[1, N_CELLS_TAPER, 1, N_CELLS_TAPER, 1],
         lengths=[0.5, tl, MM_LENGTH, tl, 0.5],
         oxide_width=MM_WIDTH + 3.0,
         oxide_height=2.0,

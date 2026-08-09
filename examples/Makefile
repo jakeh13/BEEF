@@ -105,6 +105,19 @@ directional_coupler_fdtd:
 directional_coupler_soi160_hybrid:
 	$(runner) $(my_python) directional_coupler/python/directional_coupler_soi160_hybrid.py
 
+# high_contrast_grating_fabry_perot_validation.md step 5's follow-up --
+# reconstructs a DENSE t(lambda)/k(lambda) from the sparse hybrid run above
+# via interpolation (beef.spectral.interp_complex on the safe intermediate
+# transfer-matrix pieces, NOT a brute-force dense FDTD re-solve -- see that
+# script's own module docstring for the full derivation and real validation
+# against job 11726827's partial timeout data). No srun/MPI needed: reads
+# directional_coupler_soi160_hybrid.py's own coupling_pieces.npz and does
+# pure interpolation/curve-fitting, safe on a login node. Deliberately NOT
+# added to EXAMPLES/DEVICES -- same reasoning as directional_coupler_soi160_
+# hybrid above.
+directional_coupler_soi160_hybrid_dense:
+	$(my_python) directional_coupler/python/directional_coupler_soi160_hybrid_dense.py
+
 # high_contrast_grating_fabry_perot_validation.md step 4 -- assembles the
 # already-solved HCG mirror + DC + connecting waveguides via
 # beef.network.Circuit. No srun/MPI needed: reads existing SMatrix files

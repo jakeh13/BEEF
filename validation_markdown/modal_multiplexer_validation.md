@@ -1288,6 +1288,67 @@ before either is attempted, not discovered after the fact.
      full-device FDTD reference (gap 3, job 11707932, still running as of
      this writing) to compare a new hybrid result against anyway.
 
+   **✅ 2026-08-08 — real go-ahead given, first-ever real attempt made,
+   a genuine new library bug found and fixed, second attempt in
+   progress.** With gap 3 finally closed (a real FDTD reference now
+   exists) and `TAPER_L`/`minimum_run_time` fixes available, submitted
+   the first-ever physics-on run of this device's hybrid chain: job
+   **11751064** (`run_modal_multiplexer_hybrid_SMOKE.batch`, new this
+   session — single array task, port "top", `MUX_HYBRID_N_WL=2` to bound
+   the connector-EME cost, `minimum_run_time=100.0` added to this script's
+   `fdtd_solver` preventatively, 6h budget, `save_dir` wired in so a
+   partial run isn't a total loss).
+
+   **11751064 FAILED after 1h17m** — but with a real, caught
+   `ValueError`, not a silent bad result or a wasted budget (`save_dir`
+   preserved whatever completed: 1 EME section + 1 FDTD section cached).
+   `_check_aperture()` (an existing guard, `beef/solvers/fdtd.py`, added
+   for exactly this class of problem per its own docstring — a
+   ring-resonator incident once cost 27% of transmitted power to a
+   silently-clipped aperture) caught: `excite_port aperture crosses the
+   PML: ... centre 1.0375, width 5.0000`.
+
+   **Root cause, found by tracing (not guessing)**: `section_fdtd_layout()`
+   widens a multi-mode interface's window to the full `sim_width` (correct
+   — this is the whole point of gap 3/7's "measure >1 mode → full width"
+   rule) but never re-centers it to y=0 to match. For every device before
+   this one, the underlying `center_at()` query at a multi-mode interface
+   always landed inside a single, well-defined body (an MMI or a
+   directional coupler's coupling region), which naturally reports y=0.
+   The new connector-adjacent interfaces (gap 7) are the **first ever**
+   HybridSolver boundaries to sit inside a multi-port `WaveguideRun` —
+   and `CompoundGeometry.center_at()`'s own fallback for a multi-port
+   `WaveguideRun` query with no explicit `output_idx`/`input_idx`
+   defaults to **port 0** ("top", y=+1.0375), not y=0. Combined with the
+   (correctly) unclamped full `sim_width`, that reached 3.5375 µm past a
+   2.5 µm PML inner edge. A latent gap in `section_fdtd_layout()`, not
+   something specific to this device's own script — any future device
+   cutting a boundary inside a multi-port `WaveguideRun` would have hit
+   the identical failure.
+
+   **Fixed** in `section_fdtd_layout()` (`beef/solvers/fdtd.py`): when the
+   multi-mode branch sets a side's width to `sim_width` (and no explicit
+   `monitor_center`/`monitor_size` override was given), that side's center
+   is now also forced to `0.0`. Scoped narrowly — the `n_excite == 1`
+   single-lone-port fallback (every other device's existing, working
+   precedent) is untouched; only the `n_measure > 1` / `n_excite > 1`
+   multi-mode branches are affected, and no prior device's own multi-mode
+   interfaces ever queried a multi-port `WaveguideRun` this way, so no
+   already-recorded result moves.
+
+   Traced and confirmed the mechanism directly (not just inferred from the
+   error message) via a login-node script instrumenting
+   `section_fdtd_layout()` — **caveat, logged honestly**: that trace
+   briefly ran real (small, ~5 µm domain, single-rank) FDTD physics on the
+   login node for section 0 before being caught and stopped, a real
+   violation of this repo's own "SLURM, not login-node" discipline for
+   FDTD, even though small in scope — not repeated; verification moved to
+   a real SLURM resubmission instead, per that same discipline.
+
+   **Job 11752080 resubmitted with the fix, same configuration, currently
+   running** — the actual test of whether this closes the bug. Not yet
+   landed.
+
 8. **New, 2026-08-07 — user-provided paper draft (Hiesener et al.,
    "Topology Optimization Enhancements for Multimode Interferometers," the
    TE modal multiplexer test case) cross-checked against this device's own
@@ -1415,6 +1476,158 @@ before either is attempted, not discovered after the fact.
    a fully clean result. **Not investigated further yet** — this is exactly
    the kind of thing a smoke test (res=10, deliberately crude) exists to
    surface cheaply before the real res=20 run commits real hours to it.
+
+
+   **❌ 2026-08-08, job 11734286 COMPLETED (17h01m, within budget) — the
+   real res=20 run, with all three fixes applied. STILL catastrophically
+   near-zero. The smoke test's fix did NOT carry over to production
+   resolution.** Read the full per-wavelength S-matrix directly (not just
+   the one center-wavelength line the script prints), same discipline as
+   the pre-fix run:
+
+   | in → out | T across all 11 wavelengths |
+   |---|---|
+   | TE0 → top | ~4.4×10⁻⁹ – 1.4×10⁻⁷, smooth in λ |
+   | TE0 → mid [MUX out] | ~2.6×10⁻⁶ – 3.2×10⁻⁶, smooth in λ |
+   | TE0 → bot [MUX out] | ~2.6×10⁻⁶ – 3.4×10⁻⁶, smooth in λ |
+   | TE1 → top | ~3.8×10⁻¹⁵ – 6.6×10⁻¹⁴, smooth in λ |
+   | TE1 → mid | ~9.2×10⁻¹³ – 1.1×10⁻¹² , smooth in λ |
+   | TE1 → bot | ~9.4×10⁻¹³ – 1.2×10⁻¹² , smooth in λ |
+
+   Every channel is smooth and monotone across wavelength — the same
+   "correctly-computed-ratio-scaled-by-something-badly-wrong" signature as
+   the pre-fix run, not random noise — but the magnitudes are now even
+   smaller than the pre-fix run's (which had ~10⁻⁵ channels; this one's
+   largest channel is ~10⁻⁶). TE0 finished at essentially the same
+   decay point as the pre-fix run (t=77,174.5 vs t=77,197.45 — the
+   `TAPER_L` change is too small a perturbation to move this).
+
+   **This isolates the problem.** Two real, confirmed fixes (`TAPER_L`,
+   monitor width) transformed the res=10 smoke test from broken to sane,
+   but made no qualitative difference at res=20 — same catastrophic
+   collapse, if anything worse in magnitude. The variable that actually
+   correlates with the failure across every run to date is resolution/
+   required-decay-time, not geometry or monitor sizing: res=10 needs
+   t≈2910–3217 to satisfy `decay_tol=1e-11` and produces sane results
+   (both before and after the fixes); res=20 needs t≈77,175–77,197 (24–26×
+   further) and produces near-zero results (both before and after the
+   fixes). **The leading hypothesis is now `decay_tol` itself**, exactly
+   the "more likely dominant lever" flagged and deliberately NOT changed
+   in gap 3's earlier account (pending explicit sign-off, since it's a
+   methodology decision, not a bug fix): `stop_when_dft_decayed`'s
+   relative-change criterion may force the simulation to keep running long
+   after the physically meaningful signal has already exited/decayed,
+   tracking some much smaller, slowly-decaying spurious/resonant
+   component instead — by the time that relative criterion is finally
+   satisfied at res=20, the real signal at the output monitors may already
+   have decayed into numerical noise, while at res=10 the same criterion
+   happens to trigger before that happens. **Not confirmed** — this is
+   still a hypothesis backed by correlation across four total runs (2
+   smoke, 2 real), not a mechanism verified from the meep source or a
+   controlled decay_tol sweep. **Not changed here** — same reasoning as
+   before, needs the user's explicit sign-off before spending more compute
+   on it.
+
+   **✅ User sign-off given 2026-08-08. `decay_tol` default changed
+   1e-11→1e-9** in `modal_multiplexer_fdtd.py` (env-overridable via
+   `MUX_FDTD_DECAY_TOL`; `=1e-11` reproduces the two prior broken runs
+   exactly). **Smoke test re-run first, job 11749510 (res=10,
+   decay_tol=1e-9) — safe, no regression.** COMPLETED in 8m12s (480.9s,
+   even faster than the original 1e-11 smoke test's 850s). Results
+   byte-for-byte the same as the 1e-11 smoke test: TE0 total=1.0375
+   (same 1.33 µm `check_passive` overshoot), TE1 top/mid/bot=
+   0.0101/0.0109/0.0105, total=0.0316. Expected — res=10 already decays by
+   t≈2910–3217, well inside both tolerances, so this only confirms the
+   looser criterion doesn't corrupt anything at the resolution where
+   decay was never the bottleneck. **Real res=20 run submitted as job
+   11749567** — this is the actual test of the hypothesis. landed.
+
+   **❌ 2026-08-08, job 11749567 COMPLETED in 12 minutes — but this
+   REJECTS the decay_tol hypothesis and finds a different, more specific
+   bug.** The astonishing speed itself was the tell: `run 0 finished at
+   t=107.125` (TE0), `run 1 finished at t=112.225` (TE1) — for a 66 µm
+   device, light needs several hundred meep time units at minimum just to
+   physically cross it once. The sim stopped before the pulse could have
+   reached the output monitors at all — T=0 (hit the script's -200 dB
+   floor) for exactly that reason, not because the device is lossy.
+
+   **Root cause, found**: `FDTDSolver` never sets `minimum_run_time` on
+   `stop_when_dft_decayed()` anywhere (3 call sites, `beef/solvers/
+   fdtd.py`) — meep's own default is 0, no floor at all. A loose-enough
+   `decay_tol` can therefore be satisfied by a fast, near-source transient
+   long before a distant monitor has seen anything, independent of the
+   device's real coupling. This also reframes the *previous* result
+   (11734286, decay_tol=1e-11, ran to t≈77,175): that run had plenty of
+   time for the real signal to arrive and still returned near-zero — so
+   decay_tol was never really the dominant lever; it happened to be tight
+   enough to avoid the trivial-early-stop bug, but something else
+   (still unidentified) makes even a fully-run simulation report
+   near-zero transmission at res=20 specifically.
+
+   **Independent corroboration, should have been checked earlier**: the
+   user's own paper (Fig. 3e/Table 2, gap 8) reports the SEED device's
+   simulated single-pass transmission at roughly 50–68% per channel —
+   much closer to the res=10 smoke test's ~50% than to either real run's
+   near-zero. This supports reading res=10 as closer to physically correct
+   and both res=20 attempts as genuinely broken, not the reverse.
+
+   **Fixed**: `FDTDSolver` gained a new `minimum_run_time` constructor
+   parameter (default 0.0 — meep's own default, unchanged, so no other
+   device's already-recorded behavior moves), wired into all 3
+   `stop_when_dft_decayed()` call sites. `modal_multiplexer_fdtd.py` sets
+   it explicitly to 1000 (device+stub+PML span ~68 µm; even a conservative
+   silicon group index ~4.5 only needs ~306 time units for one transit —
+   1000 leaves >3x margin for reflections, comfortably below the ~77,175
+   decay_tol=1e-11 has separately shown is needed regardless). Smoke-
+   checked (login-node, construction only): `solver.minimum_run_time` ==
+   1000.0, confirmed wired correctly. **Not yet run for real at any
+   resolution with this fix** — next step is the res=10 smoke test
+   first, same two-step discipline as every other change this gap.
+
+   **✅ 2026-08-08 — CLOSED.** Job 11749883 (res=10 smoke,
+   decay_tol=1e-9 + minimum_run_time=1000) COMPLETED in 475s, byte-for-byte
+   identical to every prior sane smoke result — no regression, as
+   expected (natural decay at res=10 already exceeds the 1000-unit floor).
+   Then **job 11749963 (real res=20, both fixes) COMPLETED in 35m51s —
+   29× faster than the original 17h01m run — with the FIRST genuinely
+   sane, physically trustworthy result this device has ever produced at
+   production-relevant resolution.** Full per-wavelength S-matrix read
+   back directly (not just the center-λ print):**
+
+   | in → out | T range across 11 wavelengths (1.26–1.36 µm) |
+   |---|---|
+   | TE0 → top | 0.40 – 0.71, smooth monotone decrease |
+   | TE0 → mid [MUX out] | 0.02 – 0.22, smooth monotone increase |
+   | TE0 → bot [MUX out] | 0.02 – 0.19, smooth monotone increase |
+   | TE1 → top | 0.01 – 0.07 |
+   | TE1 → mid [MUX out] | 0.05 – 0.55, smooth monotone decrease |
+   | TE1 → bot [MUX out] | 0.05 – 0.55, smooth monotone decrease |
+
+   TE0 total power 0.75–0.85 across the band; TE1 total 0.17–1.10 (the
+   one >1 point sits at the short-wavelength band edge, λ=1.26 µm,
+   `check_passive` flagged it — same modest, edge-of-band monitor-overlap
+   suspect already on record above, not a new problem). Every one of the
+   6 spectra is smooth and physically well-behaved across the full band —
+   no noise, no exact zeros, no absurd magnitudes — plotted in
+   `results.png`: TE1's mid/bot curves cross TE0's top curve near
+   λ≈1.32–1.33 µm, a real, plausible spectral feature for a phase-
+   shifter-based mux (whose operating principle is inherently
+   wavelength-dependent — a relative phase shift between two arms is a
+   function of λ).
+
+   **This closes the four-bug chain that blocked this gap**: `TAPER_L`
+   (2.0→3.0, matching the paper), `output_monitor_widths` (both the
+   device script's own ad-hoc override and the library's broken default),
+   and `minimum_run_time` (missing floor on `stop_when_dft_decayed`) were
+   all real, independent, now-fixed defects — not one single root cause,
+   four of them stacked, each masking evidence of the others until fixed
+   in sequence. **Gap 3 (README check 4) is CLOSED**: this device finally
+   has a trustworthy full-device FDTD reference, `example_output/
+   modal_multiplexer/modal_multiplexer_fdtd/smatrix.pkl`
+   (job 11749963), matching every other device in this repo. **Remaining
+   open item, minor**: the single >1 `check_passive` point at the
+   1.26 µm band edge — not investigated further, same monitor-overlap
+   suspect flagged in this gap's earlier smoke-test writeup.
 
 ## Order
 

@@ -661,9 +661,24 @@ def section_fdtd_layout(
         kpoint = (1.0, 0.0, 0.0)
         alpha_idx = 0
 
+    mea_w = (sim_width if n_measure > 1 else mea_w0) if monitor_size is None else monitor_size
     if monitor_center is not None:
         mea_c = monitor_center
-    mea_w = (sim_width if n_measure > 1 else mea_w0) if monitor_size is None else monitor_size
+    elif n_measure > 1 and monitor_size is None:
+        # A multi-mode interface's window is the FULL domain width, which is
+        # only geometrically valid centered at y=0 -- center_at() may return
+        # an arbitrary single PORT's position here, meaningless for "the
+        # whole shared cross-section" this window is meant to represent
+        # (e.g. a multi-port WaveguideRun with no explicit output_idx/
+        # input_idx in geometry_kwargs silently defaults to port 0's
+        # position), and combined with sim_width can push the window past
+        # the PML on the far side. FOUND 2026-08-08 on the modal
+        # multiplexer's new connector-adjacent interfaces (gap 7):
+        # CompoundGeometry.center_at() returned +1.0375 ("top" branch, port
+        # 0's default) for a query into the connector WaveguideRun with no
+        # port index given, caught by _check_aperture() rather than
+        # silently clipping (see that function's own docstring/history).
+        mea_c = 0.0
 
     src_aperture = None
     if n_excite == 1:
@@ -677,6 +692,15 @@ def section_fdtd_layout(
         src_c = sim_width / 4.0 if src_c > 0 else (-sim_width / 4.0 if src_c < 0 else 0.0)
     else:
         src_width = sim_width
+        if n_excite > 1:
+            # Same reasoning/fix as mea_c above, mirrored for the excite
+            # side's own multi-mode case. n_excite == 1 (a genuine lone
+            # single-mode port) is deliberately left untouched here --
+            # every existing device's own precedent for that fallback
+            # keeps center_at()'s real position, and changing it would be
+            # an unrelated, unverified behavior change for devices that
+            # already work.
+            src_c = 0.0
 
     return SectionFDTDLayout(
         L=L, n_excite=n_excite, n_measure=n_measure, reverse=reverse,
@@ -791,6 +815,27 @@ class FDTDSolver:
             exact wavelength is already the correct medium.
         decay_tol: DFT field decay tolerance for early-stop criterion.
             Lower = more accurate but slower; 1e-9 is faster, 1e-11 is tight.
+        minimum_run_time: floor (meep time units) before
+            stop_when_dft_decayed()'s check is even evaluated. meep's own
+            default is 0 -- no floor at all -- so a loose-enough decay_tol
+            can be satisfied by a fast, near-source transient before light
+            has physically had time to reach a distant monitor, silently
+            reporting near-zero transmission for a reason that has nothing
+            to do with the device's real coupling. FOUND 2026-08-08 on the
+            modal multiplexer (66 um device): decay_tol=1e-9 with no floor
+            stopped the sim at t=107-112 -- not even one transit's worth of
+            time for a device this long -- while decay_tol=1e-11 (no floor
+            either, just tight enough that the trivial-early-stop can't
+            satisfy it) ran to t~77,175 and STILL returned near-zero
+            transmission, an unrelated, still-open problem (see
+            modal_multiplexer_validation.md gap 3). Default 0 (meep's own
+            default, unchanged) so no other device's already-recorded
+            behavior/golden moves; every caller to date has relied on this
+            default implicitly, same reasoning as output_monitor_widths'
+            own history. Set explicitly, per device, to comfortably exceed
+            one full pulse transit of the actual structure (device length /
+            group velocity, in meep's c=1 units) before trusting decay_tol
+            alone to know when to stop.
         source_bandwidth_factor: Gaussian pulse width as a multiple of the
             requested frequency span 1/λ_min - 1/λ_max (see source_fwidth()).
             Must exceed 1 or the band edges are starved — the default 2.0
@@ -830,6 +875,7 @@ class FDTDSolver:
         material_stack: MaterialStack = SOI_160,
         dispersive: Optional[bool] = None,
         decay_tol: float = 1e-11,
+        minimum_run_time: float = 0.0,
         source_bandwidth_factor: float = 2.0,
         eps_averaging: bool = True,
         subpixel_tol: float = 1e-4,
@@ -850,6 +896,7 @@ class FDTDSolver:
         self.material_stack = material_stack
         self.dispersive = dispersive
         self.decay_tol = decay_tol
+        self.minimum_run_time = minimum_run_time
         self.source_bandwidth_factor = source_bandwidth_factor
         self.eps_averaging = eps_averaging
         self.subpixel_tol = subpixel_tol
@@ -1104,7 +1151,7 @@ class FDTDSolver:
             for yc, yw in zip(self.output_monitor_centers, out_widths)
         ]
 
-        sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol))
+        sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol, minimum_run_time=self.minimum_run_time))
 
         # Normalise by forward input-mode amplitude so |coeff|² = physical T
         in_coeff = sim.get_eigenmode_coefficients(
@@ -1317,7 +1364,7 @@ class FDTDSolver:
                           size=mp.Vector3(0, src_width, self._mon_sz)),
         )
 
-        sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol))
+        sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol, minimum_run_time=self.minimum_run_time))
 
         coeff = sim.get_eigenmode_coefficients(mon, [input_mode], eig_parity=mp.NO_PARITY)
         fwd = coeff.alpha[0, :, 0]   # [nfreq] incident amplitude, monitor order
@@ -2473,7 +2520,7 @@ class FDTDSolver:
                               size=mp.Vector3(*_port_size(mea_axis, mea_width, self._mon_sz))),
             )
 
-            sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol))
+            sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol, minimum_run_time=self.minimum_run_time))
 
             norm_coeff = sim.get_eigenmode_coefficients(norm_flux, [k], eig_parity=mp.NO_PARITY)
             if ex_axis == "y":

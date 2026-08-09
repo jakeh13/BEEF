@@ -1195,6 +1195,33 @@ precedent for a comparable-length device: **the directional coupler's own
 device is 84 µm, closely comparable. Budgeted at `-t 360` (2× that
 precedent) per task.
 
+**⚠️ Both array tasks TIMED OUT 2026-08-07/08 at the full `-t 360` (6h)
+budget** (task 0/port 1: 06:00:10 elapsed; task 1/port 3: 06:00:29) — the
+directional-coupler precedent underestimated this device's real cost by
+at least 2×. Not a crash or a bug: both tasks were still stepping cleanly
+at a steady, unremarkable ~0.29 s/step right up to the kill (step ~70120,
+meep time ≈876), no NaNs, no slowdown, no error — genuinely still
+converging toward `decay_tol=1e-11` when the clock ran out. `FDTDSolver`
+has no checkpoint/restart path (checked directly — no `checkpoint`/
+`restart`/`resume` in `beef/solvers/fdtd.py`), so any resubmission restarts
+from t=0 and re-pays the full cost, not just the remaining delta. No
+decay-percentage diagnostic is printed by this run to extrapolate
+remaining time from, so the real distance to convergence is unknown —
+could be a modest overrun or a much larger one. Partition (`cpu-small`)
+has no meaningful wall-time ceiling for this account (21 days), so a
+bigger `-t` budget is available if wanted; the open question is how much
+more compute is worth spending chasing this cross-check, not whether the
+cluster allows it. **Paused here, not resubmitted, pending the user's
+call** — this repo's whole discipline (Step 3a's 16-mode timeout,
+resolution calibration here already) has been to measure before spending
+more, not to double the budget and hope.
+
+**Decision 2026-08-08 (user's direct call): drop Step 6b for now.** Not
+resubmitted at a bigger budget or a loosened `decay_tol` — the hybrid
+script (Step 6c) stands as the trusted, already-completed result for this
+device; the full-device FDTD cross-check (check 4, Step 8) remains
+formally open, not closed, if picked up again later.
+
 ### Step 7 — metrics helper (A8) — ✅ math primitives landed 2026-08-05; the plot/report itself still pending Step 6
 
 **Deliverable.** Imbalance, excess loss, CMRR_I/Q, and phase-error
@@ -1340,6 +1367,109 @@ gain). Only this one script changed — the hybrid (6c) and body-sweep
 (Step 3) scripts don't use this parameter for their tapers at all (they
 use FDTD there), so nothing about their own already-reported numbers is
 affected or needs re-running.
+
+**Cost check before committing production time — isolated single calls
+were misleading, measured directly rather than trusted.** An isolated
+`solve()` call at `num_cells=30` (coarse settings) took ~240s vs.
+`num_cells=15`'s ~29s — an alarming 8x that would extrapolate to hours for
+the full 8-call production run. Before accepting that estimate, ran the
+ACTUAL script (not isolated calls) at the same coarse settings for both
+`num_cells` values: the full 8-call batch took 74s at 15 and 133s at 30 —
+only ~1.8x, not 8x. The isolated-call number was dominated by a one-time
+JAX JIT-compilation cost for that specific array-shape configuration, paid
+once and reused across the other 7 same-shape calls within one script run
+— invisible in an isolated single call, which pays that cost with nothing
+to amortize it against. Applying the real ~1.8x to the original
+production run's own measured time (job 11726819, 40:46 for all 8 calls)
+gives an estimated **~73 min** for the `num_cells=30` re-run — comfortably
+inside the existing `-t 360` (6h) SLURM budget, left unchanged.
+
+**Real near-miss, caught and fixed, not shipped:** the coarse-setting
+smoke invocations above wrote to the SAME `example_output/.../
+mmi_4x4_90hybrid_eme/` directory the real script always uses (env-var
+overrides change solver settings, not the output path) — so two smoke
+runs briefly overwrote the official job 11726819 results (`eme_results.
+npz`/`.png`, `smatrix_eme_port{1,3}.pkl`) with coarse garbage. Caught
+immediately (the file mtimes/values didn't match what should be there),
+and recovered with zero data loss: re-ran the script with
+`MMI4X4_EME_NCELLS_TAPER=15` and every other setting at its production
+default, which hit the on-disk solve cache instantly (11s for all 8 calls)
+and reproduced job 11726819's own recorded numbers exactly (imbalance,
+CMRR, Δφ_6/7/8 all matched to the displayed precision) — confirming the
+underlying cache was never touched, only the output directory's own
+files were transiently clobbered. Lesson for next time: point smoke-test
+env-var experiments at a scratch output path, not the script's own
+official `output_dir`, even when only solver *parameters* are overridden.
+
+**✅ Job 11736983 COMPLETED 2026-08-07 (1:13:27 — matched the ~73 min
+estimate closely).** Real, measured before/after comparison (num_cells=15,
+job 11726819, vs. num_cells=30, job 11736983), all 3 wavelengths:
+
+| | 1.26 µm | 1.31 µm | 1.36 µm |
+|---|---|---|---|
+| excess loss, port 1 (15→30) | 3.570→3.475 dB | 2.325→2.237 dB | 2.440→2.359 dB |
+| excess loss, port 3 (15→30) | 5.299→5.200 dB | 2.582→2.496 dB | 3.099→3.018 dB |
+
+**A real, consistent, but modest improvement: ~0.08-0.10 dB per port at
+every wavelength** — smaller than the ~0.3-0.6 dB extrapolated earlier
+from the coarse single-port proxy (that estimate was from a very different,
+unconverged settings regime — RES=15/N_MODES_BODY=4 — not a substitute
+for measuring it at the real production settings, which is what this is).
+Imbalance/CMRR/phase error all shifted by only hundredths of a dB/degree
+— consistent with excess loss being the metric this specific numerical
+artifact should affect (it changes total transmitted power), while
+imbalance/CMRR/phase are ratios between output ports that a
+roughly-uniform-across-ports discretization effect should mostly cancel
+out of, and did.
+
+**Net: num_cells was a real lever, but a small one at the 15→30 step
+taken.** `num_cells=30` is itself still short of the ~15→100 convergence
+climb measured earlier (60-100 kept climbing on the coarse proxy) — more
+of this specific correction is available at higher `num_cells`, at a
+steeper, non-trivially-scaling cost (see the cost-check above). Not
+pursued further without the user's direction, given the returns here were
+modest relative to the still-unaddressed EME-vs-hybrid divergence and the
+still-unresolved taper_length question (masked by `num_cells=15` before,
+now only partially unmasked at `num_cells=30` — the original
+`mmi_4x4_90hybrid_taper_sweep.py` scoping sweep has not been re-run at the
+new `num_cells=30`).
+
+### Taper-length re-check at num_cells=30 — 2026-08-07
+
+Re-ran `mmi_4x4_90hybrid_taper_sweep.py` (updated to default `num_cells=30`,
+matching `mmi_4x4_90hybrid_eme.py`'s now-settled value) at a coarse smoke
+setting (`N_MODES_TAPER=2`, `N_MODES_BODY=4`, `RES=15`, taper_length ∈
+{1.0, 3.0}). **Still exactly flat** (excess_loss=10.802 dB, imbalance=7.41
+dB, identical at both lengths) — bumping `num_cells` alone was NOT enough
+to unmask a length trend at this mode count. Cross-referencing the earlier
+diagnostic data: `N_MODES_TAPER=4` (this script's own real-sweep default)
+also showed flatness to displayed precision at every `num_cells` tested
+(5/15/30/60/100, all identical between taper_length=1 and 3). The ONLY
+mode count that showed ANY resolvable taper_length dependence at all was
+`N_MODES_TAPER=8`, and even there the effect was tiny (~1.3% relative
+`|S|²` change from tl=1→10 µm) and pointed the "wrong" way (loss
+*increasing* with length) — more consistent with a residual numerical
+artifact than a real adiabatic-taper benefit, not independently confirmed
+at a higher `num_cells` either.
+
+**Not yet run: the full production-parameter sweep** (6 taper lengths ×
+4 outputs, `N_MODES_TAPER=4`/`N_MODES_BODY=8`/`RES=40`) — estimated at
+roughly an hour of real cluster time by analogy to the EME production
+run's own per-call cost, likely to reconfirm "no resolvable trend," given
+every mode count tested below production settings already shows one.
+Paused here to check with the user before spending that time chasing a
+signal that looks null at every setting actually usable in the settled
+scripts.
+
+**Decision 2026-08-08 (user's direct call): stop here.** Every setting
+tried (num_cells 5-100 x N_MODES_TAPER 2/4, and now num_cells=30 x
+N_MODES_TAPER=2) shows a flat or negligible taper_length effect — not
+pursuing the full production-parameter sweep to chase a signal already
+this consistently null. `taper_length=1.0` (MMI's own class default,
+Step 2's original placeholder) stands unchanged; the only real,
+production-validated loss-reduction lever from this whole investigation
+is the `num_cells` 15→30 bump already landed in `mmi_4x4_90hybrid_eme.py`
+(job 11736983, ~0.08-0.10 dB real reduction).
 
 ### Step 8 — the four checks
 

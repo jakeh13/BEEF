@@ -154,7 +154,20 @@ RESOLUTION = 40.0   # mesh resolution (pixels/µm) — used by both the EME and 
                     # chain's accuracy actually depends on).
 WL_MIN = 1.26       # wavelength sweep start (µm) — O-band, matching the legacy device
 WL_MAX = 1.36       # wavelength sweep end (µm)
-N_WL = 11           # number of wavelength points
+N_WL = int(os.environ.get("MUX_HYBRID_N_WL", "11"))
+                    # env-overridable, ADDED 2026-08-08 for smoke-testing the
+                    # 7-section chain cheaply: FDTD launch COUNT does not
+                    # depend on N_WL (each broadband FDTD run captures every
+                    # wavelength via DFT in one shot), but every EME mode
+                    # solve (both bodies, and the new connector section) is
+                    # SOLVED PER WAVELENGTH POINT and does scale directly
+                    # with N_WL -- the connector solve alone measured ~84
+                    # min/wavelength on 1 rank (gap 7), so this is the
+                    # correct lever for a first cheap smoke run of the new
+                    # split, not RESOLUTION (which N_MODES/CONN_MODES were
+                    # specifically measured against at RESOLUTION=40 -- see
+                    # each constant's own comment -- so changing it would
+                    # need fresh justification, unlike N_WL).
 
 # ---------------------------------------------------------------------------
 # 1. Geometry — the legacy cascaded MUX, dimensions straight from
@@ -346,6 +359,19 @@ fdtd_solver = FDTDSolver(
     # all).
     material_stack=SOI_160,
     decay_tol=1e-11,
+    minimum_run_time=100.0,
+    # ADDED 2026-08-08, same fix as modal_multiplexer_fdtd.py's own (gap 3):
+    # FDTDSolver never floors stop_when_dft_decayed() by default, so a
+    # loose-enough decay_tol can trigger before a section's own light has
+    # crossed it. Lower risk here than the full-device script -- every FDTD
+    # section in THIS chain is only ~4 um plus stub/PML (~5.5 um total
+    # simulated span), a small fraction of the 68 um that bug needed to
+    # matter at -- but decay_tol here is already the tight 1e-11 (the
+    # regime where the bug did NOT manifest for the FDTD script either), so
+    # this is a preventative floor, not a response to an observed failure.
+    # 100 = ~4x a rough one-transit estimate (5.5 um * silicon group index
+    # ~4.5 =~ 25 meep time units), leaving real margin without approaching
+    # any resolution-relevant cost.
 )
 body_solver = EMESolver(
     num_modes=[N_MODES], num_cells=[1], lengths=[1.0],  # placeholders; solve_section() takes its span from the boundaries

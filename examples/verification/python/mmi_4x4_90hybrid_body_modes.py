@@ -28,7 +28,18 @@ MM_WIDTH = 6.0   # Step 2's settled candidate
 # 11693043, Step 1c) took 874.6s, so "16 modes" was not simply a few times
 # more expensive as guessed. 8 is a data point to establish the real
 # per-mode scaling before committing more compute to a final number.
-NUM_MODES_REQUESTED = 8
+#
+# 2026-08-08: job 11707935/11707835 confirmed all 8 requested modes come
+# back GUIDED with a healthy, still-widening n_eff margin (2.962->2.833,
+# cladding 1.4468) -- meaning the true guided-mode ceiling for this
+# cross-section was never actually found, only a lower bound established.
+# The taper-mode-count investigation found the SAME open question at the
+# taper's own 0.8um-wide end mattered a lot (real guided count 6, not the
+# 2 an earlier buggy check wrongly suggested) -- extending here to find
+# the real ceiling for the body too, at the ~416 s/mode rate measured
+# above (8 modes, 3324.7s): 20 modes budgeted at ~2.3h, via batch (not the
+# 60-min timeout that killed job 11706986).
+NUM_MODES_REQUESTED = 20
 SIM_W = MM_WIDTH + 14.0   # generous PML/margin clearance for a wide mode request
 SIM_H = 2.0               # Step 1b's converged sz
 

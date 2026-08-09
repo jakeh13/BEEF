@@ -115,6 +115,21 @@ WL_MIN = 1.50       # C-band, matches the HCG mirror's own band
 WL_MAX = 1.60
 N_WL = 11
 
+# DC160_RES_SCALE (check 3's resolution-convergence sweep) scales BOTH
+# engines together and redirects output -- see the DC160_BODY_STUB block
+# below (same env-var override family) for the mutual-exclusivity guard and
+# the single-wavelength cost reasoning.
+_res_scale_env_early = os.environ.get("DC160_RES_SCALE")
+if _res_scale_env_early is not None:
+    _res_scale = float(_res_scale_env_early)
+    FDTD_RESOLUTION *= _res_scale
+    EME_RESOLUTION *= _res_scale
+    output_dir = os.path.join(output_dir, "resolution_sweep", f"scale{_res_scale:g}")
+    print(f"DC160 resolution sweep override: scale={_res_scale} -> "
+          f"FDTD_RESOLUTION={FDTD_RESOLUTION} EME_RESOLUTION={EME_RESOLUTION} "
+          f"-> output_dir={output_dir}")
+    os.makedirs(output_dir, exist_ok=True)
+
 # DC160_WL_MIN/DC160_WL_MAX/DC160_N_WL override the full-band production
 # window above -- see module docstring's "WAVELENGTH WINDOW" section. Unset
 # (the default) reproduces job 11716260's original full-band behavior
@@ -136,6 +151,29 @@ if any(v is not None for v in _win_env):
     print(f"DC160 wavelength window override: WL_MIN={WL_MIN} WL_MAX={WL_MAX} "
           f"N_WL={N_WL} -> output_dir={output_dir}")
 
+# DC160_RES_SCALE (check 3, Step 2 item 2's resolution-convergence gap) and
+# DC160_BODY_STUB (check 1's cut-point/stub-invariance test, validation
+# doc's step 6) are two SEPARATE, mutually exclusive sweep axes -- each
+# changes what the FDTD cache actually re-solves, so combining them would
+# make a single run's cost/cache-key story ambiguous. Both force N_WL=1 at
+# lambda=1.55 um (unless the wavelength window above was ALSO explicitly
+# set) because these sweeps test a NUMERICAL PROPERTY (does resolution or
+# cut-point choice change the answer), not the spectrum -- full N_WL=11
+# decomposition cost would be paid for nothing new.
+_res_scale_env = os.environ.get("DC160_RES_SCALE")
+_stub_env = os.environ.get("DC160_BODY_STUB")
+if _res_scale_env is not None and _stub_env is not None:
+    raise SystemExit(
+        "DC160_RES_SCALE and DC160_BODY_STUB are mutually exclusive -- each "
+        "is its own sweep axis with its own cache/output-path story; set "
+        "only one per run."
+    )
+if (_res_scale_env is not None or _stub_env is not None) and not any(v is not None for v in _win_env):
+    WL_MIN = WL_MAX = 1.55
+    N_WL = 1
+    print("DC160 resolution/stub sweep: forcing single-wavelength (1.55 um) "
+          "mode -- this tests a numerical property, not the spectrum.")
+
 os.makedirs(output_dir, exist_ok=True)
 
 # The real fabricated coupler's own straight coupled-pair length -- FIXED,
@@ -147,6 +185,16 @@ COUPLING_LENGTH = 3.0   # um -- duty/dc.gds, step 0
 # as directional_coupler_hybrid.py's BODY_STUB. 2*BODY_STUB=0.5 um leaves a
 # body_length of 2.5 um out of the 3.0 um total -- comfortably positive.
 BODY_STUB = 0.25   # um
+
+# DC160_BODY_STUB overrides BODY_STUB for check 1's cut-point sweep --
+# validation_markdown/high_contrast_grating_fabry_perot_validation.md
+# step 6. Must stay < COUPLING_LENGTH/2 = 1.5 (checked below, same guard
+# the default value already passes).
+if _stub_env is not None:
+    BODY_STUB = float(_stub_env)
+    output_dir = os.path.join(output_dir, "stub_sweep", f"stub{BODY_STUB:.3f}")
+    print(f"DC160 body-stub sweep override: BODY_STUB={BODY_STUB} -> output_dir={output_dir}")
+    os.makedirs(output_dir, exist_ok=True)
 
 N_MODES = 2   # fundamental-mode even/odd supermode pair ONLY -- see module
               # docstring point 2 for the measurement justifying this.
@@ -333,6 +381,21 @@ np.savez(
     wavelengths=wavelengths, T_through=T_through, T_cross=T_cross, T_total=T_total,
     coupling_length=COUPLING_LENGTH,
     fdtd_resolution=FDTD_RESOLUTION, eme_resolution=EME_RESOLUTION,
+)
+
+# The intermediate transfer-matrix pieces (NOT just the final coeff_through/
+# coeff_cross) -- needed by directional_coupler_soi160_hybrid_dense.py to
+# reconstruct a dense spectrum via interpolation rather than a brute-force
+# dense FDTD re-solve. M_in0/M_in1 (arm-excitation -> body-mode overlaps) and
+# _beta (the FDTD-calibrated body propagation constant) each vary slowly and
+# safely with wavelength on their own; only the FINAL combined coefficient's
+# phase varies rapidly (the S-bend path is traversed twice by the
+# mirror-symmetry reuse above, doubling its phase rate) -- see that script's
+# own module docstring for the real, measured justification.
+np.savez(
+    os.path.join(output_dir, "coupling_pieces.npz"),
+    wavelengths=wavelengths, M_in0=M_in0, M_in1=M_in1, beta=_beta,
+    body_length=body_length, coupling_length=COUPLING_LENGTH,
 )
 
 fig, axes = plt.subplots(1, 2, figsize=(12, 4))

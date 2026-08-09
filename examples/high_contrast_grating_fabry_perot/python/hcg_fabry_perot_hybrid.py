@@ -31,10 +31,12 @@ t' matched t to ~1e-5). So the saved smatrix_hybrid.pkl's t/k alone are
 enough to build the full 4-port block; a separate reconstruction of the
 "isolated" branch is not needed.
 
-Connecting waveguide (20 um each arm, Step 1's provisional pin): a real
-fundamental-mode-only meow/MPB sweep (no FDTD -- straight section), run
-fresh here rather than depending on a scratch file. Built as a genuinely
-BIDIRECTIONAL SMatrixBlock -- NOT via beef.network.convert.
+Connecting waveguide (53.08 um each arm, Step 1's REAL pin -- traced from
+duty/Mux_lpbk_9$4.gds's own real fabricated loopback structure, see
+L_ARM's own comment below): a real fundamental-mode-only meow/MPB sweep
+(no FDTD -- straight section), run fresh here rather than depending on a
+scratch file. Built as a genuinely BIDIRECTIONAL SMatrixBlock -- NOT via
+beef.network.convert.
 from_transfer_matrix(), which is documented one-directional by design and
 was found (2026-08-05, tests/test_fabry_perot_network_crosscheck.py) to
 silently zero out a mirror's reflection when used for this. A real,
@@ -53,16 +55,37 @@ Matching to floating-point precision is the check itself -- same role
 test_network_ring_crosscheck.py's cross-check plays for the ring.
 
 KNOWN OPEN GAPS, not fixed by this script (see the validation doc):
-  - The 11-point DC grid (10 nm spacing) is far coarser than the ~0.41 nm
-    FWHM estimated from this cavity's own finesse -- the spectrum below is
-    known to be under-sampled near the resonance it itself reveals near
-    1.57 um. A dense zoom sweep is a separate, already-running effort
-    (validation doc step 5's follow-up).
   - FDTD_RESOLUTION=40/EME_RESOLUTION=80 (inherited from
     directional_coupler_soi160_hybrid.py) are ASSUMED, not independently
     converged for this device.
-  - The 20 um arm length is a provisional pin (Step 1), not a target
-    derived from a desired FSR/finesse.
+  - L_ARM=53.08 um is the AVERAGE of the real structure's own two arms
+    (54.583 and 51.583 um -- a real 3.0 um asymmetry this symmetric-cavity
+    model does not capture, per Step 1's own framing).
+
+DENSE RESONANCE CHARACTERIZATION (added 2026-08-08, step 5's follow-up)
+
+The 11-point/10 nm DC grid above is far coarser than the ~0.41 nm FWHM
+estimated from this cavity's own finesse -- the sparse spectrum only shows
+that a resonance exists near 1.57 um, not its real depth/width/Q/position.
+The first attempt to fix this (job 11726827, a brute-force 601-point re-run
+of directional_coupler_soi160_hybrid.py) TIMED OUT at 12 h after completing
+only 3 of the ~7+ needed expensive FDTD sub-solves -- going 11 -> 601
+wavelength points multiplies each sub-solve's own end-of-run eigenmode
+decomposition cost by ~55x, not "the same run, more points for free."
+
+Fixed instead with interpolation, not more compute: if
+example_output/directional_coupler/directional_coupler_soi160_hybrid/
+smatrix_hybrid_dense.pkl exists (from directional_coupler_soi160_hybrid_
+dense.py -- see that script's own module docstring for the full
+derivation and the real, measured per-factor validation), this script
+loads it, interpolates the HCG's own r(lambda) onto the same dense grid
+(already confirmed safe -- max phase step ~7.5 deg per 5 nm, nowhere near
+unwrap's danger zone), fits the connecting waveguide's neff(lambda) with a
+low-degree polynomial (reusing the SAME 11 real mode-solve points already
+computed above -- no new MPB solves), and evaluates the closed form (NOT
+re-running Circuit at thousands of points -- redundant, since Circuit and
+the closed form already agree to floating-point precision on the sparse
+grid above) to find the real resolved resonance lineshape.
 
 Run:
     python /path/to/examples/high_contrast_grating_fabry_perot/python/hcg_fabry_perot_hybrid.py
@@ -90,7 +113,19 @@ os.makedirs(output_dir, exist_ok=True)
 HCG_SMATRIX = os.path.join(_ROOT, "example_output", "high_contrast_grating", "high_contrast_grating_fdtd", "smatrix.pkl")
 DC_SMATRIX = os.path.join(_ROOT, "example_output", "directional_coupler", "directional_coupler_soi160_hybrid", "smatrix_hybrid.pkl")
 
-L_ARM = 20.0   # um, Step 1's provisional pin -- both connecting-waveguide arms, symmetric cavity
+L_ARM = 53.08   # um -- Step 1's REAL pin, 2026-08-08, traced from duty/Mux_lpbk_9$4.gds's own
+                # real fabricated mirror-DC-mirror loopback structure (a real test structure with
+                # this device's own topology), NOT the earlier 20 um placeholder. Path traced
+                # instance-by-instance (gdstk reference transforms: origin/rotation/x_reflection),
+                # left arm = straight(25.375) + bend(R=10.0, quarter-circle arc len=15.708,
+                # user's instruction: treat bends as straight waveguide) + straight(13.5) =
+                # 54.583 um; right arm = straight(25.375) + bend(15.708) + straight(10.5) =
+                # 51.583 um. R=10.0 confirmed two independent ways: from the bend cell's own core
+                # polygon extent, and from each bend's own port-to-port chord length (chord=R*sqrt(2)
+                # for a 90 deg arc) -- both give exactly 10.0. The two real arms differ by exactly
+                # 3.0 um (a real layout asymmetry, not modeled here -- this device's own symmetric-
+                # cavity assumption, Step 1, uses one shared length for both arms); L_ARM here is
+                # their average, 53.083 -> 53.08.
 WG_WIDTH = 0.5   # um -- the same real strip width as the HCG's own access waveguide and the DC's arms
 WG_RES = 100.0   # pts/um -- meow/MPB mode-solve resolution (no FDTD; matches Step 0/3's own checks)
 MESH_WIDTH, MESH_HEIGHT = 4.0, 2.0
@@ -248,9 +283,9 @@ for i, w in enumerate(wl_dc):
 i_peak = int(np.argmax(T_circuit))
 print(f"\nPeak output transmission: {T_circuit[i_peak]:.4f} at {wl_dc[i_peak]:.3f} um")
 print("Passivity check (R+T <= 1):", float(np.max(R_circuit + T_circuit)))
-print("\nKNOWN GAP: this grid (10 nm spacing) is far coarser than this "
-      "cavity's own estimated ~0.41 nm resonance FWHM -- see the "
-      "validation doc's step 5 follow-up for the dedicated dense sweep.")
+print("\nThis grid (10 nm spacing) is far coarser than this cavity's own "
+      "estimated ~0.41 nm resonance FWHM -- see the dense reconstruction "
+      "below (section 8) for the actual resolved lineshape.")
 
 smat = SMatrix(wavelengths=wl_dc)
 smat.set(self_reflection, port="input_reflection")
@@ -273,3 +308,203 @@ fig.savefig(os.path.join(output_dir, "spectrum.png"), dpi=300)
 plt.close("all")
 print(f"\nSMatrix saved -> {output_dir}/smatrix_fabry_perot.pkl")
 print(f"Spectrum plot saved -> {output_dir}/spectrum.png")
+
+# ---------------------------------------------------------------------------
+# 8. Dense resonance characterization (step 5's follow-up) -- see module
+#    docstring for the full derivation. Best-effort: the dense DC spectrum
+#    is a separate script's output; if it hasn't been produced yet, skip
+#    this section rather than failing the whole run.
+# ---------------------------------------------------------------------------
+from beef.spectral import interp_complex
+
+DC_SMATRIX_DENSE = os.path.join(_ROOT, "example_output", "directional_coupler", "directional_coupler_soi160_hybrid", "smatrix_hybrid_dense.pkl")
+
+if not os.path.exists(DC_SMATRIX_DENSE):
+    print(f"\n(No dense DC spectrum at {DC_SMATRIX_DENSE} -- run "
+          f"directional_coupler_soi160_hybrid_dense.py first to get the "
+          f"resolved resonance lineshape. Skipping section 8.)")
+else:
+    print(f"\n--- Section 8: dense resonance characterization ---")
+    smat_dc_dense = SMatrix.load(DC_SMATRIX_DENSE)
+    wl_dense = smat_dc_dense.wavelengths
+    t_dense = smat_dc_dense.coeff(port="through")
+    k_dense = smat_dc_dense.coeff(port="cross")
+    print(f"Dense DC grid: {len(wl_dense)} pts, {wl_dense[0]:.4f}-{wl_dense[-1]:.4f} um "
+          f"({(wl_dense[-1]-wl_dense[0])/(len(wl_dense)-1)*1000:.4f} nm spacing)")
+
+    # HCG r(lambda): interpolate directly (already confirmed safe -- max phase
+    # step ~7.5 deg per 5 nm on the real 21-point data, nowhere near
+    # unwrap_is_safe's danger zone -- check_unwrap asserts this rather than
+    # assuming it).
+    if wl_dense[0] < wl_hcg[0] or wl_dense[-1] > wl_hcg[-1]:
+        raise ValueError(
+            f"Dense grid [{wl_dense[0]}, {wl_dense[-1]}] extends beyond the "
+            f"HCG's own measured span [{wl_hcg[0]}, {wl_hcg[-1]}] -- "
+            f"interp_complex would clamp rather than extrapolate."
+        )
+    r_dense = interp_complex(wl_hcg, r, wl_dense, check_unwrap=0.5)
+
+    # Connecting waveguide neff: reuse the ALREADY-COMPUTED 11-point neff_wg
+    # above (no new MPB solves) -- fit a degree-2 polynomial (same convention
+    # as ring_resonator_hybrid.py's own neff_fit) and evaluate analytically
+    # at the dense grid.
+    _neff_fit = np.polyfit(wl_dc, neff_wg, 2)
+    _neff_resid = neff_wg - np.polyval(_neff_fit, wl_dc)
+    _neff_rel = float(np.max(np.abs(_neff_resid))) / float(np.ptp(neff_wg))
+    print(f"Connecting-waveguide neff degree-2 fit: max residual "
+          f"{np.max(np.abs(_neff_resid)):.2e} ({_neff_rel:.2%} of neff's own range)")
+    if _neff_rel > 0.01:
+        raise ValueError(
+            f"neff_wg's degree-2 fit residual is {_neff_rel:.2%} of its own "
+            f"range -- too large to trust the analytic phase evaluation "
+            f"below. The 11-point neff_wg computed above may need more "
+            f"points or a higher fit degree before this section can trust it."
+        )
+    neff_dense = np.polyval(_neff_fit, wl_dense)
+    phase_dense = np.exp(2j * np.pi * neff_dense / wl_dense * L_ARM)
+
+    rho_dense = r_dense * phase_dense ** 2
+    D_dense = 1 - rho_dense ** 2 * t_dense ** 2
+    self_reflection_dense = k_dense ** 2 * rho_dense / D_dense
+    transmission_dense = t_dense * (1 + rho_dense ** 2 * (k_dense ** 2 - t_dense ** 2)) / D_dense
+    R_dense = np.abs(self_reflection_dense) ** 2
+    T_dense = np.abs(transmission_dense) ** 2
+    print(f"Passivity check, dense grid (max R+T, should be <=1): {np.max(R_dense + T_dense):.4f}")
+
+    # This dense evaluation is the closed form ONLY -- NOT a re-run of
+    # Circuit at thousands of points. Circuit and the closed form already
+    # agree to floating-point precision on the sparse grid above (section 6);
+    # re-verifying that same equivalence at every dense point would be
+    # redundant, not new information.
+
+    def _find_dips(wl, T):
+        """Numpy-only local-minima + FWHM/Q extraction -- same convention as
+        ring_resonator_hybrid.py's own find_dips()."""
+        dips = []
+        baseline = np.median(T)
+        for i in range(1, len(T) - 1):
+            if T[i] < T[i - 1] and T[i] < T[i + 1] and T[i] < 0.7 * baseline:
+                half = (T[i] + baseline) / 2.0
+                lo = i
+                while lo > 0 and T[lo] < half:
+                    lo -= 1
+                hi = i
+                while hi < len(T) - 1 and T[hi] < half:
+                    hi += 1
+                if hi > lo:
+                    fwhm = wl[hi] - wl[lo]
+                    q = wl[i] / fwhm if fwhm > 0 else np.nan
+                    dips.append((wl[i], T[i], fwhm, q))
+        return dips
+
+    dips = _find_dips(wl_dense, T_dense)
+    print(f"\nDense-grid assembly ({len(wl_dense)} points): {len(dips)} resonance dip(s) found.")
+    if dips:
+        print(f"  {'lambda (um)':>12}  {'T_min':>8}  {'FWHM (nm)':>10}  {'Q':>10}")
+        for wl0, Tmin, fwhm, q in dips:
+            print(f"  {wl0:12.4f}  {Tmin:8.4f}  {fwhm*1000:10.4f}  {q:10.1f}")
+    if len(dips) >= 2:
+        fsr_meas = float(np.mean(np.diff([d[0] for d in dips])))
+        print(f"  Measured mean FSR: {fsr_meas*1000:.3f} nm (Step 1's own estimate: 9.5 nm)")
+
+    smat_dense = SMatrix(wavelengths=wl_dense)
+    smat_dense.set(self_reflection_dense, port="input_reflection")
+    smat_dense.set(transmission_dense, port="output")
+    smat_dense.save(os.path.join(output_dir, "smatrix_fabry_perot_dense.pkl"))
+
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    ax.plot(wl_dense, R_dense, label="Reflection (input_reflection)", color="darkorange", lw=0.8)
+    ax.plot(wl_dense, T_dense, label="Transmission (output)", color="steelblue", lw=0.8)
+    ax.axhline(1.0, color="gray", linestyle=":", lw=0.8, label="Lossless")
+    for wl0, Tmin, fwhm, q in dips:
+        ax.axvline(wl0, color="k", linestyle="--", lw=0.5, alpha=0.5)
+    ax.set_xlabel("Wavelength (um)")
+    ax.set_ylabel("Power")
+    ax.set_title(f"HCG Fabry-Perot resonator -- dense reconstruction "
+                 f"({len(wl_dense)} pts, interpolated) -- {len(dips)} resonance(s) resolved")
+    ax.legend(fontsize=8)
+    ax.grid(True)
+    ax.set_ylim(0, 1.05)
+    plt.tight_layout()
+    fig.savefig(os.path.join(output_dir, "spectrum_dense.png"), dpi=200)
+    plt.close("all")
+    print(f"\nSMatrix saved -> {output_dir}/smatrix_fabry_perot_dense.pkl")
+    print(f"Spectrum plot saved -> {output_dir}/spectrum_dense.png")
+
+# ---------------------------------------------------------------------------
+# 9. Pull in each constituent device's own geometry/performance plots, plus a
+#    new overall schematic of the assembled cavity -- so this folder is a
+#    self-contained picture of the whole device, not just the combined
+#    spectrum. Copies (not moves) -- the constituent devices' own output
+#    folders remain the authoritative source for their own plots.
+# ---------------------------------------------------------------------------
+import shutil
+
+hcg_plots_dir = os.path.join(output_dir, "hcg_mirror")
+os.makedirs(hcg_plots_dir, exist_ok=True)
+_hcg_src_dir = os.path.dirname(HCG_SMATRIX)
+for _fname in ("geometry.png", "reflection.png"):
+    _src = os.path.join(_hcg_src_dir, _fname)
+    if os.path.exists(_src):
+        shutil.copy2(_src, os.path.join(hcg_plots_dir, _fname))
+
+dc_plots_dir = os.path.join(output_dir, "directional_coupler")
+os.makedirs(dc_plots_dir, exist_ok=True)
+_dc_src_dir = os.path.dirname(DC_SMATRIX)
+for _fname in ("geometry_hybrid.png", "hybrid_results.png", "hybrid_results_dense.png"):
+    _src = os.path.join(_dc_src_dir, _fname)
+    if os.path.exists(_src):
+        shutil.copy2(_src, os.path.join(dc_plots_dir, _fname))
+_dc_sections_src = os.path.join(_dc_src_dir, "sections")
+if os.path.isdir(_dc_sections_src):
+    _dc_sections_dst = os.path.join(dc_plots_dir, "sections")
+    os.makedirs(_dc_sections_dst, exist_ok=True)
+    for _fname in os.listdir(_dc_sections_src):
+        if _fname.endswith(".png"):
+            shutil.copy2(os.path.join(_dc_sections_src, _fname), os.path.join(_dc_sections_dst, _fname))
+
+print(f"\nHCG mirror's own geometry/performance plots copied -> {hcg_plots_dir}/")
+print(f"Directional coupler's own geometry/performance/section plots copied -> {dc_plots_dir}/")
+
+# Overall schematic: the assembled cavity, laid out to real x-scale. This is
+# NOT a real shared FDTD domain -- each piece above is independently solved
+# in its own coordinate frame (A2) -- it is a labeled block diagram matching
+# this doc's own header ASCII sketch, built from each piece's own already-
+# measured real length (HCG_LENGTH from high_contrast_grating_fdtd.py's own
+# printed "HCG total length" -- 5.389 um; DC_LENGTH from
+# directional_coupler_soi160_hybrid.py's own printed "total length" -- 23.00
+# um; L_ARM from Step 1's real GDS-derived pin above).
+HCG_LENGTH = 5.389   # um -- high_contrast_grating_fdtd.py's own measured GDS x-span
+DC_LENGTH = 23.00    # um -- directional_coupler_soi160_hybrid.py's own dc.total_length
+
+
+def _draw_block(ax, x0, width, label, color, height=1.0, y0=-0.5):
+    ax.add_patch(plt.Rectangle((x0, y0), width, height, facecolor=color, edgecolor="k", lw=1.0))
+    ax.annotate(label, (x0 + width / 2, y0 + height + 0.15), ha="center", fontsize=9)
+    ax.annotate(f"{width:.2f} um", (x0 + width / 2, y0 - 0.3), ha="center", fontsize=8, color="gray")
+    return x0 + width
+
+
+fig, ax = plt.subplots(figsize=(14, 3.5))
+x1 = _draw_block(ax, 0.0, HCG_LENGTH, "HCG mirror\n(FDTD)", "#4C72B0")
+x2 = _draw_block(ax, x1, L_ARM, "waveguide\n(EME/analytic)", "#DD8452", height=0.4, y0=-0.2)
+x3 = _draw_block(ax, x2, DC_LENGTH, "directional coupler\n(FDTD + EME)", "#55A868")
+x4 = _draw_block(ax, x3, L_ARM, "waveguide\n(EME/analytic)", "#DD8452", height=0.4, y0=-0.2)
+x5 = _draw_block(ax, x4, HCG_LENGTH, "HCG mirror\n(FDTD)", "#4C72B0")
+
+ax.annotate("", xy=(x2, -1.4), xytext=(x2, -0.5), arrowprops=dict(arrowstyle="-|>", color="k"))
+ax.annotate("input_reflection", (x2, -1.6), ha="center", fontsize=8)
+ax.annotate("", xy=(x3, -1.4), xytext=(x3, -0.5), arrowprops=dict(arrowstyle="-|>", color="k"))
+ax.annotate("output", (x3, -1.6), ha="center", fontsize=8)
+
+ax.set_xlim(-2, x5 + 2)
+ax.set_ylim(-2.0, 1.8)
+ax.set_xlabel("Position along cavity (um)")
+ax.set_yticks([])
+ax.set_title(f"HCG Fabry-Perot resonator -- overall assembled geometry "
+             f"(schematic, to x-scale, NOT one shared FDTD domain)\n"
+             f"total cavity length {x5:.2f} um")
+plt.tight_layout()
+fig.savefig(os.path.join(output_dir, "overall_geometry.png"), dpi=200)
+plt.close("all")
+print(f"Overall assembled-cavity schematic saved -> {output_dir}/overall_geometry.png")
