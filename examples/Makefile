@@ -81,6 +81,13 @@ mmi_2x2_fdtd:
 mmi_2x2_hybrid:
 	$(runner) $(my_python) mmi_2x2/python/mmi_2x2_hybrid.py
 
+# Off-nominal MMI-length FDTD spot check. MM_LENGTH selects the body length
+# in um (empty runs the script's own default, the nominal 28.0 um) -- see
+# mmi_2x2_fdtd_alt_length.py's docstring and run_mmi_2x2_fdtd_alt_length.batch.
+MM_LENGTH ?=
+mmi_2x2_fdtd_alt_length:
+	$(runner) $(my_python) mmi_2x2/python/mmi_2x2_fdtd_alt_length.py $(MM_LENGTH)
+
 mmi_1x4_eme:
 	$(runner) $(my_python) mmi_1x4/python/mmi_1x4_eme.py
 

@@ -39,7 +39,15 @@ MM_WIDTH = 6.0   # Step 2's settled candidate
 # the real ceiling for the body too, at the ~416 s/mode rate measured
 # above (8 modes, 3324.7s): 20 modes budgeted at ~2.3h, via batch (not the
 # 60-min timeout that killed job 11706986).
-NUM_MODES_REQUESTED = 20
+NUM_MODES_REQUESTED = 16   # 2026-08-08: NOT the guided-ceiling probe anymore (that
+                           # attempt at 20 timed out at 4h with zero output) -- this
+                           # specifically checks whether N_MODES_BODY=16 (the value
+                           # the S-parameter convergence sweep settled on, via the
+                           # "tidy3d" backend) is ALSO safe via the "meep" backend
+                           # body_sweep.py/hybrid.py's own EME sub-solver is stuck
+                           # with (deliberately, for FDTD/EME mode-basis consistency
+                           # across the hybrid cascade -- see that script's own
+                           # comment) before committing the full Step 3 re-run to it.
 SIM_W = MM_WIDTH + 14.0   # generous PML/margin clearance for a wide mode request
 SIM_H = 2.0               # Step 1b's converged sz
 

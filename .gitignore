@@ -6,7 +6,5 @@ build/
 .eggs/
 *.egg
 .DS_Store
-*.gds
 *.npz
 output/
-gds/

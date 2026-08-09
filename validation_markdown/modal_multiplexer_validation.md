@@ -1345,9 +1345,43 @@ before either is attempted, not discovered after the fact.
    FDTD, even though small in scope — not repeated; verification moved to
    a real SLURM resubmission instead, per that same discipline.
 
-   **Job 11752080 resubmitted with the fix, same configuration, currently
-   running** — the actual test of whether this closes the bug. Not yet
-   landed.
+   **✅ Job 11752080 COMPLETED 2026-08-09, 5h31m03s (within the 6h
+   budget) — the fix holds. This is `modal_multiplexer_hybrid.py`'s
+   FIRST-EVER SUCCESSFUL REAL RUN, in any form (old 5-section or new
+   7-section), after three historical timeouts on the old chain and one
+   caught-and-fixed failure on the new one.** `array task 0 done -- port
+   'top' cached under example_sim_cache`. Sections 0-5 (input FDTD, both
+   EME bodies, both new taper-FDTDs, the new connector EME) all completed
+   and are now on disk, shared for the remaining 2 ports.
+
+   **A second, independent, valuable real-world confirmation landed for
+   free along the way**: `EMESolver.compute_modes()`'s duplicate-mode
+   guard (`fdtd_vs_EME_mode_validation.md` item 0) fired for real, for the
+   first time ever on this device's actual production interfaces —
+   `meow mode 9 duplicates already-accepted mode 8 (self-overlap
+   1.000000 > 0.90) -- skipping it and reaching further up the spectrum`
+   — and correctly recovered a full rank-14 basis rather than silently
+   returning a rank-deficient one. This is exactly the still-open question
+   gap 6 flagged ("not yet exercised against this device's real
+   interfaces") and the `N_MODES=14` decision's own "not independently
+   re-verified" caveat — both now have real, positive evidence, not just
+   prediction. (The identical warning repeats ~96× in the log, once per
+   MPI rank printing the same event — not 96 independent occurrences.)
+
+   **Cost, measured**: 5h31m for 1 of 3 ports at `N_WL=2` (reduced from
+   the shipped 11) on 4 nodes/96 ranks — the connector-EME cost concern
+   this gap raised earlier is real (a large fraction of this wall time)
+   but not fatal. Sections 0-5 being cached means ports "mid"/"bot" only
+   need to pay for their own section 6 — expected to be much faster than
+   this first, cold-cache run.
+
+   **Not yet done**: the other 2 ports, the merge step (assembles the
+   combined SMatrix from all 3 ports' cache entries), and the full
+   `N_WL=11` production run this smoke test was deliberately scoped down
+   from. No S-matrix/transmission numbers exist yet from this chain at
+   any wavelength count — this run proved the *pipeline*, not the
+   *physics*, same distinction this device's own FDTD smoke test drew
+   (gap 3).
 
 8. **New, 2026-08-07 — user-provided paper draft (Hiesener et al.,
    "Topology Optimization Enhancements for Multimode Interferometers," the
