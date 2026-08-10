@@ -112,6 +112,19 @@ directional_coupler_fdtd:
 directional_coupler_soi160_hybrid:
 	$(runner) $(my_python) directional_coupler/python/directional_coupler_soi160_hybrid.py
 
+# The OTHER 3 real "DC_test" devices on the 4C10 die (GDS labels 1901/1902,
+# 1921/1922, 1931/1932 -- 1911/1912 IS directional_coupler_soi160_hybrid.py's
+# own coupling_length=3.0 device, see directional_coupler_soi160_hybrid_dc_
+# test.py's own module docstring for the full id-to-length derivation and
+# why coupling_length=0 (1931/1932) isn't runnable via this target as-is.
+# NOT a cache hit against directional_coupler_soi160_hybrid's own cache --
+# a real new FDTD+EME solve per length, same cost class, needs the SLURM
+# batch queue not a login node. Deliberately NOT added to EXAMPLES/DEVICES,
+# same reasoning as directional_coupler_soi160_hybrid above.
+COUPLING_LENGTH ?= 11.634
+directional_coupler_soi160_hybrid_dc_test:
+	$(runner) $(my_python) directional_coupler/python/directional_coupler_soi160_hybrid_dc_test.py $(COUPLING_LENGTH)
+
 # high_contrast_grating_fabry_perot_validation.md step 5's follow-up --
 # reconstructs a DENSE t(lambda)/k(lambda) from the sparse hybrid run above
 # via interpolation (beef.spectral.interp_complex on the safe intermediate

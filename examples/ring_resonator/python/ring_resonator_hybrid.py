@@ -461,10 +461,19 @@ def _json_polys(polys):
 
 def _sim_params(wavelengths):
     """Every module-level constant that affects the physical result of
-    run_coupler_fdtd()/run_bend_fdtd() — the raw-meep equivalent of
-    FDTDSolver's vars(solver) (see beef/cache/config.py's _solver_config).
-    Changing any of these must change the cache key, or a stale run could be
-    served for a different simulation.
+    run_bend_fdtd() and every excite of run_coupler_fdtd() — the raw-meep
+    equivalent of FDTDSolver's vars(solver) (see beef/cache/config.py's
+    _solver_config). Changing any of these must change the cache key, or a
+    stale run could be served for a different simulation.
+
+    L_C is NOT here: run_bend_fdtd()'s build_bend_polys() has no dependence
+    on L_C at all, so putting it in this shared helper re-invalidated that
+    cache on every L_C edit for no physical reason. run_coupler_fdtd()
+    really does depend on L_C (build_coupler_polys() widens with it, and
+    geometry_center stays fixed at x=0.0, so there's no translation-
+    invariance trick available the way there is in
+    ring_resonator_hybrid_cascaded.py's run_left_fdtd()) — it adds "L_C" to
+    its own config dict directly instead.
 
     The two `resolved_*` entries mirror FDTDSolver's
     `_resolved_spectral_config()`. They are derived from `wavelengths`, which
@@ -485,7 +494,6 @@ def _sim_params(wavelengths):
         "waveguide_width": WAVEGUIDE_WIDTH,
         "gap": GAP,
         "R": R,
-        "L_C": L_C,
         "resolution": FDTD_RESOLUTION,
         "three_d": THREE_D,
         "sim_height": SIM_HEIGHT,
@@ -562,6 +570,7 @@ def run_coupler_fdtd(excite, wavelengths, save_dir=None, cache_only=False):
             "geometry_class": "RingResonatorCoupler",
             "geometry_polygons": {"2,0": _json_polys(build_coupler_polys())},
             "wavelengths": [round(float(w), 9) for w in wavelengths],
+            "L_C": L_C,
             **_sim_params(wavelengths),
         }
         hit = lookup(save_dir, config)

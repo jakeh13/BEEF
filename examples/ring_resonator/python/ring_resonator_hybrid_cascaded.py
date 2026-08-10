@@ -348,6 +348,21 @@ def build_left_polys():
     ]
 
 
+def _left_polys_relative():
+    """build_left_polys(), translated so LEFT_X_CENTER sits at x=0 — i.e. the
+    domain shape actually simulated (make_sim() passes LEFT_X_CENTER as
+    geometry_center, so meep only ever sees positions relative to it).
+
+    Every x-coordinate in build_left_polys() is (L_C-independent constant)
+    - L_C/2, and LEFT_X_CENTER is itself -L_C/2 + a constant, so subtracting
+    it cancels L_C exactly regardless of L_C's value — this fingerprint is
+    the same for L_C=4.0 and L_C=8.0 (or any other value), matching the fact
+    that run_left_fdtd() simulates the same relative geometry either way.
+    Used only for the cache key; build_left_polys() (absolute coordinates)
+    is still what's actually built into the meep simulation."""
+    return [[(x - LEFT_X_CENTER, y) for x, y in poly] for poly in build_left_polys()]
+
+
 # ---------------------------------------------------------------------------
 # 4. Standalone 90-degree bend geometry — identical to ring_resonator_hybrid.py.
 # ---------------------------------------------------------------------------
@@ -518,6 +533,14 @@ def _sim_params(wavelengths):
     build_left_polys()'s vertex coordinates, which geometry_polygons
     fingerprints directly.
 
+    L_C is NOT here: it only shifts both build_left_polys() and make_sim()'s
+    geometry_center by the same -L_C/2, so the simulated domain (and
+    run_bend_fdtd's, which never depended on L_C to begin with) is bit-
+    identical across L_C values. run_left_fdtd's own geometry_polygons
+    fingerprint is taken relative to LEFT_X_CENTER (see _left_polys_relative())
+    precisely so this stays true of the cache key too — putting L_C here
+    would re-invalidate the cache on every L_C edit for no physical reason.
+
     The two `resolved_*` entries strand this script's pre-fix cache entries —
     see ring_resonator_hybrid.py's identical helper for why deriving them from
     already-hashed `wavelengths` is still the point."""
@@ -529,7 +552,6 @@ def _sim_params(wavelengths):
         "waveguide_width": WAVEGUIDE_WIDTH,
         "gap": GAP,
         "R": R,
-        "L_C": L_C,
         "resolution": FDTD_RESOLUTION,
         "three_d": THREE_D,
         "sim_height": SIM_HEIGHT,
@@ -590,7 +612,7 @@ def run_left_fdtd(excite, wavelengths, save_dir=None, cache_only=False):
             "solver_type": "ring_resonator_hybrid_cascaded.run_left_fdtd",
             "method": excite,
             "geometry_class": "RingResonatorLeftSection",
-            "geometry_polygons": {"2,0": _json_polys(build_left_polys())},
+            "geometry_polygons": {"2,0": _json_polys(_left_polys_relative())},
             "wavelengths": [round(float(w), 9) for w in wavelengths],
             "n_modes": N_MODES,
             **_sim_params(wavelengths),
