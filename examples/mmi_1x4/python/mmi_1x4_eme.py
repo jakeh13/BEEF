@@ -36,6 +36,7 @@ import os
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 from beef import MMI, EMESolver, SIN_300, plot_eme_geometry, plot_performance
 
@@ -126,21 +127,50 @@ plot_eme_geometry(
 print(f"Geometry plot saved -> {output_dir}/geometry.png")
 
 # ---------------------------------------------------------------------------
-# 4. Wavelength sweep -- one solve() call per output branch (four solves,
-#    no mirror-symmetry shortcut -- see module docstring).
+# 4. Wavelength + mm_length sweep -- one solve_length_sweep() call per output
+#    branch (four solves, no mirror-symmetry shortcut -- see module
+#    docstring). The body (region BODY_REGION=2 of the 5-region chain) is a
+#    uniform mm_width slab, so EMESolver.solve_length_sweep() solves its
+#    modes once per wavelength and applies every swept length as an analytic
+#    propagation phase (same "multi-cell generalization of the single-cell
+#    trick" step 5's own design tool, mmi_1x4_sin_body_length_sweep.py, is
+#    built on) -- the 281-point length sweep costs the same as solving the
+#    single MM_LENGTH=206.0 result alone would.
+#
+#    NOTE: solve_length_sweep() caches under its own method name, a genuinely
+#    different cache entry from solve()'s -- the first run after this change
+#    needs a fresh prewarm even though save_dir is unchanged (see the
+#    validation doc's own note on this, mmi_1x4_sin300_validation.md step 6).
 # ---------------------------------------------------------------------------
 wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
+mm_lengths = np.linspace(20.0, 300.0, 281)   # um; MM_LENGTH=206.0 lands exactly on this grid
+BODY_REGION = 2   # index into the 5-region chain: wg_in(0) taper_in(1) body(2) taper_out(3) wg_out(4)
 print(f"\nSweeping {len(wavelengths)} wavelengths: "
-      f"{wavelengths[0]:.3f} - {wavelengths[-1]:.3f} um\n")
+      f"{wavelengths[0]:.3f} - {wavelengths[-1]:.3f} um, "
+      f"mm_length {mm_lengths[0]:.1f} - {mm_lengths[-1]:.1f} um ({len(mm_lengths)} pts)\n")
+
+L_idx = int(np.argmin(np.abs(mm_lengths - MM_LENGTH)))
+assert mm_lengths[L_idx] == MM_LENGTH, (
+    f"MM_LENGTH={MM_LENGTH} is not an exact point on this sweep's own grid "
+    f"(nearest: {mm_lengths[L_idx]}) -- do not silently snap, this is exactly "
+    f"the coupler bug (0.0208 um discrepancy shipped for weeks)."
+)
 
 smat = None
+T_grids = np.zeros((4, len(mm_lengths), len(wavelengths)))
 for k in range(4):
-    smat_k = solver.solve(mmi, wavelengths, ports=[f"out{k}"], output_idx=k, save_dir=save_dir)
+    results_k = solver.solve_length_sweep(
+        mmi, wavelengths, mm_lengths, ports=[f"out{k}"],
+        sweep_region=BODY_REGION, output_idx=k, save_dir=save_dir,
+    )   # list[SMatrix], aligned with mm_lengths
+    T_grids[k] = np.array([sm.transmission(f"out{k}") for sm in results_k])
+    print(f"  output {k} (y={mmi.output_ys[k]:+.2f} um) solved")
+
+    smat_k = results_k[L_idx]
     if smat is None:
         smat = smat_k
     else:
         smat._data.update(smat_k._data)
-    print(f"  output {k} (y={mmi.output_ys[k]:+.2f} um) solved")
 smat.check_passive()   # sanity: total output power must not exceed 1 at any wavelength
 
 # ---------------------------------------------------------------------------
@@ -166,3 +196,63 @@ print(f"\nSMatrix saved -> {output_dir}/smatrix.pkl")
 
 plot_performance(smat, output_dir=output_dir, title="1x4 MMI Splitter on 300 nm Si3N4 (EME)")
 print(f"Performance plot saved -> {output_dir}/performance.png")
+
+# ---------------------------------------------------------------------------
+# 7. Multimode-length sweep plot -- band-mean transmission per output +
+#    max-min spread across the 4 outputs vs mm_length. Same metric/format as
+#    validation_markdown/mmi_1x4_sin300_validation.md step 5's own sweep
+#    (mmi_1x4_sin_body_length_sweep.py) and mmi_1x4_hybrid.py's own matching
+#    sweep plot, folded into this script rather than living only in
+#    verification/, since it comes free from step 4's own solve_length_sweep()
+#    call above (already paid for, not an extra solve).
+# ---------------------------------------------------------------------------
+T_band_mean = T_grids.mean(axis=2)   # [4, n_L]
+T_total_grid = T_grids.sum(axis=0)   # [n_L, n_wl]
+spread = T_band_mean.max(axis=0) - T_band_mean.min(axis=0)   # [n_L]
+sweep_best_idx = int(np.argmin(spread))
+mm_length_sweep_best = float(mm_lengths[sweep_best_idx])
+
+print(f"\nLength-sweep optimum (min max-min spread across 4 outputs): "
+      f"mm_length = {mm_length_sweep_best:.1f} um (spread={spread[sweep_best_idx]:.4f}); "
+      f"chosen production value MM_LENGTH={MM_LENGTH} has spread={spread[L_idx]:.4f}")
+
+np.savez(os.path.join(output_dir, "mm_length_sweep.npz"),
+         mm_lengths=mm_lengths, wavelengths=wavelengths,
+         T_grids=T_grids, T_total_grid=T_total_grid, spread=spread,
+         mm_length_best=mm_length_sweep_best, mm_length_chosen=MM_LENGTH,
+         output_ys=mmi.output_ys)
+print(f"Length-sweep data saved -> {output_dir}/mm_length_sweep.npz")
+
+fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
+colors = ["steelblue", "darkorange", "seagreen", "firebrick"]
+
+ax = axes[0]
+for k in range(4):
+    ax.plot(mm_lengths, T_band_mean[k],
+             label=f"Output {k} (y={mmi.output_ys[k]:+.2f} um)", color=colors[k])
+ax.plot(mm_lengths, T_total_grid.mean(axis=1), "k--", lw=1, label="Total")
+ax.axvline(MM_LENGTH, color="purple", linestyle="-.", lw=1.2,
+           label=f"chosen (production)={MM_LENGTH:.1f} um")
+ax.axvline(mm_length_sweep_best, color="gray", linestyle=":", lw=1.2,
+           label=f"sweep optimum={mm_length_sweep_best:.1f} um")
+ax.axhline(0.25, color="gray", linestyle=":", lw=0.6)
+ax.set_xlabel("mm_length (um)")
+ax.set_ylabel("Band-mean transmission")
+ax.set_title("EME -- output power vs body length")
+ax.legend(fontsize=7)
+ax.grid(True)
+
+ax = axes[1]
+ax.semilogy(mm_lengths, spread, color="k")
+ax.axvline(MM_LENGTH, color="purple", linestyle="-.", lw=1.2)
+ax.axvline(mm_length_sweep_best, color="gray", linestyle=":", lw=1.2)
+ax.set_xlabel("mm_length (um)")
+ax.set_ylabel("max-min spread across 4 outputs")
+ax.set_title("EME -- equal-split quality vs body length")
+ax.grid(True, which="both")
+
+plt.suptitle("1x4 MMI on 300 nm Si3N4 -- EME body length sweep (analytic, no extra mode solves)", fontsize=11)
+plt.tight_layout()
+fig.savefig(os.path.join(output_dir, "mm_length_sweep.png"), dpi=300)
+plt.close("all")
+print(f"Length-sweep plot saved -> {output_dir}/mm_length_sweep.png")

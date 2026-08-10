@@ -110,7 +110,9 @@ L_PI = 108.9195                     # MEASURED, job 11693043, mm_width=6.0, O-ba
 # grid-snap lesson (a "pinned" length silently 0.0208 um off its own sweep
 # grid, shipped for weeks).
 _DELTA_L_GRID = np.linspace(-10.0, 10.0, 81)
-DELTA_L = -1.50
+DELTA_L = -2.75   # was -1.50 -- re-derived 2026-08-09 at N_MODES=16 (job
+                  # 11768847), see the N_MODES comment below for why -1.50
+                  # (found at the under-converged N_MODES=8) no longer applies
 _nearest = _DELTA_L_GRID[np.argmin(np.abs(_DELTA_L_GRID - DELTA_L))]
 assert _nearest == DELTA_L, (
     f"DELTA_L={DELTA_L} is not an exact point on the Step 3 sweep grid "
@@ -144,11 +146,20 @@ _fdtd_common = dict(
     decay_tol=1e-11,
 )
 
-N_MODES = 8   # job 11707935/11707835: all 8 requested modes came back guided
-              # at mm_width=6.0, wl=1.31 (n_eff 2.962->2.833, cladding
-              # 1.4468 -- healthy, still-widening margin, not near cutoff).
-              # NOT exhaustive -- a deliberate coarse first-pass choice
-              # (~416 s/mode measured cost). See module docstring.
+N_MODES = 16   # was 8 -- bumped 2026-08-09. The S-parameter convergence
+              # sweep (job 11752350, "tidy3d" backend) found N=8 under-
+              # converged by 50-64% relative to the true value, which
+              # converges by N=16-20. Re-running this script's own
+              # meep-backed body sub-solver at N=16, at THIS script's actual
+              # production domain (oxide_width=MM_WIDTH+3.0), was confirmed
+              # affordable (77 min, job 11767748) -- an earlier attempt at
+              # a much WIDER diagnostic-only domain (oxide_width=
+              # MM_WIDTH+14.0, body_modes.py's own convention) timed out at
+              # both 3h and 4h with zero output; that wall was a property of
+              # the wrong domain, not of N=16 itself (a parallel tidy3d
+              # screen confirmed mode content is identical across every
+              # domain size tested, production width through +20 um).
+              # See module docstring.
 
 
 def make_section_solver(method: str):

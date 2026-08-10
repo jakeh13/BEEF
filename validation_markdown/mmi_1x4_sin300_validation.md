@@ -1312,6 +1312,137 @@ of the gap between the chosen 206 µm point (3.7% imbalance) and 280 µm's
 1.0% — cheaper than lengthening the device, if the two effects are actually
 independent (also not yet checked).
 
+#### Hybrid variant of the step-5 `mm_length` sweep — MEASURED 2026-08-09
+
+Step 5's own sweep (`mmi_1x4_sin_body_length_sweep.py`, job array 11667114)
+used the pure-EME chain, at real cost (~5:49-6:29 hrs/branch, no FDTD section
+to lean a cache on) — that sweep's config is already bit-for-bit
+`mmi_1x4_eme.py`'s own, so it already **is** the EME variant; nothing new
+needed there.
+
+The hybrid chain is different: `HybridSolver.solve_length_sweep()`'s own
+docstring promises the two FDTD sections dedupe against `solve()`'s own
+cache entries when configs match exactly, so a hybrid `mm_length` sweep
+pinned bit-for-bit to `mmi_1x4_hybrid.py`'s real config (same `mm_length=
+206.0`, same `wavelengths`, same `N_MODES=12`) should reuse the cache jobs
+11696233/11734486 already warmed, paying only for the body's own cheap
+tidy3d mode solve. New script `mmi_1x4_hybrid_body_length_sweep.py` written
+on that basis.
+
+**A real bug, caught and fixed before it did lasting damage.** First
+submission (job 11752875) computed `save_dir` via `os.path.join(_HERE, "..",
+"..", "..", "example_sim_cache")` — **three** `".."`, copied from the
+pre-existing EME sweep tool's own path arithmetic without checking it. Three
+dots from `examples/verification/python/` lands at `duty/BEEF/
+example_sim_cache/` — a real, separate, mostly-empty directory (the EME
+tool's own past runs had silently been writing there too, harmlessly for
+that script since it never expected cache reuse against the real device
+cache anyway). For THIS script the same bug was not harmless: pointed away
+from the actually-warm `duty/example_sim_cache/`, every section — including
+the two ~12-hr FDTD sections — cache-missed, and the job timed out at 1 hr
+mid-time-step, having made no useful progress. Root-caused via a sequence of
+`cache_only=True` probes (safe by construction — a miss raises immediately
+rather than silently falling through to a real solve) that isolated it to
+the path, not to anything about looping over branches or the 281-point grid
+(both tested independently and shown fine in isolation once the path was
+right). Fixed to four `".."` (matching `mmi_1x4_hybrid.py`'s own depth from
+`examples/mmi_1x4/python/` — the same depth as `examples/verification/
+python/`, four levels either way). **Not fixed**: the EME sweep tool's own
+three-dot path — genuinely inert there, out of scope of what this fix was
+for.
+
+**Re-run clean (job 11770532): 25.3 s for all 4 branches, 281 lengths.**
+
+**⚠ SECOND real bug, found 2026-08-09/10 — this run's own numbers were
+WRONG, not just the path.** `HybridSolver._stubs(k)` returns `(0.0, 0.0)`
+for any section that is neither the very first nor the very last in the
+chain — the body (section 1 of [input, body, output]) is neither. So
+`solve_section()`'s own `length = (x1-x0) + stub_left + stub_right`
+(what a plain `hybrid.solve()` call uses for the body) reduces to just
+`x1-x0` = `mm_length - 2*body_stub`, **not** `mm_length` — `body_stub` of
+MMI body is folded into each *adjacent* FDTD section's own domain instead
+(module docstring's "Build HybridSolver" comment), so
+`boundaries[1]`/`boundaries[2]` are already built narrower to account for
+that. `solve_section_length_sweep()` (what the swept path uses for the
+body) applies whatever `lengths` it is given directly as the propagation
+length, with **no** such stub adjustment — so the caller must pre-subtract
+`2*body_stub` to mean the same physical length `solve_section()` would at a
+given `mm_length`. `mmi_2x2_hybrid.py`'s own hand-rolled cascade already
+does exactly this (`body_lengths = mm_lengths - 2 * body_stub`); this
+session's new scripts, built on the generic `HybridSolver.solve_length_sweep()`
+API instead of hand-rolling, missed it the first time through.
+
+**MEASURED impact**: passing raw `mm_lengths` (not `mm_lengths -
+2*body_stub`) gave a real, reproducible ~6% relative error on individual
+port T at the chosen point (0.1635 vs the correct 0.1541 at output 0,
+λ=1.55, mm_length=206) — large because T(L) oscillates rapidly with length
+here (visible in the sweep plot's own many closely-spaced peaks/dips), so
+even a 0.5 µm propagation-length error lands on a materially different
+point of the curve. Root-caused by direct comparison: `hybrid.solve()`,
+`hybrid.solve_length_sweep()` with a single-element `body_lengths=[205.5]`,
+and the full 281-point sweep's own slice at `mm_length=206` all agree
+exactly (max diff 0.0 between the two swept variants, confirming the grid
+itself introduced no error) once the fix landed; before the fix, `solve()`
+and the swept path disagreed by 0.0094 in T at the same nominal length.
+Fixed in both `mmi_1x4_hybrid_body_length_sweep.py` and
+`mmi_1x4/python/mmi_1x4_hybrid.py` (the production script, see step 6's own
+account below); **re-verified after the fix: the production script's
+single-length results are now byte-identical to the pre-sweep-integration
+baseline** (job 11783136 reproduces job 11734486's T=[0.1541, 0.1409,
+0.1409, 0.1541] exactly).
+
+**Corrected re-run (job 11782082, 6:56 — slower than the buggy version's
+25.3 s because `body_lengths` is a genuinely new cache key, needing one
+fresh body mode solve; still cheap, not the ~12 hr/section FDTD class):**
+
+| | EME (job 11667114/step 5) | Hybrid, corrected (job 11782082) |
+|---|---|---|
+| sweep optimum (min spread) | 280.0 µm (spread 0.0013) | **44.0 µm** (spread 0.0041) |
+| spread at chosen 206 µm | 0.0052 | 0.0064 |
+| total T (band-mean) at 206 µm | 0.5696 | 0.6014 |
+| per-output band-mean T at 206 µm | [0.1398, 0.1450, 0.1450, 0.1398] | [0.1535, 0.1471, 0.1471, 0.1535] |
+| outer vs. inner at 206 µm | inner **>** outer | outer **>** inner |
+
+**The single-argmin optima now look 236 µm apart — but the overlay plot
+shows this is NOT the disagreement it looks like.** Re-ran
+`mmi_1x4_length_sweep_compare.py` (no new solving, just re-reads both
+`.npz` files) against the corrected hybrid data:
+`example_output/verification/mmi_1x4_length_sweep_compare/
+eme_vs_hybrid_length_sweep.png`. **Both total-throughput and spread curves
+track almost exactly across the ENTIRE 20–300 µm range** — same
+oscillation period, same dip depths, at essentially every point, including
+near 44 µm: EME's OWN spread curve also dips sharply there (visibly
+comparable in depth to its own 280 µm dip), it just isn't EME's single
+*global* minimum. The "236 µm apart" framing describes two engines' argmin
+picks landing on two different (both genuinely excellent) local minima of a
+curve they otherwise agree on almost everywhere — not a physics
+disagreement. **This is a real, reassuring confirmation that both engines
+see 44 µm as a genuinely strong candidate**, not an artifact of one engine
+or one bug.
+
+**The split-SHAPE discrepancy, however, survives the fix and is real**:
+at the corrected numbers, EME still sends more band-mean power to the inner
+ports at 206 µm (0.1450 > 0.1398), hybrid still sends more to the outer
+ports (0.1535 > 0.1471) — opposite signs, not a magnitude difference, and
+not explained by either bug found so far (both were length/path bugs, not
+anything that would flip a sign). Well-evidenced, reproducible, and still
+unexplained — exactly what step 8 check 1 (engine agreement) exists to
+investigate, not yet run for this device.
+
+**New direction opened by the corrected data**: mm_length=44 µm is a
+genuine, dual-engine-confirmed candidate for a **>4x shorter** multimode
+section than the chosen 206 µm, at comparable (even slightly better, on the
+hybrid side) split quality. But the current `waveguide_offset=2.4 µm` port
+spacing was tuned against 206 µm's own self-imaging pattern, which is a
+physically different point on the beat curve than 44 µm's — nothing has
+yet checked whether a *different* offset would align better with 44 µm's
+own image spacing. `mmi_1x4_sin_taper_offset_sweep.py` (new) fixes
+`mm_length=44.0` and sweeps `waveguide_offset` across the geometrically
+feasible range `(2.2, 3.2667)` µm (uniform port pitch, per-offset genuinely
+fresh EME solve — no analytic trick available here, unlike length) to
+answer that directly. In progress as of this writing — see step 8/design
+notes below for status once it lands.
+
 Companion field-plot scripts written the same session for the other
 existing EME examples, confirming `plot_eme_fields()` generalizes cleanly:
 `plot_mmi1x2_eme_fields.py` (job 11745434, 19 cells, ~1 min against a

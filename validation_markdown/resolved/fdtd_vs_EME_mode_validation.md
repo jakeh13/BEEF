@@ -1209,3 +1209,14 @@ the three properties they need has been checked.
   It is proven on the coupler, where the observable (L₅₀) is exquisitely
   sensitive to Δβ. On a device whose output is dominated by one strong channel,
   a mis-ordered weak mode may not move the S-matrix measurably.
+- **2026-08-09 — the near-degenerate pair at the mux's interface 0, above,
+  is real and reproduces at a different wavelength/mode-count.** The modal
+  multiplexer's `check_mode_correspondence` (finally exercised at the
+  actual swept wavelengths, not just the band midpoint) failed at interface
+  0, λ=1.26 µm, N_MODES=14: mode 8's row completeness only 0.009, unmoved
+  by raising N_MODES to 15 — inconsistent with truncation, consistent with
+  this same meep-ladder-vs-meow-simultaneous-solve resolution gap. See
+  `mode_crossing_correspondence_repair_validation.md` (new, this date) for
+  the full write-up, a regime taxonomy for what a wavelength-dependent
+  index change can mean, and a staged plan — the repair question this
+  section's own open items motivate but do not yet answer.

@@ -42,10 +42,23 @@ os.makedirs(output_dir, exist_ok=True)
 WL = 1.31
 MM_WIDTH = 6.0
 RES = 40.0
-SIM_W = MM_WIDTH + 14.0
-SIM_H = 2.0
-N_MODES = 8   # the largest count BOTH backends are known to handle
-              # (meep: job 11707835, ~55 min; tidy3d: trivial by comparison)
+SIM_W = MM_WIDTH + float(os.environ.get("SIM_W_MARGIN", 14.0))   # default matches
+              # body_modes.py's own generous-margin convention; override to 3.0 to
+              # match body_sweep.py/hybrid.py/eme.py's actual PRODUCTION domain
+              # (oxide_width=MM_WIDTH+3.0) -- these are NOT the same simulation
+              # span, a real discrepancy caught 2026-08-09. Every meep-wall
+              # bisection point measured so far (N=8/10/12/16) used the WIDE
+              # (+14.0) domain, not what production actually runs.
+SIM_H = float(os.environ.get("SIM_H", 2.0))   # 2.0 = Step 1b's converged sz --
+              # but that check was done for the NARROW 0.35um access waveguide,
+              # never re-verified for this WIDE 6um body cross-section's own
+              # higher-order modes (which extend further vertically into
+              # cladding than a single-mode narrow guide's do) -- override to
+              # check height convergence directly, same idea as SIM_W_MARGIN.
+N_MODES = int(os.environ.get("N_MODES", 8))   # default: the largest count BOTH
+              # backends are known to handle (meep: job 11707835, ~55 min;
+              # tidy3d: trivial by comparison). Override for a meep-ceiling
+              # bisection (known good=8, known bad=16 -- jobs 11753042/11749479).
 
 MODE_SOLVER = os.environ.get("MODE_SOLVER", "meep")
 assert MODE_SOLVER in ("meep", "tidy3d"), f"unknown MODE_SOLVER={MODE_SOLVER!r}"
@@ -68,8 +81,8 @@ dt = time.time() - t0
 print(f"  done ({dt:.1f}s)")
 
 for i, m in enumerate(modes):
-    path = os.path.join(output_dir, f"mode_{MODE_SOLVER}_{i:02d}.json")
+    path = os.path.join(output_dir, f"mode_{MODE_SOLVER}_n{N_MODES}_w{int(SIM_W)}_{i:02d}.json")
     m.save(path)
     print(f"  mode {i+1}: n_eff={float(m.neff.real):.6f}  -> {path}")
 
-print(f"\nSaved {N_MODES} modes -> {output_dir}/mode_{MODE_SOLVER}_*.json ({dt:.1f}s total)")
+print(f"\nSaved {N_MODES} modes -> {output_dir}/mode_{MODE_SOLVER}_n{N_MODES}_w{int(SIM_W)}_*.json ({dt:.1f}s total)")

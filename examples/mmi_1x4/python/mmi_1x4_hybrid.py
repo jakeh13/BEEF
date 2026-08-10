@@ -63,7 +63,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from beef import MMI, EMESolver, FDTDSolver, HybridSolver, SIN_300, plot_hybrid_geometry
+from beef import MMI, EMESolver, FDTDSolver, HybridSolver, SIN_300, SMatrix, plot_hybrid_geometry
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_1x4", "mmi_1x4_hybrid"))
@@ -232,29 +232,79 @@ print(f"Geometry plot saved -> {output_dir}/geometry_hybrid.png")
 print(f"Sub-region plots saved -> {output_dir}/sections/")
 
 # ---------------------------------------------------------------------------
-# 5. Run hybrid simulation -- once per output port. output_idx is passed
+# 5. Run hybrid simulation across BOTH wavelength and mm_length in one pass.
+#    The body is a uniform mm_width slab, so HybridSolver.solve_length_sweep()
+#    solves it once per wavelength and applies every swept length as an
+#    analytic propagation phase (beef/solvers/hybrid.py's own docstring) --
+#    the whole 281-point length sweep costs the same as solving the single
+#    MM_LENGTH=206.0 result alone would. The two FDTD sections dedupe against
+#    any prior solve()/solve_length_sweep() call sharing this cache dict (same
+#    config = same cache key regardless of which method built it), so this
+#    costs no more than the single-length version did. output_idx is passed
 #    ONLY to the output section's kwargs (input/body sections don't branch,
 #    so their kwargs are identical across all four calls) and a shared cache
-#    is passed to every hybrid.solve() call, so the input/body sections are
-#    only ever simulated once, not once per output port.
+#    is passed to every call, so the input/body sections are only ever
+#    simulated once, not once per output port -- same reuse the single-length
+#    version already had, now extended across the length grid too.
+#
+#    MEASURED 2026-08-09 (verification/mmi_1x4_hybrid_body_length_sweep.py,
+#    job 11770532): 25.3 s for all 4 branches x 281 lengths against the warm
+#    cache -- confirmed cheap before folding into this script.
+#
+#    ⚠ body_lengths, NOT mm_lengths, is what gets swept -- MEASURED
+#    2026-08-09/10: HybridSolver._stubs(k) returns (0.0, 0.0) for any
+#    section that is neither the very first nor the very last (the body is
+#    neither), so solve_section()'s own `length = (x1-x0) + stub_left +
+#    stub_right` reduces to just `x1-x0` for the body -- which is
+#    `mm_length - 2*body_stub`, NOT mm_length, since body_stub of MMI body is
+#    folded into each adjacent FDTD section's own domain (module docstring's
+#    "3. Build HybridSolver" comment) and boundaries[1]/boundaries[2] are
+#    built accordingly. solve_section_length_sweep() applies whatever
+#    `lengths` it is given directly as the propagation length with NO stub
+#    adjustment (unlike solve_section()), so the caller must pre-subtract
+#    2*body_stub to mean the same physical length solve_section() would at
+#    that mm_length -- exactly what mmi_2x2_hybrid.py's own hand-rolled
+#    cascade already does (`body_lengths = mm_lengths - 2 * body_stub`).
+#    Missing this the first time through produced a real, measured ~6%
+#    relative error on individual port T (0.1635 vs the correct 0.1541 at
+#    output 0, λ=1.55, MM_LENGTH=206) -- large enough to matter because T(L)
+#    oscillates rapidly with length here (see the sweep plot), so even a
+#    0.5 µm propagation-length error lands on a materially different point
+#    of the curve. Verified after the fix: solve(), solve_length_sweep()
+#    with a single-element body_lengths, and this full 281-point sweep's own
+#    slice at MM_LENGTH all agree exactly.
 # ---------------------------------------------------------------------------
 wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
+mm_lengths = np.linspace(20.0, 300.0, 281)   # um; MM_LENGTH=206.0 lands exactly on this grid
+body_lengths = mm_lengths - 2 * body_stub    # EME body section's own physical length
+BODY_SECTION = 1   # index into solvers=[input(0), body(1), output(2)]
 print(f"\nHybrid sweep: {wavelengths[0]:.3f} - {wavelengths[-1]:.3f} um "
-      f"({len(wavelengths)} pts, {N_MODES} interface modes)\n")
+      f"({len(wavelengths)} pts, {N_MODES} interface modes), "
+      f"mm_length {mm_lengths[0]:.1f} - {mm_lengths[-1]:.1f} um ({len(mm_lengths)} pts)\n")
 
 section_cache = {}
-smats = []
+coeffs_grids = np.zeros((4, len(mm_lengths), len(wavelengths)), dtype=complex)
 for k in range(4):
-    smat_k = hybrid.solve(
-        mmi, wavelengths, port=f"out{k}", cache=section_cache, save_dir=save_dir,
+    coeffs = hybrid.solve_length_sweep(
+        mmi, wavelengths, body_lengths, sweep_section=BODY_SECTION,
         geometry_kwargs={2: {"output_idx": k}},
-    )
-    smats.append(smat_k)
+        cache=section_cache, save_dir=save_dir,
+    )   # [n_L, n_wl, 1, 1] complex
+    coeffs_grids[k] = coeffs[:, :, 0, 0]
     print(f"  output {k} (y={mmi.output_ys[k]:+.2f} um) solved")
 
-smat = smats[0]
-for smat_k in smats[1:]:
-    smat._data.update(smat_k._data)
+T_grids = np.abs(coeffs_grids) ** 2   # [4, n_L, n_wl]
+
+L_idx = int(np.argmin(np.abs(mm_lengths - MM_LENGTH)))
+assert mm_lengths[L_idx] == MM_LENGTH, (
+    f"MM_LENGTH={MM_LENGTH} is not an exact point on this sweep's own grid "
+    f"(nearest: {mm_lengths[L_idx]}) -- do not silently snap, this is exactly "
+    f"the coupler bug (0.0208 um discrepancy shipped for weeks)."
+)
+
+smat = SMatrix(wavelengths=wavelengths)
+for k in range(4):
+    smat.set(coeffs_grids[k, L_idx], port=f"out{k}")
 smat.check_passive()   # sanity: total output power must not exceed 1 at any wavelength
 
 T = [smat.transmission(port=f"out{k}") for k in range(4)]
@@ -309,3 +359,64 @@ plt.tight_layout()
 fig.savefig(os.path.join(output_dir, "hybrid_results.png"), dpi=300)
 plt.close("all")
 print(f"Results plot saved -> {output_dir}/hybrid_results.png")
+
+# ---------------------------------------------------------------------------
+# 7. Multimode-length sweep plot -- band-mean transmission per output +
+#    max-min spread across the 4 outputs vs mm_length, same metric/format as
+#    validation_markdown/mmi_1x4_sin300_validation.md step 5's own sweep
+#    (mmi_1x4_sin_body_length_sweep.py) and this session's
+#    mmi_1x4_hybrid_body_length_sweep.py verification script, now folded
+#    into the real device script rather than living only in verification/.
+#    A 1x4's natural sweep diagnostic is per-output balance, not a single
+#    bar/cross ratio the way mmi_2x2_hybrid.py's own sweep plot uses -- that
+#    device has exactly two outputs, this one has four.
+# ---------------------------------------------------------------------------
+T_band_mean = T_grids.mean(axis=2)   # [4, n_L]
+T_total_grid = T_grids.sum(axis=0)   # [n_L, n_wl]
+spread = T_band_mean.max(axis=0) - T_band_mean.min(axis=0)   # [n_L]
+sweep_best_idx = int(np.argmin(spread))
+mm_length_sweep_best = float(mm_lengths[sweep_best_idx])
+
+print(f"\nLength-sweep optimum (min max-min spread across 4 outputs): "
+      f"mm_length = {mm_length_sweep_best:.1f} um (spread={spread[sweep_best_idx]:.4f}); "
+      f"chosen production value MM_LENGTH={MM_LENGTH} has spread={spread[L_idx]:.4f}")
+
+np.savez(os.path.join(output_dir, "mm_length_sweep.npz"),
+         mm_lengths=mm_lengths, wavelengths=wavelengths,
+         T_grids=T_grids, T_total_grid=T_total_grid, spread=spread,
+         mm_length_best=mm_length_sweep_best, mm_length_chosen=MM_LENGTH,
+         output_ys=mmi.output_ys)
+print(f"Length-sweep data saved -> {output_dir}/mm_length_sweep.npz")
+
+fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
+
+ax = axes[0]
+for k in range(4):
+    ax.plot(mm_lengths, T_band_mean[k],
+             label=f"Output {k} (y={mmi.output_ys[k]:+.2f} um)", color=colors[k])
+ax.plot(mm_lengths, T_total_grid.mean(axis=1), "k--", lw=1, label="Total")
+ax.axvline(MM_LENGTH, color="purple", linestyle="-.", lw=1.2,
+           label=f"chosen (production)={MM_LENGTH:.1f} um")
+ax.axvline(mm_length_sweep_best, color="gray", linestyle=":", lw=1.2,
+           label=f"sweep optimum={mm_length_sweep_best:.1f} um")
+ax.axhline(0.25, color="gray", linestyle=":", lw=0.6)
+ax.set_xlabel("mm_length (um)")
+ax.set_ylabel("Band-mean transmission")
+ax.set_title("Hybrid -- output power vs body length")
+ax.legend(fontsize=7)
+ax.grid(True)
+
+ax = axes[1]
+ax.semilogy(mm_lengths, spread, color="k")
+ax.axvline(MM_LENGTH, color="purple", linestyle="-.", lw=1.2)
+ax.axvline(mm_length_sweep_best, color="gray", linestyle=":", lw=1.2)
+ax.set_xlabel("mm_length (um)")
+ax.set_ylabel("max-min spread across 4 outputs")
+ax.set_title("Hybrid -- equal-split quality vs body length")
+ax.grid(True, which="both")
+
+plt.suptitle("1x4 MMI on 300 nm Si3N4 -- Hybrid body length sweep (analytic, no extra FDTD)", fontsize=11)
+plt.tight_layout()
+fig.savefig(os.path.join(output_dir, "mm_length_sweep.png"), dpi=300)
+plt.close("all")
+print(f"Length-sweep plot saved -> {output_dir}/mm_length_sweep.png")

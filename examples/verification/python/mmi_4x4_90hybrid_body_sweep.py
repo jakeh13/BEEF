@@ -130,12 +130,29 @@ _fdtd_common = dict(
     decay_tol=DECAY_TOL,
 )
 
-N_MODES = 8   # job 11707835: all 8 requested modes came back guided at
-              # mm_width=6.0, wl=1.31 (n_eff 2.962->2.833, cladding 1.4468 --
-              # healthy, still-widening margin, not near cutoff). NOT
-              # exhaustive -- a deliberate coarse-first-pass choice, see
-              # module docstring for the ~416 s/mode cost that ruled out
-              # going straight to a full audit at 16+.
+N_MODES = 16   # was 8 -- bumped 2026-08-09. The S-parameter convergence sweep
+              # (job 11752350, "tidy3d" backend) found N=8 under-converged by
+              # 50-64% relative to the true value, which converges by N=16-20.
+              # This body sub-solver is deliberately locked to "meep" (not
+              # "tidy3d") for FDTD/EME mode-basis consistency across the
+              # hybrid cascade -- a bare N=16/20 request via meep at the WIDE
+              # domain body_modes.py/cross_section.py use (oxide_width=
+              # MM_WIDTH+14.0) timed out at both 3h and 4h with zero output
+              # (jobs 11753042/11749479). Root cause found, not just worked
+              # around: THIS script's own domain is much narrower (oxide_
+              # width=MM_WIDTH+3.0, matching the FDTD sections it interfaces
+              # with) -- at THAT actual production width, N=16 via meep
+              # completed in 77 min (job 11767748), and N=8 in 23 min (job
+              # 11767747), both faster than the historical wide-domain timing.
+              # A parallel tidy3d screen confirmed mode content (n_eff) is
+              # bit-for-bit IDENTICAL from oxide_width=MM_WIDTH+3.0 all the
+              # way to +20.0 and oxide_height=2.0 through 6.0 -- the domain
+              # was never too small for accuracy, it was the DIAGNOSTIC
+              # scripts' own much-wider domain that made meep's eigensolve
+              # dramatically slower for higher-order modes (more iterations
+              # per mode, MPB log showed 160 iters for mode 16 at the wide
+              # domain). The wall was a property of the wrong test
+              # configuration, not of this script's own real domain.
 
 
 def make_section_solver(method: str):

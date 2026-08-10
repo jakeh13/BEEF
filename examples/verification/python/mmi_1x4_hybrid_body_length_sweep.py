@@ -60,8 +60,8 @@ from beef import MMI, EMESolver, FDTDSolver, HybridSolver, SIN_300
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(
-    _HERE, "..", "..", "..", "example_output", "verification", "mmi_1x4_hybrid_body_length_sweep"))
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_sim_cache"))
+    _HERE, "..", "..", "..", "..", "example_output", "verification", "mmi_1x4_hybrid_body_length_sweep"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 os.makedirs(output_dir, exist_ok=True)
 
 # ---------------------------------------------------------------------------
@@ -112,8 +112,27 @@ BODY_SECTION = 1   # index into solvers=[input(0), body(1), output(2)]
 # ---------------------------------------------------------------------------
 # Same 281-point grid as the EME variant, for direct comparability.
 # solve_length_sweep()'s analytic trick makes the grid size free regardless.
+#
+# ⚠ body_lengths, NOT mm_lengths, is what gets swept -- MEASURED 2026-08-09/10:
+# HybridSolver._stubs(k) returns (0.0, 0.0) for the body section (neither the
+# first nor the last section), so solve_section()'s own `length = (x1-x0) +
+# stub_left + stub_right` reduces to just `x1-x0` = mm_length - 2*body_stub
+# for the body, NOT mm_length -- body_stub of MMI body is folded into each
+# adjacent FDTD section's own domain instead. solve_section_length_sweep()
+# applies whatever `lengths` it's given directly as the propagation length
+# with NO such adjustment, so the caller must pre-subtract 2*body_stub --
+# exactly what mmi_2x2_hybrid.py's own hand-rolled cascade already does
+# (`body_lengths = mm_lengths - 2 * body_stub`). Missing this the first time
+# through produced a real, measured ~6% relative error on individual port T
+# (0.1635 vs the correct 0.1541 at output 0, λ=1.55, mm_length=206) -- large
+# because T(L) oscillates rapidly with length here, so even a 0.5 µm
+# propagation-length error lands on a materially different point of the
+# curve. Verified after the fix: solve(), solve_length_sweep() with a
+# single-element body_lengths, and this full 281-point sweep's own slice at
+# mm_length=206 all agree exactly.
 # ---------------------------------------------------------------------------
 mm_lengths = np.linspace(20.0, 300.0, 281)
+body_lengths = mm_lengths - 2 * body_stub   # EME body section's own physical length
 wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
 print(f"\nBody length sweep: {mm_lengths[0]:.1f}-{mm_lengths[-1]:.1f} um "
       f"({len(mm_lengths)} pts), wavelengths {wavelengths[0]:.3f}-{wavelengths[-1]:.3f} um "
@@ -128,7 +147,7 @@ section_cache = {}
 T_grids = np.zeros((4, len(mm_lengths), len(wavelengths)))
 for k in range(4):
     coeffs = hybrid.solve_length_sweep(
-        mmi, wavelengths, mm_lengths, sweep_section=BODY_SECTION,
+        mmi, wavelengths, body_lengths, sweep_section=BODY_SECTION,
         geometry_kwargs={2: {"output_idx": k}},
         cache=section_cache, save_dir=save_dir,
     )   # [n_L, n_wl, 1, 1] complex

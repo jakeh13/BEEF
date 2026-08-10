@@ -1383,6 +1383,234 @@ before either is attempted, not discovered after the fact.
    *physics*, same distinction this device's own FDTD smoke test drew
    (gap 3).
 
+   **✅ Remaining 2 ports run (jobs 11759057[1-2]) and merged (job
+   11759061) 2026-08-09 — pipeline complete, but the result was badly
+   non-physical, a second real library bug found and fixed.**
+   `check_passive()` fired hard: `in_mode=1 totals 370.5435` and
+   `in_mode=2 totals 137.7605` (both `> 1+0.001`, i.e. the device appeared
+   to emit 137-370× the power it was given). TE0 total transmission
+   91.38×, TE1 12.24× — not a rounding-level defect.
+
+   **Root cause, localized by singular-value sweep of every cached
+   section's transfer matrix** (cheap — the matrices already exist on
+   disk from the run above): every section had max SV ≈ 1.0 **except**
+   FDTD-taper-in (connector → MMI2-body, `x=[-7.41,-3.41]`, 6→14 modes),
+   at 21.7 (wl idx 0) / 11.8 (wl idx 1). Per-excited-mode column-norm
+   breakdown showed only connector modes k=1,2 were broken (norms
+   ~21.7/21.65 and ~11.76/11.69); k=3-6 were normal (~0.97-1.02). The
+   existing post-hoc `warn_on_transfer_duplicate()` check (already run on
+   this exact matrix inside `solve_section()`) never fired — this is a
+   different failure signature than the duplicate-eigenvector class it
+   guards against (confirmed: the two broken columns' normalized overlap
+   is ~0.0005, essentially orthogonal, not the highly-correlated pattern
+   a true duplicate launch would produce).
+
+   **Mechanism**: `solve_section()`'s excite-side normalization
+   (`beef/solvers/fdtd.py`, ~line 2525) divides each measured coefficient
+   by `src_alpha`, the launched mode's own amplitude at a norm-flux
+   monitor. For y-axis (off-axis) excite ports this was already known to
+   need a flux-calibrated correction (`sqrt(mp.get_fluxes())` magnitude +
+   `angle(get_eigenmode_coefficients())` phase — the empirical fix from
+   `ring_resonator_hybrid.py`), but the x-axis (in-line) branch trusted
+   raw `get_eigenmode_coefficients()` alpha unconditionally, with no
+   cross-check against the flux monitor. The connector's modes 1-2 sit at
+   Δn_eff=0.0148 (n_eff spectrum `[2.10549, 2.09067, 2.03595, 1.56570,
+   1.54514, 1.52526]`) — near-degenerate enough that `get_eigenmode_
+   coefficients()`'s modal decomposition at the norm-flux plane silently
+   undercounted their launched power, while `mp.get_fluxes()` (a direct
+   field integral, not a decomposition) stayed correct. Every row of the
+   resulting column scaled up by the same large, wrong factor — consistent
+   with the observed pattern (each broken column internally
+   self-consistent in *shape*, just uniformly too large) and with why the
+   two broken columns don't resemble each other (they're different modes'
+   content, each independently mis-scaled by its own bad denominator).
+
+   **Fix — deliberately conditional, not a blanket replacement**, because
+   `solve_section()` is shared by every `HybridSolver` example with an
+   x-axis excite port (mmi_1x4, mmi_4x4_90hybrid, mmi_2x2,
+   directional_coupler, ring_resonator, hcg_fabry_perot — not just this
+   device). Added `_EXCITE_NORM_MISMATCH_TOL = 0.1` and, for the x-axis
+   branch: compute both `sqrt(mp.get_fluxes())` and `|alpha|`, and only
+   fall back to flux-calibrated normalization (logging a warning naming
+   the band and section) when they disagree by more than 10%. Every
+   already-validated x-axis section elsewhere sees bit-identical output
+   unless it independently hits the same near-degenerate-mode condition —
+   confirmed by construction, not just claimed (the mismatch check is a
+   no-op whenever the two methods already agree).
+
+   **Verified by measurement, not argued**: cleared the stale cache entry
+   for the FDTD-taper-in section (`example_sim_cache/
+   FDTDSolver_solve_section_CompoundGeometry_6e7d5cc920bf58c0`, config-hash
+   keyed with no code-version component, so it would otherwise have been
+   silently reused unchanged) and resubmitted (job **11759740**,
+   2h35m59s). The new warning fired for **exactly** bands 1 and 2 (`max
+   95.4% mismatch at freq index 1`) and *only* those two — bands 3-6 never
+   appear in the log, confirming the guard leaves already-healthy bands
+   untouched. Post-fix transfer matrix: max SV **1.0005** (wl idx 0) /
+   **1.0234** (wl idx 1), down from 21.7/11.8 — every column norm now
+   0.97-1.02, matching every other section in the chain.
+
+   **Re-merged (job 11764830, 24s)**: `check_passive()` raised **no
+   warnings** — the first time this chain has ever produced a passive
+   result. Real numbers, `N_WL=2` smoke scope, λ=1.36 µm:
+
+   | | top | mid [MUX out] | bot [MUX out] | total |
+   |---|---|---|---|---|
+   | TE0 in | 0.1452 | 0.3225 | 0.1754 | **0.6431** |
+   | TE1 in | 0.0671 | 0.0980 | 0.0605 | **0.2256** |
+
+   Both totals ≤ 1, as they must be. This is the first trustworthy
+   S-matrix this chain has ever produced, at any wavelength count.
+
+   **Still open**: the ~0.36/0.77 power deficit (TE0/TE1 totals well
+   below 1, not just under it) is unexplained — could be genuine
+   radiation/reflection/truncated-basis loss (as the script's own printed
+   caveat says) or could be a further, smaller normalization/accounting
+   issue not yet investigated. Not yet run at production `N_WL=11`. The
+   `mirror_pairs`/`check_mode_correspondence` items above remain
+   undone. No `verify_modal_multiplexer_hybrid_vs_fdtd.py` comparison
+   script exists yet to check this result against the now-closed gap 3
+   FDTD reference.
+
+   **✅ 2026-08-09 — manually cross-checked against gap 3's FDTD reference
+   at the 2 overlapping wavelengths (1.26, 1.36 µm), in two rounds.**
+   First round (against the *not-yet-fully-fixed* FDTD reference, before
+   gap 3's own second normalization bug — see above — was found) showed a
+   striking pattern: at 1.26 µm, hybrid's TE0 "top"/"mid" values looked
+   almost exactly like FDTD's, transposed (FDTD top=0.71/mid=0.02 vs
+   hybrid top=0.01/mid=0.75) — initially read as a possible hybrid-chain
+   port-mislabeling bug. Traced directly (not guessed): pulled the cached
+   per-port FDTD-out section transfer matrices (section 6, `output_idx`
+   0/1/2) and confirmed their body-mode→port coupling pattern is stable
+   and sane across both wavelengths — ruling out a mode-index swap in the
+   hybrid chain itself. Cross-referencing gap 3's own `check_passive` log
+   instead showed the FDTD reference's *own* violation sits at this exact
+   wavelength (`in_mode=2 totals 1.1021 at 1.2600`) — the "swap" was the
+   FDTD reference being wrong, not the hybrid chain.
+
+   **Second round, after gap 3's fix landed (job 11766971, fully clean
+   reference)**: re-ran the same comparison. TE0 now agrees closely at
+   both wavelengths with no transposition artifact at all:
+
+   | | λ=1.26 top | mid | bot | λ=1.36 top | mid | bot |
+   |---|---|---|---|---|---|---|
+   | FDTD TE0 | 0.0123 | 0.7153 | 0.0158 | 0.1440 | 0.3844 | 0.1481 |
+   | hybrid TE0 | 0.0107 | 0.7546 | 0.0109 | 0.1452 | 0.3225 | 0.1754 |
+
+   TE1 agrees well at 1.36 µm (FDTD 0.075/0.059/0.068 vs hybrid
+   0.067/0.098/0.061) but **still shows a real, precisely-localized
+   discrepancy at 1.26 µm specifically** — top and bot look swapped
+   between the two solvers (FDTD top=0.0276/bot=0.5466 vs hybrid
+   top=0.5494/bot=0.0338; mid agrees fine at ~0.009 both). Unlike the
+   TE0 case, fixing the FDTD reference did NOT resolve this one — it is a
+   genuine, still-open hybrid-chain discrepancy, isolated to the
+   antisymmetric input mode (TE1) at the short-wavelength band edge only.
+   Given top/bot looked like a clean transposition and TE1 is the
+   antisymmetric input mode, this initially read as consistent with the
+   class of failure gap 1 is about — a mode-identity mismatch at one of
+   the hybrid chain's interfaces, specific to a near-crossing at this
+   wavelength.
+
+   **Correction before investigating further**: this device is NOT
+   actually y=0 mirror-symmetric — `BRANCH_SPECS` gives top and bot
+   *different* waveguide widths (0.33 µm vs 0.35 µm, ~6% asymmetry,
+   `modal_multiplexer_fdtd.py`), so there is no exact selection rule
+   forcing T_top=T_bot for TE1 and the "clean transposition" framing
+   above was not by itself proof of a swap. The small deliberate
+   asymmetry is itself informative, though: it is a standard technique to
+   break what would otherwise be an exact degeneracy between symmetric/
+   antisymmetric mode combinations — meaning the relevant modes here are
+   near-degenerate BY DESIGN, the same condition behind every real bug
+   found this session.
+
+   **✅ 2026-08-09 — root cause found and measured directly, via
+   `check_mode_correspondence`, at the very first interface checked.**
+   Wrote a one-off diagnostic (`examples/verification/python/
+   diag_te1_swap_correspondence.py`, TEMPORARY) that reuses
+   `modal_multiplexer_hybrid.py`'s own real construction verbatim, builds
+   a second `HybridSolver` with `check_mode_correspondence=True`, and
+   calls `_check_interface_correspondence()` directly at each of the 6
+   interfaces at wl=1.26/1.31/1.36 SEPARATELY (the library's own
+   built-in check only ever runs once, at `mean(wavelengths)`, so it had
+   never actually been exercised at 1.26 µm for this device before).
+   First check (interface 0, FDTD-in ↔ EME-MMI1, wl=1.26) **raised
+   immediately** (`mode_correspondence_action` defaults to "raise"):
+
+   ```
+   correspondence=[0,1,2,3,4,5,6,7,11,8,9,10,12,13]  (expected identity)
+   per-mode diagonal:      [...,1.0, 0.0, 1.0,...]   <- index 8
+   row completeness:       [...,0.0090,...]          <- index 8
+   ```
+
+   meep's own mode 8 at this interface, at 1.26 µm specifically, is not
+   a reordering of meow's basis — the error's own diagnosis is "BASIS
+   INCOMPLETE... the two sides are not describing the same set of
+   modes": meep's mode 8 is only 0.9% representable inside meow's 14-mode
+   window at all. This is gap 1's own top-priority concern, materializing
+   for real, for the first time, in this device's actual production
+   interfaces — and it directly explains the TE1/1.26 µm discrepancy:
+   `solve()`'s matrix-chain contraction assumes index *i* means the same
+   physical mode on both sides of every interface with no runtime check
+   (exactly what `check_mode_correspondence` exists to verify), and at
+   this interface, at this wavelength, that assumption is false. Whatever
+   power lands in meep's own "row 8" gets silently misattributed to
+   meow's row 8 instead of its true (or absent) counterpart, corrupting
+   the chain from the very first interface onward for any input mode
+   with nonzero weight there.
+
+   **Most likely mechanism (not yet independently confirmed)**: shorter
+   wavelength → tighter mode confinement → a 15th-order body mode
+   probably becomes newly well-guided right around 1.26 µm and pushes
+   into the effective top-14 window on one engine's side but not
+   (equally) on the other's — `N_MODES=14` was already flagged in this
+   script's own comments as "NOT OPTIONAL, a judgment call made without
+   explicit user sign-off" (gap 2/6), set from a measurement at the
+   *shipped* resolution, not audited across the full swept band.
+
+   **Not a bug to silently patch** — raising `N_MODES` is a real
+   trade-off (more modes elsewhere in the band may be junk/unconverged,
+   per gap 2's own resolution-convergence findings), and the correct fix
+   depends on what's actually driving the newly-appearing mode, which is
+   not yet known. `check_mode_correspondence` was never turned on for
+   this device's real hybrid runs at all (old OR new interfaces) — this
+   diagnostic is the first time it has ever been exercised here. Stopped
+   at interface 0 (the check raises on first failure); interfaces 1-5 and
+   wl=1.31/1.36 are UNCHECKED — do not assume they are clean.
+
+   **✅ 2026-08-09, same day — tested raising N_MODES, twice, both
+   decisive negative results — this is NOT a basis-size problem.**
+
+   - **N_MODES=16**: `FDTDSolver`'s own guided-mode guard raised before
+     the correspondence check even ran — this cross-section supplies only
+     **15** truly guided modes at 1.26 µm, not 16 (band 16 sits at/below
+     the cladding index). Confirms the earlier speculation that one more
+     mode becomes guided near this wavelength, but 16 overshoots it.
+   - **N_MODES=15**: correspondence check re-run (job 11768703,
+     `mode_correspondence_action="warn"` this time, so it wouldn't stop at
+     the first failure) — **mode 8's failure is unchanged**: row
+     completeness moved from 0.0090 (at 14 modes) to only 0.0391 (at 15
+     modes), both catastrophically below the 0.90 threshold, while every
+     other mode (0-7, 9-14) stays perfectly clean (diagonal=1.0). Adding
+     the 15th mode to the basis did essentially nothing for mode 8's own
+     correspondence.
+
+   **Conclusion: this is not "the basis is too small," it is something
+   specific to mode 8's own identity/shape at this cross-section and
+   wavelength** — meep and meow disagree about what that mode physically
+   *is*, not just whether it fits in the window. Raising N_MODES further
+   is very unlikely to help and was not tried again after this result.
+   The script currently ships with `N_MODES=15` (left at the higher,
+   still-imperfect value rather than reverted to 14, since 15 is at least
+   no worse and the guided-mode-count measurement is itself new
+   information worth keeping) but this is **NOT verified against a real
+   hybrid run** — no real `solve_section()` physics has been run at
+   N_MODES=15 yet, only the cheap correspondence diagnostic. The
+   interface-0/wl=1.26 problem is real and unresolved either way; the
+   likely next step is comparing mode 8's actual n_eff/field shape
+   between the two engines directly (the same field-overlap machinery
+   this check already uses) rather than more basis-size tuning — not
+   attempted this session.
+
 8. **New, 2026-08-07 — user-provided paper draft (Hiesener et al.,
    "Topology Optimization Enhancements for Multimode Interferometers," the
    TE modal multiplexer test case) cross-checked against this device's own
@@ -1662,6 +1890,69 @@ before either is attempted, not discovered after the fact.
    open item, minor**: the single >1 `check_passive` point at the
    1.26 µm band edge — not investigated further, same monitor-overlap
    suspect flagged in this gap's earlier smoke-test writeup.
+
+   **✅ 2026-08-09 — the "minor, remaining" band-edge violation above was
+   real and is now genuinely fixed too, via a fifth (and, this time,
+   actually final) library bug, found while cross-checking the hybrid
+   chain's own fix against this reference.** Two separate root causes,
+   both in `FDTDSolver.solve()` (`beef/solvers/fdtd.py`), fixed in
+   sequence:
+
+   1. **Input-side normalization** — same class of bug as gap 7's
+      connector fix: `solve()`'s `src_alpha = in_coeff.alpha[0,:,0]` was
+      unconditional, no flux cross-check, unlike `solve_section()` even
+      before today. Added the identical conditional flux-calibrated
+      fallback (reusing `_EXCITE_NORM_MISMATCH_TOL`). **Tested and ruled
+      out as the cause of this particular violation**: job 11765609 (real
+      res=20 rerun) reproduced the exact same `in_mode=2 totals 1.1021 at
+      1.2600` violation, byte-for-byte, with the new mismatch warning
+      never firing anywhere in the run — proof the input-side
+      decomposition was already fine here, and proof the new guard
+      correctly stays a no-op when it should. Kept in the code regardless
+      (it's still a real, independently-motivated robustness fix; it just
+      wasn't *this* bug).
+   2. **Output monitor overlap — the actual cause.** `solve()`'s output
+      monitor width default clamped only against the PML edge
+      (`sim_width - 2*abs(yc)`), never against neighboring output ports.
+      With `output_monitor_centers=[+1.0375, 0.0, -1.0375]` and
+      `sim_width=5.0`, that gave the on-axis "mid" monitor a width of
+      **5.0 µm — wide enough to completely engulf both the top and bot
+      branches**, and gave top/bot monitors (2.925 µm each) reach well
+      past y=0 into mid's own waveguide too. `get_eigenmode_
+      coefficients()` solves eigenmodes of whatever dielectric sits
+      inside its window, so "mid"'s monitor was decomposing onto the
+      fundamental supermode of all three coupled waveguides at once, not
+      the isolated mid-branch mode — precisely what `check_passive()`'s
+      own message names ("double-counted output branch"). This traces
+      directly to 2026-08-07's removal of this script's hand-picked
+      `output_monitor_widths=[0.9,0.9,0.9]` override (see above) in favor
+      of the library default — that default's "as wide as possible while
+      staying centered on its own branch and inside the domain" rule is
+      correct for a single monitor spanning every mode of one shared body
+      cross-section on purpose, but wrong for several individually-narrow
+      output ports placed close together. Every OTHER `solve()`-based
+      example in this repo (mmi_1x2, mmi_2x2, mmi_2x2_alt_length,
+      mmi_4x4_90hybrid, directional_coupler) passes its own explicit
+      `output_monitor_widths` and never hit this default path — confirmed
+      by grep, not assumed — so this was scoped to this device alone.
+      **Fixed**: the default now also clamps each output monitor's width
+      to the gap to its nearest neighboring `output_monitor_centers`
+      entry, so adjacent monitors meet exactly at their shared midpoint
+      with zero overlap (verified by hand: top/mid/bot now get width
+      1.0375 µm each, spans `[0.519,1.556]`/`[-0.519,0.519]`/
+      `[-1.556,-0.519]` — exact edge-to-edge tiling, confirmed by a
+      standalone arithmetic check before touching meep).
+
+   **Verified by measurement, in stages**: res=10 smoke test (job
+   11766751) — the *different*, previously-known violation from this
+   gap's own smoke-test history (`in_mode=1 totals 1.1113 at 1.3300`, a
+   separate resolution-dependent marginal case of the same overlap
+   mechanism) was **also gone**, no `check_passive` warnings at all. Real
+   res=20 production rerun (**job 11766971, 29m05s — faster than
+   11749963's 35m51s**): **zero `check_passive` warnings across the full
+   11-wavelength, 2-input-mode sweep.** This is the first fully passive
+   FDTD reference this device has ever produced, superseding job
+   11749963's "closed, but with one flagged point" result.
 
 ## Order
 

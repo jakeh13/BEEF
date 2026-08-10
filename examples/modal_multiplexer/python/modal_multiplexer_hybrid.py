@@ -241,7 +241,27 @@ PORTS = [("top", 0), ("mid", 1), ("bot", 2)]
 #    slot of its type in the chain — sections are told apart by their
 #    x-ranges (and cached per-section), not by which object solves them.
 # ---------------------------------------------------------------------------
-N_MODES = 14    # body supermodes carried at all four section interfaces.
+N_MODES = 15    # body supermodes carried at all four section interfaces.
+                # RAISED 14->15, 2026-08-09 (modal_multiplexer_validation.md
+                # gap 7's 2026-08-09 entry): check_mode_correspondence
+                # measured a real basis-incompleteness at 14 modes at the
+                # short-wavelength band edge (1.26 um, interface 0) -- meep's
+                # own mode 8 was only 0.9% representable in meow's 14-mode
+                # window, consistent with a 15th-order mode becoming newly
+                # guided near that wavelength. Tried 16 first (to keep an
+                # even symmetric/antisymmetric PARITY BALANCE, per the
+                # comment below) but FDTDSolver's own guided-mode guard
+                # raised: this cross-section supplies only 15 truly guided
+                # modes at 1.26 um, not 16 -- band 16 sits at/below the
+                # cladding index. 15 is therefore the measured ceiling, not
+                # a guess; an odd total means one parity has one more mode
+                # than the other at this wavelength, which the comment
+                # below's "1+5, 2+6" framing did not anticipate but is not
+                # itself a problem. Same reasoning as before on why this is
+                # safe to test now and wasn't in 2026-08-04: the old padding
+                # guard used to silently pad missing modes with junk; it now
+                # raises loudly instead (items 12/14), which is exactly how
+                # this was discovered. NOT YET VERIFIED against a real run.
                 # CHANGED 16->14, 2026-08-04 (modal_multiplexer_validation.md
                 # gap 2/gap 6's item-12/14 fix) -- NOT OPTIONAL, a judgment
                 # call made without explicit user sign-off, flagged here for

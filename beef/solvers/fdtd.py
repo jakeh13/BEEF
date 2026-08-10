@@ -44,6 +44,19 @@ _DUP_BAND_DIAG_NZ = 8
 # this stays cheap even at its ceiling.
 _DUP_BAND_MAX_EXTRA = 8
 
+# --- solve_section() excite-normalization mismatch guard -------------------
+#
+# See validation_markdown/modal_multiplexer_validation.md gap 7: the connector
+# section's excited bands 1-2 (Δn_eff=0.0148, near-degenerate) produced
+# transfer-matrix columns 10-20x too large -- get_eigenmode_coefficients()'s
+# alpha at the norm-flux plane silently undercounted launched power for those
+# two bands specifically, while mp.get_fluxes() (a direct field integral, not
+# a modal decomposition) stayed correct. Measured mismatch for the broken
+# bands was 10-20x; every other band on the same cross-section agreed with
+# flux to within numerical noise. 0.1 sits with wide margin below the former
+# and above the latter.
+_EXCITE_NORM_MISMATCH_TOL = 0.1
+
 # --- section_mode_beta() safety thresholds ---------------------------------
 #
 # REWRITTEN 2026-08-01. This block used to describe "failure mode 1" as the
@@ -1134,11 +1147,43 @@ class FDTDSolver:
                           size=mp.Vector3(0, src_width, self._mon_sz)),
         )
 
-        # One output monitor per output waveguide
+        # One output monitor per output waveguide. Default width clamps to
+        # TWO limits, not just one: the PML edge (sim_width - 2*abs(yc), as
+        # before) AND the gap to the nearest neighboring output port. The
+        # PML-only clamp is correct for a single, isolated multi-mode
+        # monitor (e.g. an MMI body cross-section spanning every waveguide
+        # together on purpose), but for a multi-PORT solve() call with
+        # several individually-narrow output_monitor_centers close together
+        # (this device's 3 output branches at WO=1.0375 um pitch,
+        # sim_width=5.0), the PML-only clamp let the on-axis "mid" monitor
+        # reach the full 5.0 um sim_width -- completely engulfing the other
+        # two branches at +/-1.0375 um. get_eigenmode_coefficients() solves
+        # eigenmodes of whatever dielectric sits inside its window, so that
+        # monitor was decomposing onto the fundamental supermode of all
+        # three coupled waveguides, not the isolated mid-branch mode --
+        # exactly the "double-counted output branch" check_passive() itself
+        # warns about. Traced directly to this via modal_multiplexer's own
+        # gap-3 reference (TE1 totals 1.1021 at 1.26 um, persisting even
+        # after the input-side normalization fix above, which correctly
+        # never fired since the corruption is per-output-port, not at the
+        # shared source). Clamping to the nearest-neighbor gap makes
+        # adjacent monitors meet exactly at their shared midpoint with zero
+        # overlap for evenly-spaced ports (this device's case); for a lone
+        # output port (no neighbors), or one far enough from its neighbors
+        # that the PML edge is already the tighter limit, this clamp is a
+        # no-op and prior behavior is unchanged.
+        def _neighbor_gap(i: int) -> float:
+            yc = self.output_monitor_centers[i]
+            others = [abs(yc - oc) for j, oc in enumerate(self.output_monitor_centers) if j != i]
+            return min(others) if others else self.sim_width
+
         out_widths = (
             self.output_monitor_widths
             if self.output_monitor_widths is not None
-            else [self.sim_width - 2.0 * abs(yc) for yc in self.output_monitor_centers]
+            else [
+                min(self.sim_width - 2.0 * abs(yc), _neighbor_gap(i))
+                for i, yc in enumerate(self.output_monitor_centers)
+            ]
         )
         out_fluxes = [
             sim.add_mode_monitor(
@@ -1153,11 +1198,35 @@ class FDTDSolver:
 
         sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol, minimum_run_time=self.minimum_run_time))
 
-        # Normalise by forward input-mode amplitude so |coeff|² = physical T
+        # Normalise by forward input-mode amplitude so |coeff|² = physical T.
+        # Same mismatch guard as solve_section()'s x-axis excite branch (see
+        # _EXCITE_NORM_MISMATCH_TOL's docstring): get_eigenmode_coefficients()
+        # alone can silently undercount launched power for an ill-conditioned
+        # decomposition, so cross-check against mp.get_fluxes() (a direct
+        # field integral) and only fall back to flux-calibrated normalization
+        # when they disagree. Found via modal_multiplexer's own gap-3
+        # reference: the ONE check_passive() violation in that "closed" run
+        # (TE1 totals 1.1021 at 1.26 um) traces to this exact unconditional
+        # alpha here, this device's own input waveguide being the excited
+        # geometry rather than a connector this time — the failure mode isn't
+        # specific to near-degenerate multimode bases the way gap 7's fix
+        # was motivated, just to get_eigenmode_coefficients() itself.
         in_coeff = sim.get_eigenmode_coefficients(
             in_flux, [input_mode], eig_parity=mp.NO_PARITY
         )
-        src_alpha = in_coeff.alpha[0, :, 0]  # [nfreq] forward amplitude, monitor order
+        in_alpha_raw = in_coeff.alpha[0, :, 0]  # [nfreq] forward amplitude, monitor order
+        in_flux_mag = np.abs(np.asarray(mp.get_fluxes(in_flux)))
+        in_mismatch = np.abs(np.sqrt(in_flux_mag) - np.abs(in_alpha_raw)) / np.maximum(np.sqrt(in_flux_mag), 1e-30)
+        if np.any(in_mismatch > _EXCITE_NORM_MISMATCH_TOL):
+            logger.warning(
+                "solve: input mode %d normalization mismatch between "
+                "get_eigenmode_coefficients() and get_fluxes() (max %.1f%% at freq "
+                "index %d) — falling back to flux-calibrated normalization.",
+                input_mode, 100 * float(in_mismatch.max()), int(in_mismatch.argmax()),
+            )
+            src_alpha = np.sqrt(in_flux_mag) * np.exp(1j * np.angle(in_alpha_raw))
+        else:
+            src_alpha = in_alpha_raw
 
         smat = SMatrix(wavelengths=wavelengths)
         for i, flux_mon in enumerate(out_fluxes):
@@ -2523,6 +2592,7 @@ class FDTDSolver:
             sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol, minimum_run_time=self.minimum_run_time))
 
             norm_coeff = sim.get_eigenmode_coefficients(norm_flux, [k], eig_parity=mp.NO_PARITY)
+            alpha_raw = norm_coeff.alpha[0, :, ex_alpha_idx]
             if ex_axis == "y":
                 # Flux-calibrated normalization: get_eigenmode_coefficients()
                 # alone undercounts power for an off-axis, backward-launched
@@ -2532,9 +2602,32 @@ class FDTDSolver:
                 # phase from the coefficient). Applied for both signs
                 # conservatively; only sign=-1 was ever tested there.
                 flux = np.abs(np.asarray(mp.get_fluxes(norm_flux)))
-                src_alpha = np.sqrt(flux) * np.exp(1j * np.angle(norm_coeff.alpha[0, :, ex_alpha_idx]))
+                src_alpha = np.sqrt(flux) * np.exp(1j * np.angle(alpha_raw))
             else:
-                src_alpha = norm_coeff.alpha[0, :, ex_alpha_idx]
+                # x-axis (in-line) excite: get_eigenmode_coefficients()'s own
+                # alpha is normally trustworthy and left untouched here, so
+                # every already-validated x-axis section elsewhere (mmi_1x4,
+                # mmi_4x4_90hybrid, mmi_2x2, directional_coupler, ...) sees
+                # bit-identical output. But it can silently undercount power
+                # for a near-degenerate excited band (gap 7's connector,
+                # bands 1-2 at Δn_eff=0.0148) — detect that by cross-checking
+                # against mp.get_fluxes() (a direct field integral, immune to
+                # modal-decomposition ill-conditioning) and fall back to the
+                # same flux-calibrated form used above only when they disagree.
+                flux = np.abs(np.asarray(mp.get_fluxes(norm_flux)))
+                mismatch = np.abs(np.sqrt(flux) - np.abs(alpha_raw)) / np.maximum(np.sqrt(flux), 1e-30)
+                if np.any(mismatch > _EXCITE_NORM_MISMATCH_TOL):
+                    logger.warning(
+                        "solve_section: excite band %d normalization mismatch between "
+                        "get_eigenmode_coefficients() and get_fluxes() (max %.1f%% at freq "
+                        "index %d) for section x=[%.4f, %.4f] — likely a near-degenerate "
+                        "excited mode; falling back to flux-calibrated normalization for "
+                        "this band.",
+                        k, 100 * float(mismatch.max()), int(mismatch.argmax()), x0, x1,
+                    )
+                    src_alpha = np.sqrt(flux) * np.exp(1j * np.angle(alpha_raw))
+                else:
+                    src_alpha = alpha_raw
 
 
             if os.environ.get("BEEF_DEBUG_NORM"):
