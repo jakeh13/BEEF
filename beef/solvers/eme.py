@@ -46,6 +46,56 @@ def _neff_fingerprint(neff_override: Optional[np.ndarray]):
             for row in np.atleast_2d(arr)]
 
 
+# Tolerance for the diagonal-reconstruction self-check in
+# solve_section_length_sweep() -- see that method's "neff cache" tier. Loose
+# enough to absorb meow's own solver noise, tight enough that a real ordering/
+# convention mismatch (not just floating-point jitter) always fails it.
+_DIAGONAL_RECONSTRUCTION_TOL = 1e-6
+
+
+def _propagate_diagonal(neff_all: np.ndarray, wavelengths: np.ndarray, lengths: np.ndarray,
+                         n_modes_out: int, n_modes_in: int) -> np.ndarray:
+    """Reconstruct transfer matrices from per-wavelength mode effective
+    indices alone, with no meow call at all.
+
+    A uniform-cross-section EME section's propagation S-matrix is exactly
+    diagonal in the mode basis (solve_section_length_sweep()'s own docstring):
+    ``S_ii(L) = exp(2j*pi*neff_i(wl)/wl * L)``. Given just ``neff_all``
+    (``[len(wavelengths), n_modes]``, already carrying any neff_override), the
+    transfer matrix at *any* length is this formula, not a new eigenmode
+    solve -- the reuse mechanism this function exists to serve, and also the
+    ground truth solve_section_length_sweep()'s own real (meow) solve is
+    checked against once per fresh solve before its neff is ever cached
+    (see _DIAGONAL_RECONSTRUCTION_TOL).
+
+    Args:
+        neff_all: [len(wavelengths), n_modes] complex, mode index i in the
+            same right@i/left@i basis solve_section_length_sweep()'s own
+            mw.compute_s_matrix() calls use.
+        wavelengths: [len(wavelengths)] um.
+        lengths: [n_L] um.
+        n_modes_out/n_modes_in: trailing shape of the returned array; only
+            min(n_modes_out, n_modes_in, neff_all.shape[1]) diagonal entries
+            are filled, matching a mode-count-truncated diagonal block —
+            same truncation convention lookup_superset()'s slicing assumes.
+
+    Returns:
+        Complex ndarray [len(lengths), len(wavelengths), n_modes_out, n_modes_in].
+    """
+    wavelengths = np.asarray(wavelengths)
+    lengths = np.asarray(lengths)
+    n = min(n_modes_out, n_modes_in, neff_all.shape[1])
+    T = np.zeros((len(lengths), len(wavelengths), n_modes_out, n_modes_in), dtype=complex)
+    if n == 0:
+        return T
+    phase = np.exp(
+        2j * np.pi * neff_all[None, :, :n] / wavelengths[None, :, None] * lengths[:, None, None]
+    )  # [n_L, n_wl, n]
+    for i in range(n):
+        T[:, :, i, i] = phase[:, :, i]
+    return T
+
+
 class EMESolver:
     """Eigenmode expansion solver wrapping meow.
 
@@ -488,31 +538,47 @@ class EMESolver:
                 f"cache_only=False to populate the cache."
             )
 
-        gds_polys = geometry.section_gds(
-            x0, x1, self.oxide_width,
-            stub_left=stub_left, stub_right=stub_right, **geometry_kwargs
-        )
-        structs = extrude_polygons(gds_polys, self._extrusion_rules(wavelengths))
-        mesh = self._build_mesh()
-        cells = mw.create_cells(structures=structs, mesh=mesh, Ls=[length])
+        # Fast path: solve_section always builds a single cell (Ls=[length]),
+        # so left/right ports share one cross-section's mode basis -- modes
+        # are orthogonal by construction, making the transfer matrix diagonal
+        # with T[i,i] = exp(2j*pi*neff_i/wl*L). When neff_override replaces
+        # neff right after the solve anyway (calibrate_body_neff), that
+        # diagonal is determined entirely by neff_override, never by the
+        # field profile -- so the eigenmode solve and mw.compute_s_matrix()
+        # are skipped outright rather than run and discarded. See
+        # validation_markdown/calibrate_body_neff_mode_solve_skip_validation.md
+        # step 2 (gated on that doc's step 1/5 before this is the default).
+        if neff_override is not None:
+            T = np.zeros((len(wavelengths), n_modes_out, n_modes_in), dtype=complex)
+            for wl_idx, wl in enumerate(wavelengths):
+                for k in range(min(n_modes_out, n_modes_in)):
+                    T[wl_idx, k, k] = np.exp(
+                        2j * np.pi * neff_override[wl_idx][k] / wl * length
+                    )
+        else:
+            gds_polys = geometry.section_gds(
+                x0, x1, self.oxide_width,
+                stub_left=stub_left, stub_right=stub_right, **geometry_kwargs
+            )
+            structs = extrude_polygons(gds_polys, self._extrusion_rules(wavelengths))
+            mesh = self._build_mesh()
+            cells = mw.create_cells(structures=structs, mesh=mesh, Ls=[length])
 
-        T = np.zeros((len(wavelengths), n_modes_out, n_modes_in), dtype=complex)
+            T = np.zeros((len(wavelengths), n_modes_out, n_modes_in), dtype=complex)
 
-        for wl_idx, wl in enumerate(wavelengths):
-            env = mw.Environment(wl=float(wl), T=self.temperature)
-            css = [mw.CrossSection.from_cell(cell=cell, env=env) for cell in cells]
-            modes = [self.compute_modes(cs, n_modes) for cs in css]
-            if neff_override is not None:
-                modes = [self._override_neff(m, neff_override[wl_idx]) for m in modes]
-            S, port_map = mw.compute_s_matrix(modes, cells=cells)
-            # S is a flat dense matrix keyed by string port labels ("left@n",
-            # "right@n"), not an NxN block per port pair — look up indices
-            # explicitly rather than assuming S[0,1] is the transmission block.
-            for i in range(n_modes_out):
-                for j in range(n_modes_in):
-                    i_out = port_map[f"right@{i}"]
-                    j_in = port_map[f"left@{j}"]
-                    T[wl_idx, i, j] = S[i_out, j_in]
+            for wl_idx, wl in enumerate(wavelengths):
+                env = mw.Environment(wl=float(wl), T=self.temperature)
+                css = [mw.CrossSection.from_cell(cell=cell, env=env) for cell in cells]
+                modes = [self.compute_modes(cs, n_modes) for cs in css]
+                S, port_map = mw.compute_s_matrix(modes, cells=cells)
+                # S is a flat dense matrix keyed by string port labels ("left@n",
+                # "right@n"), not an NxN block per port pair — look up indices
+                # explicitly rather than assuming S[0,1] is the transmission block.
+                for i in range(n_modes_out):
+                    for j in range(n_modes_in):
+                        i_out = port_map[f"right@{i}"]
+                        j_in = port_map[f"left@{j}"]
+                        T[wl_idx, i, j] = S[i_out, j_in]
 
         # Post-hoc duplicate-mode scan of the transfer matrix just computed —
         # fdtd_vs_EME_mode_validation.md item 8. `compute_modes()`'s own
@@ -566,6 +632,35 @@ class EMESolver:
         solve_section() call (one mode solve per wavelength), regardless of
         how many lengths are swept.
 
+        Caching has THREE tiers, cheapest first (see beef/cache/ for the
+        underlying lookup()/lookup_superset() primitives):
+          1. Exact match on every arg including `lengths` — unchanged from
+             before, a plain on-disk hit.
+          2. Mode-count superset at the SAME `lengths` — unchanged from
+             before (`family_config`/lookup_superset()): a cached run with
+             >= the requested mode count, at this exact lengths array, gets
+             sliced down.
+          3. NEW — length-independent neff reuse (`neff_config`): per the
+             diagonal-in-mode-basis fact above, the only genuinely expensive
+             step is the eigenmode solve itself (one per wavelength), which
+             never reads `lengths` at all. So a *previous* call at this same
+             geometry/wavelengths/mode-count — with ANY lengths array, swept
+             or not — already solved and can hand over its per-wavelength
+             neff; this tier reconstructs T for the requested `lengths`
+             purely analytically (_propagate_diagonal(), no meow call) and
+             is what actually eliminates a re-solve when only the sweep
+             range changes.
+
+             Every fresh (non-cached) solve below validates this reuse path
+             is safe for the current cross-section BEFORE trusting it for
+             future calls: it reconstructs one length's T from the neff it
+             just solved and compares against the real mw.compute_s_matrix()
+             result for that same length (_DIAGONAL_RECONSTRUCTION_TOL). Only
+             a passing check gets its neff saved to tier 3's cache — a
+             cross-section this fact somehow doesn't hold for (it always has,
+             so far) just never becomes eligible for tier-3 reuse, and still
+             returns its own correct (real-solve) T regardless.
+
         Args:
             neff_override: optional array ``[len(wavelengths), n_modes]``
                 replacing each mode's n_eff before propagation, leaving field
@@ -577,14 +672,17 @@ class EMESolver:
                 on the coupling (dc_validation.md item 6). Normally supplied by
                 ``HybridSolver(calibrate_body_neff=True)`` rather than by hand;
                 see ``FDTDSolver.section_mode_beta()``. None (default) uses the
-                mode solver's own n_eff, unchanged.
+                mode solver's own n_eff, unchanged. Included as part of every
+                cache tier's key (including tier 3's neff_config) — a
+                calibrated and an uncalibrated run never share a cache entry.
             save_dir: persistent on-disk cache directory (see beef/cache/).
                 None/"" (default) disables the cache — see
                 FDTDSolver.solve_section()'s save_dir docstring for the full
-                semantics (identical here; lengths is included in the config).
-            cache_only: if True, never run the solve — a cache hit returns as
-                usual, a miss raises CacheMissError. See
-                FDTDSolver.solve_section()'s cache_only docstring for the
+                semantics (identical here; lengths is included in tiers 1/2's
+                config, deliberately excluded from tier 3's neff_config).
+            cache_only: if True, never run the solve — a cache hit (any tier)
+                returns as usual, a miss at all three raises CacheMissError.
+                See FDTDSolver.solve_section()'s cache_only docstring for the
                 full semantics (identical here).
 
         Returns:
@@ -598,20 +696,21 @@ class EMESolver:
 
         # See solve_section()'s comment on family_config/lookup_superset —
         # same reuse mechanism, same no-extra-precondition reasoning; lengths
-        # stays part of the family key (unchanged, only mode counts dropped)
-        # since it's a real physical input, not something mode-count reuse
-        # can vary (Solver recommendation #2).
+        # stays part of the family key (tier 2 only drops mode counts, same
+        # as before — Solver recommendation #2). Tier 3's neff_config below
+        # additionally drops lengths.
         family_config = None
+        neff_config = None
         if save_dir:
+            _material_cfg = resolved_material_config(
+                self.material_stack, wavelengths, self._resolved_dispersive())
             family_config = build_run_config(
                 self, "solve_section_length_sweep",
                 dict(x0=x0, x1=x1, wavelengths=wavelengths, lengths=lengths,
                      stub_left=stub_left, stub_right=stub_right,
                      geometry_kwargs=geometry_kwargs,
                      neff_override=_neff_fingerprint(neff_override),
-                     **resolved_material_config(
-                         self.material_stack, wavelengths,
-                         self._resolved_dispersive())),
+                     **_material_cfg),
                 geometry,
             )
             config = build_run_config(
@@ -621,9 +720,7 @@ class EMESolver:
                      stub_left=stub_left, stub_right=stub_right,
                      geometry_kwargs=geometry_kwargs,
                      neff_override=_neff_fingerprint(neff_override),
-                     **resolved_material_config(
-                         self.material_stack, wavelengths,
-                         self._resolved_dispersive())),
+                     **_material_cfg),
                 geometry,
             )
             hit = lookup(save_dir, config)
@@ -635,6 +732,34 @@ class EMESolver:
                 folder, _stored_dims = superset
                 logger.info("solve_section_length_sweep: superset cache hit at %s (sliced)", folder)
                 return load_result(folder)[:, :, :n_modes_out, :n_modes_in]
+
+            # Tier 3: same ingredients as family_config, with `lengths` ALSO
+            # dropped and `n_modes` pinned explicitly (family_config has no
+            # mode-count field at all, so a distinct method_name plus an
+            # explicit n_modes keeps this tier's key from colliding with it).
+            neff_config = build_run_config(
+                self, "solve_section_neff",
+                dict(x0=x0, x1=x1, wavelengths=wavelengths, n_modes=n_modes,
+                     stub_left=stub_left, stub_right=stub_right,
+                     geometry_kwargs=geometry_kwargs,
+                     neff_override=_neff_fingerprint(neff_override),
+                     **_material_cfg),
+                geometry,
+            )
+            neff_hit = lookup(save_dir, neff_config)
+            if neff_hit is not None:
+                neff_all = load_result(neff_hit)  # [n_wl, n_modes] complex, self-checked when saved
+                logger.info(
+                    "solve_section_length_sweep: neff cache hit at %s -- "
+                    "%d length(s) reconstructed analytically, no new mode solve",
+                    neff_hit, len(lengths),
+                )
+                T = _propagate_diagonal(neff_all, wavelengths, lengths, n_modes_out, n_modes_in)
+                folder = save_run(save_dir, config, T)
+                update_family_pointer(
+                    save_dir, family_config, (n_modes_out, n_modes_in), os.path.basename(folder),
+                )
+                return T
         if cache_only:
             raise CacheMissError(
                 f"solve_section_length_sweep(): cache_only=True but no cached "
@@ -651,6 +776,7 @@ class EMESolver:
         cells = mw.create_cells(structures=structs, mesh=mesh, Ls=[1.0])  # length is a placeholder
 
         T = np.zeros((len(lengths), len(wavelengths), n_modes_out, n_modes_in), dtype=complex)
+        neff_all = np.zeros((len(wavelengths), n_modes), dtype=complex)  # tier 3's cache payload
 
         for wl_idx, wl in enumerate(wavelengths):
             env = mw.Environment(wl=float(wl), T=self.temperature)
@@ -658,6 +784,8 @@ class EMESolver:
             modes = [self.compute_modes(cs, n_modes) for cs in css]  # one solve, reused below
             if neff_override is not None:
                 modes = [self._override_neff(m, neff_override[wl_idx]) for m in modes]
+
+            neff_all[wl_idx, :] = np.array([m.neff for m in modes[0]], dtype=complex)
 
             if wl_idx == len(wavelengths) // 2:
                 # Diagnostic: confirm this cross-section actually resolves
@@ -676,12 +804,34 @@ class EMESolver:
                         j_in = port_map[f"left@{j}"]
                         T[L_idx, wl_idx, i, j] = S[i_out, j_in]
 
+        # Tier 3's own gate: reconstruct this cross-section's FIRST swept
+        # length purely from neff_all and compare against the real solve
+        # above. Only a pass makes neff_all eligible to serve future
+        # different-lengths calls (see docstring) — a cross-section where
+        # this somehow fails just never gets a tier-3 entry, T itself is
+        # unaffected either way.
+        neff_cache_safe = True
+        if save_dir and neff_config is not None and len(lengths) > 0:
+            T_check = _propagate_diagonal(neff_all, wavelengths, lengths[:1], n_modes_out, n_modes_in)
+            max_diff = float(np.max(np.abs(T_check[0] - T[0])))
+            if max_diff > _DIAGONAL_RECONSTRUCTION_TOL:
+                neff_cache_safe = False
+                logger.warning(
+                    "solve_section_length_sweep: diagonal-reconstruction self-check "
+                    "off by %.2e (tol %.1e) at length=%.6f um -- skipping the "
+                    "length-independent neff cache for this cross-section; T "
+                    "itself (from the real solve) is unaffected.",
+                    max_diff, _DIAGONAL_RECONSTRUCTION_TOL, float(lengths[0]),
+                )
+
         if save_dir:
             folder = save_run(save_dir, config, T)
             logger.info("solve_section_length_sweep: cache saved at %s", folder)
             update_family_pointer(
                 save_dir, family_config, (n_modes_out, n_modes_in), os.path.basename(folder),
             )
+            if neff_config is not None and neff_cache_safe:
+                save_run(save_dir, neff_config, neff_all)
 
         return T
 
