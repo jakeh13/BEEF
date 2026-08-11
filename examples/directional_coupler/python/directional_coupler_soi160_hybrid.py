@@ -19,11 +19,22 @@ constructor semantics):
 
 Two differences from directional_coupler_hybrid.py, both load-bearing:
 
-1. coupling_length is FIXED at the GDS's own 3.0 um, not swept for a 50:50
-   split -- this is a real fabricated device's own dimension, not a free
-   design parameter (step 0's decision: use the real GDS numbers directly).
-   So there is no coupling_length sweep, no L50 search, no
-   PLOT_COUPLING_LENGTH pin -- just ONE length, measured once.
+1. coupling_length is PINNED at the GDS's own 3.0 um for the headline result
+   (smatrix_hybrid.pkl, coupling_result.npz, hybrid_results.png) -- this is
+   a real fabricated device's own dimension, not a free design parameter
+   (step 0's decision: use the real GDS numbers directly). No L50 search,
+   no auto-picked plot length: the pin is always exactly 3.0 um.
+
+   The EME body IS now swept around that pin (coupling_lengths below,
+   same solve_section_length_sweep()-based idiom as directional_coupler_
+   hybrid.py's own coupling-length sweep and mmi_2x2_hybrid.py's mm_length
+   sweep) -- the two FDTD S-bend sections (M_in0/M_in1) don't depend on
+   coupling_length at all, only on the fixed bend/access-waveguide geometry,
+   so the same two cached FDTD solves cover every swept length for free.
+   3.0 um is spliced into the grid exactly (not just grid-snapped), so the
+   real-device result is bit-identical to solving it alone. length_sweep.npz
+   / coupling_length_sweep.png are diagnostic (cache-reuse / sensitivity
+   demonstration), not a design search -- there is still no L50 pin.
 
 2. N_MODES=2, not 5. The real 0.5 um / 160 nm strip carries 2 guided modes
    (fundamental + a genuinely guided 2nd-order mode, both with real margin
@@ -268,6 +279,25 @@ print(f"Coupling-length budget: 2 x {BODY_STUB:.2f} um inside the FDTD "
       f"sections + EME body {body_length:.2f} um "
       f"= {COUPLING_LENGTH:.2f} um total")
 
+# Diagnostic coupling-length sweep around the real GDS pin -- see module
+# docstring point 1. The two FDTD S-bend sections below don't depend on
+# coupling_length, so solve_section_length_sweep() gets every one of these
+# lengths from the SAME two cached FDTD solves, at the cost of one extra EME
+# mode-solve-and-propagate per wavelength (not per length). The real 3.0 um
+# pin is spliced in exactly so the headline result below is bit-identical to
+# solving it alone.
+coupling_lengths = np.linspace(2 * BODY_STUB, 20.0, 200)   # um, diagnostic sweep grid
+if not np.any(np.isclose(coupling_lengths, COUPLING_LENGTH, rtol=0, atol=1e-9)):
+    coupling_lengths = np.sort(np.append(coupling_lengths, COUPLING_LENGTH))
+body_lengths = coupling_lengths - 2 * BODY_STUB   # EME body section's physical length per swept coupling_length
+L_plot_idx = int(np.argmin(np.abs(coupling_lengths - COUPLING_LENGTH)))
+assert np.isclose(coupling_lengths[L_plot_idx], COUPLING_LENGTH, rtol=0, atol=1e-9), (
+    f"real coupling_length pin {COUPLING_LENGTH} um was not sampled exactly "
+    f"(got {coupling_lengths[L_plot_idx]} um)"
+)
+print(f"Coupling-length sweep: {coupling_lengths[0]:.2f} - {coupling_lengths[-1]:.2f} um "
+      f"({len(coupling_lengths)} pts, real pin spliced in exactly at index {L_plot_idx})")
+
 _iface_mon = dict(monitor_center=0.0, monitor_size=fdtd_solver.sim_width)
 
 # ---------------------------------------------------------------------------
@@ -339,21 +369,28 @@ if CALIBRATE_BODY:
     print(f"    FDTD own phase  n_eff {_body_neff[_i, 0]:.6f} {_body_neff[_i, 1]:.6f}   "
           f"delta_n_eff {_body_neff[_i, 0] - _body_neff[_i, 1]:.6f}   <- body propagates on this")
 
-M_body = body_solver.solve_section_length_sweep(
-    dc, wavelengths, boundaries[1], boundaries[2], np.array([body_length]),
+M_body_grid = body_solver.solve_section_length_sweep(
+    dc, wavelengths, boundaries[1], boundaries[2], body_lengths,
     n_modes_in=N_MODES, n_modes_out=N_MODES, save_dir=save_dir,
     neff_override=_body_neff,
-)  # [1, n_wl, N_MODES, N_MODES]
+)  # [n_L, n_wl, N_MODES, N_MODES]
 
-tmp = np.einsum("wij,wjk->wik", M_body[0], M_in0)          # [n_wl, N_MODES, 1]
-full_through = np.einsum("wij,wjk->wik", M_out_through, tmp)   # [n_wl, 1, 1]
-full_cross = np.einsum("wij,wjk->wik", M_out_cross, tmp)        # [n_wl, 1, 1]
+tmp = np.einsum("Lwij,wjk->Lwik", M_body_grid, M_in0)                # [n_L, n_wl, N_MODES, 1]
+full_through_grid = np.einsum("wij,Lwjk->Lwik", M_out_through, tmp)  # [n_L, n_wl, 1, 1]
+full_cross_grid = np.einsum("wij,Lwjk->Lwik", M_out_cross, tmp)      # [n_L, n_wl, 1, 1]
 
-coeff_through = full_through[:, 0, 0]
-coeff_cross = full_cross[:, 0, 0]
-T_through = np.abs(coeff_through) ** 2
-T_cross = np.abs(coeff_cross) ** 2
-T_total = T_through + T_cross
+T_through_grid = np.abs(full_through_grid[:, :, 0, 0]) ** 2   # [n_L, n_wl]
+T_cross_grid = np.abs(full_cross_grid[:, :, 0, 0]) ** 2
+T_total_grid = T_through_grid + T_cross_grid
+
+# Slice at the real, pinned coupling_length (spliced in exactly above) for the
+# wavelength-domain view -- keep the complex coefficients so the saved
+# SMatrix preserves phase, same as before this notebook's own sweep existed.
+coeff_through = full_through_grid[L_plot_idx, :, 0, 0]
+coeff_cross = full_cross_grid[L_plot_idx, :, 0, 0]
+T_through = T_through_grid[L_plot_idx]
+T_cross = T_cross_grid[L_plot_idx]
+T_total = T_total_grid[L_plot_idx]
 
 wl_c = wavelengths[len(wavelengths) // 2]
 idx = np.argmin(np.abs(wavelengths - wl_c))
@@ -430,3 +467,41 @@ plt.tight_layout()
 fig.savefig(os.path.join(output_dir, "hybrid_results.png"), dpi=300)
 plt.close("all")
 print(f"Results plot saved -> {output_dir}/hybrid_results.png")
+
+# ---------------------------------------------------------------------------
+# 7. Coupling-length sweep grid + plot -- diagnostic only (see module
+#    docstring point 1): demonstrates the two cached FDTD S-bend solves above
+#    are reused unchanged across every length here, not a design search.
+# ---------------------------------------------------------------------------
+np.savez(
+    os.path.join(output_dir, "length_sweep.npz"),
+    coupling_lengths=coupling_lengths, wavelengths=wavelengths,
+    T_through=T_through_grid, T_cross=T_cross_grid,
+    L_plot=COUPLING_LENGTH, L_plot_idx=L_plot_idx,
+)
+print(f"Length-sweep grid saved -> {output_dir}/length_sweep.npz")
+
+fig, ax = plt.subplots(figsize=(7, 4.5))
+for grid, label, color in [
+    (T_through_grid, "Through", "steelblue"),
+    (T_cross_grid,   "Cross",   "darkorange"),
+    (T_total_grid,   "Total",   "k"),
+]:
+    mean, lo, hi = grid.mean(axis=1), grid.min(axis=1), grid.max(axis=1)
+    ax.plot(coupling_lengths, mean, label=label, color=color,
+            lw=1.5 if label == "Total" else 1.2,
+            linestyle="--" if label == "Cross" else "-")
+    ax.fill_between(coupling_lengths, lo, hi, color=color, alpha=0.15, lw=0)
+
+ax.axvline(COUPLING_LENGTH, color="gray", linestyle=":", lw=0.8,
+           label=f"Real device ({COUPLING_LENGTH:.2f} um, fixed)")
+ax.set_xlabel("Coupling length (um)")
+ax.set_ylabel("Transmission (mean over wavelength, shaded = min-max)")
+ax.set_title("Directional Coupler (SOI_160) — Power Transfer vs Coupling Length (diagnostic)")
+ax.legend(fontsize=8)
+ax.grid(True)
+ax.set_ylim(0, 1.05)
+plt.tight_layout()
+fig.savefig(os.path.join(output_dir, "coupling_length_sweep.png"), dpi=300)
+plt.close("all")
+print(f"Coupling-length sweep plot saved -> {output_dir}/coupling_length_sweep.png")
