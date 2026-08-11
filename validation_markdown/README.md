@@ -15,6 +15,7 @@ One file per example device, recording what has to hold before that device's
     resolved/high_contrast_grating_fabry_perot_validation.md HCG Fabry-Perot cavity + DC tap — Steps 0-5 + checks 1-3 all closed with real data; 44 real resonances at the real (GDS-derived) cavity length, FSR 2.255nm; check 4 out of scope by decision
     modal_multiplexer_validation.md    modal multiplexer — resumed 2026-08-04, gap list against the four checks
     mode_crossing_correspondence_repair_validation.md  cross-device — BUILD PLAN, mechanism does not exist yet; check_mode_correspondence can DETECT a mode-identity mismatch but nothing REPAIRS one; prompted by a real, still-open failure at the modal multiplexer's interface 0 (mode 8, wl=1.26 um)
+    calibrate_body_neff_mode_solve_skip_validation.md  cross-device — BUILD PLAN, mechanism does not exist yet; when calibrate_body_neff overrides a single-cell EME body's neff, the field profile that solve computed is never read again — plan to skip it; confirmed check_mode_correspondence's own field fetch is independent so this is safe to build
     archive/                           closed items, kept whole
     resolved/                          whole docs sufficiently addressed (open to-dos may remain)
     resolved/directional_coupler_validation.md  directional coupler — the worked example
