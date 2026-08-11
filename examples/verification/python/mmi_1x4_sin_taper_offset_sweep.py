@@ -80,11 +80,12 @@ os.makedirs(output_dir, exist_ok=True)
 # ---------------------------------------------------------------------------
 RESOLUTION = float(os.environ.get("MMI1X4_OFFSET_RES", 40.0))
 WL_MIN, WL_MAX = 1.50, 1.60
-N_WL = int(os.environ.get("MMI1X4_OFFSET_NWL", 11))
+WL_CENTER = 0.5 * (WL_MIN + WL_MAX)
+N_WL = int(os.environ.get("MMI1X4_OFFSET_NWL", 1))   # 1 = center wavelength only, per default
 N_BODY = int(os.environ.get("MMI1X4_OFFSET_NBODY", 20))
 N_TAPER = int(os.environ.get("MMI1X4_OFFSET_NTAPER", 10))
-C_TAPER = int(os.environ.get("MMI1X4_OFFSET_CTAPER", 8))
-N_POINTS = int(os.environ.get("MMI1X4_OFFSET_NPOINTS", 21))
+C_TAPER = int(os.environ.get("MMI1X4_OFFSET_CTAPER", 3))   # coarse by default -- see module docstring
+N_POINTS = int(os.environ.get("MMI1X4_OFFSET_NPOINTS", 5))
 
 WAVEGUIDE_WIDTH = 1.1
 TAPER_WIDTH = 2.2
@@ -97,11 +98,23 @@ MM_LENGTH = 44.0   # um -- corrected hybrid sweep's own spread minimum (job 1178
                    # port spacing exists for THIS short length, not that one.
 
 # Feasible waveguide_offset range (see module docstring's geometric derivation).
-_OFFSET_MIN = TAPER_WIDTH + 0.05   # 0.05 um minimum edge-to-edge margin, not zero
-_OFFSET_MAX = (MM_WIDTH - TAPER_WIDTH) / 3.0 - 0.05
+_FEASIBLE_MIN = TAPER_WIDTH + 0.05   # 0.05 um minimum edge-to-edge margin, not zero
+_FEASIBLE_MAX = (MM_WIDTH - TAPER_WIDTH) / 3.0 - 0.05
+
+# Targeted range, not the full feasible span -- analyze_mmi1x4_self_imaging_L44.py's
+# own peak detection (job 11783781) found the field's actual lobe pattern at this
+# length best matches offset ~3.34 um (outer port pair on the ±5.01 um peak, inner
+# pair on the tallest ±1.74 um peak) -- just past _FEASIBLE_MAX (3.2167), so this
+# sweep is centered as close to that candidate as geometry allows, not scanning blind.
+_OFFSET_MIN = float(os.environ.get("MMI1X4_OFFSET_MIN", 3.0))
+_OFFSET_MAX = float(os.environ.get("MMI1X4_OFFSET_MAX", _FEASIBLE_MAX))
+assert _FEASIBLE_MIN <= _OFFSET_MIN and _OFFSET_MAX <= _FEASIBLE_MAX + 1e-9, (
+    f"requested range [{_OFFSET_MIN}, {_OFFSET_MAX}] escapes the geometrically "
+    f"feasible [{_FEASIBLE_MIN}, {_FEASIBLE_MAX}]"
+)
 offsets = np.linspace(_OFFSET_MIN, _OFFSET_MAX, N_POINTS)
 
-wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
+wavelengths = np.array([WL_CENTER]) if N_WL == 1 else np.linspace(WL_MIN, WL_MAX, N_WL)
 
 if len(sys.argv) != 2 or sys.argv[1] not in ("0", "1", "2", "3"):
     raise SystemExit(f"usage: {sys.argv[0]} <output branch 0-3>")

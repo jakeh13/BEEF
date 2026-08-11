@@ -322,6 +322,76 @@ regime conclusion, not after.**
     sensibly (or does not materially change, if the earlier bad modes
     carried negligible power).
 
+  **⚠️ 2026-08-10 — WALKED BACK. The "domain size is the fix" conclusion
+  above does not survive a real multi-point sweep.** Requested next: a
+  rigorous convergence sweep (not just the 3 confirming points above)
+  tracking each engine's OWN n_eff independently across many domain sizes,
+  mirroring gap 2's resolution-convergence table
+  (`examples/verification/python/diag_domain_convergence_neff.py`, new,
+  N_MODES=14, wl=1.26, sim_width swept 5.0-11.0 µm in 1.0 µm steps, fixed
+  aspect ratio). Two jobs (11774688, then 11781219 after fixing a
+  floating-point mesh bug the first one hit — `sim_width * ASPECT` is not
+  always exactly representable in binary float, so `int(res * height)`
+  can truncate one pixel short of intent; fixed with a small epsilon
+  nudge before assignment).
+
+  **Result: not monotonic, and not converging — it gets WORSE past 9.0,
+  not better.** meep's own n_eff sequence:
+  - 5.0→9.0 µm: the top 6 modes (n_eff 2.75→2.41) are rock-solid
+    identical to 5-6 decimal places throughout — genuinely converged.
+    Below that, WHICH specific modes populate the rest of the 14-mode
+    basis keeps reshuffling (a ~2.270 mode drops out at 6.0, reappears at
+    9.0; a new, more weakly-confined mode appears at the bottom each time
+    one drops from the middle) — oscillating, not settling, exactly the
+    signature of `_iter_distinct_bands()`'s duplicate-overlap threshold
+    (0.90) sitting on a knife-edge for a genuinely close-packed cluster of
+    modes, not smooth truncation error shrinking away.
+  - **10.0 µm: one of the previously rock-solid top-6 modes (~2.518)
+    disappears entirely** from the accepted 14 — a mode that had been
+    byte-stable across every domain size from 5.0-9.0 is now gone.
+  - **11.0 µm: outright failure.** Six separate bands flagged as
+    duplicates during the ladder search (band_num 5, 6, 7, 9, 13, 14 all
+    hit the 0.90 self-overlap guard), and the cross-section is found to
+    supply only **10** guided modes of the 14 requested — fewer than at
+    every smaller domain tested, including the original 5.0 µm baseline.
+    `_iter_distinct_bands()` raised (its own guard working correctly —
+    this is an honest failure, not a silent bad number).
+
+  **Conclusion, corrected: domain-size truncation was real and does
+  explain the improvement seen between 5.0 and 9.0, but it is not "the
+  fix" — meep's per-band ladder search is fundamentally unstable against
+  this cross-section's close-packed mode cluster at ANY domain size
+  tested, including the ones that looked clean.** 9.0 µm was not a
+  plateau; it was one lucky point inside a noisy, non-monotonic region
+  between "too small, truncates real modes" (≤6.0ish) and "too large,
+  the ladder itself falls apart" (≥10.0). This reframes Stage 0 back
+  toward **regime C (cross-engine / method-level resolution failure)**
+  as the dominant explanation, now with substantially stronger evidence
+  than the original surgical-isolation argument: the instability is not
+  a property of one specific (mode, wavelength, domain-size) combination,
+  it is a property of `_iter_distinct_bands()`'s ladder-plus-duplicate-
+  threshold approach applied to this cross-section's genuinely
+  close-packed spectrum, independent of domain size. **The concrete
+  "enlarge the domain, ship N_MODES=14" fix proposed above is
+  retracted** — it would have shipped a config that happens to look
+  clean at exactly the wavelength/domain pair tested and silently breaks
+  nearby, which is worse than the status quo, not better.
+
+  **Paused here (2026-08-10) at the user's direction.** Next steps
+  identified but not started: (a) measure the duplicate-threshold's own
+  self-overlap values directly across domain size, to see exactly which
+  pair of modes is fighting the 0.90 threshold and whether that overlap
+  value itself trends with domain size or is genuinely noisy; (b)
+  consider whether `_iter_distinct_bands()`'s ladder-search approach
+  needs a fundamentally different strategy for this cross-section (e.g.
+  a simultaneous/degenerate-subspace solve on the meep side, analogous to
+  what item 12 built for the counting problem, adapted to actually
+  separate a close pair rather than just detect one); (c) do not attempt
+  another blind parameter sweep (domain size, N_MODES, or resolution)
+  without first understanding the mechanism — three such sweeps this
+  session (N_MODES twice, domain size twice) each produced a clean-looking
+  but ultimately non-representative result.
+
 ### Stage 1 — margin-gated auto-permutation in `HybridSolver` (build only if Stage 0 finds a real regime-A case)
 
 - Extend `HybridSolver` so that, when `check_mode_correspondence` finds a

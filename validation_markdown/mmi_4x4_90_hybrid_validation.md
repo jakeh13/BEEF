@@ -42,6 +42,36 @@ sentence explicitly says "optical hybrid" or "90° hybrid."
 
 ---
 
+**CURRENT STATUS (2026-08-09) — read this first, history follows below.**
+Steps 1-7 done. Step 6 (all 3 example scripts) done and RE-RUN at a
+properly-converged body mode basis -- see "Body/taper mode-count
+convergence investigation" (before Step 8) for the full trail. **The
+numbers that matter right now:**
+
+- `N_MODES_TAPER=12` (mmi_4x4_90hybrid_eme.py), `N_MODES_BODY=16`
+  (body_sweep.py/hybrid.py) -- both converged, both measured, not
+  guessed. `num_cells=30` for the EME-only script's taper (job 11736983).
+- Settled geometry: `mm_width=6.0`, `waveguide_width=0.35`,
+  `waveguide_offset=1.5`, `taper_width=0.8`, `taper_length=1.0`,
+  **`ΔL=-2.75` (mm_length=78.9396)** -- re-derived from the old
+  `ΔL=-1.50`/`mm_length=80.1896` once the body basis converged; the old
+  point is stale, do not reuse it.
+- **Real Step 6c (hybrid, FDTD+EME) numbers at the converged point (job
+  11778128): worse than previously reported.** CMRR fails the cited
+  ≥20 dBe bar at most wavelengths (was: comfortable at band centre);
+  phase error breaches the cited ≤5° bar at multiple ports (was: only
+  one); excess loss 6.5-8.4 dB peak (was 2.1-4.3 dB). The earlier
+  "close to spec" read was an artifact of the under-converged N=8 body
+  basis, not real performance -- corrected, not regressed.
+- Steps 8 (four checks) and 9 (golden fixture) not started.
+- **Open, not yet started: whether the geometry itself (mm_width, taper
+  dimensions, access waveguide width) needs redesigning to actually meet
+  the paper's cited spec, now that the real performance is known.**
+  Paused here at the user's direction (2026-08-09) -- pick this up
+  next if/when resumed.
+
+---
+
 **Status 2026-08-05:** Step 1's cross-section sweep (1a single-mode width,
 1b sz convergence, 1c L_π vs. body width, all at O-band on `SOI_220`) is
 running as SLURM job **11692410** (`batch/verification/
@@ -1470,6 +1500,115 @@ Step 2's original placeholder) stands unchanged; the only real,
 production-validated loss-reduction lever from this whole investigation
 is the `num_cells` 15→30 bump already landed in `mmi_4x4_90hybrid_eme.py`
 (job 11736983, ~0.08-0.10 dB real reduction).
+
+### Body/taper mode-count convergence investigation — 2026-08-09
+
+User request: field plots (examples/verification/python/
+plot_mmi4x4_90hybrid_eme_fields.py) showed taper section under-resolved.
+Asked N_MODES_TAPER>10.
+
+**Taper side.** N_MODES_TAPER 4->12 in mmi_4x4_90hybrid_eme.py. Field
+plot dramatically smoother at 12 (fans into clean self-imaging pattern
+vs staying confined/speckly at 4) -- BUT production S-matrix metrics
+barely moved (job 11746259 vs original: agreement to 3-4 decimals).
+Convergence sweep (job 11747369, single port pair, num_cells=30): flat
+4-16, anomaly at 20. Root cause found: taper's wide end (0.8um) has
+**6 real guided modes** (checked directly, meep backend, after catching
+a strip-tuple-order bug in first attempt) -- N=4 missed 2 of 6, N=12
+covers all + margin. Flatness explained: fundamental-mode launch barely
+couples to the missing higher-order guided modes for this geometry --
+real physics, not luck. N=20 anomaly: likely instability among
+non-guided continuum pseudo-modes (modes 7+), not a guided threshold
+(guided count is 6, nowhere near 20). Net: N_MODES_TAPER=12 kept,
+well-justified now, not just "field plot looked better."
+
+**Body side -- the big one.** S-parameter convergence sweep (job
+11752350, tidy3d backend, single port pair, N=[4,8,12,16,20,24]):
+**N_MODES_BODY=8 (used in EVERY script for this device) under-converged
+by 50-64% relative to true value**, which converges cleanly by N=16-20
+(agreement <1% through 24). This is not the taper's small effect --
+N=8 gives |S|^2=[0.139,0.150,0.147], true value ~[0.085,0.149,0.223].
+
+Body sub-solver deliberately locked to "meep" backend (not tidy3d) for
+FDTD/EME mode-basis consistency across hybrid cascade (body_sweep.py's
+own comment). Bare N=16/20 guided-ceiling probes via meep at the WIDE
+diagnostic domain (oxide_width=MM_WIDTH+14.0, body_modes.py's own
+convention) TIMED OUT at both 3h (N=16, job 11753042) and 4h (N=20, job
+11749479) -- ZERO output both times, same signature as the original
+Step 3a 16-mode failure. User direction: skip ceiling-finding, go
+straight to S-param convergence (done above); then investigate
+meep/tidy3d interchangeability before accepting the wall.
+
+**meep vs tidy3d comparison** (N=8, both handle this fine): n_eff
+agrees to ~1% (consistent small offset, all 8 modes). Overlap matrix
+between the two mode sets: perfectly diagonal (zero cross-terms,
+same ordering/content) but diagonal magnitude only ~0.05 even with
+power-normalized inner product (each self-normalizes to 1.0
+individually). Dug deeper: sign-change count along raw field profile
+--meep 2/7/11 for modes 1/4/8 (smooth), tidy3d 101/182/111 (noisy).
+Envelope/n_eff/width/position all agree closely; tidy3d's raw field
+carries real numerical noise that would corrupt a strict interface
+overlap. **Conclusion: NOT clearly safe to swap body backend to
+tidy3d.**
+
+Bisected meep's own ceiling instead: N=12 timed out at 2h (job
+11764161, zero output), N=10 probe in flight when superseded (see
+below). **User asked: have we checked the SIMULATION SPAN (domain
+size) for the mode calc, not just mode count?** Real catch -- checked
+oxide_width/oxide_height actually used: body_modes.py/cross_section.py
+(and every prior "meep wall" test) used oxide_width=MM_WIDTH+14.0=20um;
+body_sweep.py/hybrid.py's ACTUAL production domain is oxide_width=
+MM_WIDTH+3.0=9um. Never the same span.
+
+Domain convergence screen (tidy3d, cheap/fast, N=8): n_eff BIT-FOR-BIT
+IDENTICAL across oxide_width margin 3.0 through 20.0, and oxide_height
+2.0 through 6.0. Domain was never too small for ACCURACY.
+
+Re-tested meep at the REAL production width (9um): **N=16 completed in
+77 min (job 11767748), N=8 in 23 min (job 11767747)** -- both faster
+than anything seen at the wide domain, no wall at all. Root cause of
+the "meep wall": the WIDE diagnostic-only domain gave the eigensolver
+far more numerical room for near-degenerate/spurious modes at higher
+orders (MPB log: mode 16 needed 160 iterations at the wide domain vs
+few iterations for low-order modes) -- a property of the wrong test
+config, not of meep or N=16 itself. Cancelled the now-moot wide-domain
+N=10 bisection job (11767698).
+
+**Full redo, as originally approved, now unblocked.** N_MODES_BODY
+8->16 in body_sweep.py (production oxide_width unchanged, already
+correct). Step 3 ΔL re-sweep: job 11768847, COMPLETED 8:58h (budget
+15h). **Result: optimal ΔL shifted -1.50 -> -2.75 um** (mm_length
+78.9396 vs old 80.1896) -- best-point metrics WORSE than the N=8
+result: max|Δφ|=12.320° (was 8.28°), max imbalance=14.6155dB (was
+4.90dB). The old "close to spec" result was itself an artifact of the
+under-converged basis, not real.
+
+hybrid.py updated to N_MODES=16, DELTA_L=-2.75 -- NOT a cache hit
+(this script's own boundaries derive from mmi.mm_length, which shifted;
+same mechanism as the original mm_length near-miss). Job 11778128,
+COMPLETED 10:10h (budget 15h), all 4 FDTD input sections + body solve
+genuinely fresh.
+
+**Final, converged Step 6c numbers (N=16, ΔL=-2.75), 1.26/1.31/1.36um:**
+
+| | port 1 | port 3 |
+|---|---|---|
+| imbalance (dB) | 4.267 / 1.928 / 5.871 | 14.615 / 1.744 / 6.495 |
+| excess loss (dB) | 6.460 / 1.776 / 2.121 | 8.366 / 1.452 / 3.959 |
+| CMRR_I (dBe) | 6.836 / 13.214 / 10.480 | 10.415 / 24.389 / 5.578 |
+| CMRR_Q (dBe) | 10.417 / 24.385 / 5.578 | 1.531 / 14.241 / 7.784 |
+| Δφ_6/7/8 (deg) | 2.291 / 10.449 / 9.971 | -4.324 / 7.514 / 12.320 | (third col 9.973/9.347 at 1.36um, see report)
+
+**Net: this device's real, converged performance is meaningfully worse
+against the paper's cited requirements (CMRR>=20dBe, |Δφ|<=5°) than
+the earlier under-converged (N=8) numbers suggested** -- CMRR fails at
+most wavelengths now (was: comfortable at centre), phase error breaches
+5° at multiple ports/wavelengths now (was: only Δφ_6). Excess loss also
+higher (6.5-8.4dB peak vs old 2.1-4.3dB). This is the correct, trustworthy
+number -- not a regression to fix, a measurement error to stop trusting.
+Whether the geometry itself (mm_width, taper params, access waveguide
+width) needs redesigning to actually meet spec is now an open question
+this convergence work exposed, not one it answers.
 
 ### Step 8 — the four checks
 

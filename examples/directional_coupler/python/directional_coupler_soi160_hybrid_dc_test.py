@@ -82,6 +82,23 @@ coupling_length=0 result likely needs a different construction entirely
 skipping the EME body section) -- not attempted here; flag this to
 whoever runs the id-1931/1932 case before spending compute on it.
 
+coupling_length=0.5 (device 1921/1922) is a SECOND, separate edge case,
+found the hard way (job 11785062_1, 2026-08-10): it clears the body_length>0
+guard above (body_length=0.35 um with the *0.15 BODY_STUB formula), but each
+FDTD section's own domain is padded by dpml=0.5 um past its body-facing
+boundary regardless of BODY_STUB (solve_section() draws stub+dpml, not just
+stub), and that padding alone (0.5 um) is already bigger than the whole
+0.35 um body -- it spills into the OPPOSITE S-bend. Without a guard this
+surfaces as a ValueError from deep inside beef/geometry/coupler.py's own
+_check_cut() (a real geometry-construction failure, not this script's own
+message) after the 24-core allocation is already running. The
+_body_stub_cap assertion below catches it up front instead, same pattern as
+the coupling_length=0 case: coupling_length must exceed roughly 2*dpml for
+this 3-section decomposition to have a valid interior interface AT ALL, not
+just a formula tweak away -- directional_coupler_soi160_fdtd_dc_test.py
+(full single-domain FDTD, no such constraint) already has a real result for
+this device, job 11785063.
+
 Each invocation writes to its own length-tagged subfolder, mirroring
 mmi_2x2_fdtd_alt_length.py's convention:
 
@@ -151,7 +168,41 @@ N_WL = 11
 # coupling_length=3.0 -- see module docstring). Kept comfortably below
 # coupling_length/2; the assertion below is the same hard guard the
 # original script uses, not a new check.
-BODY_STUB = min(0.25, COUPLING_LENGTH * 0.15)
+#
+# ALSO capped by _body_stub_cap (added 2026-08-10 after job 11785062_1's
+# real crash at coupling_length=0.5): each FDTD section's own domain is
+# padded by _DPML past its body-facing boundary regardless of BODY_STUB --
+# solve_section() draws stub+dpml, not just stub, so the waveguide/PML
+# continues through the full PML thickness (see plot_hybrid_geometry's
+# draw_stub_left/right, beef/plot/geometry.py, which mirrors this exactly
+# for the section preview plots) -- so that padding alone reaches
+# BODY_STUB - coupling_length/2 + _DPML past the coupling-region CENTRE on
+# each side. At coupling_length=0.5, the *0.15 formula alone gives
+# BODY_STUB=0.075, and the "in" section's padded right edge lands at
+# x=+0.325 -- inside the (+0.25, +10.25) right S-bend, not the uniform body
+# it was supposed to land in. beef/geometry/coupler.py's own _check_cut()
+# caught it (a real ValueError, not a silently wrong answer) but from deep
+# inside geometry-construction code, not this script's own guard -- the
+# _body_stub_cap assertion below turns that into a clear, expected failure
+# at the top of the script instead, the same pattern coupling_length=0
+# already gets.
+_DPML = 0.5   # must match _fdtd_common's dpml below -- single source of truth
+_STUB_MARGIN = 0.05   # um -- keep the padding safely clear of the opposite
+                      # bend rather than exactly on the knife-edge boundary
+_body_stub_cap = COUPLING_LENGTH - _DPML - _STUB_MARGIN
+assert _body_stub_cap > 0, (
+    f"coupling_length ({COUPLING_LENGTH:.3f} um) leaves no room for the FDTD "
+    f"sections' own {_DPML:.2f} um PML padding on the body-facing side of "
+    f"EACH section without the two paddings overlapping through the middle "
+    f"-- needs coupling_length > 2*dpml (+ margin) = "
+    f"{2 * _DPML + _STUB_MARGIN:.2f} um for this hybrid decomposition to "
+    f"have a valid interior interface at all, regardless of how small "
+    f"BODY_STUB is made. coupling_length=0.5 (device 1921/1922) is EXPECTED "
+    f"to hit this -- use directional_coupler_soi160_fdtd_dc_test.py instead "
+    f"(full single-domain FDTD has no such constraint; already run "
+    f"successfully at this length, job 11785063)."
+)
+BODY_STUB = min(0.25, COUPLING_LENGTH * 0.15, _body_stub_cap)
 
 N_MODES = 2   # fundamental-mode even/odd supermode pair -- same measured
               # simplification as directional_coupler_soi160_hybrid.py
@@ -182,7 +233,7 @@ _fdtd_common = dict(
     res=FDTD_RESOLUTION,
     sim_width=7.0,
     sim_height=1.5,
-    dpml=0.5,
+    dpml=_DPML,
     source_margin=0.0,
     monitor_margin=0.25,
     three_d=True,

@@ -1,7 +1,30 @@
 # Active SLURM jobs — snapshot
 
+**★ TWENTY-SEVENTH SNAPSHOT — 2026-08-10, verified against
+`squeue -u jhiesener3`. This is the current one. Everything below the rule
+is the twenty-sixth snapshot (2026-08-05), not reverified this pass except
+where noted.**
+
+| job | state | what |
+|---|---|---|
+| **11791990_1** | ✅ **COMPLETED** 01:52:03 (16:06:45→17:58:48), exit 0:0 | `beef_mmi_2x2_examples`, array index 1 only (`mmi_2x2_fdtd`) — rerun at `N_WL` 11→51 across the same C-band 1.530–1.565 µm span (user request: more wavelength resolution). `check_passive()` held (script reached its post-solve print block and saved `smatrix.pkl` without raising). At λ=1.547 µm (center of 51-pt sweep): bar 0.4560, cross 0.5207, total 0.9767, IL −0.10 dB — close to ideal 50/50 (T_each=0.5) at the nominal self-imaging length. Verified against `example_output/mmi_2x2/mmi_2x2_fdtd/smatrix.pkl` (written 17:58) and `transmission.png`, not just the job-log `:.4f` lines |
+| **11791991_0** | ✅ **COMPLETED** 01:44:41 (16:06:45→17:51:26), exit 0:0 | `beef_mmi_2x2_fdtd_alt_length` array task 0, L24 (mm_length=24, total 32.00 µm) — same `N_WL`→51 change. `check_passive()` held. At λ=1.547 µm: bar 0.2786, cross 0.3930, total 0.6716, IL −1.73 dB — expected off-nominal degradation away from the 28 µm self-imaging length. Verified against `L24.00/smatrix.pkl` (written 17:51) |
+| **11791991_1** | ✅ **COMPLETED** 02:29:09 (16:06:45→18:35:54), exit 0:0 | `beef_mmi_2x2_fdtd_alt_length` array task 1, L32 (mm_length=32, total 40.00 µm — longest body of the three, hence longest runtime). `check_passive()` held. At λ=1.547 µm: bar 0.3864, cross 0.3468, total 0.7331, IL −1.35 dB. Verified against `L32.00/smatrix.pkl` (written 18:35) and `transmission.png`, not just the job-log `:.4f` lines |
+
+**Rerun complete — all three `N_WL` 11→51 mmi_2x2 FDTD jobs finished clean, no errors, `check_passive()` held on every one.** Rollup at λ=1.547 µm (center of the new 51-point C-band sweep, 1.530–1.565 µm):
+
+| mm_length | bar | cross | total | IL (dB) | wall time |
+|---|---|---|---|---|---|
+| 28.00 (nominal) | 0.4560 | 0.5207 | 0.9767 | −0.10 | 1:52:03 |
+| 24.00 | 0.2786 | 0.3930 | 0.6716 | −1.73 | 1:44:41 |
+| 32.00 | 0.3864 | 0.3468 | 0.7331 | −1.35 | 2:29:09 |
+
+Matches the expected physical picture: the nominal 28 µm self-imaging length is the only one near ideal 50/50 (IL ~ 0 dB); both off-nominal lengths show real insertion-loss penalties. All figures/`smatrix.pkl` regenerated at the finer 51-point resolution the user asked for; nothing else about the device configuration changed from the 11-point baseline.
+
+---
+
 **★ TWENTY-SIXTH SNAPSHOT — 2026-08-05, verified against
-`squeue -u jhiesener3`. This is the current one.**
+`squeue -u jhiesener3`.**
 
 | job | state | what |
 |---|---|---|

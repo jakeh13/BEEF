@@ -125,6 +125,28 @@ COUPLING_LENGTH ?= 11.634
 directional_coupler_soi160_hybrid_dc_test:
 	$(runner) $(my_python) directional_coupler/python/directional_coupler_soi160_hybrid_dc_test.py $(COUPLING_LENGTH)
 
+# Full single-domain FDTD (directional_coupler_fdtd.py's method, no EME
+# body) version of the same 4 DC_test devices, on SOI_160/dc.gds dims. Unlike
+# the hybrid dc_test target above, coupling_length=0.0 (device 1931/1932) IS
+# runnable here -- see directional_coupler_soi160_fdtd_dc_test.py's own
+# module docstring for why. No cache reuse across lengths at all (contrast
+# the hybrid method's shared FDTD sections) -- a real new whole-device FDTD
+# solve per length, needs the SLURM batch queue not a login node.
+# Deliberately NOT added to EXAMPLES/DEVICES, same reasoning as
+# directional_coupler_soi160_hybrid above.
+directional_coupler_soi160_fdtd_dc_test:
+	$(runner) $(my_python) directional_coupler/python/directional_coupler_soi160_fdtd_dc_test.py $(COUPLING_LENGTH)
+
+# Coupling-length sweep (directional_coupler_hybrid.py's method: 2 FDTD +
+# 1 EME solve total, any number of swept lengths for free) on SOI_160/dc.gds
+# dims, 0.5-30 um. Deliberately reuses directional_coupler_soi160_hybrid.py's
+# own cached FDTD sections (built at the die's real coupling_length=3.0, not
+# the sweep midpoint) -- see the script's own module docstring's CACHE REUSE
+# section. Deliberately NOT added to EXAMPLES/DEVICES, same reasoning as
+# directional_coupler_soi160_hybrid above.
+directional_coupler_soi160_hybrid_length_sweep:
+	$(runner) $(my_python) directional_coupler/python/directional_coupler_soi160_hybrid_length_sweep.py
+
 # high_contrast_grating_fabry_perot_validation.md step 5's follow-up --
 # reconstructs a DENSE t(lambda)/k(lambda) from the sparse hybrid run above
 # via interpolation (beef.spectral.interp_complex on the safe intermediate

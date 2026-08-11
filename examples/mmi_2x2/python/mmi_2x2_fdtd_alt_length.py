@@ -60,7 +60,7 @@ save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_
 RESOLUTION = 40.0   # mesh resolution (pixels/µm) — used by the FDTD solver
 WL_MIN = 1.530      # wavelength sweep start (µm)
 WL_MAX = 1.565      # wavelength sweep end (µm)
-N_WL = 11           # number of wavelength points
+N_WL = 51           # number of wavelength points
 
 # ---------------------------------------------------------------------------
 # 1. Define geometry — identical to mmi_2x2_fdtd.py except mm_length

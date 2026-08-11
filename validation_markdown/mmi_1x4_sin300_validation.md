@@ -1440,8 +1440,102 @@ own image spacing. `mmi_1x4_sin_taper_offset_sweep.py` (new) fixes
 `mm_length=44.0` and sweeps `waveguide_offset` across the geometrically
 feasible range `(2.2, 3.2667)` µm (uniform port pitch, per-offset genuinely
 fresh EME solve — no analytic trick available here, unlike length) to
-answer that directly. In progress as of this writing — see step 8/design
-notes below for status once it lands.
+answer that directly.
+
+**Targeted, not blind: `analyze_mmi1x4_self_imaging_L44.py` (job 11783781,
+17 min, same field-snapshot method as the 206 µm version) read the field's
+actual lobe positions at mm_length=44's own body end first.** Found **7
+peaks**, not a clean 4: y = ∓5.01 (h132), ∓3.69 (h83), ∓1.74 (h159,
+tallest), 0.01 (h58, weak, no port there anyway). Best 4-port match: outer
+pair → ±5.01 peak, inner pair → ±1.74 (tallest) peak → implied
+`waveguide_offset≈3.34` µm — just past the geometric feasibility ceiling
+(3.2667 µm, set by `mm_width=12`/`taper_width=2.2` fixed) by ~0.07 µm. Real
+per-point cost checked first (job 11783183: 2:48:51 for ONE offset, ONE
+branch, full config) — far too expensive for a grid scan, so the actual
+sweep used the field-plot estimate to center a **5-point** sweep near the
+feasible ceiling (`[3.0, 3.217]` µm) at **coarse `C_TAPER=3`** (down from
+8) and **center wavelength only** (`N_WL=1`, not the full 11-point band) —
+~38 min/branch, 4 branches parallel (job 11789245).
+
+**Result — a real, substantial throughput gain, at a real balance cost:**
+
+| offset (µm) | outer T | inner T | total T | spread |
+|---|---|---|---|---|
+| 3.000 | 0.195 | 0.181 | 0.751 | 0.028 |
+| 3.054 | 0.197 | 0.182 | 0.758 | 0.031 |
+| 3.108 | 0.198 | 0.183 | **0.762** | 0.032 |
+| 3.163 | 0.198 | 0.183 | 0.762 | 0.030 |
+| 3.217 | 0.196 | 0.183 | 0.759 | **0.027** |
+
+Total T is **0.75–0.76 across the whole tested range** — vs. the current
+production point's (mm_length=206, offset=2.4) 0.6014 band-mean —
+**~27% more light delivered**, a large, consistent effect across all 5
+points, not a fluke of one. But balance is worse: spread 0.027–0.032 here
+(relative imbalance ≈15%, since per-port mean ≈0.19) vs. production's
+0.0064 (≈3.7% relative) — a genuine throughput/balance tradeoff, not a
+strictly-better point. **Caveats, stated plainly**: single wavelength
+(no band-average/dispersion check), coarse `C_TAPER=3` (taper-staircase
+discretization error unmeasured), and the tested range didn't reach the
+peak-matched ~3.34 µm estimate (infeasible at the current `mm_width`).
+**Not yet a validated design change** — flagged as a promising, real,
+measured direction for this device (short body + widened offset, a
+markedly more compact and higher-throughput geometry than the current
+206 µm/2.4 µm point), worth a real-config confirmation (`N_WL=11`,
+`C_TAPER=8`) and possibly a `mm_width` increase (to reach the true
+peak-matched 3.34 µm offset) before treating it as a candidate replacement
+design.
+
+#### `mmi_1x4_eme.py`'s own length-sweep plot — code landed, real run NOT YET COMPLETE ⚠
+
+Mirroring what landed in `mmi_1x4_hybrid.py` (below), `mmi_1x4_eme.py`
+Section 4 was rewritten to call `EMESolver.solve_length_sweep(...,
+sweep_region=BODY_REGION=2)` instead of plain `solve()`, deriving the
+existing single-`MM_LENGTH=206.0` report AND a new `mm_length_sweep.png`
+(same per-output/spread format as the hybrid version) from one computation
+— code is written, syntax-checked, **not proven against a real run yet.**
+
+**Real cost is materially higher than the single-length prewarm, and the
+first attempt TIMED OUT.** `solve_length_sweep()` caches under its own
+method name — a genuinely different cache entry from `solve()`'s, per
+`EMESolver.solve_length_sweep()`'s own docstring — so this needs a fresh
+prewarm regardless of the already-warm `solve()`-based cache from step 6's
+own real run. `_prewarm_mmi_1x4_eme_sweep.py` (new, temporary, mirrors the
+original single-length prewarm's per-branch/array pattern) submitted as job
+**11783204** (4-task array, `-t 480` / 8h). **All 4 tasks TIMED OUT at 8h,
+zero progress markers visible in any log** (only the one "Prewarming
+branch…" print line — `mode_solver="tidy3d"` gives no per-step output the
+way meep's MPB does for the hybrid script's FDTD sections, so there is
+no way to tell from the log alone how close it was). Not a stall/bug by
+itself — the pre-existing EME design tool (`mmi_1x4_sin_body_length_sweep.py`,
+step 5) measured **5:49–6:29 hrs at `N_WL=5`** for the equivalent full
+19-cell-chain `solve_length_sweep()` call; linearly extrapolating to this
+script's real `N_WL=11` (est. cost scales with wavelength count, since the
+"free" trick only removes the length-count dependency, not the
+per-wavelength mode-solve cost) suggests **~13–14 hrs/branch** — i.e. 8h
+was always going to be short, this is consistent with the design tool's own
+prior measurement, not a new anomaly.
+
+**Left in this state for the next session to pick up.** Options, not yet
+decided between:
+1. Resubmit the same array with a longer walltime (`-t 900` / 15h, or split
+   further) — most direct, costs real cluster time, no code change.
+2. Reduce `N_WL` for this specific sweep plot (it is a design/diagnostic
+   artifact, not a load-bearing result the way the single-`MM_LENGTH=206`
+   report is) — e.g. `N_WL=5`, matching the design tool's own already-paid
+   cost, cutting the fresh solve to the already-measured ~6 hr/branch class.
+3. Skip re-deriving from scratch and instead have `mmi_1x4_eme.py` read the
+   design tool's own already-computed `mm_length_sweep.npz` (step 5, job
+   11667114 — genuinely the same solver config, confirmed identical
+   N_BODY/N_TAPER/C_TAPER/oxide dims/res/mode_solver) for the PLOT only,
+   keeping the existing fast `solve()`-based single-length path for the
+   printed/saved production results — zero new cost, at the price of the
+   plot being sourced from a companion script's run rather than this one's
+   own, same asymmetry the hybrid/EME scripts already have in a few other
+   places (documented, not hidden).
+
+No cluster time is currently committed to this (the timed-out array is
+finished, not paused) — next step is picking one of the three options
+above and running it, not resuming anything in flight.
 
 Companion field-plot scripts written the same session for the other
 existing EME examples, confirming `plot_eme_fields()` generalizes cleanly:
