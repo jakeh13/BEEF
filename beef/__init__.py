@@ -73,6 +73,7 @@ Core public API:
         plot_eme_fields            — EME field visualization
         plot_eme_geometry          — EME device + region geometry plot
         plot_fdtd_geometry         — FDTD device + source/monitor/PML geometry plot
+        plot_section_fdtd_geometry — standalone FDTDSolver.solve_section() geometry plot
         plot_hybrid_geometry       — Hybrid device + section geometry plot (+ sub-region plots)
         plot_performance           — transmission/insertion loss plots
         plot_splitting_ratio       — splitting ratio plot
@@ -110,8 +111,8 @@ from .results import SMatrix
 from .solvers import EMESolver, FDTDSolver, PortSpec, HybridSolver
 from .sweep import ParallelSweep
 from .plot import (
-    plot_eme_fields, plot_eme_geometry, plot_fdtd_geometry, plot_hybrid_geometry,
-    plot_performance, plot_splitting_ratio,
+    plot_eme_fields, plot_eme_geometry, plot_fdtd_geometry, plot_section_fdtd_geometry,
+    plot_hybrid_geometry, plot_performance, plot_splitting_ratio,
 )
 
 __all__ = [
@@ -146,6 +147,6 @@ __all__ = [
     # sweep
     "ParallelSweep",
     # plot
-    "plot_eme_fields", "plot_eme_geometry", "plot_fdtd_geometry", "plot_hybrid_geometry",
-    "plot_performance", "plot_splitting_ratio",
+    "plot_eme_fields", "plot_eme_geometry", "plot_fdtd_geometry", "plot_section_fdtd_geometry",
+    "plot_hybrid_geometry", "plot_performance", "plot_splitting_ratio",
 ]

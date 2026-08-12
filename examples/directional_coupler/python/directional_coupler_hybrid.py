@@ -12,32 +12,27 @@ Geometry (220 nm SOI, C-band):
 
     |<- bend_length ->|<--- coupling_length --->|<- bend_length ->|
 
-Three physically distinct features, but only **2 FDTD simulations + 1 EME simulation
-total**:
+Three physically distinct features, but only **1 FDTD simulation + 1 EME
+simulation total** (SYMMETRIC_MODE_REUSE=True, the default):
 
     [input S-bend]  ->  [straight coupled pair]  ->  [output S-bend]
-       FDTD (x2)               EME (x1)              reused, not resimulated
+       FDTD (x1)               EME (x1)              reused, not resimulated
 
   - The S-bends that carry the excited waveguide from a well-isolated access
     pitch down into the tight coupling gap (and back out again) are curved,
     non-adiabatic features — exactly what FDTD is for.
   - The straight coupled-pair region is where the actual directional
     coupling happens: an eigenmode expansion over its 2 supermodes (even +
-    odd) is both exact and far cheaper than FDTD here. Each individual arm
-    is single-mode by design, so 2 modes fully capture the excited coupling
-    physics (bump N_MODES up only if the arm width supports higher-order
-    per-arm modes too).
-  - The output section is NEVER separately simulated. DirectionalCoupler has
-    no left/right asymmetry (same bend_length, coupling_pitch,
-    waveguide_offset, bend_type on both sides), so the output section is
-    *exactly* the input section mirrored in x. By reciprocity, exciting the
-    input section's single-mode access end and measuring its N-mode
-    body-facing end gives the same coefficient as exciting the (mirrored)
-    output section's body-facing end and measuring its access end. So
-    running the input section once per input arm ("in" and "isolated") is
-    enough to get *both* the input- and output-side transfer matrices — the
-    "through"/"cross" matrices are just those results transposed (mode axes
-    swapped), not resimulated.
+    odd) is both exact and far cheaper than FDTD here.
+  - The output section is NEVER separately simulated: DirectionalCoupler has
+    no left/right asymmetry, so by reciprocity the input section's transfer
+    matrix, transposed, IS the output section's.
+  - The "isolated"-arm input matrix is ALSO not separately simulated: launching
+    "in" vs. "isolated" is itself a mirror operation, so each body mode's
+    coefficient either matches or flips sign between the two launches (even/odd
+    mode symmetry) — see MODE_SIGNS below for how that sign vector was
+    measured. Set SYMMETRIC_MODE_REUSE=False to simulate both arms directly
+    (e.g. to re-derive MODE_SIGNS after a geometry change).
 
 Coupling-length sweep — the classic directional-coupler "beat length"
 characterization — without any additional FDTD or EME simulations:
@@ -57,8 +52,7 @@ characterization — without any additional FDTD or EME simulations:
     sweep, each just a cheap diagonal phase-matrix evaluation
     (S_ii(L) = exp(2j*pi*neff_i/wavelength*L); see its docstring in
     beef/solvers/eme.py). Total solver cost is the same as a single fixed
-    coupling_length run — 2 FDTD solves + 1 EME mode-solve per
-    wavelength — regardless of sweeping 200 lengths instead of 1.
+    coupling_length run regardless of sweeping 200 lengths instead of 1.
   - Each FDTD input/output section reaches BODY_STUB µm past the
     S-bend/coupling-region seam, into the straight interior, so its
     interface mode decomposition happens on a uniform coupled-pair cross-
@@ -256,6 +250,18 @@ N_MODES = 5   # even + odd supermodes carried at the two body interfaces.
               # index -- a radiation mode, dropped at no cost.
               # resolved/directional_coupler_validation.md check 2 caveat.
 
+SYMMETRIC_MODE_REUSE = True   # derive M_in1 from M_in0 via MODE_SIGNS instead of a 2nd FDTD run
+
+# Per-mode sign relating the "isolated"-arm launch to the "in"-arm launch
+# (M_in1[m] = MODE_SIGNS[m] * M_in0[m]), measured once against a real
+# 2-FDTD-arm run (cache_only, both directions). The two dominant supermodes
+# (even, odd) matched to ~1e-5 relative residual; the three higher-order
+# modes are individually noisier (~1% -- near-cutoff, tiny magnitude) but
+# contribute negligibly. Fixed geometric property of the mirror-symmetric
+# cross-section, not resolution/wavelength/length dependent. Re-derive by
+# setting SYMMETRIC_MODE_REUSE = False if the geometry changes.
+MODE_SIGNS = np.array([1, -1, -1, 1, 1])
+
 _fdtd_common = dict(
     res=FDTD_RESOLUTION,
     sim_width=6.0,        # >= waveguide_offset + margin, so both far-pitch arms sit inside PML clearance
@@ -359,12 +365,10 @@ plot_hybrid_geometry(
     sub_region_dir=os.path.join(output_dir, "sections"),
     sub_region_show_pml=True,
     sub_region_show_eme_detail=True,
-    # One sub-region plot per simulation actually run in step 5: the input
-    # section is solved once per input arm (input_idx=0 "in", input_idx=1
-    # "isolated"). Both configs declare the output section (index 2) as the
-    # x-mirror of the input section — the same reuse step 5 hand-rolls with
-    # .transpose() (see module docstring) — so it gets no sub-region plot
-    # and is hatched/labeled as mirrored in the full-device overview above.
+    # Both input arms shown for reference; "isolated" is only actually
+    # simulated in step 5 when SYMMETRIC_MODE_REUSE=False (see there). Output
+    # section (index 2) is the x-mirror of the input section either way, so
+    # it gets no sub-region plot — hatched/labeled as mirrored above instead.
     sub_region_configs=[
         ("in", {0: {"input_idx": 0, **_iface_mon}}, {2: 0}),
         ("isolated", {0: {"input_idx": 1, **_iface_mon}}, {2: 0}),
@@ -374,13 +378,11 @@ print(f"Geometry plot saved → {output_dir}/geometry_hybrid.png")
 print(f"Sub-region plots saved → {output_dir}/sections/")
 
 # ---------------------------------------------------------------------------
-# 5. Run the sweep — 2 FDTD solves (input section, once per input arm) plus
-#    one EME mode-solve per wavelength, combined with the coupling_length-
-#    swept body matrix via the same matrix-chain contraction
-#    HybridSolver.solve() uses internally (broadcast over the extra length
-#    axis). The output section is never separately simulated: M_in0/M_in1
-#    double as the output-side transfer matrices once transposed (see module
-#    docstring) — "through" is the mirror of "in", "cross" of "isolated".
+# 5. Run the sweep — input section: 1 FDTD solve (SYMMETRIC_MODE_REUSE) or 2
+#    (both arms). Body: 1 EME mode-solve/wavelength, length-swept
+#    analytically. Output section: never simulated, mirror of the input
+#    (see module docstring) — "through" mirrors "in", "cross" mirrors
+#    "isolated".
 # ---------------------------------------------------------------------------
 wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
 print(f"\nWavelength sweep: {wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm "
@@ -392,12 +394,16 @@ M_in0 = fdtd_solver.solve_section(
     stub_left=fdtd_solver.waveguide_length, stub_right=0.0,
     input_idx=0, save_dir=save_dir, **_iface_mon,
 )  # [n_wl, N_MODES, 1] — "in" arm -> body modes
-M_in1 = fdtd_solver.solve_section(
-    dc, wavelengths, boundaries[0], boundaries[1],
-    n_modes_in=1, n_modes_out=N_MODES,
-    stub_left=fdtd_solver.waveguide_length, stub_right=0.0,
-    input_idx=1, save_dir=save_dir, **_iface_mon,
-)  # [n_wl, N_MODES, 1] — "isolated" arm -> body modes
+
+if SYMMETRIC_MODE_REUSE:
+    M_in1 = M_in0 * MODE_SIGNS[None, :, None]  # "isolated" arm, derived — no 2nd FDTD run
+else:
+    M_in1 = fdtd_solver.solve_section(
+        dc, wavelengths, boundaries[0], boundaries[1],
+        n_modes_in=1, n_modes_out=N_MODES,
+        stub_left=fdtd_solver.waveguide_length, stub_right=0.0,
+        input_idx=1, save_dir=save_dir, **_iface_mon,
+    )  # [n_wl, N_MODES, 1] — "isolated" arm -> body modes
 
 M_out_through = M_in0.transpose(0, 2, 1)  # [n_wl, 1, N_MODES] — mirror-symmetry reuse, not a new simulation
 M_out_cross = M_in1.transpose(0, 2, 1)    # [n_wl, 1, N_MODES]

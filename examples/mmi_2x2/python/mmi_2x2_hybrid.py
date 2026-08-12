@@ -19,32 +19,28 @@ sections use half_domain_aperture to isolate the excited/measured port from
 its neighbor. The top input is excited (input_idx=1); the top output is the
 "bar" port (output_idx=1) and the bottom output the "cross" port (output_idx=0).
 
-One hybrid pass, directional_coupler_hybrid.py-style: **2 FDTD + 1 EME
-mode-solve total, and the output section is NEVER separately simulated.**
-The MMI is left-right mirror-symmetric (same tapers/ports on both sides of
-the rectangular body), so by reciprocity the output section with
-output_idx=k is exactly the x-mirror of the input section with input_idx=k:
-solving the input section once per input arm (input_idx=1 "in_top", the
-excited arm, and input_idx=0 "in_bot") gives *both* the input- and
-output-side transfer matrices — the bar (output_idx=1) and cross
-(output_idx=0) output matrices are just those two results transposed (mode
-axes swapped), not resimulated. The same matrices also compose into the
-full 2x2 excitation family (launching the bottom arm instead) for free,
-though that's numerically identical to the top-arm launch by up-down
-symmetry and isn't separately plotted.
+One hybrid pass: the output section is NEVER separately simulated — by
+mirror symmetry + reciprocity, output_idx=k is the x-mirror of input_idx=k,
+so the bar/cross output matrices are just the input matrices transposed.
+With SYMMETRIC_MODE_REUSE (default on), the bottom-arm matrix M_in0 is
+ALSO not separately simulated: launching top vs. bottom arm is itself a
+mirror operation, so each body mode's coefficient either matches or flips
+sign between the two launches (even/odd mode symmetry) — see
+calibrate_body_neff_mode_solve_skip_validation.md-style reasoning and the
+MODE_SIGNS comment below for how that sign vector was measured. This drops
+the FDTD count from 2 to 1. Set SYMMETRIC_MODE_REUSE=False to fall back to
+simulating both arms directly (e.g. to re-derive MODE_SIGNS after a
+geometry change).
 
 The multimode-section length sweep rides the same pass: the EME body is a
 uniform mm_width slab, so EMESolver.solve_section_length_sweep() solves its
 modes once per wavelength and applies each swept length as an analytic
-propagation phase. Zero extra FDTD simulations, zero extra mode solves vs.
-a single-length run.
+propagation phase.
 
-This composes matrices from two different excitations (the cross path pairs
-M_in0-transposed with the M_in1 excitation) in one cascade — the pattern
-HybridSolver.solve()/solve_length_sweep()'s one-call contract can't
-express, which is why this example (like directional_coupler_hybrid.py)
-hand-rolls the einsum cascade instead of calling the generic API. See
-notes.md Solver recommendation #7 ("still open").
+The cross path pairs M_in0's transpose with the M_in1 excitation in one
+cascade, which HybridSolver.solve_length_sweep()'s one-call contract can't
+express — this example hand-rolls the einsum cascade instead. See notes.md
+Solver recommendation #7 ("still open").
 
 Run:
     python /path/to/examples/mmi_2x2/python/mmi_2x2_hybrid.py
@@ -70,6 +66,9 @@ RESOLUTION = 40.0   # mesh resolution (pixels/µm) — used by both the EME and 
 WL_MIN = 1.530      # wavelength sweep start (µm)
 WL_MAX = 1.565      # wavelength sweep end (µm)
 N_WL = 11           # number of wavelength points
+
+CALIBRATE_BODY = True    # propagate the EME body on the FDTD's own measured beta
+SYMMETRIC_MODE_REUSE = True   # derive M_in0 from M_in1 via MODE_SIGNS instead of a 2nd FDTD run
 
 # ---------------------------------------------------------------------------
 # 0. Simulation method per section — HybridSolver is solver-agnostic (any
@@ -125,6 +124,17 @@ N_MODES = 14   # modes carried at the two input/output <-> body interfaces.
                # Was 15: band 14 (n_eff 1.4078) sits below the 1.4443 cladding
                # index -- a radiation mode, dropped at no cost.
                # mmi_2x2_validation.md gap 3.
+
+# Per-mode sign relating the bottom-arm launch to the top-arm launch
+# (M_in0[m] = MODE_SIGNS[m] * M_in1[m]), measured once against a real
+# 2-FDTD-arm run (cache_only, both directions, max relative residual on the
+# dominant modes ~1e-4; weak/near-cutoff modes 7-9/11/12 are noisier
+# individually but negligible in the final T_bar/T_cross, verified <=1.1e-4
+# relative across the full 201-length x 11-wavelength grid). Fixed geometric
+# property of the mirror-symmetric cross-section -- not resolution/
+# wavelength/length dependent. Re-derive by setting SYMMETRIC_MODE_REUSE =
+# False if the geometry changes.
+MODE_SIGNS = np.array([1, -1, 1, -1, 1, -1, 1, -1, -1, -1, -1, 1, -1, 1])
 
 # Both the input and output ports have a neighbor waveguide_offset = 1.5 µm
 # away that is drawn in the same section (all branches are always physically
@@ -209,13 +219,10 @@ plot_hybrid_geometry(
     sub_region_dir=os.path.join(output_dir, "sections"),
     sub_region_show_pml=True,
     sub_region_show_eme_detail=True,
-    # One sub-region plot per simulation actually run in step 5: the input
-    # section is solved once per input arm (input_idx=1 "in_top" — the
-    # excited arm — and input_idx=0 "in_bot"). Both configs declare the
-    # output section (index 2) as the x-mirror of the input section — the
-    # same reuse step 5 hand-rolls with .transpose() — so it gets no
-    # sub-region plot and is hatched/labeled as mirrored in the full-device
-    # overview above.
+    # Both input arms shown for reference; "in_bot" is only actually
+    # simulated in step 5 when SYMMETRIC_MODE_REUSE=False (see there). Output
+    # section (index 2) is the x-mirror of the input section either way, so
+    # it gets no sub-region plot — hatched/labeled as mirrored above instead.
     sub_region_configs=[
         ("in_top", {0: {"input_idx": 1}}, {2: 0}),
         ("in_bot", {0: {"input_idx": 0}}, {2: 0}),
@@ -225,15 +232,10 @@ print(f"Geometry plot saved → {output_dir}/geometry_hybrid.png")
 print(f"Sub-region plots saved → {output_dir}/sections/")
 
 # ---------------------------------------------------------------------------
-# 5. Run the hybrid pass — one manual cascade, directional_coupler_hybrid.py
-#    style: 2 FDTD solves (input section, once per input arm) + 1 EME
-#    mode-solve per wavelength (body, length-swept analytically). The output
-#    section is never simulated: by mirror symmetry + reciprocity, the bar
-#    output matrix is M_in1 transposed and the cross output matrix is M_in0
-#    transposed (see module docstring). No cache needed — nothing is ever
-#    re-solved. The cross path pairs M_in0's transpose with the M_in1
-#    excitation in one cascade, which is why this composes matrices manually
-#    instead of calling HybridSolver.solve_length_sweep().
+# 5. Run the hybrid pass. Output section: never simulated (mirror symmetry,
+#    see module docstring). Body: 1 EME mode-solve/wavelength, length-swept
+#    analytically. Input: 1 FDTD solve (SYMMETRIC_MODE_REUSE) or 2 (both
+#    arms simulated directly).
 # ---------------------------------------------------------------------------
 wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
 print(f"\nHybrid sweep: {wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm "
@@ -247,19 +249,35 @@ M_in1 = input_solver.solve_section(
     stub_left=input_solver.waveguide_length, stub_right=0.0,
     input_idx=1, save_dir=save_dir,
 )  # [n_wl, N_MODES, 1] — excited (top) arm -> body modes
-M_in0 = input_solver.solve_section(
-    mmi, wavelengths, boundaries[0], boundaries[1],
-    n_modes_in=1, n_modes_out=N_MODES,
-    stub_left=input_solver.waveguide_length, stub_right=0.0,
-    input_idx=0, save_dir=save_dir,
-)  # [n_wl, N_MODES, 1] — bottom arm -> body modes
+
+if SYMMETRIC_MODE_REUSE:
+    M_in0 = M_in1 * MODE_SIGNS[None, :, None]  # bottom arm, derived — no 2nd FDTD run
+else:
+    M_in0 = input_solver.solve_section(
+        mmi, wavelengths, boundaries[0], boundaries[1],
+        n_modes_in=1, n_modes_out=N_MODES,
+        stub_left=input_solver.waveguide_length, stub_right=0.0,
+        input_idx=0, save_dir=save_dir,
+    )  # [n_wl, N_MODES, 1] — bottom arm -> body modes
 
 M_out_bar = M_in1.transpose(0, 2, 1)    # [n_wl, 1, N_MODES] — mirror-symmetry reuse, not a new simulation
 M_out_cross = M_in0.transpose(0, 2, 1)  # [n_wl, 1, N_MODES]
 
+# calibrate_body_neff: propagate the body on the FDTD's own measured beta
+# rather than MPB's mode index (see EMESolver._override_neff / dc_validation.md
+# item 6). One beta solve per mode/wavelength on the body's own span — the
+# same span the length sweep below propagates through.
+body_neff = None
+if CALIBRATE_BODY:
+    beta = input_solver.section_mode_beta(
+        mmi, wavelengths, boundaries[1], boundaries[2], N_MODES, save_dir=save_dir,
+    )  # [n_wl, N_MODES] rad/µm
+    body_neff = beta * wavelengths[:, None] / (2 * np.pi)
+
 M_body = body_solver.solve_section_length_sweep(
     mmi, wavelengths, boundaries[1], boundaries[2], body_lengths,
     n_modes_in=N_MODES, n_modes_out=N_MODES, save_dir=save_dir,
+    neff_override=body_neff,
 )  # [n_L, n_wl, N_MODES, N_MODES]
 
 tmp = np.einsum("Lwij,wjk->Lwik", M_body, M_in1)               # [n_L, n_wl, N_MODES, 1]

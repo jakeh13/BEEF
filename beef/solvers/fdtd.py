@@ -2676,3 +2676,244 @@ class FDTDSolver:
                 )
 
         return T
+
+    def solve_section_multi_length(
+        self,
+        geometry,
+        wavelengths: np.ndarray,
+        mid: float,
+        lengths: Sequence[float],
+        n_modes: int,
+        monitor_center: Optional[float] = None,
+        monitor_size: Optional[float] = None,
+        **geometry_kwargs,
+    ) -> np.ndarray:
+        """Modal transfer matrices at MULTIPLE lengths from ONE merged FDTD
+        domain — section_mode_beta_multi_monitor_validation.md's mechanism.
+
+        `section_mode_beta()` fits body beta from `len(lengths)` fully
+        independent `solve_section()` calls, each a separate domain build +
+        separate decay-to-tolerance wait, even though the underlying
+        cross-section never changes (only the propagation distance does).
+        This method builds ONE domain sized to `max(lengths)`, with one
+        excited-mode source (shared across all lengths) and one interior
+        interface monitor per length, and reads all of them off a single
+        `sim.run()` — one decay wait instead of `len(lengths)`.
+
+        Reuses `section_fdtd_layout(x0, x1, ...)` completely unchanged
+        (called once, with `x0, x1 = mid -+ max(lengths)/2`) rather than a
+        new layout function: `layout.src_x`/`norm_x`/`src_c`/`src_width`/
+        `mea_c`/`mea_w`/`kpoint`/`alpha_idx` don't depend on length at all,
+        and `layout.mea_x` (computed for the `max(lengths)`-length window)
+        already gives the boundary case directly. Only `mea_x` needs a
+        per-length variant, added here as `mea_positions`:
+
+            mea_positions[i] = (layout.L - lengths[i]) if layout.reverse
+                                else lengths[i]
+
+        which reproduces each length's own single-domain interface-monitor
+        distance from the source (`lengths[i] - monitor_margin`) exactly —
+        checked algebraically in
+        section_mode_beta_multi_monitor_validation.md step 2, not
+        approximated.
+
+        Unlike `solve_section()`: no `save_dir`/`cache_only` (deferred —
+        this method's own cache-key shape is still an open question, see
+        the validation doc), no `PortSpec`/`y0`/`y1` support (not needed by
+        `section_mode_beta()`'s calls, which are always plain x-normal with
+        `n_modes_in == n_modes_out`) — narrower than `solve_section()` on
+        purpose, not a general replacement for it.
+
+        Args:
+            mid: device-frame x-coordinate the lengths are centered on
+                (matches `section_mode_beta()`'s own `mid = 0.5*(x0+x1)`).
+            lengths: propagation distances to measure (µm) — the same
+                values `section_mode_beta()` would otherwise simulate one
+                domain each for.
+            n_modes: mode count on both sides (matches
+                `section_mode_beta()`'s own `n_modes_in=n_modes_out=n_modes`
+                calls).
+            monitor_center, monitor_size: as `solve_section()` — override
+                the (length-independent) interface monitor's y-centre/span.
+            **geometry_kwargs: forwarded to `geometry.section_prisms()`/
+                `section_fdtd_layout()`.
+
+        Returns:
+            Complex ndarray [len(lengths), len(wavelengths), n_modes, n_modes].
+        """
+        import meep as mp
+
+        wavelengths = np.asarray(wavelengths)
+        lengths = [float(L) for L in lengths]
+        if not lengths:
+            raise ValueError("solve_section_multi_length: lengths must be non-empty.")
+        if any(L <= 0.0 for L in lengths):
+            raise ValueError(f"solve_section_multi_length: lengths must be > 0, got {lengths}.")
+
+        L_domain = max(lengths)
+        x0, x1 = mid - L_domain / 2.0, mid + L_domain / 2.0
+
+        layout = section_fdtd_layout(
+            geometry, x0, x1, 0.0, 0.0,
+            n_modes, n_modes, self.sim_width,
+            self.source_margin, self.monitor_margin, self.half_domain_aperture,
+            geometry_kwargs, monitor_center=monitor_center, monitor_size=monitor_size,
+        )
+        n_excite = layout.n_excite
+        n_measure = layout.n_measure
+
+        # Per-length interior monitor positions, local frame (0..L_domain) --
+        # see the docstring derivation above. The shortest length's monitor
+        # sits CLOSEST to the source (largest mea_positions[i] when reverse,
+        # smallest when not) -- how close, for a real device, is exactly
+        # what step 6's convergence study (simulation/domain length) is for;
+        # not asserted against an invented threshold here.
+        mea_positions_local = [
+            (layout.L - L_i) if layout.reverse else L_i
+            for L_i in lengths
+        ]
+
+        wl_center = float(np.mean(wavelengths))
+        si_med, sio2_med = self._media(wavelengths)
+
+        # stub_left/stub_right always 0 here (section_mode_beta() never
+        # passes them) -- see solve_section()'s own comment for why dpml is
+        # still added on both sides of the drawn waveguide regardless.
+        prisms = geometry.section_prisms(
+            x0, x1, si_med,
+            stub_left=self.dpml, stub_right=self.dpml,
+            wg_height=self._wg_height,
+            **geometry_kwargs,
+        )
+
+        span = x1 - x0
+        Sx = span + 2 * self.dpml
+        Sy = self.sim_width + 2 * self.dpml
+
+        # lo == x0, hi == x1 (stub_left=stub_right=0), so x_center == mid
+        # exactly -- the meep cell is centred on the same point the caller's
+        # lengths are centred on, by construction.
+        lo, hi = x0, x1
+        x_center = (lo + hi) / 2.0
+
+        fcen = 1.0 / wl_center
+        fwidth = source_fwidth(wavelengths, self.source_bandwidth_factor)
+        mon_freqs, wl_order = monitor_freq_grid(wavelengths)
+        check_source_coverage(fcen, fwidth, wavelengths)
+
+        shifted = [
+            mp.Prism(
+                vertices=[mp.Vector3(v.x - x_center, v.y, v.z) for v in p.vertices],
+                height=p.height, material=p.material,
+            )
+            for p in prisms
+        ]
+
+        T = np.zeros((len(lengths), len(wavelengths), n_modes, n_modes), dtype=complex)
+
+        ex_width = layout.src_width
+        ex_transverse = layout.src_c
+        ex_along_src = layout.src_x + lo - x_center
+        ex_along_norm = layout.norm_x + lo - x_center
+        ex_kpoint = layout.kpoint
+        ex_alpha_idx = layout.alpha_idx
+
+        mea_width = layout.mea_w
+        mea_transverse = layout.mea_c
+        mea_alpha_idx = layout.alpha_idx
+        mea_along_list = [pos + lo - x_center for pos in mea_positions_local]
+
+        # Same PML-crossing guard as solve_section() -- see that method's
+        # own docstring for the ring_resonator_validation.md blocker-0
+        # history this is guarding against. Transverse aperture is
+        # length-independent (checked once for excite, once for measure).
+        def _check_aperture(kind: str, transverse: float, width: float) -> None:
+            inner = Sy / 2.0 - self.dpml
+            reach = abs(transverse) + width / 2.0
+            if reach > inner + 1e-9:
+                raise ValueError(
+                    f"{kind} aperture crosses the PML: spans y="
+                    f"[{transverse - width/2:.4f}, {transverse + width/2:.4f}] "
+                    f"(centre {transverse:.4f}, width {width:.4f}) but the PML "
+                    f"inner edge is at y=+/-{inner:.4f} (cell {Sy:.4f}, dpml "
+                    f"{self.dpml})."
+                )
+
+        _check_aperture("excite", ex_transverse, ex_width)
+        _check_aperture("measure", mea_transverse, mea_width)
+
+        for k in range(1, n_excite + 1):
+            src = mp.EigenModeSource(
+                mp.GaussianSource(fcen, fwidth=fwidth),
+                center=mp.Vector3(*_port_point("x", ex_along_src, ex_transverse)),
+                size=mp.Vector3(*_port_size("x", ex_width, self._mon_sz)),
+                eig_band=k,
+                eig_kpoint=mp.Vector3(*ex_kpoint),
+                eig_match_freq=True,
+            )
+            sim = mp.Simulation(
+                resolution=self.res,
+                cell_size=mp.Vector3(Sx, Sy, self._cell_sz),
+                boundary_layers=[mp.PML(self.dpml)],
+                geometry=shifted,
+                sources=[src],
+                default_material=sio2_med,
+                eps_averaging=self.eps_averaging,
+                subpixel_tol=self.subpixel_tol,
+                subpixel_maxeval=self.subpixel_maxeval,
+            )
+            norm_flux = sim.add_mode_monitor(
+                mon_freqs,
+                mp.FluxRegion(center=mp.Vector3(*_port_point("x", ex_along_norm, ex_transverse)),
+                              size=mp.Vector3(*_port_size("x", ex_width, self._mon_sz))),
+            )
+            mea_fluxes = [
+                sim.add_mode_monitor(
+                    mon_freqs,
+                    mp.FluxRegion(center=mp.Vector3(*_port_point("x", mea_along, mea_transverse)),
+                                  size=mp.Vector3(*_port_size("x", mea_width, self._mon_sz))),
+                )
+                for mea_along in mea_along_list
+            ]
+
+            sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol, minimum_run_time=self.minimum_run_time))
+
+            norm_coeff = sim.get_eigenmode_coefficients(norm_flux, [k], eig_parity=mp.NO_PARITY)
+            alpha_raw = norm_coeff.alpha[0, :, ex_alpha_idx]
+            # x-axis excite only (no PortSpec/y-axis support here) -- same
+            # flux-calibrated fallback as solve_section()'s own x-axis
+            # branch, guarding against a near-degenerate excited band
+            # silently undercounting power (modal_multiplexer_validation.md
+            # gap 7).
+            flux = np.abs(np.asarray(mp.get_fluxes(norm_flux)))
+            mismatch = np.abs(np.sqrt(flux) - np.abs(alpha_raw)) / np.maximum(np.sqrt(flux), 1e-30)
+            if np.any(mismatch > _EXCITE_NORM_MISMATCH_TOL):
+                logger.warning(
+                    "solve_section_multi_length: excite band %d normalization "
+                    "mismatch between get_eigenmode_coefficients() and "
+                    "get_fluxes() (max %.1f%% at freq index %d) for domain "
+                    "x=[%.4f, %.4f] -- likely a near-degenerate excited mode; "
+                    "falling back to flux-calibrated normalization for this band.",
+                    k, 100 * float(mismatch.max()), int(mismatch.argmax()), x0, x1,
+                )
+                src_alpha = np.sqrt(flux) * np.exp(1j * np.angle(alpha_raw))
+            else:
+                src_alpha = alpha_raw
+
+            for i, mea_flux in enumerate(mea_fluxes):
+                for m in range(1, n_measure + 1):
+                    c = sim.get_eigenmode_coefficients(mea_flux, [m], eig_parity=mp.NO_PARITY)
+                    coeff = (c.alpha[0, :, mea_alpha_idx] / src_alpha)[wl_order]
+                    if layout.reverse:
+                        T[i, :, k - 1, m - 1] = coeff
+                    else:
+                        T[i, :, m - 1, k - 1] = coeff
+
+            sim.reset_meep()
+
+        from ..mode_identity import warn_on_transfer_duplicate
+
+        for i, L_i in enumerate(lengths):
+            warn_on_transfer_duplicate(T[i], logger, x0, x1)
+
+        return T

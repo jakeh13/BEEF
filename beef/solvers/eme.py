@@ -767,62 +767,75 @@ class EMESolver:
                 f"with cache_only=False to populate the cache."
             )
 
-        gds_polys = geometry.section_gds(
-            x0, x1, self.oxide_width,
-            stub_left=stub_left, stub_right=stub_right, **geometry_kwargs
-        )
-        structs = extrude_polygons(gds_polys, self._extrusion_rules(wavelengths))
-        mesh = self._build_mesh()
-        cells = mw.create_cells(structures=structs, mesh=mesh, Ls=[1.0])  # length is a placeholder
+        # Fast path: with neff_override, the diagonal-in-mode-basis fact this
+        # method's own docstring states (S_ii(L) = exp(2j*pi*neff_i/wl*L))
+        # applies directly to the SUPPLIED neff, so build T with the same
+        # _propagate_diagonal() tier 3 already trusts (validated against a
+        # real solve every time it populates that cache, see
+        # _DIAGONAL_RECONSTRUCTION_TOL above) instead of solving for modes
+        # whose neff gets overwritten immediately after anyway. See
+        # validation_markdown/resolved/
+        # calibrate_body_neff_mode_solve_skip_validation.md — same argument
+        # as solve_section()'s fast path, extended here to the length sweep.
+        if neff_override is not None:
+            neff_all = np.asarray(neff_override, dtype=complex)
+            T = _propagate_diagonal(neff_all, wavelengths, lengths, n_modes_out, n_modes_in)
+            neff_cache_safe = True  # exact by construction -- no real solve to check against
+        else:
+            gds_polys = geometry.section_gds(
+                x0, x1, self.oxide_width,
+                stub_left=stub_left, stub_right=stub_right, **geometry_kwargs
+            )
+            structs = extrude_polygons(gds_polys, self._extrusion_rules(wavelengths))
+            mesh = self._build_mesh()
+            cells = mw.create_cells(structures=structs, mesh=mesh, Ls=[1.0])  # length is a placeholder
 
-        T = np.zeros((len(lengths), len(wavelengths), n_modes_out, n_modes_in), dtype=complex)
-        neff_all = np.zeros((len(wavelengths), n_modes), dtype=complex)  # tier 3's cache payload
+            T = np.zeros((len(lengths), len(wavelengths), n_modes_out, n_modes_in), dtype=complex)
+            neff_all = np.zeros((len(wavelengths), n_modes), dtype=complex)  # tier 3's cache payload
 
-        for wl_idx, wl in enumerate(wavelengths):
-            env = mw.Environment(wl=float(wl), T=self.temperature)
-            css = [mw.CrossSection.from_cell(cell=cell, env=env) for cell in cells]
-            modes = [self.compute_modes(cs, n_modes) for cs in css]  # one solve, reused below
-            if neff_override is not None:
-                modes = [self._override_neff(m, neff_override[wl_idx]) for m in modes]
+            for wl_idx, wl in enumerate(wavelengths):
+                env = mw.Environment(wl=float(wl), T=self.temperature)
+                css = [mw.CrossSection.from_cell(cell=cell, env=env) for cell in cells]
+                modes = [self.compute_modes(cs, n_modes) for cs in css]  # one solve, reused below
 
-            neff_all[wl_idx, :] = np.array([m.neff for m in modes[0]], dtype=complex)
+                neff_all[wl_idx, :] = np.array([m.neff for m in modes[0]], dtype=complex)
 
-            if wl_idx == len(wavelengths) // 2:
-                # Diagnostic: confirm this cross-section actually resolves
-                # n_modes distinct, non-degenerate supermodes (neff split
-                # apart) rather than a near-degenerate/duplicate pair, which
-                # would explain a single-arm launch failing to couple into
-                # one of them.
-                neffs = [m.neff for m in modes[0]]
-                logger.debug("EME cross-section neff @ λ=%.3f µm: %s", wl, neffs)
+                if wl_idx == len(wavelengths) // 2:
+                    # Diagnostic: confirm this cross-section actually resolves
+                    # n_modes distinct, non-degenerate supermodes (neff split
+                    # apart) rather than a near-degenerate/duplicate pair, which
+                    # would explain a single-arm launch failing to couple into
+                    # one of them.
+                    neffs = [m.neff for m in modes[0]]
+                    logger.debug("EME cross-section neff @ λ=%.3f µm: %s", wl, neffs)
 
-            for L_idx, L in enumerate(lengths):
-                S, port_map = mw.compute_s_matrix(modes, cells=cells, cell_lengths=[float(L)])
-                for i in range(n_modes_out):
-                    for j in range(n_modes_in):
-                        i_out = port_map[f"right@{i}"]
-                        j_in = port_map[f"left@{j}"]
-                        T[L_idx, wl_idx, i, j] = S[i_out, j_in]
+                for L_idx, L in enumerate(lengths):
+                    S, port_map = mw.compute_s_matrix(modes, cells=cells, cell_lengths=[float(L)])
+                    for i in range(n_modes_out):
+                        for j in range(n_modes_in):
+                            i_out = port_map[f"right@{i}"]
+                            j_in = port_map[f"left@{j}"]
+                            T[L_idx, wl_idx, i, j] = S[i_out, j_in]
 
-        # Tier 3's own gate: reconstruct this cross-section's FIRST swept
-        # length purely from neff_all and compare against the real solve
-        # above. Only a pass makes neff_all eligible to serve future
-        # different-lengths calls (see docstring) — a cross-section where
-        # this somehow fails just never gets a tier-3 entry, T itself is
-        # unaffected either way.
-        neff_cache_safe = True
-        if save_dir and neff_config is not None and len(lengths) > 0:
-            T_check = _propagate_diagonal(neff_all, wavelengths, lengths[:1], n_modes_out, n_modes_in)
-            max_diff = float(np.max(np.abs(T_check[0] - T[0])))
-            if max_diff > _DIAGONAL_RECONSTRUCTION_TOL:
-                neff_cache_safe = False
-                logger.warning(
-                    "solve_section_length_sweep: diagonal-reconstruction self-check "
-                    "off by %.2e (tol %.1e) at length=%.6f um -- skipping the "
-                    "length-independent neff cache for this cross-section; T "
-                    "itself (from the real solve) is unaffected.",
-                    max_diff, _DIAGONAL_RECONSTRUCTION_TOL, float(lengths[0]),
-                )
+            # Tier 3's own gate: reconstruct this cross-section's FIRST swept
+            # length purely from neff_all and compare against the real solve
+            # above. Only a pass makes neff_all eligible to serve future
+            # different-lengths calls (see docstring) — a cross-section where
+            # this somehow fails just never gets a tier-3 entry, T itself is
+            # unaffected either way.
+            neff_cache_safe = True
+            if save_dir and neff_config is not None and len(lengths) > 0:
+                T_check = _propagate_diagonal(neff_all, wavelengths, lengths[:1], n_modes_out, n_modes_in)
+                max_diff = float(np.max(np.abs(T_check[0] - T[0])))
+                if max_diff > _DIAGONAL_RECONSTRUCTION_TOL:
+                    neff_cache_safe = False
+                    logger.warning(
+                        "solve_section_length_sweep: diagonal-reconstruction self-check "
+                        "off by %.2e (tol %.1e) at length=%.6f um -- skipping the "
+                        "length-independent neff cache for this cross-section; T "
+                        "itself (from the real solve) is unaffected.",
+                        max_diff, _DIAGONAL_RECONSTRUCTION_TOL, float(lengths[0]),
+                    )
 
         if save_dir:
             folder = save_run(save_dir, config, T)

@@ -17,7 +17,7 @@ import numpy as np
 
 from ..solvers.fdtd import section_fdtd_layout
 
-__all__ = ["plot_eme_geometry", "plot_fdtd_geometry", "plot_hybrid_geometry"]
+__all__ = ["plot_eme_geometry", "plot_fdtd_geometry", "plot_section_fdtd_geometry", "plot_hybrid_geometry"]
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +313,104 @@ def plot_fdtd_geometry(
         _draw_pml(ax, dpml, total_gds, oxide_width)
 
     _finalize(fig, ax, title, geometry, output_path)
+    return fig, ax
+
+
+def plot_section_fdtd_geometry(
+    geometry,
+    solver,
+    x0: float,
+    x1: float,
+    n_in: int = 1,
+    n_out: int = 1,
+    stub_left: float = 0.0,
+    stub_right: float = 0.0,
+    monitor_center: Optional[float] = None,
+    monitor_size: Optional[float] = None,
+    show_pml: bool = True,
+    ax=None,
+    title: Optional[str] = None,
+    output_path: Optional[str] = None,
+    figsize: Tuple[float, float] = (6, 3.5),
+    wg_layer: Tuple[int, int] = (2, 0),
+    ox_layer: Tuple[int, int] = (1, 0),
+    **geometry_kwargs,
+):
+    """Top-down geometry plot for a single FDTDSolver.solve_section() call,
+    standalone — no HybridSolver/section-index required.
+
+    Same rendering `_plot_hybrid_sub_regions()`'s FDTD branch uses internally
+    for a HybridSolver's own sub-region plots, factored out so a caller that
+    invokes `solve_section()` directly — e.g. `section_mode_beta()`'s
+    per-length calibration windows, which aren't tied to any HybridSolver
+    boundary index — can visualize exactly what it simulated without faking
+    up a single-section HybridSolver just to get a plot.
+
+    Args:
+        geometry: DeviceGeometry instance.
+        solver: FDTDSolver whose .sim_width/.dpml/.source_margin/
+            .monitor_margin/.half_domain_aperture drive the layout.
+        x0, x1: device-frame section bounds — same meaning as
+            FDTDSolver.solve_section()'s own x0/x1.
+        n_in, n_out: same as solve_section()'s n_modes_in/n_modes_out — only
+            affects source-vs-monitor-side layout via section_fdtd_layout(),
+            not a drawn mode count.
+        stub_left, stub_right, monitor_center, monitor_size: same as
+            solve_section()'s own args.
+        show_pml: shade the PML absorbing-boundary rectangles.
+        ax: existing Axes; creates a new figure if None.
+        title: plot title (defaults to a generic section description).
+        output_path: full path for output PNG; directory created if needed.
+        figsize, wg_layer, ox_layer: as plot_fdtd_geometry().
+        **geometry_kwargs: forwarded to geometry.section_gds() and
+            section_fdtd_layout()'s aperture lookups.
+
+    Returns:
+        (fig, ax)
+    """
+    dpml = getattr(solver, "dpml", 0.0) or 0.0
+    oxide_width = solver.sim_width + 2 * dpml
+    L = (x1 - x0) + stub_left + stub_right
+
+    # solve_section() draws stub_left/right + dpml (not just stub_left/
+    # right) so the waveguide continues through the full PML thickness
+    # instead of stopping at its inner edge — match that here so the plot
+    # shows what's actually simulated (see _plot_hybrid_sub_regions).
+    draw_stub_left = stub_left + dpml
+    draw_stub_right = stub_right + dpml
+    gds_polys = geometry.section_gds(
+        x0, x1, oxide_width, stub_left=draw_stub_left, stub_right=draw_stub_right,
+        **geometry_kwargs
+    )
+
+    fig, ax = _new_ax(ax, figsize)
+    _draw_polygons(ax, gds_polys, wg_layer, ox_layer, x_shift=-dpml)
+
+    _draw_section_fdtd_markers(
+        ax, geometry, solver, x0, x1, stub_left, stub_right,
+        oxide_width, n_in, n_out, geometry_kwargs,
+        monitor_center=monitor_center, monitor_size=monitor_size,
+    )
+    margin = max(0.5, 0.08 * L)
+    if show_pml:
+        margin = max(margin, dpml + 0.1)
+        y0, y1 = -oxide_width / 2, oxide_width / 2
+        _draw_pml_rect(ax, -dpml, 0.0, y0, y1, label="PML")
+        _draw_pml_rect(ax, L, L + dpml, y0, y1, label="PML")
+        _draw_pml_rect(ax, -dpml, L + dpml, y0, y0 + dpml)
+        _draw_pml_rect(ax, -dpml, L + dpml, y1 - dpml, y1)
+
+    ax.set_xlim(-margin, L + margin)
+    ax.set_ylim(-oxide_width / 2, oxide_width / 2)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("x (µm, section-local)")
+    ax.set_ylabel("y (µm)")
+    ax.set_title(title or f"{type(solver).__name__} section [{x0:.2f}, {x1:.2f}] µm")
+    ax.grid(False)
+
+    if output_path:
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        fig.savefig(output_path, dpi=600, bbox_inches="tight")
     return fig, ax
 
 

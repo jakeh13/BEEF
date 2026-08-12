@@ -71,6 +71,52 @@ depends on.
 - Any future caller that reads `solve_section()`'s modes for something
   besides `T` and the correspondence check (none currently does, per the
   independence finding above — worth re-checking if that changes).
+- **`EMESolver.solve_section_length_sweep()` — was a separate method,
+  untouched by the original plan; now extended, 2026-08-12.** It used to
+  call `self.compute_modes(cs, n_modes)` unconditionally and only apply
+  `neff_override` *after*, via `_override_neff()` — same "solve then
+  discard the neff" pattern this plan was written to fix in
+  `solve_section()`, just not fixed there originally. **Confirmed
+  2026-08-12, directly relevant**: both shipped hybrid examples this plan's
+  fast path was expected to speed up (`mmi_2x2_hybrid.py`,
+  `directional_coupler_hybrid.py`) call their EME body through
+  `solve_section_length_sweep()`, not `solve_section()` — so
+  `calibrate_body_neff=True` on either script's body was **not** skipping
+  that script's own EME mode solve, despite `solve_section()`'s fast path
+  already existing.
+
+  **Fixed, same session.** `solve_section_length_sweep()` (`eme.py`) now
+  has its own fast path, gated the same way (`neff_override is not None`):
+  it skips `mw.create_cells()`/`compute_modes()`/`mw.compute_s_matrix()`
+  entirely and builds `T` directly via `_propagate_diagonal()` — an
+  *existing*, already-in-production helper this method's own "tier 3"
+  neff-reuse cache path already trusted (self-validated against a real
+  solve every time that cache tier gets populated, via
+  `_DIAGONAL_RECONSTRUCTION_TOL`). Reusing proven code here rather than
+  hand-rolling the formula a second time.
+
+  **Numerical equivalence verified, 2026-08-12**, same standard as
+  `solve_section()`'s step 5: one real mode solve on the DC coupled-pair
+  body (`N_MODES=5`, `EME_RESOLUTION=80`), reused to build both (a) the old
+  per-length loop by hand (`_override_neff()` → `mw.compute_s_matrix(...,
+  cell_lengths=[L])`, 5 lengths spanning 0.5–55 µm) and (b) the actual new
+  `solve_section_length_sweep()` call with the same synthetic override.
+  Result: **`max|T_old - T_fast| = 0.0`** — exact, across every length
+  tested, not merely close.
+
+  **Caller audit, 2026-08-12** (all 24 example scripts/notebooks touching
+  `calibrate_body_neff` or `solve_section_length_sweep`, via a research
+  subagent): the fix is transparent to callers — any script already passing
+  a real `neff_override` gets it automatically, no per-script changes
+  needed. Two exceptions found, both real, neither fixed by this change:
+  - `ring_resonator_hybrid_cascaded.py`/`.ipynb` hand-roll their own
+    `mw.create_cells()`/`compute_modes_meep()` calls instead of using
+    `EMESolver` at all — this fix can't reach that code; would need its own
+    separate implementation.
+  - `mmi_1x2_hybrid.py`/`.ipynb`'s `CALIBRATE_BODY` flag is real but
+    routes through `solve()` (single-length), which forwards
+    `neff_override` to plain `solve_section()` — already covered by that
+    method's own earlier fast path, just not by this one.
 
 ## Implementation steps
 
