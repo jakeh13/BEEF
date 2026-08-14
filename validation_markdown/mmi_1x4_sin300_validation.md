@@ -1618,6 +1618,275 @@ four and cannot be skipped:
   pairs, against its 0.002 tolerance. Nitride's weak contrast is the reason this
   cannot be inherited from silicon's passes.
 
+### Step 9 — two cost/correctness items opened 2026-08-13, neither run yet
+
+Both found while reviewing the 6d split-shape discrepancy (EME favors inner
+ports 1,2; hybrid favors outer ports 0,3 — still unexplained, step 6d/check 1).
+
+**9a. `calibrate_body_neff` — code landed, NOT YET RUN.** `mmi_1x4_hybrid.py`
+carried the body on tidy3d's own mode index the whole way through the
+11734486 run recorded in step 6d; `calibrate_body_neff=True` (HybridSolver's
+built-in β-calibration, `dc_validation.md` item 6) was flagged in the
+script's own docstring as "available, unused by default here... if step 8's
+engine-agreement check finds it matters" but never turned on. Turned on this
+session: `CALIBRATE_BODY = True` module constant, threaded into
+`HybridSolver(calibrate_body_neff=CALIBRATE_BODY)`.
+
+Why now, not deferred further: this device pairs tidy3d (body) with meep
+(input/output FDTD) — a strictly bigger cross-engine basis gap than
+`directional_coupler_hybrid.py`'s own meep-vs-MPB case that
+`calibrate_body_neff` was built to fix, and the coupler's version of this
+exact mismatch was a measured 10.4% error on the coupling-sensitive quantity
+(Δβ) before calibration. A plausible, not yet confirmed, explanation for the
+6d split-shape sign flip.
+
+**Cost, not yet paid.** `calibrate_body_neff` adds `len(calibrate_lengths)`
+(default 2) extra FDTD section solves on the body span, sourced from the
+input section's `section_mode_beta()`, cached and shared across all four
+`output_idx` calls — same mechanism `directional_coupler_hybrid.py` calls
+"three short FDTD section solves, cheap" in its own docstring. **Not cheap
+here**: this device's own measured FDTD section cost is ~12–24 hrs/section
+(`decay_tol=1e-11` on weakly-confined 300 nm nitride, step 6d), so budget for
+that class of job, not the coupler's. `calibrate_body_neff` is part of
+`HybridSolver`'s own section cache key, so turning it on invalidates none of
+the *existing* (uncalibrated) cache entries — it adds new ones alongside
+them — but every number in step 6d's table (T, IL, the split-shape finding
+itself) was produced WITHOUT this flag and must be re-measured under it, not
+assumed to still hold or to explain the discrepancy until an actual run says
+so.
+
+**9b. Symmetric mode reuse on the OUTPUT side — proposed, not implemented,
+no code written.** `mmi_2x2_hybrid.py`/`directional_coupler_hybrid.py` each
+cut their large-FDTD count in half by noticing their two *input* arms are
+mirror images of each other (`SYMMETRIC_MODE_REUSE`: solve one arm, derive
+the other via a measured per-mode sign vector, `MODE_SIGNS`). This device has
+one input port (nothing to mirror there) but its **four output branches**
+carry the same symmetry: `output_ys = [-3.6, -1.2, +1.2, +3.6]` µm is
+centered on the same y=0 axis the single input sits on (`MMI._port_ys()`),
+so output_idx=0 is the y-mirror of output_idx=3, and output_idx=1 of
+output_idx=2 — structurally the same trick, just on the other side of the
+device.
+
+**Sizing.** Step 6d's real run solves 1 input + 4 outputs = **5** large FDTD
+sections per full sweep. Simulating only output_idx∈{0,1} directly and
+deriving output_idx∈{3,2} via mirroring cuts that to 1 input + 2 output =
+**3** — a 40% reduction in the dominant cost (each section is the
+~12–24 hr class measured in step 6d, not the cheap calibration solves of
+9a), i.e. plausibly saving one full ~1.7-day array-task run out of the
+~1.7 days a 4-branch prewarm currently costs per branch pair.
+
+**What landing this actually needs — none of it done yet:**
+
+1. **Measure the sign vector for real**, the same way `mmi_2x2_hybrid.py`'s
+   `MODE_SIGNS` (line 137) and `directional_coupler_hybrid.py`'s (line 263)
+   were measured: run both members of one mirror pair (e.g. output_idx=0 AND
+   output_idx=3) for real, `cache_only`-style comparison of their per-mode
+   coefficients, confirm each body mode's contribution either matches or
+   flips sign between the two — do not assume the sign vector is `[1,-1,1,-1,...]`
+   by analogy; both existing examples measured theirs independently and got
+   different patterns (`[1,-1,1,-1,1,-1,1,-1,-1,-1,-1,1,-1,1]` for the 2×2,
+   `[1,-1,-1,1,1]` for the coupler).
+2. **Rewrite the per-output loop as a hand-rolled cascade**, not a
+   `hybrid.solve_length_sweep()` call per branch. `HybridSolver`'s one-call
+   contract solves a section or derives it from `mirror_pairs` *within one
+   chain*; deriving output_idx=3's transfer matrix from output_idx=2's
+   already-computed result, across two otherwise-identical
+   `solve_length_sweep()` calls, isn't expressible through that API —
+   exactly the reason `mmi_2x2_hybrid.py`'s own module docstring gives for
+   hand-rolling its cross-path einsum instead of using `HybridSolver.solve()`
+   for it ("HybridSolver's one-call contract can't express [this]").
+3. **Re-verify the geometry is exactly y-mirror-symmetric** before trusting
+   step 1's derivation — `use_neighbor_aperture=True` and the per-branch FDTD
+   monitors should already respect this by construction (A1/6a), but no test
+   has explicitly asserted `width_at`/`center_at` symmetry across y=0 for
+   this device the way `HybridSolver`'s own `mirror_check_tol` guardrail does
+   for `mirror_pairs`-based chains — worth the same check here, cheaply,
+   before spending cluster time on a 4-branch reference run.
+
+**Interacts with 9a**: if `calibrate_body_neff` changes the numbers, the
+sign vector must be measured AFTER 9a lands, on the calibrated cascade — not
+before, or 9b would freeze a sign pattern against soon-to-be-stale physics.
+Land 9a first.
+
+**9c. Joint taper-offset x mm_length design sweep — user-requested
+2026-08-13, IN FLIGHT.** Neither 5's `mm_length` sweep (fixed offset=2.4) nor
+the earlier `mmi_1x4_sin_taper_offset_sweep.py` (fixed mm_length=44.0, offset
+swept) ever asked the joint question: for EACH `waveguide_offset`, what is
+the best `mm_length`? New script
+`examples/verification/python/mmi_1x4_sin_taper_offset_length_sweep.py`
+(EME, `mode_solver="tidy3d"`, all-guided per-branch `solve_length_sweep()`,
+same free-length-sweep trick as step 5) answers it directly: one fresh
+`EMESolver.solve_length_sweep()` per `(offset, branch)` pair (offset is NOT
+free like length — it's a genuinely different cross-section at every one of
+the 19 cells), sweeping the full `mm_length` grid at each.
+
+**Offset grid, decided with the user after two feasibility rounds:**
+`[2.2, 2.5, 2.8, 3.1, 3.2167] µm`. `mm_width` held FIXED at today's
+production `12.0 µm` (user's explicit choice over widening it — keeps
+`N_BODY=20`'s mode-count basis, sized off 23 guided modes at `mm_width=12.0`
+in job 11660226, valid at every point without re-deriving it for a wider
+body). This pins the offset ceiling at this device's own geometric
+containment limit, `offset < (mm_width − taper_width)/3 = 3.2667 µm`
+(`mmi_1x4_sin_taper_offset_sweep.py`'s own derivation) — the swept 3.2167 is
+that ceiling minus the same 0.05 µm safety margin that script's own
+`_FEASIBLE_MAX` already uses (the literal 3.2667 the user first named rounds
+UP across the true repeating-decimal boundary and fails the containment
+assert by ~5e-5 µm). The low end, 2.2 µm, sits exactly ON the
+adjacent-taper-overlap floor (`offset > taper_width = 2.2 µm`, else
+neighboring tapers overlap at the body face) — the user's own first choice
+of 2.0 µm was rejected here for exactly that reason (0.2 µm of taper
+overlap), and 2.2 is the boundary case: 0.0 µm edge-to-edge clearance,
+touching but not overlapping. Both endpoints verified by direct arithmetic
+before submission (not just asserted in-script): all 5 offsets checked
+against both the containment ceiling and the adjacent floor, all pass.
+
+**Config**: `N_WL=5, N_BODY=20, N_TAPER=10, C_TAPER=8`, `res=40` — pinned to
+step 5's own real-run config (job array 11667114), not production's
+`N_WL=11`, since this is an exploratory design sweep. `mm_length` grid
+identical to step 5's (`linspace(20, 300, 281)`), so results compare
+directly against that sweep's own numbers.
+
+**Cost**: 5 offsets × 4 branches = 20 independent tasks, each the same cost
+class as step 5's own real run (measured there: 5:49–6:29 hrs/branch).
+
+**Status: ✅ DONE 2026-08-14 — all 20 tasks completed, MEASURED, a real
+design finding.** Smoke test (job 11817341, reduced scope) confirmed the
+script first, per this session's two-step discipline; real array (job
+**11817364**, `--array=0-19`) then ran all 20 `(offset, branch)` pairs to
+completion, 05:46–06:33 each, zero failures (`sacct`: 20/20 `COMPLETED`,
+exit `0:0`; no `Traceback`/`AssertionError`/`OOM` in any of the 20 log
+files). `mmi_1x4_sin_taper_offset_length_sweep_merge.py` combined them.
+
+**⚠ Output directory correction — same off-by-one this session's own
+`mmi_1x4_sin_body_length_sweep.py` already has (that script's own module
+history, and the `mmi_1x4_hybrid_body_length_sweep.py` fix note earlier in
+this doc, for the identical `save_dir` version of this exact mistake).**
+Copying that script's own `os.path.join(_HERE, "..", "..", "..", …)`
+(3 levels up from `examples/verification/python/`) lands at
+**`BEEF/example_output/verification/mmi_1x4_sin_taper_offset_length_sweep/`**,
+NOT `duty/example_output/...` as this doc's own 9c write-up first said
+(4 levels up, matching the production scripts' own depth from
+`examples/mmi_1x4/python/`). Not fixed — flagged only, same call this repo
+already made for the sibling script: moving it now would just relocate a
+complete, verified result set, and every file this session produced is
+self-consistently under the `BEEF/`-nested path (the merge script's own
+`output_dir` uses the identical 3-dot convention, so it found all 20 files
+correctly). **Real path**: `BEEF/example_output/verification/
+mmi_1x4_sin_taper_offset_length_sweep/` (relative to repo root).
+`save_dir` (the EME mode-solve cache) landed the same way, at
+`BEEF/example_sim_cache/` — a fresh, disconnected cache pool, not the real
+device cache at `duty/example_sim_cache/`. Harmless here for the same
+reason it was harmless for the sibling script: this sweep's cross-sections
+(5 new offsets) were never in the real cache to begin with, so nothing was
+missed by not sharing it.
+
+**Per-offset best (min spread, naive global argmin — what the merge script
+reports by default):**
+
+| offset (µm) | best mm_length (µm) | spread | total T |
+|---|---|---|---|
+| 2.2000 | 113.00 | 0.0001 | 0.5120 |
+| 2.5000 | 205.00 | 0.0043 | 0.6112 |
+| 2.8000 | 286.00 | 0.0005 | 0.6302 |
+| 3.1000 | 72.00  | 0.0001 | 0.4426 |
+| 3.2167 | 197.00 | 0.0002 | 0.7444 |
+
+**But the real finding is NOT the naive argmin — it's a short-device family
+near L≈40 µm that the per-offset table above misses entirely** (argmin picks
+the single tightest-balance point regardless of throughput, and at several
+offsets the tightest-balance point sits at low throughput — e.g. 3.1000's
+own "best," L=72, T=0.44). Scanning the full `[offset, mm_length]` grid for
+points combining low spread AND high throughput surfaces a **new standout
+candidate, dominating every previously known point on this device**:
+
+> **offset = 3.1000 µm, mm_length = 40.0 µm → total T = 0.9598 (IL = −0.18
+> dB), spread = 0.00185 (0.77% relative imbalance).**
+
+Neighbors confirm this is a real, smooth peak, not a single-pixel grid
+artifact: L=39 → T=0.9496/spread 0.0041 (1.72%), L=41 → T=0.9459/spread
+0.0024 (1.01%). A second, slightly weaker peak sits at offset=3.2167,
+L=38–42 (T=0.90–0.94, 0.68–3.4% imbalance).
+
+**Comparison against every other candidate on record for this device:**
+
+| design point | mm_length | total T | rel. imbalance |
+|---|---|---|---|
+| current production | 206.0 µm | 0.6014 | 4.26% (step 6d/9) |
+| earlier 44 µm + offset≈3.0–3.2 exploration (coarse, N_WL=1) | 44 µm | 0.75–0.76 | ~15% |
+| **this sweep: offset=3.1, L=40** | **40.0 µm** | **0.9598** | **0.77%** |
+
+That is **~60% more throughput than production, ~5.5x shorter than
+production, and better balanced than either prior candidate** — not a
+marginal improvement, a different regime. Physically plausible, not an
+obvious artifact: T=0.96 sits close to the lossless ideal (1.0) with all
+four outputs landing within a few percent of each other
+(`[0.2405, 0.2394, 0.2394, 0.2405]`-scale per-output values), the signature
+of a genuine near-perfect 4-way self-imaging condition rather than basis
+truncation noise.
+
+**Caveats, stated plainly — NOT yet a validated design change:**
+- Design-tool fidelity only: `N_WL=5` (not production's 11-point band),
+  `N_BODY=20/N_TAPER=10/C_TAPER=8` (same preliminary truncation step 6
+  already flagged as unvalidated for the production device).
+- 1 µm grid spacing — the true optimum could sit slightly off L=40; a finer
+  local sweep (e.g. 35–45 µm at 0.1 µm steps, still cheap under
+  `solve_length_sweep()`'s free-length trick) would sharpen this before
+  treating 40.0 as pinned.
+- Single reference `mm_width=12.0` throughout (this sweep's own user-decided
+  scope) — untested whether a wider body pushes this peak even higher, the
+  same open question step 9c's own module docstring already flags for the
+  offset ceiling.
+- No hybrid/FDTD cross-check yet (check 1, still open) and no resolution
+  convergence check (check 3, still open) — both apply to this candidate
+  exactly as much as to the production point.
+
+**Next step, not yet done**: a real-config confirmation run (`N_WL=11`,
+finer local `mm_length` grid around 40 µm, offset fixed at 3.1) at this
+candidate point, the same "promote a design-tool finding to a validated
+result" step every prior candidate on this device has needed.
+
+#### Local refinement — ✅ DONE 2026-08-14, peak confirmed and sharpened
+
+User asked for a follow-up local refinement (offset 2.90–3.20 µm in 0.05 µm
+steps × mm_length 30–50 µm in 0.1 µm steps, `N_WL=1` for a fast localization
+pass — full config otherwise unchanged). New scripts
+`mmi_1x4_sin_taper_offset_length_refine.py` /
+`..._refine_merge.py`, same two-step (smoke, job 11839141, then real 28-task
+array, job **11839158**) discipline. **All 28 tasks completed cleanly**
+(sacct: 28/28 `COMPLETED`, exit `0:0`, 55–58 min/task at `N_WL=1` — the ~5x
+speedup vs. the coarse sweep's `N_WL=5` cost was a correct estimate).
+Output: `BEEF/example_output/verification/mmi_1x4_sin_taper_offset_length_refine/`.
+
+**Refined peak: offset=3.1000 µm (unchanged from the coarse grid),
+mm_length≈39.9–40.1 µm → total T=0.9707, spread=0.00079 (0.33% relative
+imbalance)** — better than the coarse grid's own 40.0 µm estimate
+(T=0.9598, 0.77%) simply because the finer grid sits closer to the true
+continuous optimum. The offset did NOT move between the 0.3 µm-coarse and
+0.05 µm-fine grids — real evidence this is a genuine peak, not a grid
+artifact.
+
+**The peak is broad, not a knife-edge — a favorable property for a real
+device.** Every `mm_length` in [39.5, 40.3] µm gives T=0.968–0.971 with
+<0.7% imbalance (top-10 table, all at offset=3.1 except one point at
+offset=3.05/L=39.9 also landing at T=0.968) — a ~0.8 µm-wide plateau, not a
+single sharp point, meaning the design tolerates realistic length variation
+without falling off this optimum.
+
+**Still not yet a validated design change** — same caveats as before
+(design-tool `N_BODY/N_TAPER/C_TAPER` fidelity, `N_WL=1` now instead of 5
+for this pass specifically, single `mm_width=12.0`, no check 1/3 yet). Next
+step unchanged: a real `N_WL=11` confirmation pinned at offset=3.1,
+mm_length=40.0 (or 39.9–40.1, functionally equivalent given the plateau).
+
+**Output**: `BEEF/example_output/verification/mmi_1x4_sin_taper_offset_length_refine/refine_offset{0-6}_branch{0-3}.npz`
+(28 raw files) and `taper_offset_length_refine.npz`/`.png` (merged result +
+plot).
+
+**Output** (paths corrected per the note above):
+`BEEF/example_output/verification/mmi_1x4_sin_taper_offset_length_sweep/sweep_offset{0-4}_branch{0-3}.npz`
+(20 raw files) and `taper_offset_length_sweep.npz`/`.png` (merged result +
+plot).
+
 ---
 
 ## Measured vs argued — read this before quoting anything above

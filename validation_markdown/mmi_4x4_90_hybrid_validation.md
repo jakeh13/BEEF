@@ -69,6 +69,128 @@ numbers that matter right now:**
   the paper's cited spec, now that the real performance is known.**
   Paused here at the user's direction (2026-08-09) -- pick this up
   next if/when resumed.
+- **2026-08-14, mm_width Stage-1 scoping in progress, job 11840371** —
+  cheap L_π-vs-width + guided-mode-count probes (9 candidate widths,
+  3.5–10.0 µm, `mmi_4x4_90hybrid_mm_width_scope.py`) to pick 1-2 promising
+  widths before committing to the expensive Stage-2 full treatment (own
+  body solve + baseline 4-solve per width, no cache reuse possible).
+  Still `RUNNING` within its 8h budget as of this update; results pending.
+- **2026-08-14, `calibrate_body_neff`/`section_mode_beta()` investigation
+  — real crash found, HANDED OFF to a separate, already-in-progress
+  effort, not pursued further in this thread.** This device has never
+  used FDTD-consistent body-neff calibration (the mechanism `dc_
+  validation.md` item 6 introduced — MPB's body n_eff and what meep's
+  FDTD actually accumulates differ by ~2.3%/mode, amplified by Δβ into a
+  ~10% coupling error on the coupler). A direct attempt to replicate
+  `HybridSolver`'s own calibration for this device's hand-rolled cascade
+  hit a real `RuntimeError: meep: simulation fields are NaN or Inf` inside
+  `section_mode_beta()`'s own internal FDTD call — traced to the method's
+  branch-safety length formula picking an absurdly short calibration
+  domain (~1.9 µm total, 53% of it PML) for this body's high `β_max`
+  (`n_eff≈2.96`), a real edge case for wide/high-index-contrast multimode
+  bodies the method has apparently never been exercised against (the only
+  working precedent, `mmi_2x2_hybrid.py`, has a much narrower `mm_width=
+  2.8` body). Not a usage mistake — the call matches that working
+  precedent exactly. **Not resolved here**: the user has a separate agent
+  already working this implementation; this thread stood down to avoid
+  duplicating cluster time/edits.
+- **2026-08-14, Step 6b (full-device FDTD reference) RE-QUEUED at the
+  user's direction, job 11847078** — see Step 6b's own updated section
+  below for the full account (stale-geometry fix + budget raised to 3
+  days given job 11733865's inconclusive 6h timeout). Results pending.
+- **2026-08-13, queued as the first concrete lever on that open question:
+  a coarse `waveguide_offset` sweep** (open decisions item 5 below) --
+  `waveguide_offset` is currently *derived* (`=W/4`, exactly reproduces
+  paper Eq. 8) rather than independently validated for this platform, and
+  directly controls where each access waveguide couples into the body's
+  self-imaging pattern -- a plausible lever for the CMRR/phase gap. Made
+  cheap by two findings, both checked, not assumed (see "Top-bottom
+  mirror-symmetry solve reuse" and "waveguide_offset body-cache
+  independence" sections above/below): the body mode solve doesn't need
+  re-running per offset point (confirmed via `cache_only=True` against
+  job 11768847's cache), and each offset point only needs 2 new FDTD
+  input solves, not 4, via the same mirror-reuse trick as
+  `mmi_2x2_hybrid.py`'s own `MODE_SIGNS`. **Script:
+  `examples/verification/python/mmi_4x4_90hybrid_offset_sweep.py`,
+  smoke-tested end to end at reduced settings first** (caught and fixed one
+  real bug: the body-mode cache lookup also needs a production-vs-test
+  fallback, same class of issue as the sign-vector derivation). **Submitted
+  2026-08-13, job 11817429** (4-task array, `run_mmi_4x4_90hybrid_offset_
+  sweep.batch`, `gts-sr108-ece`, offsets {1.2, 1.35, 1.65, 1.8} µm — the
+  baseline `offset=1.5` needs no new run, it is job 11778128's own cached
+  result, already fetched and confirmed to reproduce those exact numbers).
+  **✅ RESULTS LANDED 2026-08-13, job 11817429 (all 4 tasks COMPLETED,
+  2:10h–3:02h each) — the offset lever makes things WORSE, not better, at
+  every point tested, and the derivation mechanism itself was independently
+  confirmed correct, not just theoretically argued:**
+
+  | offset (µm) | max\|Δφ\| (deg) | min CMRR (dBe) | max excess loss (dB) | max imbalance (dB) |
+  |---|---|---|---|---|
+  | 1.20 | 157.348 | 0.713 | 5.553 | 22.293 |
+  | 1.35 | 107.460 | 0.044 | 6.901 | 35.416 |
+  | **1.50 (baseline, job 11778128)** | **12.320** | **1.531** | **8.366** | **14.615** |
+  | 1.65 | 51.365 | 2.908 | 5.668 | 10.674 |
+  | 1.80 | 162.849 | 1.135 | 5.101 | 15.620 |
+
+  Every offset away from the baseline is DRAMATICALLY worse on phase error
+  (51°–163° vs. 12°) — not a smooth, mild degradation. Before trusting
+  numbers this surprising (they echo A11's own old phase-pinning bug
+  superficially), ran a direct, independent confirmation rather than
+  accepting `check_passive()`'s clean pass as sufficient (it only bounds
+  power, not phase — a sign-derivation bug on the phase-sensitive derived
+  ports would pass it too): at offset=1.35, solved ports 2 and 3 for REAL
+  (not derived) and compared against the sign-vector-derived values used
+  in the sweep — **agreement to ≤0.84° angle, ≤0.2% magnitude**, at a
+  genuinely new offset never used to derive the sign vector. The reuse
+  mechanism is confirmed correct away from the baseline, not just at it;
+  the phase blowup is real physics, not a screening artifact.
+
+  **Interpretation: `mm_length`/`ΔL=-2.75` was tuned specifically FOR
+  `offset=1.5` (Step 3's own ΔL sweep, run only at that offset) — moving
+  the ports without re-tuning the body length breaks the self-imaging
+  phase alignment badly, consistent with MMI self-imaging being a discrete,
+  position-sensitive interference pattern, not a smoothly-varying one.**
+  `waveguide_offset` is NOT a free, independent lever on its own; it is
+  coupled to `ΔL` — **checked directly the same day, not left as a
+  hypothesis, see "Joint (offset, ΔL) grid" below: re-optimizing ΔL per
+  offset does not rescue it either.** offset is now a closed, ruled-out
+  lever.
+
+### Joint `(offset, ΔL)` grid — 2026-08-13, zero new cluster time
+
+The single-ΔL screen above only ever evaluated each offset against the ONE
+`ΔL=-2.75` slice tuned for `offset=1.5`. Two things needed for a real
+answer were already sitting on disk, needing no new solves: job
+11817429's own 2 real + 2 sign-derived input matrices per new offset (job
+11778128's 4 real for the baseline), and the FULL 81-point `ΔL` body
+length-sweep grid (job 11768847) — confirmed offset-independent (the
+"`waveguide_offset` body-cache independence" finding above), so the SAME
+grid applies at every offset, not just 1.5. `mmi_4x4_90hybrid_offset_
+deltaL_grid.py` re-combines the already-cached input matrices against
+every one of the 81 `ΔL` points per offset (pure numpy, no meep/meow call)
+— 21 s on the login node for the full 5×81 = 405-point grid.
+
+**Result: even each offset's own best achievable `ΔL` stays far worse than
+the baseline's best point.**
+
+| offset (µm) | best ΔL in [-10,+10] µm | max\|Δφ\| at that ΔL (deg) | min CMRR there (dBe) |
+|---|---|---|---|
+| 1.20 | +7.50 | 125.563 | 1.790 |
+| 1.35 | +0.25 | 64.802 | 2.723 |
+| **1.50 (baseline)** | **−2.75** | **12.320** | **1.531** |
+| 1.65 | −1.00 | 47.638 | 5.170 |
+| 1.80 | +6.50 | 75.121 | 0.420 |
+
+The global best point over the entire explored 5×81 grid remains
+`offset=1.5, ΔL=-2.75` — the paper's own Eq. 8 port-spacing formula
+(`offset=mm_width/4`) is not merely "whatever `ΔL` happened to be tuned
+for," it is genuinely close to optimal across this range, independent of
+`ΔL`. `waveguide_offset` is a closed, ruled-out lever now, not an open
+one — the next candidate levers (per the 2026-08-09 open question) are
+`mm_width`, or the still-unmeasured `taper_width`/`taper_length`
+placeholders (Step 2's own flagged, never-independently-optimized
+defaults), both of which would need genuinely new FDTD/EME solves, not
+free reuse of what is already cached.
 
 ---
 
@@ -1252,6 +1374,41 @@ script (Step 6c) stands as the trusted, already-completed result for this
 device; the full-device FDTD cross-check (check 4, Step 8) remains
 formally open, not closed, if picked up again later.
 
+**Re-queued 2026-08-14 at the user's direction.** Two real issues fixed
+before resubmitting, not just a retry at the same config:
+
+1. **The script and notebook were stale.** `mmi_4x4_90hybrid_fdtd.py`/
+   `.ipynb` still carried `ΔL=-1.50`/`mm_length=80.1896` — the point from
+   *before* the 2026-08-09 `N_MODES_BODY=8→16` body-basis convergence fix
+   moved the settled point to `ΔL=-2.75`/`mm_length=78.9396` (job
+   11768847). Job 11733865's own timeout was therefore already against a
+   superseded geometry, not just an incomplete one. Both files updated to
+   the current point, with the same grid-snap `assert` `mmi_4x4_90hybrid_
+   hybrid.py` uses (do not silently let a "settled" length drift off the
+   Step 3 sweep grid).
+2. **Budget raised, not just resubmitted at `-t 360`.** Job 11733865
+   reached meep time≈876 in the full 6h with no sign of trouble (steady
+   ~0.29 s/step, no NaNs) — genuinely still converging, not stuck. New
+   budget: **`-t 4320` (3 days, 12× the previous attempt)**, `run_
+   mmi_4x4_90hybrid_fdtd.batch` (updated in place, same array-of-2-tasks
+   shape). Still a real, uncertain cost, stated plainly: `FDTDSolver` has
+   no checkpoint/restart (confirmed directly), so if 3 days is not enough
+   the entire budget is lost, not partially credited, and a fresh, larger
+   resubmission would be the only path forward — this is not a confident
+   estimate, it is the most defensible next step given the one real data
+   point available (876 meep-time units reached in 6h, unknown distance
+   to actual decay).
+
+A cheap reduced-resolution smoke pass was NOT re-run first — this exact
+device already showed (job 11726835/11726854, above) that reduced
+resolution/decay_tol sits below the noise floor over this 84 µm
+propagation length, so a smoke pass here would be uninformative by this
+device's own established precedent, not skipped carelessly.
+
+**Submitted 2026-08-14, job 11847078** (array 0-1, same task→port mapping
+as before: task 0 → `port="bot"` (port 1), task 1 → `input_idx=2`
+(port 3)). Results pending.
+
 ### Step 7 — metrics helper (A8) — ✅ math primitives landed 2026-08-05; the plot/report itself still pending Step 6
 
 **Deliverable.** Imbalance, excess loss, CMRR_I/Q, and phase-error
@@ -1610,6 +1767,73 @@ Whether the geometry itself (mm_width, taper params, access waveguide
 width) needs redesigning to actually meet spec is now an open question
 this convergence work exposed, not one it answers.
 
+### Top-bottom mirror-symmetry solve reuse — checked 2026-08-13, zero new cluster time
+
+Question: `mmi_2x2_hybrid.py`'s own `SYMMETRIC_MODE_REUSE`/`MODE_SIGNS`
+mechanism (top vs. bottom arm, a ±1 sign vector over body modes, empirically
+measured once) already drops that device's FDTD count from 2 to 1, on top
+of the left-right (input↔output) mirror reuse every MMI hybrid example
+here already uses (A5). This device has the same y=0 mirror symmetry
+(`_port_ys` places all 4 ports symmetrically, `_default_ports` gives every
+port identical `waveguide_width`/`taper_length`/`taper_width` —
+`beef/geometry/mmi.py:58-77`), across TWO mirror pairs (`input_idx` 0↔3 at
+y=∓2.25, 1↔2 at y=∓0.75) — so the same trick would in principle drop the 4
+input-section solves to 2, the natural floor for a 4-port device (2 distinct
+`|y|` magnitudes).
+
+**Checked directly against job 11778128's already-cached results
+(`solve_section(..., cache_only=True)`, all 4 `input_idx` cache HIT, 0.17 s,
+no new FDTD run)**, not just architecturally argued:
+
+- `M_in[3]/M_in[0]` and `M_in[2]/M_in[1]` (both mirror pairs, all 3
+  wavelengths, N_MODES_BODY=16): **all 16 of 16 body modes give a clean,
+  real, wavelength-stable ±1 sign** — checked with proper circular
+  statistics (`R = |mean(unit ratio)|`), not a naive arithmetic mean/std of
+  the angle (a first pass using the latter wrongly flagged 2 modes as
+  "unstable" — a branch-cut artifact: angles landing at alternating
+  +179.9°/−180.0° across wavelengths are the *same* physical sign,
+  literally 180° apart from 0 either way, but a plain `.mean()`/`.std()` on
+  wrapped angle values doesn't know that and reports a spuriously huge
+  swing. Caught before it propagated into anything real by re-checking
+  with `R` — `R=1.0000` (min 0.99999995) for every one of the 16 modes,
+  both pairs, meaning perfect wavelength-to-wavelength consistency, no
+  exceptions). Angular deviation from an exact 0°/180° sign: ≤0.04° (pair
+  0↔3), ≤0.15° (pair 1↔2) — every mode. Magnitude residual `||ratio|-1|`:
+  ≤0.17% (pair 0↔3), ≤0.29% (pair 1↔2) — every mode. **The same alternating
+  sign pattern `[+1,-1,+1,-1,...]` holds for BOTH pairs**, i.e. one shared,
+  single sign vector (not two independently-fit ones) explains both 0↔3
+  and 1↔2 — real evidence the sign is an intrinsic y-parity property of
+  each body eigenmode, not a per-pair coincidence.
+
+**Verdict: the reduction is real, clean on all 16 modes (no flagged
+exceptions), and at a precision comparable to the 2×2's own `MODE_SIGNS`
+validation (~1e-4-level angle agreement, sub-0.3% magnitude residual) — not
+just a screening approximation.** Still worth one caveat before treating it
+as equal-status to the 2×2's own precedent: this is one reference geometry
+(N_MODES_BODY=16, `mm_length=78.9396`, the current design point) checked
+once, not re-derived across a length/wavelength range the way the 2×2's
+`MODE_SIGNS` comment describes being re-validated after design changes —
+worth a quick re-check (same cache-only technique, ~free) if `mm_length`/
+`ΔL` or `N_MODES_BODY` ever change again.
+
+### `waveguide_offset` body-cache independence — checked 2026-08-13, zero new cluster time
+
+Before spending real solves on an offset sweep: does `EMESolver`'s cached
+body-mode result (job 11768847's 81-point `ΔL` grid, N_MODES_BODY=16) stay
+valid if `waveguide_offset` changes? `waveguide_offset` only moves the four
+ports' y-position, entirely inside the *input* section's own x-range
+(`[boundaries[0], boundaries[1]]`); the body section's cache fingerprint
+(`beef/cache/config.py`'s `build_run_config()`) is built from
+`geometry.section_gds(x0, x1, ...)` — the polygons **sliced to
+`[boundaries[1], boundaries[2]]` only** — so an offset change cannot appear
+in it. **Confirmed directly, not just argued from the fingerprint code**:
+called `solve_section_length_sweep(..., cache_only=True)` with
+`waveguide_offset=1.3` (a candidate sweep point, never solved before)
+against the same body boundaries/lengths grid — cache HIT, identical
+`(81, 3, 16, 16)` shape, no new run. **The body solve never needs
+re-running across an offset sweep** — only the 2 (via the mirror-reuse
+trick above) or 4 input-section solves per offset point do.
+
 ### Step 8 — the four checks
 
 Once Step 6's three scripts exist and run for the first time, this doc
@@ -1651,6 +1875,30 @@ still expected to move means regenerating it twice).
 4. **Directory/file naming** — used `mmi_4x4_90hybrid` above for
    consistency with `mmi_2x2`/`mmi_1x4`'s own `mmi_<NxM>` convention plus a
    disambiguating suffix for the terminology collision flagged at the top;
+5. ~~Coarse `waveguide_offset` sweep~~ ✅ **DONE 2026-08-13, job 11817429 —
+   then extended into a full joint `(offset, ΔL)` grid, zero new cost,
+   same day — see "Joint (offset, ΔL) grid" section below. Answered
+   firmly: offset alone is not the fix, and re-optimizing ΔL per offset
+   does not rescue it either.** Every tested offset (1.2, 1.35, 1.65, 1.8)
+   was dramatically worse on phase error at the shared ΔL (51°–163° vs.
+   baseline 1.5's 12.3°); the sign-vector derivation was independently
+   confirmed correct at a new offset (≤0.84° angle / ≤0.2% magnitude vs. a
+   real 4-solve check at offset=1.35). Extending to the FULL 81-point ΔL
+   grid per offset (already-cached data, `mmi_4x4_90hybrid_offset_deltaL_
+   grid.py`, 21 s on the login node) shows even each offset's OWN best
+   achievable ΔL stays far worse than baseline (best max\|Δφ\| = 125.6° /
+   64.8° / 47.6° / 75.1° at offset 1.2/1.35/1.65/1.8, vs. baseline's
+   12.3°) — the paper's own Eq. 8 port-spacing formula (`offset=W/4`) is
+   not merely "what ΔL happened to be tuned for," it is genuinely close to
+   optimal across the explored range, independent of ΔL. `waveguide_offset`
+   is now a closed, ruled-out lever, not an open one.
+6. ~~Top-bottom mirror-symmetry reuse for production reporting, not just
+   screening~~ ✅ **No longer blocked** — the original "2 flagged
+   near-degenerate modes" finding was itself an analysis artifact (a
+   branch-cut bug in how the check averaged wrapped angles, not a real
+   mode-basis instability); corrected check shows all 16 modes clean. The
+   sign vector is trusted for this design point; re-validate (cheap,
+   cache-only) if `mm_length`/`N_MODES_BODY` change again.
    open to a different name before Step 6 creates the directory.
 
 ---

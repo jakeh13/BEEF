@@ -4,9 +4,24 @@ reference simulation (BEEF method).
 validation_markdown/mmi_4x4_90_hybrid_validation.md Step 6b (check 4's own
 full-device reference). Same device as mmi_4x4_90hybrid_hybrid.py/
 mmi_4x4_90hybrid_eme.py -- see mmi_4x4_90hybrid_hybrid.py's own module
-docstring for the paper reference and first-pass-design caveats (N_MODES=8,
-unmeasured taper placeholders, mm_length=80.1896 the best point in a Step 3
-sweep, not a converged optimum -- A9/A11 in the validation doc).
+docstring for the paper reference and design caveats. RE-DERIVED 2026-08-14
+to the current settled geometry (ΔL=-2.75, mm_length=78.9396, was -1.50/
+80.1896) -- the point this script originally shipped with predates the
+2026-08-09 N_MODES_BODY=8->16 body-basis convergence fix that moved ΔL, so
+job 11733865 (below) ran the STALE point and its own timeout is superseded,
+not just re-attempted at the same geometry. taper_width/taper_length remain
+unmeasured placeholders (Step 2), unchanged from the hybrid/EME scripts.
+
+Previous attempt (job 11733865, 2026-08-08): TIMED OUT at the full -t 360
+(6h) budget on both array tasks -- not a crash, both were still stepping
+cleanly (~0.29s/step, no NaNs/slowdown) at meep time~876, genuinely still
+converging toward decay_tol=1e-11. Paused at the user's direction rather
+than resubmitted at a bigger budget at the time (validation doc, Step 6b).
+Re-queued 2026-08-14 at the user's direction, at the corrected geometry and
+a substantially larger time budget (see the batch script) -- an ~84 um,
+4-port single-domain box storing far more energy than any smaller section
+this repo has run to full decay is a real, uncertain cost, not assumed
+solved by the small ΔL correction alone.
 
 Method: single-domain FDTD via meep, the whole ~84 um device in one box --
 the most physically complete of the three simulation methods (unlike the
@@ -83,8 +98,20 @@ WAVEGUIDE_OFFSET = MM_WIDTH / 4.0
 TAPER_WIDTH = 0.8
 TAPER_LENGTH = 1.0
 L_PI = 108.9195
-DELTA_L = -1.50
-MM_LENGTH = 0.75 * L_PI + DELTA_L   # = 80.1896
+
+# DELTA_L: re-derived 2026-08-09 at the converged N_MODES_BODY=16 body basis
+# (job 11768847) -- was -1.50 (mm_length=80.1896), found at the since-
+# superseded under-converged N=8 basis; see mmi_4x4_90hybrid_hybrid.py's own
+# comment for the full story. Asserted against that sweep's exact grid,
+# same discipline mmi_1x4_hybrid.py's own grid-snap lesson established.
+_DELTA_L_GRID = np.linspace(-10.0, 10.0, 81)
+DELTA_L = -2.75
+_nearest = _DELTA_L_GRID[np.argmin(np.abs(_DELTA_L_GRID - DELTA_L))]
+assert _nearest == DELTA_L, (
+    f"DELTA_L={DELTA_L} is not an exact point on the Step 3 sweep grid "
+    f"(nearest: {_nearest}) -- do not silently snap."
+)
+MM_LENGTH = 0.75 * L_PI + DELTA_L   # = 78.9396
 
 mmi = MMI(
     n_inputs=4, n_outputs=4,

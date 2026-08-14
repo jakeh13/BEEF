@@ -12,16 +12,16 @@ One file per example device, recording what has to hold before that device's
     running_jobs.md                    snapshot — active SLURM jobs and which gap/item each is for
     mmi_1x4_sin300_validation.md       1×4 MMI on 300 nm Si3N4 — BUILD PLAN, device does not exist yet
     mmi_4x4_90_hybrid_validation.md    4×4 MMI 90° optical hybrid, SOI 220nm/O-band — BUILD PLAN, device does not exist yet; ref: Yasui et al., ACES J. 36(5), 2021
-    high_contrast_grating_validation.md HCG reflector, FDTD-only (no EME/hybrid) — corrected: peak R 97.1% vs paper's 98.9%, gap widened after fix; 2/3 caught mistakes now have an automated guard; res=70/80 probe shows resolution residual has NOT settled by res=60
     resolved/high_contrast_grating_fabry_perot_validation.md HCG Fabry-Perot cavity + DC tap — Steps 0-5 + checks 1-3 all closed with real data; 44 real resonances at the real (GDS-derived) cavity length, FSR 2.255nm; check 4 out of scope by decision
     modal_multiplexer_validation.md    modal multiplexer — resumed 2026-08-04, gap list against the four checks
-    mode_crossing_correspondence_repair_validation.md  cross-device — BUILD PLAN, mechanism does not exist yet; check_mode_correspondence can DETECT a mode-identity mismatch but nothing REPAIRS one; prompted by a real, still-open failure at the modal multiplexer's interface 0 (mode 8, wl=1.26 um)
     section_mode_beta_multi_monitor_validation.md  cross-device — BUILD PLAN, steps 1-3 done (real cost measured: 42.1hr old path vs 14.0hr projected merged; layout designed; FDTDSolver.solve_section_multi_length() implemented + smoke-tested), PAUSED 2026-08-12 pending cluster time for steps 4-8 (numerical equivalence + the two convergence studies, all real-FDTD-time-gated)
     archive/                           closed items, kept whole
     resolved/                          whole docs sufficiently addressed (open to-dos may remain)
     resolved/directional_coupler_validation.md  directional coupler — the worked example
     resolved/material_model_validation.md       cross-device — shared Si/SiO2 model, both engines
-    deferred/                          work intentionally postponed, not blocked or closed (currently empty)
+    deferred/                          work intentionally postponed, not blocked or closed
+    deferred/high_contrast_grating_validation.md HCG reflector, FDTD-only (no EME/hybrid) — moved here 2026-08-13; corrected peak R 97.1% vs paper's 98.9%, gap widened after the waveguide-extension fix; res=70/80 probe shows resolution residual has NOT settled by res=60; postponed pending a decision to spend the multi-hour cluster time on a res=70/80 full-band re-run
+    deferred/mode_crossing_correspondence_repair_validation.md  cross-device — BUILD PLAN, moved here 2026-08-13; check_mode_correspondence can DETECT a mode-identity mismatch but nothing REPAIRS one, prompted by the modal multiplexer's interface 0 (mode 8, wl=1.26 um); Stage 0 classified the failure as regime C with a real mechanism (meep's per-band-count ladder re-diagonalizes independently each call, no shared state — confirmed via meep's own C++ source); Stage 2 feasibility CONFIRMED (a single MPB simultaneous num_bands solve keeps the known duplicate pair orthogonal, overlap 0.34 vs meep's 1.0) but production integration (frequency-matching per band, field-API adapter) not started — postponed by user choice, not blocked
 
 Every per-device file for an **existing** device lives in `resolved/`.
 

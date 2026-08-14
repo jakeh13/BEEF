@@ -14,12 +14,13 @@ longer domain with multiple monitors instead — this document specs how, and
 makes the previously-prohibitive convergence check (2) nearly free as a side
 effect of doing (3).
 
-## Status — paused 2026-08-12, resume here on the cluster
+## Status — step 4 passed 2026-08-13, resume at step 5 on the cluster
 
 Steps 1-3 done locally (M3 MacBook, no cluster needed for these — pure
 design/implementation/smoke-test, not real production-scale compute).
-Steps 4-8 need real FDTD time at a scale this machine can't reasonably
-absorb — paused here deliberately, not blocked on anything unresolved.
+Step 4 done for real on the cluster, 2026-08-13. Steps 5-8 need real FDTD
+time at a scale beyond a login-node smoke run — not blocked on anything
+unresolved, just not yet run.
 
 **Done:**
 - Step 1: real per-sim cost measured (3609.53 s, one band). Old-path
@@ -28,19 +29,17 @@ absorb — paused here deliberately, not blocked on anything unresolved.
   source-proximity concern resolved with real numbers, all below.
 - Step 3: `FDTDSolver.solve_section_multi_length()` implemented
   (`beef/solvers/fdtd.py`) and smoke-tested (structural correctness only).
-
-**Not done — pick up here:**
-- Step 4 (numerical equivalence test) is next. Real cost estimate at a
-  *reduced* scale (`n_modes=2`, 1 wavelength, real `res=40`/
-  `decay_tol=1e-11`/real lengths — NOT full `N_MODES=14`/11-wavelength
-  production scale, which would cost tens of hours just for this check):
-  old path (3 lengths × 2 bands ≈ 6 sims) **≈ 3.5-4 hours**; merged path
-  (2 bands × 1 longer domain) **≈ 1.2-1.5 hours**; **≈ 5-6 hours
-  combined**. The time-stepping/decay cost doesn't shrink with fewer
-  modes — only step 1's measured output-decomposition tail (~26 of the 60
-  min) does, which is why this is still hours, not minutes, even reduced.
-  Steps 5-8 unstarted, all real-FDTD-time-gated, all described in full
-  below.
+- Step 4: numerical equivalence test **PASSED for real, 2026-08-13**, job
+  11813378 (`gts-sr108-ece`, 07:08:01 wall, exit 0). Reduced scale
+  (`n_modes=2`, 1 wavelength, real `res=40`/`decay_tol=1e-11`, real
+  auto-picked lengths `[1.1023, 2.2046, 3.3069]` µm — NOT full
+  `N_MODES=14`/11-wavelength production scale). Full numbers, guard checks,
+  and script/batch record below at step 4 itself.
+  - Script: `examples/verification/python/
+    equivalence_test_solve_section_multi_length.py`. Batch:
+    `batch/verification/run_equivalence_section_multi_length.batch`.
+  - Steps 5-8 unstarted, all real-FDTD-time-gated, all described in full
+    below.
 - Both new scripts are permanent, git-tracked, NOT in any session
   scratchpad: `examples/verification/python/
   time_section_mode_beta_single_sim.py` (step 1) and `examples/
@@ -297,6 +296,59 @@ assumed, to be measured for real in step 1 below.
    turns out to matter. Also explicitly check the linearity/branch-margin
    guards still fire correctly on a case constructed to need them (don't
    just check the happy path).
+
+   **PASSED, 2026-08-13.** Job 11813378 (`gts-sr108-ece`, 07:08:01 wall,
+   exit 0). Reduced scale: `n_modes=2`, 1 wavelength (`1.5475` µm, band
+   centre), real `res=40`, real `decay_tol=1e-11`, lengths auto-picked the
+   same way `section_mode_beta()` picks them internally (not hand-copied):
+   `[1.1023, 2.2046, 3.3069]` µm (`beta_max=11.4001` rad/µm,
+   `max_safe_spacing=2.2046` µm). Old path 3 independent `solve_section()`
+   calls, 18297.8 s (5.08 h) total (4995.7 / 5724.4 / 7577.6 s per length,
+   growing with length as expected). Merged path one
+   `solve_section_multi_length()` call, 7339.3 s (2.04 h). **Measured
+   speedup at this reduced scale: 2.49x** (doc step 1's full-production-scale
+   projection was 3.00x — in the same range, not identical, since the merged
+   domain here is longer than any single old-path domain and per-band cost
+   isn't perfectly flat with domain length, exactly the caveat step 1 itself
+   flagged as unverified).
+
+   Agreement, old vs. merged:
+   - **Raw phases**: `max|phase_old - phase_merged| = 7.72e-05 rad` — about
+     1300x tighter than `_BETA_FIT_RESIDUAL_MAX` (0.1 rad), the guard's own
+     straight-line tolerance, used here only as a scale reference.
+   - **Raw `|T_ii|`**: `max||T_ii|_old - |T_ii|_merged|| = 2.64e-03`.
+   - **Fitted β** (`beta_fit_from_phases()`, same seed fed to both):
+     `max|beta_old - beta_merged| = 3.50e-05 rad/µm` (**0.0003%**), both
+     wl/mode cells' residuals ≤ 8.00e-05 rad (guard fires above 0.1) and
+     margins 0.060 (guard fires above 0.9) — nowhere near either threshold
+     on the happy path, for both paths.
+   - **The correlated-noise concern this doc flagged above turned out not to
+     matter** at this decay_tol: agreement is 3-4 orders of magnitude
+     tighter than the guards themselves, not merely "inside tolerance."
+
+   Guard checks, all real, not assumed:
+   - **B1** (pure-math sanity, no FDTD): `beta_fit_from_phases()` recovers a
+     known synthetic β=9.4 rad/µm at these real lengths to `1.78e-15`
+     — regression baseline for the shared fit function both paths rely on.
+   - **B2** (residual guard, reusing this run's real phases, no extra FDTD):
+     a deliberate 1.0 rad outlier injected into one (wl, mode) cell of each
+     path's real phases pushes `resid` to 0.6667 rad on **both** — guard
+     fires correctly, consistently, on data from either path.
+   - **B3** (branch-margin guard / Guard 2, cheap — seed solve only, no
+     time-stepping): `section_mode_beta()` called for real with deliberately
+     too-widely-spaced lengths (`[4.4092, 8.8185]` µm against
+     `max_safe_spacing=2.2046` µm) raised `ValueError` exactly as designed
+     ("branches only 1.425 rad/µm apart on a β of ~11.400 ... Space them no
+     more than 2.205 µm apart"). This only exercises the *old* path's wired
+     guard — `solve_section_multi_length()` has no guard wrapper of its own
+     yet (step 7 wiring, not this step) — flagged in the script's own
+     output, not silently assumed equivalent.
+
+   Script: `examples/verification/python/
+   equivalence_test_solve_section_multi_length.py`. Batch:
+   `batch/verification/run_equivalence_section_multi_length.batch`
+   (`--account=gts-sr108-ece`, `-t 600`). Full log:
+   `reports/11813378.out`.
 5. **Convergence study #1 — number of monitors/lengths.** The gap this
    whole document exists to close: with merging, adding a monitor is cheap
    (no new domain build/decay wait), so sweep N ∈ {3, 4, 5, 6, ...} monitors
@@ -305,12 +357,83 @@ assumed, to be measured for real in step 1 below.
    prohibitively expensive to check under the old N-separate-sims
    architecture (each extra length was another full sim) — merging is what
    makes this checkable at all, not just cheaper.
+
+   **PASSED (β side), residual trend flagged, 2026-08-14.** Job 11838953
+   (`gts-sr108-ece`, 03:11:17 wall, exit 0). Same reduced scale as step 4
+   (`n_modes=2`, 1 wavelength, real `res=40`/`decay_tol=1e-11`), N sweep
+   {3,4,5,6} monitors from ONE `solve_section_multi_length()` call
+   (spacing=1.1023 µm shared across all N, domain = 6×spacing = 6.6138 µm,
+   well inside the 26.5 µm usable body span — nowhere near the tapers).
+   Every N < 6 is a free re-fit of a prefix of that one run's phase data
+   via `beta_fit_from_phases()` — no extra simulation.
+
+   Fitted β (rad/µm, both (wl, mode) cells):
+
+   | N | β mode 0 | β mode 1 | worst resid (rad) | worst margin |
+   |---|----------|----------|--------------------|--------------|
+   | 3 | 11.571207 | 11.407468 | 1.069e-04 | 0.0603 |
+   | 4 | 11.571265 | 11.407524 | 1.283e-04 | 0.0603 |
+   | 5 | 11.571236 | 11.407497 | 1.289e-04 | 0.0603 |
+   | 6 | 11.571113 | 11.407379 | 4.503e-04 | 0.0603 |
+
+   **β is already converged at N=3** — `max|β(N) - β(N=6)|` across all four
+   N values stays at `9.4e-05`-`1.5e-04` rad/µm regardless of N (not a
+   monotonic decay toward N=6, just noise-floor fluctuation around the same
+   value): today's production default of 3 monitors gives the same β, to
+   this precision, as 6 monitors would. Successive-N steps
+   (`|β(N)-β(N-1)|`): `5.8e-05` (4v3), `2.9e-05` (5v4), `1.2e-04` (6v5) —
+   also non-monotonic, consistent with noise rather than a real trend
+   needing more points to average out.
+
+   **The residual, unlike β, DOES show a real, monotonically-growing trend
+   with N** — `1.07e-04 → 1.28e-04 → 1.29e-04 → 4.50e-04` rad from N=3 to
+   N=6, a ~4.2x jump overall (biggest single step N=5→6). Still 2-3 orders
+   of magnitude under `_BETA_FIT_RESIDUAL_MAX` (0.1 rad) — the guard would
+   not have fired at any N tested — but this is a measured trend, not
+   noise.
+
+   **Correction, 2026-08-14** (caught while designing step 6, not left
+   stale): this entry originally attributed the residual growth to N and
+   domain length being confounded in this run (`domain = N×spacing`
+   growing alongside N). That's wrong — job 11838953 made exactly ONE
+   `solve_section_multi_length()` call with all 6 lengths at once, so the
+   domain was fixed at `6×spacing = 6.6138 µm` for *every* row of the table
+   above, including the N=3 row. What actually varies across N here is
+   only how many of that one run's 6 already-measured monitors get fed
+   into the fit — domain length never moved. The real domain-length
+   question (does embedding the *same* 3 lengths in a bigger shared domain
+   shift their own measured phase/β) turned out to be answerable directly
+   by comparing this job's N=3 row against step 4's separate merged-path
+   run (job 11813378, domain = `3×spacing = 3.3069` µm, the same 3
+   lengths) — see step 6 below, which resolves this for real using that
+   comparison plus new data.
+
+   Script: `examples/verification/python/
+   convergence_study_monitor_count.py`. Batch: `batch/verification/
+   run_convergence_monitor_count.batch`. Full log: `reports/11838953.out`.
+   **Caveat carried from step 4**: reduced scale only (`n_modes=2`, 1
+   wavelength) — not yet checked at full `N_MODES=14`/11-wavelength
+   production scale.
 6. **Convergence study #2 — total simulation/domain length.** Does the
    longest monitor's distance need to keep growing — e.g., do the *shorter*
    lengths' fitted phases change once they're measured inside a longer
    shared domain (near-field/launch-transient contamination) versus their
    own independently-sized domain today? Sweep the total domain length
    (independent of monitor count) and check β-fit stability against it.
+
+   **Submitted, not yet landed, 2026-08-14.** Job 11844627 (`gts-sr108-ece`).
+   Holds the 3 real production/step-4/step-5 lengths fixed and varies ONLY
+   the shared domain size via one extra, ignored padding length (forces
+   `L_domain` bigger, never enters the β fit) — cleanly separating "domain
+   length" from "monitor count," which step 5's own run (corrected above)
+   did not actually vary. Reuses two domain sizes already measured for
+   free: `3×spacing` (job 11813378) and `6×spacing` (job 11838953's N=3
+   row), and adds two new ones (`4×spacing`, `8×spacing`) via genuine new
+   `solve_section_multi_length()` calls. Script: `examples/verification/
+   python/convergence_study_domain_length.py`. Batch: `batch/verification/
+   run_convergence_domain_length.batch` (`-t 720`, ~6.3 h estimated from
+   the existing two points' own timing). Results to be filled in here once
+   the job completes.
 7. **Wire in with a fallback, same pattern as `SYMMETRIC_MODE_REUSE`.**
    Once steps 4-6 pass, make the merged approach `section_mode_beta()`'s
    default, keep the old per-length path reachable behind a flag (mirrors
@@ -334,12 +457,27 @@ assumed, to be measured for real in step 1 below.
   for a different/longer set of monitor positions on the same cross-section
   doesn't force a full re-run? Not designed, worth considering once step 2
   lands.
-- Is 3 monitors (today's default) actually going to turn out to be enough
-  once convergence study #1 has real data, or does this reveal the shipped
-  calibration numbers (DC's `job 11517245`, etc.) were under-sampled all
-  along? Genuinely unknown until measured — this document takes no
-  position on the answer, only that the question was never asked before.
+- Is 3 monitors (today's default) actually going to turn out to be enough?
+  **Answered for β, 2026-08-14 (step 5): yes, at this reduced scale.**
+  β at N=3 matches β at N=6 to `9.4e-05` rad/µm (non-monotonic
+  fluctuation, not a trend converging toward more monitors) — no sign the
+  shipped calibration numbers (DC's `job 11517245`, etc.) are
+  under-sampled on the β axis. **Not answered for the residual**: it grows
+  measurably (~4.2x) from N=3 to N=6, still far under the guard threshold
+  but a real trend, confounded with domain length in step 5's design — see
+  step 5's own entry and step 6, which is needed to separate "more
+  monitors" from "longer domain" before this is fully closed. Reduced
+  scale only (`n_modes=2`, 1 wavelength); full production scale unchecked.
 - Does the correlated-noise concern on the linearity/residual guard (flagged
   above) turn out to matter in practice, or is `decay_tol=1e-11` tight
-  enough that it's inert? Step 4 answers this for real; not assumed either
-  way here.
+  enough that it's inert? **Answered, 2026-08-13 (step 4): inert.** Old-vs-
+  merged agreement (`max|beta diff| = 3.50e-05 rad/µm`) is 3-4 orders of
+  magnitude tighter than the residual/margin guard thresholds — checked at
+  reduced scale (`n_modes=2`, 1 wavelength), not yet at full
+  `N_MODES=14`/11-wavelength production scale, so treat as strong evidence,
+  not a production-scale guarantee.
+- Does the merged path need its own guard wrapper mirroring
+  `section_mode_beta()`'s pre-simulation branch-margin guard (Guard 2)? Step
+  4's B3 check confirmed the guard fires correctly on the *old* path's
+  entry point, but `solve_section_multi_length()` itself has no equivalent
+  — not a gap in step 4, just not yet in scope until step 7's wiring.

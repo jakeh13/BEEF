@@ -2162,6 +2162,8 @@ class FDTDSolver:
         y1: Optional[float] = None,
         excite_port: Optional[PortSpec] = None,
         measure_port: Optional[PortSpec] = None,
+        measure_margin: Optional[float] = None,
+        measure_margins: Optional[Sequence[float]] = None,
         save_dir: Optional[str] = None,
         cache_only: bool = False,
         **geometry_kwargs,
@@ -2244,6 +2246,47 @@ class FDTDSolver:
                 mirror of both. Only the alpha_idx/kpoint meaning (+1=
                 forward/index 0, -1=backward/index 1) is shared between the
                 two roles.
+            measure_margin: explicit along-axis offset (µm) for
+                measure_port's own monitor position, overriding
+                self.monitor_margin for that one side only. None (default):
+                identical to today's behavior — measure_port (when given)
+                falls back to self.monitor_margin, the SAME attribute the
+                excited side's own normalization monitor uses (ex_along_norm
+                above), so without this override the two sides cannot be
+                offset independently of one another. Pass an explicit value
+                to decouple them — e.g. a fixed simulation domain whose
+                measured-side monitor sweeps to an arbitrary interior
+                position while the excited side's own monitor_margin stays
+                untouched (mmi_2x2_body_stub_sweep_alt.py's own original
+                use case: domain size held fixed by pinning x1, the
+                measured monitor's distance from x1 swept via
+                measure_margin instead). Ignored (and must be None) when
+                measure_port is None — raises ValueError otherwise, since
+                nothing would read it. Mutually exclusive with
+                measure_margins (below) — only one of the two may be given.
+            measure_margins: like measure_margin, but a whole list of
+                along-axis offsets (µm) for measure_port, each one getting
+                its OWN mode monitor within the SAME simulation — one FDTD
+                run captures the mode content at every listed position
+                instead of one run per position. Since sim.run()'s cost is
+                dominated by stop_when_dft_decayed()'s decay wait (a
+                property of the whole field, independent of how many DFT
+                monitors are recording it), N monitors cost roughly the
+                same wall-clock time as 1 — the motivating case is a dense
+                position sweep (e.g. every 5 nm over some span) that would
+                otherwise need N separate multi-hour runs
+                (mmi_2x2_body_stub_sweep_alt.py's rewrite from a
+                one-run-per-body_stub sweep to this). Returned array gains
+                an axis for it: [len(wavelengths), len(measure_margins),
+                n_modes_out, n_modes_in] instead of the usual
+                [len(wavelengths), n_modes_out, n_modes_in]. None (default):
+                today's single-monitor behavior/shape, completely
+                unaffected. Requires measure_port (same rule as
+                measure_margin); mutually exclusive with measure_margin.
+                The cache "superset" mode-count-slicing reuse
+                (lookup_superset(), family_config below) is skipped
+                whenever this is given — that mechanism assumes the usual
+                3-D return shape.
             save_dir: persistent on-disk cache directory (see beef/cache/).
                 None/"" (default) disables the cache entirely — every call
                 re-runs the simulation, same as before this parameter
@@ -2263,7 +2306,9 @@ class FDTDSolver:
                 center_at (e.g. port_idx for a branching output geometry).
 
         Returns:
-            Complex ndarray [len(wavelengths), n_modes_out, n_modes_in].
+            Complex ndarray [len(wavelengths), n_modes_out, n_modes_in], or
+            [len(wavelengths), len(measure_margins), n_modes_out, n_modes_in]
+            when measure_margins is given.
         """
         if (y0 is None) != (y1 is None):
             raise ValueError("solve_section: y0 and y1 must both be given or both omitted.")
@@ -2273,6 +2318,29 @@ class FDTDSolver:
                     f"solve_section: {_label}.axis='y' requires y0 and y1 to be given "
                     "(there is no y-extent to place a y-normal plane in otherwise)."
                 )
+        if measure_margin is not None and measure_port is None:
+            raise ValueError(
+                "solve_section: measure_margin is only meaningful together with "
+                "measure_port (it overrides that port's own along-axis offset) — "
+                "got measure_margin but measure_port=None."
+            )
+        if measure_margins is not None:
+            if measure_port is None:
+                raise ValueError(
+                    "solve_section: measure_margins is only meaningful together with "
+                    "measure_port (each entry overrides that port's own along-axis "
+                    "offset for one of its many monitors) — got measure_margins but "
+                    "measure_port=None."
+                )
+            if measure_margin is not None:
+                raise ValueError(
+                    "solve_section: measure_margin and measure_margins are mutually "
+                    "exclusive — pass one along-axis offset (measure_margin) for a "
+                    "single monitor, or a list (measure_margins) for many monitors "
+                    "in one simulation, not both."
+                )
+            if len(measure_margins) == 0:
+                raise ValueError("solve_section: measure_margins must not be empty.")
 
         import meep as mp
 
@@ -2338,14 +2406,14 @@ class FDTDSolver:
             return asdict(p) if p is not None else None
 
         family_config = None
-        if save_dir and monitor_size is not None:
+        if save_dir and monitor_size is not None and measure_margins is None:
             family_config = build_run_config(
                 self, "solve_section",
                 dict(x0=x0, x1=x1, wavelengths=wavelengths,
                      stub_left=stub_left, stub_right=stub_right,
                      monitor_center=monitor_center, monitor_size=monitor_size,
                      y0=y0, y1=y1, excite_port=_port_key(excite_port),
-                     measure_port=_port_key(measure_port),
+                     measure_port=_port_key(measure_port), measure_margin=measure_margin,
                      geometry_kwargs=geometry_kwargs, reverse=reverse,
                      **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor),
                      **resolved_material_config(
@@ -2362,7 +2430,8 @@ class FDTDSolver:
                      stub_left=stub_left, stub_right=stub_right,
                      monitor_center=monitor_center, monitor_size=monitor_size,
                      y0=y0, y1=y1, excite_port=_port_key(excite_port),
-                     measure_port=_port_key(measure_port),
+                     measure_port=_port_key(measure_port), measure_margin=measure_margin,
+                     measure_margins=(list(measure_margins) if measure_margins is not None else None),
                      geometry_kwargs=geometry_kwargs,
                      resolved_layout=(asdict(layout) if layout is not None else None),
                      **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor),
@@ -2449,7 +2518,10 @@ class FDTDSolver:
             for p in prisms
         ]
 
-        T = np.zeros((len(wavelengths), n_modes_out, n_modes_in), dtype=complex)
+        if measure_margins is not None:
+            T = np.zeros((len(wavelengths), len(measure_margins), n_modes_out, n_modes_in), dtype=complex)
+        else:
+            T = np.zeros((len(wavelengths), n_modes_out, n_modes_in), dtype=complex)
 
         # source_margin/monitor_margin are documented (see class docstring) as
         # offsets from the PML *inner* edge — i.e. from lo/hi (device frame),
@@ -2516,7 +2588,22 @@ class FDTDSolver:
             # the measure side's position via an explicit PortSpec, only
             # excite_port's LOW/HIGH convention is directly verified
             # (ring_resonator_hybrid_cascaded.py's run_left_fdtd()).
-            mea_along = (hi_ax if p.sign == 1 else lo_ax) - p.sign * self.monitor_margin - along_shift
+            # measure_margin (None by default) lets this side's offset be
+            # set independently of self.monitor_margin, which the excite
+            # side's own ex_along_norm above always uses regardless —
+            # without this override the two sides would be forced to share
+            # one offset (see solve_section()'s own docstring).
+            # measure_margins (a list) instead builds one along-axis
+            # position PER entry — mea_along becomes a list too, one flux
+            # monitor per position added into the SAME simulation below.
+            if measure_margins is not None:
+                mea_along = [
+                    (hi_ax if p.sign == 1 else lo_ax) - p.sign * mm - along_shift
+                    for mm in measure_margins
+                ]
+            else:
+                _mea_margin = self.monitor_margin if measure_margin is None else measure_margin
+                mea_along = (hi_ax if p.sign == 1 else lo_ax) - p.sign * _mea_margin - along_shift
             mea_transverse = p.center - transverse_shift
             mea_alpha_idx = p.alpha_idx
         else:
@@ -2583,11 +2670,26 @@ class FDTDSolver:
                 mp.FluxRegion(center=mp.Vector3(*_port_point(ex_axis, ex_along_norm, ex_transverse)),
                               size=mp.Vector3(*_port_size(ex_axis, ex_width, self._mon_sz))),
             )
-            mea_flux = sim.add_mode_monitor(
-                mon_freqs,
-                mp.FluxRegion(center=mp.Vector3(*_port_point(mea_axis, mea_along, mea_transverse)),
-                              size=mp.Vector3(*_port_size(mea_axis, mea_width, self._mon_sz))),
-            )
+            if measure_margins is not None:
+                # One flux monitor per swept position, all in this SAME
+                # simulation -- sim.run() below times-steps once regardless
+                # of monitor count (stop_when_dft_decayed() watches the
+                # whole field, not any one monitor), so N positions cost
+                # about the same wall-clock time as 1.
+                mea_fluxes = [
+                    sim.add_mode_monitor(
+                        mon_freqs,
+                        mp.FluxRegion(center=mp.Vector3(*_port_point(mea_axis, along, mea_transverse)),
+                                      size=mp.Vector3(*_port_size(mea_axis, mea_width, self._mon_sz))),
+                    )
+                    for along in mea_along
+                ]
+            else:
+                mea_flux = sim.add_mode_monitor(
+                    mon_freqs,
+                    mp.FluxRegion(center=mp.Vector3(*_port_point(mea_axis, mea_along, mea_transverse)),
+                                  size=mp.Vector3(*_port_size(mea_axis, mea_width, self._mon_sz))),
+                )
 
             sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol, minimum_run_time=self.minimum_run_time))
 
@@ -2644,15 +2746,27 @@ class FDTDSolver:
                           f"flux={_f[_i]:.6g}  sqrt(flux)/|alpha|={np.sqrt(_f[_i])/_a[_i]:.6g}  "
                           f"flux/|alpha|^2={_f[_i]/_a[_i]**2:.6g}", flush=True)
 
-            for m in range(1, n_measure + 1):
-                c = sim.get_eigenmode_coefficients(mea_flux, [m], eig_parity=mp.NO_PARITY)
-                # [wl_order] lifts the ratio out of meep's ascending-frequency
-                # monitor order back onto `wavelengths` as the caller gave it.
-                coeff = (c.alpha[0, :, mea_alpha_idx] / src_alpha)[wl_order]
-                if reverse:
-                    T[:, k - 1, m - 1] = coeff  # excited=out(k), measured=in(m)
-                else:
-                    T[:, m - 1, k - 1] = coeff  # excited=in(k), measured=out(m)
+            if measure_margins is not None:
+                for pos_idx, mea_flux_i in enumerate(mea_fluxes):
+                    for m in range(1, n_measure + 1):
+                        c = sim.get_eigenmode_coefficients(mea_flux_i, [m], eig_parity=mp.NO_PARITY)
+                        # [wl_order] lifts the ratio out of meep's ascending-frequency
+                        # monitor order back onto `wavelengths` as the caller gave it.
+                        coeff = (c.alpha[0, :, mea_alpha_idx] / src_alpha)[wl_order]
+                        if reverse:
+                            T[:, pos_idx, k - 1, m - 1] = coeff  # excited=out(k), measured=in(m)
+                        else:
+                            T[:, pos_idx, m - 1, k - 1] = coeff  # excited=in(k), measured=out(m)
+            else:
+                for m in range(1, n_measure + 1):
+                    c = sim.get_eigenmode_coefficients(mea_flux, [m], eig_parity=mp.NO_PARITY)
+                    # [wl_order] lifts the ratio out of meep's ascending-frequency
+                    # monitor order back onto `wavelengths` as the caller gave it.
+                    coeff = (c.alpha[0, :, mea_alpha_idx] / src_alpha)[wl_order]
+                    if reverse:
+                        T[:, k - 1, m - 1] = coeff  # excited=out(k), measured=in(m)
+                    else:
+                        T[:, m - 1, k - 1] = coeff  # excited=in(k), measured=out(m)
 
             sim.reset_meep()
 
@@ -2665,7 +2779,14 @@ class FDTDSolver:
         # arithmetic on it.
         from ..mode_identity import warn_on_transfer_duplicate
 
-        warn_on_transfer_duplicate(T, logger, x0, x1)
+        if measure_margins is not None:
+            for pos_idx, mm in enumerate(measure_margins):
+                # hi - mm: this position's actual absolute measurement
+                # plane (matches how mea_along itself was derived above),
+                # not x1 -- the two only coincide when stub_right == 0.
+                warn_on_transfer_duplicate(T[:, pos_idx], logger, x0, hi - mm)
+        else:
+            warn_on_transfer_duplicate(T, logger, x0, x1)
 
         if save_dir:
             folder = save_run(save_dir, config, T)

@@ -97,13 +97,19 @@ Opened **2026-08-04**, at the user's request: an FDTD-only example (no EME, no
 > codebase encodes what band a given device was designed for to check a
 > requested wavelength range against.
 >
-> **Placement.** Top level, not `resolved/` or `deferred/`, for the same
-> reason `mmi_1x4_sin300_validation.md` sits there: the four checks in
-> [README.md](README.md#the-four-checks) don't apply (FDTD-only, no
-> EME/hybrid), so this doc's own step 10 stands in for a gap list. Held back
-> from `resolved/` by the now-larger, unresolved paper gap (step 9/10) and
-> the three unguarded-mistake items in the box
-> above.
+> **Placement.** Moved into `deferred/` 2026-08-13, at the user's explicit
+> instruction, after confirming nothing had changed since the 2026-08-05
+> update above. **This is a placement decision, not a claim that step 10 is
+> closed** — the paper-comparison gap (97.14% vs. 98.9%, step 9) and the
+> open resolution-convergence question (does R keep moving past res=60,
+> step 8/10 item 1) are both exactly as open as they were on 2026-08-05.
+> `deferred/` fits better than the top level or `resolved/` because what's
+> actually blocking further progress is a real resource decision (a
+> res=70/80 full-band production sweep, estimated multi-hour on the
+> single-wavelength res=80 cost of 262 min alone) that has not been made,
+> not an unresolved technical question this pipeline could close on its
+> own — i.e. work intentionally postponed, matching README.md's own
+> definition of `deferred/`.
 
 ## Reference — what this device is
 

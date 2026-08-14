@@ -20,6 +20,22 @@ solved four times (output_idx=0..3), sharing the input+body simulations via
 one `cache` dict across all four hybrid.solve() calls (mmi_1x2_hybrid.py's
 own pattern for its two output ports, extended to four here).
 
+This device DOES have TOP-BOTTOM mirror symmetry across its four output
+branches, unreused so far: output_ys = [-3.6, -1.2, +1.2, +3.6] um, so
+output_idx=0 is the y-mirror of output_idx=3 and output_idx=1 of
+output_idx=2 (`_port_ys()` centers symmetrically about y=0, same axis the
+single input port sits on). Not yet applied here -- this is the
+SYMMETRIC_MODE_REUSE trick mmi_2x2_hybrid.py/directional_coupler_hybrid.py
+use on their two INPUT arms, applicable on this device's OUTPUT side
+instead, and would cut this script from 5 large FDTD section solves (1
+input + 4 output) to 3 (1 input + 2 output, deriving the other two via a
+measured MODE_SIGNS-style sign vector) -- see validation doc step 6d/9 for
+the sizing and what's needed to land it (a real 4-branch reference run to
+measure the sign vector, then hand-rolling the per-output cascade the way
+mmi_2x2_hybrid.py's cross path already does, since HybridSolver.
+solve_length_sweep()'s one-call contract can't derive one output's matrix
+from another's).
+
 Aperture: use_neighbor_aperture=True on the MMI geometry (not
 half_domain_aperture on the FDTD solver) -- mmi_1x2_hybrid.py's/
 mmi_2x2_hybrid.py's half_domain_aperture only works because a shared y=0
@@ -43,12 +59,32 @@ basis in this hybrid chain"). Step 4 found compute_modes_meep silently wrong
 for this platform's weakly-confined modes, and the body's near-cutoff bands
 (job 11660226: margins down to 0.004) are exactly the regime that broke it
 -- using it here would risk a wrong body mode basis, not just the ~2.3%/mode
-phase mismatch calibrate_body_neff exists to fix. Any resulting basis
-mismatch between the body's tidy3d modes and the FDTD sections' own meep
-eigenbasis should be checked against calibrate_body_neff=True (available,
-unused by default here -- same reasoning mmi_1x2_hybrid.py's own
-CALIBRATE_BODY flag documents) if step 8's engine-agreement check finds it
-matters.
+phase mismatch calibrate_body_neff exists to fix.
+
+CALIBRATE_BODY = True as of 2026-08-13 (was "available, unused by default"
+through the 11734486 run recorded in the validation doc). Turned on because
+that run surfaced a real, unexplained disagreement with mmi_1x4_eme.py: EME
+favors the inner ports (1,2), hybrid favors the outer ports (0,3) -- opposite
+signs, not just a magnitude gap (validation doc step 6d). tidy3d vs meep is a
+STRICTLY BIGGER basis mismatch than mmi_2x2_hybrid.py's/
+directional_coupler_hybrid.py's own meep-vs-MPB case that calibrate_body_neff
+was built for (dc_validation.md item 6), so it is a real candidate explanation,
+not just cargo-culted from the other examples. Wired through
+HybridSolver(calibrate_body_neff=CALIBRATE_BODY) below rather than a hand-rolled
+section_mode_beta() call like mmi_2x2_hybrid.py/directional_coupler_hybrid.py
+use, because this script drives its cascade through hybrid.solve_length_sweep()
+directly instead of hand-rolling the einsum contraction -- HybridSolver's own
+constructor flag does the equivalent calibration internally (beef/solvers/
+hybrid.py's _calibrated_neff(), sourced from the input section's
+section_mode_beta()). Costs len(calibrate_lengths) (default 2) extra FDTD
+section solves on the body span, cached under save_dir and shared across all
+four output_idx calls -- given this device's own measured ~12-24 hr/section
+FDTD cost (decay_tol=1e-11 on weakly-confined nitride, step 6d), budget for
+that class of job, not a "cheap" calibration the way the coupler's is.
+**Not yet run for real** -- enabling this invalidates the existing hybrid cache
+entries for this device (calibrate_body_neff is part of HybridSolver's own
+section cache key), so 11734486's numbers above predate this flag and must be
+re-measured, not assumed to still hold.
 
 MM_LENGTH = 206.0 um -- MEASURED 2026-08-04, see mmi_1x4_eme.py's module
 docstring and the constant's own comment below for the full provenance.
@@ -77,6 +113,11 @@ RESOLUTION = 40.0
 WL_MIN = 1.50
 WL_MAX = 1.60
 N_WL = 11
+
+CALIBRATE_BODY = True   # propagate the EME body on the input FDTD section's own
+                        # measured beta rather than tidy3d's mode index -- see
+                        # module docstring for why this device needs it more than
+                        # mmi_2x2_hybrid.py/directional_coupler_hybrid.py do
 
 # ---------------------------------------------------------------------------
 # 0. Simulation method per section
@@ -211,6 +252,7 @@ hybrid = HybridSolver(
     solvers=[input_solver, body_solver, output_solver],
     boundaries=boundaries,
     interface_modes=interface_modes,
+    calibrate_body_neff=CALIBRATE_BODY,
 )
 
 # ---------------------------------------------------------------------------

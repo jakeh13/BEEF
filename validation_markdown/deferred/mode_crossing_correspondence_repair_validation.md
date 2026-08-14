@@ -377,20 +377,85 @@ regime conclusion, not after.**
   clean at exactly the wavelength/domain pair tested and silently breaks
   nearby, which is worse than the status quo, not better.
 
-  **Paused here (2026-08-10) at the user's direction.** Next steps
-  identified but not started: (a) measure the duplicate-threshold's own
-  self-overlap values directly across domain size, to see exactly which
-  pair of modes is fighting the 0.90 threshold and whether that overlap
-  value itself trends with domain size or is genuinely noisy; (b)
-  consider whether `_iter_distinct_bands()`'s ladder-search approach
-  needs a fundamentally different strategy for this cross-section (e.g.
-  a simultaneous/degenerate-subspace solve on the meep side, analogous to
+  **✅ MEASURED 2026-08-13 (job 11813373,
+  `diag_dup_threshold_self_overlap.py`, new) — item (a) done: instrumented
+  `_iter_distinct_bands()`'s exact loop (same k-seed laddering, same
+  shipped 16x8 grid, same n_clad stop rule — re-implemented, not
+  monkeypatched, since the guard itself only logs a skip's value and
+  discards every near-miss) to record the FULL worst-overlap value at
+  EVERY band_num attempt, accepted or not, across the same 7-point
+  sim_width sweep (5.0-11.0 µm) as the walked-back finding above. Two
+  distinct phenomena came out, previously conflated into one:**
+
+  **(1) A universal, domain-size-INDEPENDENT exact duplicate at the top of
+  the basis.** At every single one of the 7 domain sizes tested, band_num
+  14 is skipped as a duplicate of band_num 13 with overlap = 1.000000 and
+  byte-identical raw n_eff (e.g. 5.0 µm: both 1.657513; 6.0 µm: both
+  1.657433; 7.0 µm: both 1.657410 — not close, identical). This is not a
+  knife-edge call fluctuating near 0.90 — meep's ladder search converges
+  onto the literal same eigenvector for two adjacent band_num values,
+  every time, regardless of domain size. This is the textbook "byte-
+  identical k_x" signature `fdtd_vs_EME_mode_validation.md` item 12
+  already put on record for this interface, now caught directly at the
+  actual production wavelength/N_MODES rather than inferred from prior
+  evidence. The guard already handles it correctly (skip, grab band 15
+  instead) at every domain size — this specific pair was never the
+  domain-size-sensitive part of the story.
+
+  **(2) A separate, genuinely domain-size-DEPENDENT close-packed cluster
+  in the middle of the spectrum (n_eff ≈ 2.0-2.6, roughly band_nums
+  5-9)**, whose closest pair — and whether that pair's overlap actually
+  crosses 0.90 — changes with domain size: clean at 5.0 (worst ≤ 0.37 in
+  this range); a new near-duplicate appears at 6.0 (band 9 vs band 7,
+  overlap 0.969, SKIPPED); a *different* pair crosses at 7.0/8.0 (band 7
+  vs band 5, 0.951/0.983, SKIPPED); at 9.0 every pair in this range stays
+  elevated (0.60-0.80) but — for the only domain size in the whole
+  sweep — none actually crosses 0.90; at 10.0 a new pair crosses (band 5
+  vs band 3, overlap 0.973, SKIPPED); at 11.0 the cluster fully
+  collapses, four separate pairs cross 0.90 (bands 5, 6, 7, 9 all
+  skipped, plus 13/14 — 6 skips total, matching the earlier neff-only
+  sweep's "6 duplicate-band hits" and "only 10 of 14 modes found"
+  exactly).
+
+  **This directly explains the walked-back sweep's own mystery.** The
+  "~2.518 mode disappears entirely at 10.0" finding above is not a mode
+  ceasing to be guided — it is band_num 5 (n_eff 2.518087) getting
+  correctly skipped as a 0.973-overlap duplicate of band_num 3 at that
+  specific domain size, silently shifting every later logical index down
+  by one. **9.0 was never a real plateau** — it is the one domain size
+  where this cluster's still-close overlaps (0.6-0.8) happen to fall just
+  under 0.90, not a point of genuine convergence; the underlying
+  closeness among these modes never went away, only whether it crossed
+  the guard's threshold did.
+
+  **Reading on the regime question**: this is stronger, not just
+  reframed, evidence for regime C. A single fixed near-degenerate pair
+  drifting through a crossing would show one overlap value trending
+  smoothly with domain size. What's measured instead is (1) one totally
+  domain-size-invariant exact duplicate (a pure ladder-resolution
+  failure, unrelated to convergence) plus (2) several *different* mode
+  pairs within a close-packed cluster taking turns being "the" closest
+  pair as domain size shifts their relative spacing — consistent with a
+  genuinely close-packed spectrum where meep's ladder-plus-duplicate-
+  threshold approach is fighting multiple near-ties at once, not with one
+  isolated crossing that a permutation or a domain-size choice could
+  cleanly resolve.
+
+  **Paused here (2026-08-10, item (a) closed 2026-08-13) at the user's
+  direction.** Next steps identified but not started: (b) consider
+  whether `_iter_distinct_bands()`'s ladder-search approach needs a
+  fundamentally different strategy for this cross-section (e.g. a
+  simultaneous/degenerate-subspace solve on the meep side, analogous to
   what item 12 built for the counting problem, adapted to actually
-  separate a close pair rather than just detect one); (c) do not attempt
-  another blind parameter sweep (domain size, N_MODES, or resolution)
-  without first understanding the mechanism — three such sweeps this
-  session (N_MODES twice, domain size twice) each produced a clean-looking
-  but ultimately non-representative result.
+  separate a close pair rather than just detect one) — finding (2) above
+  makes the case for this more concrete: a single ladder search cannot be
+  patched per-pair when several different pairs take turns being close;
+  (c) do not attempt another blind parameter sweep (domain size, N_MODES,
+  or resolution) without first understanding the mechanism — three such
+  sweeps before this one (N_MODES twice, domain size twice) each produced
+  a clean-looking but ultimately non-representative result; this
+  instrumentation pass was not one, since it measured the guard's own
+  mechanism directly rather than an outcome one layer removed from it.
 
 ### Stage 1 — margin-gated auto-permutation in `HybridSolver` (build only if Stage 0 finds a real regime-A case)
 
@@ -434,6 +499,85 @@ without its own separate design discussion:
 - Not attempted this session. Flagging it here so it is not lost, and so a
   future push at N_MODES or at the permutation mechanism does not get
   mistaken for having addressed this.
+
+**✅ FEASIBILITY CONFIRMED 2026-08-13 (job 11816173,
+`examples/verification/python/diag_mpb_simultaneous_solve.py`, new) — the
+first bullet above is real, not just plausible.**
+
+First, checked meep's own C++ source (`src/mpb.cpp`, `NanoComp/meep`)
+before writing any code: `get_eigenmode(band_num=N)` already runs a
+simultaneous N-band block diagonalization internally
+(`create_evectmatrix(..., band_num, ...)` feeding one `eigensolver()`
+call) — Python's wrapper just discards the N-1 lower eigenvectors that
+same call already computed and returns only the top one. So
+"`_iter_distinct_bands()`'s ladder isn't simultaneous" is not quite the
+right description of the bug — each individual call already is. What's
+different band_num=13 to band_num=14 is that they are TWO INDEPENDENT
+diagonalizations (different block sizes, no shared state), with no
+guarantee they split a near-degenerate subspace the same way twice.
+
+Tested that inter-call-inconsistency hypothesis directly: used
+`meep.mpb.ModeSolver` (a separate, lower-level Python binding onto the
+same MPB engine — confirmed importable in `jmh`, confirmed to accept
+`mp.Prism` geometry directly since `Prism`'s MRO includes
+`meep.geom.GeometricObject`, the class `ModeSolver.geometry` expects) to
+run ONE `num_bands=16` diagonalization at a single fixed k (seeded at
+meep's own converged k for the known band13≡band14 duplicate,
+n_eff=1.657513 at sim_width=5.0, job 11813373), on the SAME interface-0
+cross-section geometry (`mux.section_prisms()`, the identical call
+`_build_section_mode_sim()` makes), at the same resolution.
+
+**Result: worst off-diagonal overlap among all 16 simultaneously-solved
+bands = 0.340935** (between the pair at n_eff 1.757914/1.595459 — not
+even the pair nearest 1.6575). The two bands landing nearest the known
+duplicate's n_eff (1.674508 and 1.673372, MPB's own bands 13/14 in this
+fixed-k ordering) show **essentially zero** cross-overlap (0.000 in the
+printed matrix) — in stark contrast to meep's own ladder, which gave
+**exactly** 1.000000 for its band13/band14 at this identical domain size,
+wavelength, and cross-section. A genuine simultaneous diagonalization
+keeps every band mutually distinct exactly where meep's independent
+per-band-count ladder collapsed two of them onto the same vector.
+
+**This confirms the fix is real, not just architecturally plausible**:
+extracting all N bands from one MPB call instead of stitching together N
+independent single-band-terminal calls should eliminate this specific
+duplicate-solve failure mode. Two caveats this feasibility check
+deliberately left open (noted in the script's own docstring, acceptable
+for a go/no-go answer, NOT acceptable to skip before any production
+integration):
+  - MPB has no PML — the y/z supercell here is genuinely periodic, not
+    absorbing, a different truncation error than meep's own FDTD-side PML
+    mode-solve uses. Tested at sim_width=5.0 (the confirmed-duplicate
+    baseline) specifically so this result is not conflated with the
+    domain-size question Stage 0 already investigated separately.
+  - Fixed-k rather than fixed-frequency: the resulting per-band
+    frequencies land near, not exactly at, wl=1.26 µm. Irrelevant to the
+    orthogonality question tested here, but a real gap before this could
+    replace `_iter_distinct_bands()` in production, which needs to hit a
+    specific target wavelength per band, not just demonstrate mutual
+    orthogonality at one k.
+
+**Not yet done, and explicitly NOT started** (this was a feasibility
+measurement only, per the "don't build Stage 1/2 before classifying, and
+don't integrate without a separate design discussion" guidance both at
+the top of this stage and in the non-goals section below):
+  - Reconciling MPB's own field-query API (`get_efield()`, full native
+    grid) with the rest of `beef`'s downstream code, which expects meep's
+    `EigenmodeData.amplitude(point, component)` point-query interface —
+    a real adapter layer, not a drop-in swap.
+  - A target-frequency correction step per band (Newton step using each
+    band's own group velocity, which MPB also reports) to turn this
+    fixed-k feasibility result into the fixed-wavelength answer
+    `section_mode_neff()`/`section_mode_fields()` actually need to return.
+  - Repeating this check at the domain-size-dependent cluster (bands 5-9,
+    n_eff≈2.0-2.6) found in job 11813373 — today's test only targeted the
+    domain-size-INDEPENDENT band13/14 duplicate; the separate,
+    genuinely-close cluster is a different (if related) question this
+    feasibility check does not yet answer.
+  - Deciding whether MPB's periodic-boundary truncation behaves
+    acceptably for this device's real production domain size, or whether
+    it needs its own convergence check the way Stage 0 did for meep's
+    PML-based domain.
 
 ### Stage 3 — exercise `check_mode_correspondence` across the actual swept band, not just its midpoint (cheap, valuable regardless of regime)
 
