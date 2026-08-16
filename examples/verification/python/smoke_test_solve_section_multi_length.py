@@ -1,4 +1,4 @@
-"""Step 3 smoke test for validation_markdown/section_mode_beta_multi_monitor_validation.md.
+"""Step 3 smoke test for validation_markdown/resolved/section_mode_beta_multi_monitor_validation.md.
 
 Cheap structural smoke test for FDTDSolver.solve_section_multi_length() --
 NOT a correctness check (that's step 4's real numerical-equivalence test,

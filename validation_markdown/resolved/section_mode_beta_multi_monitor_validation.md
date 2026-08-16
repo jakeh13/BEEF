@@ -1,6 +1,6 @@
 # Merging `section_mode_beta()`'s per-length FDTD sims into one multi-monitor simulation — plan
 
-**BUILD PLAN — the mechanism this document specs does not exist yet.**
+**COMPLETE — the mechanism this document specs is built, validated, and wired in (steps 1-8, 2026-08-12 → 2026-08-16).** It is not yet the path production actually takes: every real caller passes `save_dir`, and the merged path has no cache-key design, so all of them still fall back to the per-length path. See the Status section and the open questions at the end.
 Prompted by a direct question during manuscript-figure work on the 2×2 MMI's
 `calibrate_body_neff` geometry (`calibrate_body_neff_mmi_2x2_geometry.ipynb`),
 2026-08-12: `FDTDSolver.section_mode_beta()` fits body β from `len(lengths)`
@@ -14,13 +14,14 @@ longer domain with multiple monitors instead — this document specs how, and
 makes the previously-prohibitive convergence check (2) nearly free as a side
 effect of doing (3).
 
-## Status — step 4 passed 2026-08-13, resume at step 5 on the cluster
+## Status — COMPLETE: steps 1-8 all done and measured
 
 Steps 1-3 done locally (M3 MacBook, no cluster needed for these — pure
 design/implementation/smoke-test, not real production-scale compute).
-Step 4 done for real on the cluster, 2026-08-13. Steps 5-8 need real FDTD
-time at a scale beyond a login-node smoke run — not blocked on anything
-unresolved, just not yet run.
+Steps 4-6 done for real on the cluster, 2026-08-13/14. Step 7 (wiring) done
+locally, 2026-08-14 — a code change plus tests, no cluster needed. Step 8
+(jobs 11872191/11872184/11872185) landed 2026-08-15/16, all COMPLETED,
+exit 0 — full production scale, ~42 cluster-hours across the three.
 
 **Done:**
 - Step 1: real per-sim cost measured (3609.53 s, one band). Old-path
@@ -35,11 +36,33 @@ unresolved, just not yet run.
   auto-picked lengths `[1.1023, 2.2046, 3.3069]` µm — NOT full
   `N_MODES=14`/11-wavelength production scale). Full numbers, guard checks,
   and script/batch record below at step 4 itself.
-  - Script: `examples/verification/python/
-    equivalence_test_solve_section_multi_length.py`. Batch:
-    `batch/verification/run_equivalence_section_multi_length.batch`.
-  - Steps 5-8 unstarted, all real-FDTD-time-gated, all described in full
-    below.
+- Step 5: convergence study #1 (monitor count) **done, 2026-08-14**, job
+  11838953 — β converged at N=3, residual grows with N but the writeup's
+  original "confounded with domain length" explanation was wrong (caught
+  and corrected in place) and got resolved for real by step 6.
+- Step 6: convergence study #2 (domain length) **done, 2026-08-14**, job
+  11844627 — found a real, non-monotonic domain-length sensitivity on the
+  same 3 fit lengths (β range `5.78e-04` rad/µm across 3×-8×spacing
+  domains, ~15x step 4's equivalence noise floor), still 3+ orders of
+  magnitude under both guard thresholds. Full numbers at step 6 itself.
+  - Scripts: `examples/verification/python/
+    equivalence_test_solve_section_multi_length.py` (step 4),
+    `convergence_study_monitor_count.py` (step 5),
+    `convergence_study_domain_length.py` (step 6). Batches:
+    `batch/verification/run_equivalence_section_multi_length.batch`,
+    `run_convergence_monitor_count.batch`, `run_convergence_domain_length.batch`.
+- Step 7: wired in with a fallback, **done, 2026-08-14** — new
+  `use_merged_domain=True` default on `section_mode_beta()`
+  (`beef/solvers/fdtd.py`), automatic fallback to the per-length path when
+  caching is requested (today, every real production caller), a regression
+  found and fixed in `tests/test_beta_calibration.py`, and Guard 2 now
+  covers the merged path for free. Full record at step 7 itself.
+- Step 8: shipped examples re-run at full production scale, **done,
+  2026-08-15/16** — jobs 11872185 (DC SOI160, 1h51m), 11872184 (DC hybrid,
+  3h31m), 11872191 (MMI 2×2, 31h23m), all exit 0. Both DC scripts came back
+  bit-for-bit identical to their prior runs; the MMI 2×2 had no valid
+  pre-step-7 baseline and was confirmed inert by a build-count measurement
+  instead (44 builds = the per-length path exactly). Full record at step 8.
 - Both new scripts are permanent, git-tracked, NOT in any session
   scratchpad: `examples/verification/python/
   time_section_mode_beta_single_sim.py` (step 1) and `examples/
@@ -421,31 +444,256 @@ assumed, to be measured for real in step 1 below.
    own independently-sized domain today? Sweep the total domain length
    (independent of monitor count) and check β-fit stability against it.
 
-   **Submitted, not yet landed, 2026-08-14.** Job 11844627 (`gts-sr108-ece`).
+   **PASSED (real domain-length sensitivity found, still guard-safe),
+   2026-08-14.** Job 11844627 (`gts-sr108-ece`, 09:15:11 wall, exit 0).
    Holds the 3 real production/step-4/step-5 lengths fixed and varies ONLY
    the shared domain size via one extra, ignored padding length (forces
    `L_domain` bigger, never enters the β fit) — cleanly separating "domain
    length" from "monitor count," which step 5's own run (corrected above)
-   did not actually vary. Reuses two domain sizes already measured for
-   free: `3×spacing` (job 11813378) and `6×spacing` (job 11838953's N=3
-   row), and adds two new ones (`4×spacing`, `8×spacing`) via genuine new
-   `solve_section_multi_length()` calls. Script: `examples/verification/
-   python/convergence_study_domain_length.py`. Batch: `batch/verification/
-   run_convergence_domain_length.batch` (`-t 720`, ~6.3 h estimated from
-   the existing two points' own timing). Results to be filled in here once
-   the job completes.
+   did not actually vary. New domains: pad=4×spacing (6579.0 s, 1.83 h) and
+   pad=8×spacing (26704.7 s, 7.42 h — nearly 2x the ~3.9 h projected from a
+   length-only cost model; a bigger domain costs more per FDTD *step* too,
+   not just more steps, exactly as observed live before this job finished).
+   Combined with the two free points (`3×spacing`, job 11813378;
+   `6×spacing`, job 11838953's N=3 row):
+
+   | domain (µm) | β mode 0 | β mode 1 | worst resid (rad) | worst margin | source |
+   |---|---|---|---|---|---|
+   | 3.3069 (3×) | 11.571281 | 11.407538 | 8.000e-05 | 0.0600 | free (job 11813378) |
+   | 4.4092 (4×) | 11.571353 | 11.407607 | 2.321e-07 | 0.0604 | new |
+   | 6.6138 (6×) | 11.571207 | 11.407468 | 1.069e-04 | 0.0603 | free (job 11838953) |
+   | 8.8185 (8×) | 11.570775 | 11.407054 | 2.103e-04 | 0.0602 | new |
+
+   **Real, measurable, non-monotonic domain-length sensitivity** on the
+   *same* 3 fit lengths — not the noise-floor-sized wiggle steps 4-5 saw.
+   β range across the sweep: `5.78e-04` rad/µm (mode 0), `5.53e-04` rad/µm
+   (mode 1) — about **15x step 4's old-vs-merged equivalence agreement**
+   (`3.50e-05` rad/µm) and clearly outside steps 4-5's noise floor, though
+   still tiny in relative terms (`5.06e-4/11.57 ≈ 0.0044%` peak-to-peak).
+   Not a clean "farther domain = worse" trend: residual is *smallest* at
+   4×spacing (`2.321e-07` rad, an almost exact fit) — smaller than the
+   no-padding baseline itself (`8.00e-05` at 3×) — then grows through 6×
+   and 8×. β itself peaks at 4×spacing too, not at either extreme. **This
+   answers step 2's original source-proximity/near-field worry for real:
+   yes, embedding the same near monitors in a bigger shared domain does
+   measurably shift their fitted β/residual, and the shift does not
+   monotonically track domain size** — plausibly a domain-size-dependent
+   interference pattern between the source's near-field and the PML's own
+   (non-zero, if small) residual reflection, though this run cannot isolate
+   the mechanism, only its size. Margin stayed flat (~0.060) throughout,
+   same as steps 4-5 — unaffected by domain length.
+
+   **Still deeply guard-safe**: worst resid `2.103e-04` rad is 3 orders of
+   magnitude under `_BETA_FIT_RESIDUAL_MAX` (0.1 rad); worst margin `0.0604`
+   is over an order of magnitude under `_BETA_BRANCH_MARGIN_RAISE` (0.9).
+   Nothing here would have tripped either guard at any domain size tested.
+   The practical read: today's production 3-monitor, no-padding domain
+   (3×spacing) sits well within this sensitivity band, not at either
+   extreme of it — no evidence the shipped calibration numbers are an
+   outlier case.
+
+   Script: `examples/verification/python/
+   convergence_study_domain_length.py`. Batch: `batch/verification/
+   run_convergence_domain_length.batch`. Full log: `reports/11844627.out`.
+   **Caveat carried from steps 4-5**: reduced scale only (`n_modes=2`, 1
+   wavelength) — not yet checked at full `N_MODES=14`/11-wavelength
+   production scale, where a real (if small) domain-length effect like this
+   one is worth re-checking rather than assuming it scales away.
 7. **Wire in with a fallback, same pattern as `SYMMETRIC_MODE_REUSE`.**
    Once steps 4-6 pass, make the merged approach `section_mode_beta()`'s
    default, keep the old per-length path reachable behind a flag (mirrors
    `mmi_2x2_hybrid.py`/`directional_coupler_hybrid.py`'s own
    `SYMMETRIC_MODE_REUSE` toggle from the same session) for re-validation if
    a future finding needs the fully-independent-sims version again.
+
+   **Done, 2026-08-14.** New `use_merged_domain: bool = True` parameter on
+   `section_mode_beta()` (`beef/solvers/fdtd.py`). When `True` (default) and
+   no caching is requested, the phase-collection block calls the merged
+   `solve_section_multi_length()` once instead of looping `solve_section()`
+   over `len(lengths)`; everything downstream (both post-fit guards, and
+   Guard 2 above them) reads `phases` unchanged either way, so **the merged
+   path now gets Guard 2's pre-simulation branch-margin check for free**,
+   closing one of step 4's own open questions ("does the merged path need
+   its own guard wrapper?") — yes, and wiring it through this entry point
+   is how, with no new guard code needed.
+
+   **Caching gate, not a blanket default.** Checked every real caller before
+   writing this (`beef/solvers/hybrid.py`, `mmi_2x2_hybrid.py`,
+   `directional_coupler_hybrid.py`, `directional_coupler_soi160_hybrid*.py`,
+   `mmi_4x4_90hybrid_calibrated_baseline.py`) — every one of them passes
+   `save_dir` for caching. The merged path has no cache-key design yet (open
+   question above, still open), so `merged_active = use_merged_domain and
+   save_dir is None and not cache_only` — any caller requesting caching
+   automatically falls back to the per-length path, logged at `info` level,
+   regardless of the flag. Practical consequence: **today, every real
+   production caller keeps using the proven per-length path unaffected**,
+   because they all pass `save_dir`. The flag is real and takes effect the
+   moment a caller either drops `save_dir` or the cache-key design (open
+   question above) lands — it is not dead code, but it is not yet the path
+   production actually takes either. That gap is real and open, not
+   papered over.
+
+   **Regression found and fixed while wiring this in.**
+   `tests/test_beta_calibration.py::TestSectionModeBetaDpmlClearance` (5
+   tests) monkeypatches `solve_section()`/`section_mode_neff()` to test the
+   per-length orchestration meep-free — running the suite confirmed exactly
+   the predicted break: with the new default active, those tests never
+   touch the fake `solve_section()` at all, and the real
+   `solve_section_multi_length()` crashed instead
+   (`AttributeError: 'NoneType' object has no attribute 'center_at'` on the
+   test's `geometry=None`). Fixed by adding `use_merged_domain=False` to all
+   5 call sites — they test the per-length path specifically, so pinning it
+   preserves exactly what they were designed to check. Full suite after the
+   fix: **639 passed, 19 skipped** (pre-existing skips, unrelated).
+
+   **Smoke-tested end to end, real meep, low res=10/decay_tol=1e-3** (same
+   deliberately-cheap scale as step 3's own smoke test — structural
+   confirmation only, not a re-check of equivalence, which steps 4-6 already
+   did at production-representative settings): default call → **3**
+   `mp.Simulation` builds (1 seed + 2 excited-band merged sims); explicit
+   `use_merged_domain=False` → **7** builds (1 seed + 3 lengths × 2 bands);
+   default **with** `save_dir` set → **7** builds, identical count and
+   bit-identical β to the explicit-False case, confirming the caching
+   fallback takes the per-length path, not the merged one. (Merged-vs-old β
+   disagreement at this loose smoke scale was `0.24` rad/µm — expected noise
+   from `decay_tol=1e-3`/`res=10`/sub-µm lengths, not a real equivalence
+   concern; the real number is step 4's `3.50e-05` rad/µm at production-
+   representative settings.)
 8. **Re-run the shipped examples' calibration for real.** `mmi_2x2_hybrid.py`
    and `directional_coupler_hybrid.py`/`directional_coupler_soi160_hybrid*`
    all call `calibrate_body_neff` through `section_mode_beta()` — their
    calibration numbers should be regenerated (cluster, given this is still
    real FDTD compute even after merging) once the merged path is validated,
    to confirm the shipped β values don't move outside noise.
+
+   **ALL 3 PASSED, 2026-08-15/16.** Both DC scripts came back **bit-for-bit
+   identical** to their prior runs; the MMI 2×2 had no valid pre-step-7
+   baseline to diff against (an unrelated `SYMMETRIC_MODE_REUSE` commit
+   landed in between), and was confirmed inert instead by a direct
+   build-count measurement off its own run — details under each below. All
+   three pass `save_dir`, so per step 7's fallback all three take the
+   per-length path: this is a sanity re-run confirming nothing about these
+   shipped numbers moved from step 7's code change, not a test of the
+   merged path itself.
+
+   Full production scale, not steps 4-6's reduced scale: `N_MODES=14`/11
+   wavelengths (MMI 2×2), `N_MODES=5` (DC), `N_MODES=2` (DC SOI160), all at
+   `res=40`. Real cost is far larger than anything else in this document —
+   checked before submitting, not assumed: no direct cache-cold precedent
+   existed for the MMI 2×2 script under real 48-way MPI parallelism
+   (`LMOD_SYSHOST=phoenix` → `srun --mpi=pmi2` confirmed live), so its
+   walltime is anchored on `directional_coupler_hybrid.py`'s own REAL
+   cache-cold measurement under that same parallel regime (job 11609658,
+   10:25:31 at `N_MODES=5`, see `batch/run_directional_coupler_L151.batch`'s
+   own comment history), scaled by `N_MODES` (14/5 ≈ 2.8x) with a large
+   margin on top, not a naive serial extrapolation (an earlier, serial-only
+   projection put this at 42.1h — irrelevant once real MPI parallelism is
+   accounted for).
+
+   - MMI 2×2 hybrid: job 11872191, `gts-sr108-gedc_main` (see account note
+     below), `-N 2 --ntasks-per-node=24`, `-t 2880` (48h). Batch:
+     `batch/verification/run_step8_mmi_2x2_hybrid_recalibration.batch`.
+
+     **PASSED on the question step 8 actually asks, but by a different
+     route than the other two — no bit-for-bit comparison was possible.**
+     1-07:22:45 wall (31h23m), exit 0, inside the 48h cap (and close to the
+     ~29h pre-submit estimate). Results at λ=1.547 µm, `mm_length`=28.0 µm:
+     bar T=0.4562 (−3.41 dB), cross T=0.5187 (−2.85 dB), total T=0.9749.
+
+     **Why there is no before/after table here.** The only prior recorded
+     run of this script is job 11791990_1 (2026-08-10), and it **predates
+     commit `d7910e8` (2026-08-12)**, which introduced this example's own
+     `SYMMETRIC_MODE_REUSE` — deriving `M_in0` from `M_in1` by mirror
+     symmetry instead of simulating the second arm. That is a different
+     change by a different mechanism, and it moves these numbers
+     (11791990_1 reported bar 0.4560 / cross 0.5207 / total 0.9767). No run
+     of `mmi_2x2_hybrid.py` exists between that commit and step 7 (checked
+     `sacct` across the whole window — the several `beef_mmi2x2_*` jobs
+     there are body-stub sweeps and body-mode field scripts, not this
+     example). So the ~0.4% cross-port difference against the August 10 log
+     is attributable to `SYMMETRIC_MODE_REUSE`, **not** to step 7, and this
+     device simply has no clean pre-step-7 baseline to diff against. Stated
+     rather than papered over with a comparison that would not mean what it
+     appears to.
+
+     **What does confirm step 7 was inert here, directly and from this very
+     run**: the job made **44 meep domain builds**. The per-length path
+     predicts exactly 1 (`M_in1`) + 1 (seed) + 3 lengths × 14 excited bands
+     = 44; the merged path would have been 1 + 1 + 14 = 16. The production
+     run therefore took the unchanged per-length path, exactly as step 7's
+     `save_dir` fallback designs it to — a direct structural measurement,
+     stronger than a numeric diff, and consistent with the bit-for-bit
+     matches the two DC scripts (which *do* have valid baselines) already
+     showed.
+   - DC hybrid: job 11872184, `gts-sr108`, `-N 2 --ntasks-per-node=24`,
+     `-t 900` (15h, ~44% margin over the measured 10:25:31 precedent).
+     Batch: `batch/verification/
+     run_step8_directional_coupler_hybrid_recalibration.batch`.
+
+     **PASSED, 2026-08-15 — bit-for-bit identical.** 03:30:40 wall, exit 0
+     (well under the 15h cap; faster than the 10:25:31 cache-cold precedent,
+     consistent with some cache reuse — not chased further, since the
+     comparison below is what actually matters). Compared directly against
+     job 11655592_0's own printed output (`reports/11655592_0.out`, the
+     most recent prior run pinned to the same exact 15.10 µm coupling
+     length, pre-step-7):
+     | quantity | job 11655592_0 (before) | job 11872184 (after) |
+     |---|---|---|
+     | MPB n_eff (even/odd) | 2.323677 / 2.300177 | 2.323677 / 2.300177 |
+     | FDTD n_eff (even/odd) | 2.375225 / 2.354162 | 2.375225 / 2.354162 |
+     | Δn_eff (FDTD) | 0.021063 | 0.021063 |
+     | Through T / IL | 0.5075 / −2.95 dB | 0.5075 / −2.95 dB |
+     | Cross T / IL | 0.4907 / −3.09 dB | 0.4907 / −3.09 dB |
+     | Coupling ratio | 0.492 | 0.492 |
+
+     Second confirmation of the same result as DC SOI160 above — expected,
+     same reason: `save_dir` set, step 7's fallback took the identical
+     per-length path, deterministic FDTD.
+   - DC SOI160 hybrid: job 11872185, `gts-sr108`, `-N 1
+     --ntasks-per-node=24`, `-t 1440` (24h — double the 720/12h that
+     succeeded in `batch/dc_soi160_hybrid.batch`, but that completion
+     (job 11716260) reused 5 cached entries from an earlier attempt;
+     zero cache exists now, so this run is genuinely colder). Batch:
+     `batch/verification/
+     run_step8_directional_coupler_soi160_hybrid_recalibration.batch`.
+
+     **PASSED, 2026-08-15 — bit-for-bit identical, not merely within
+     noise.** 01:51:23 wall, exit 0 (well under the 24h cap). 10
+     `Initializing structure` domain builds in this run's log vs. only 2 in
+     job 11716260's (which reused 5 cached entries from an even earlier
+     attempt) — real, direct evidence this run did more fresh computation,
+     i.e. was colder, though not the fully-uncached case checked for
+     before submitting (`example_sim_cache` inspection was of the wrong
+     cache dir; this script's own cache may partially persist elsewhere —
+     not chased further since it doesn't change the result below). Compared
+     directly against job 11716260's own printed output
+     (`reports/11716260.out`, the prior real run, pre-step-7):
+     | quantity | job 11716260 (before) | job 11872185 (after) |
+     |---|---|---|
+     | MPB n_eff (even/odd) | 2.129795 / 2.101037 | 2.129795 / 2.101037 |
+     | FDTD n_eff (even/odd) | 2.181661 / 2.156256 | 2.181661 / 2.156256 |
+     | Δn_eff (FDTD) | 0.025405 | 0.025405 |
+     | Through T / IL | 0.8989 / −0.46 dB | 0.8989 / −0.46 dB |
+     | Cross T / IL | 0.0979 / −10.09 dB | 0.0979 / −10.09 dB |
+     | Coupling ratio | 0.098 | 0.098 |
+
+     Every printed digit matches — expected and correct, not a coincidence:
+     since this script passes `save_dir`, step 7's fallback routes it
+     through the exact same per-length code path as before the change, and
+     FDTD is deterministic given identical inputs. Confirms step 7's wiring
+     is a genuine no-op for this caller, exactly as designed.
+
+   **Account note**: `gts-sr108-ece` hit `AssocGrpBillingMinutes` on all
+   three submissions (confirmed broadly exhausted — even unrelated other
+   users'/sessions' pending jobs were stuck on it at the same time, not
+   specific to these jobs). DC/DC-SOI160 cleared under `gts-sr108`; the
+   MMI 2×2 job's much larger request (`-N 2 × 24 ranks × 48h`) still hit
+   the same gate there and only cleared under `gts-sr108-gedc_main` — the
+   three accounts' available headroom shifts and needs checking per
+   submission, not assumed from a prior session (see
+   [[slurm-account-gts-sr108-ece]]).
+
+   Results to be filled in here once each job completes.
 
 ## Open questions
 
@@ -458,16 +706,26 @@ assumed, to be measured for real in step 1 below.
   doesn't force a full re-run? Not designed, worth considering once step 2
   lands.
 - Is 3 monitors (today's default) actually going to turn out to be enough?
-  **Answered for β, 2026-08-14 (step 5): yes, at this reduced scale.**
-  β at N=3 matches β at N=6 to `9.4e-05` rad/µm (non-monotonic
-  fluctuation, not a trend converging toward more monitors) — no sign the
-  shipped calibration numbers (DC's `job 11517245`, etc.) are
-  under-sampled on the β axis. **Not answered for the residual**: it grows
-  measurably (~4.2x) from N=3 to N=6, still far under the guard threshold
-  but a real trend, confounded with domain length in step 5's design — see
-  step 5's own entry and step 6, which is needed to separate "more
-  monitors" from "longer domain" before this is fully closed. Reduced
-  scale only (`n_modes=2`, 1 wavelength); full production scale unchecked.
+  **Answered, 2026-08-14 (steps 5-6): yes for β, and the residual growth
+  step 5 saw is now explained.** β at N=3 matches β at N=6 to `9.4e-05`
+  rad/µm (non-monotonic fluctuation, not a trend converging toward more
+  monitors) — no sign the shipped calibration numbers (DC's
+  `job 11517245`, etc.) are under-sampled on the β axis. Step 5's residual
+  growth turned out NOT to be a monitor-count effect (step 5's domain was
+  fixed the whole time, corrected above) — step 6 isolated it as a genuine
+  domain-length effect instead: the same 3 fit lengths' β/residual shift
+  measurably (β range `5.78e-04` rad/µm) as the *shared domain around them*
+  grows, independent of how many monitors are in it. Both effects stay 3+
+  orders of magnitude under the guard thresholds throughout. Reduced scale
+  only (`n_modes=2`, 1 wavelength); full production scale unchecked.
+- Does the merged domain's size need its own minimum-clearance recommendation
+  (beyond the existing `_check_aperture()` PML-crossing guard), given step 6
+  found the domain-length effect is real but non-monotonic rather than
+  simply "bigger is worse"? **Opened, 2026-08-14 (step 6).** Only 4 domain
+  sizes tested (3×-8×spacing); not enough to fit a model or recommend a safe
+  range, only to confirm the effect exists and stays guard-safe at every
+  size tried. Worth a denser sweep if this ever needs a hard bound rather
+  than an existence proof.
 - Does the correlated-noise concern on the linearity/residual guard (flagged
   above) turn out to matter in practice, or is `decay_tol=1e-11` tight
   enough that it's inert? **Answered, 2026-08-13 (step 4): inert.** Old-vs-
@@ -477,7 +735,19 @@ assumed, to be measured for real in step 1 below.
   `N_MODES=14`/11-wavelength production scale, so treat as strong evidence,
   not a production-scale guarantee.
 - Does the merged path need its own guard wrapper mirroring
-  `section_mode_beta()`'s pre-simulation branch-margin guard (Guard 2)? Step
-  4's B3 check confirmed the guard fires correctly on the *old* path's
-  entry point, but `solve_section_multi_length()` itself has no equivalent
-  — not a gap in step 4, just not yet in scope until step 7's wiring.
+  `section_mode_beta()`'s pre-simulation branch-margin guard (Guard 2)?
+  **Resolved, 2026-08-14 (step 7): no separate wrapper needed.**
+  `solve_section_multi_length()` itself still has no guard of its own, but
+  step 7 wired it in *behind* `section_mode_beta()`'s existing Guard 2 (and
+  both post-fit guards), so calling through that entry point — which is how
+  every real caller reaches it — gets identical guard coverage on either
+  path. A caller that bypasses `section_mode_beta()` and calls
+  `solve_section_multi_length()` directly still gets no guard at all, same
+  as before; not a real gap since no production caller does that.
+- Given the merged path won't actually activate for any current production
+  caller until its cache-key design lands (all of them pass `save_dir`,
+  step 7's own finding) — is designing that cache key worth doing before
+  step 8's re-run, or should step 8 run once on the per-length path as
+  today and revisit once caching is designed? Not decided; step 8 itself
+  doesn't need an answer to proceed, since it's re-validating shipped
+  numbers either way.

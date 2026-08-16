@@ -1,4 +1,4 @@
-"""Step 4 of validation_markdown/section_mode_beta_multi_monitor_validation.md.
+"""Step 4 of validation_markdown/resolved/section_mode_beta_multi_monitor_validation.md.
 
 Numerical equivalence test: old path (3 independent solve_section() calls)
 vs. new path (one FDTDSolver.solve_section_multi_length() call), same MMI

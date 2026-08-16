@@ -69,12 +69,55 @@ numbers that matter right now:**
   the paper's cited spec, now that the real performance is known.**
   Paused here at the user's direction (2026-08-09) -- pick this up
   next if/when resumed.
-- **2026-08-14, mm_width Stage-1 scoping in progress, job 11840371** —
-  cheap L_π-vs-width + guided-mode-count probes (9 candidate widths,
+- **2026-08-14, mm_width Stage-1 scoping — job 11840371 TIMED OUT at -t
+  480 (8h), partial real results; continuation submitted as job 11855837.**
+  Cheap L_π-vs-width + guided-mode-count probes (9 candidate widths,
   3.5–10.0 µm, `mmi_4x4_90hybrid_mm_width_scope.py`) to pick 1-2 promising
   widths before committing to the expensive Stage-2 full treatment (own
   body solve + baseline 4-solve per width, no cache reuse possible).
-  Still `RUNNING` within its 8h budget as of this update; results pending.
+  **L_π-vs-width fully completed and clean**: `L_π/W²` stays 3.023–3.026
+  µm⁻¹ across the ENTIRE 3.5–10.0 µm range — the same self-imaging scaling
+  already confirmed at 6–16 µm now holds down to the narrowest
+  geometrically-valid width too, not just near the current design point.
+  **Mode-count probe (the expensive half) only reached 3 of 9 widths
+  before the time limit**: 3.5 µm → 23 guided modes (6434 s), 4.0 µm → 24
+  (7051 s), 4.5 µm → 24 (4774 s) — **~1.3–2h per width, not cheap despite
+  the "Stage 1" framing, and going narrower does NOT reduce mode count
+  substantially** (23-24 modes at 3.5-4.5 µm vs. the current 6.0 µm
+  design's own already-known >16). Real duplicate-mode collisions logged
+  at every width (`meow mode N duplicates already-accepted mode N-1`,
+  `fdtd_vs_EME_mode_validation.md` item 0's own guard firing, not a new
+  bug) — this cross-section is richly multimode even at the narrow end.
+  **Continuation submitted as job 11855837 — ✅ COMPLETED 2026-08-15
+  (14:41h wall).** Full mode-count picture, all 9 widths:
+
+  | width (µm) | guided | wall time |
+  |---|---|---|
+  | 3.5 | 23 | 6434 s |
+  | 4.0 | 24 | 7051 s |
+  | 4.5 | 24 | 4774 s |
+  | 5.0 | 24 | 5078 s |
+  | 5.5 | 24 | 4931 s |
+  | 6.0 (current) | 24 | 7427 s |
+  | 7.0 | 24 | 10351 s |
+  | 8.0 | 24 | 10407 s |
+  | 10.0 | 24 | 14651 s |
+
+  **Sobering, load-bearing result: every width from 4.0 to 10.0 µm hits
+  the full `n_request=24` CAP** — meaning the true guided-mode count is
+  `≥24` almost everywhere in the tested range, this probe only ever
+  measured a floor, never found a ceiling. Wall time trends upward with
+  width (roughly 5-7k s at 4.5-6.0 µm to ~10-15k s at 7-10 µm), consistent
+  with more/costlier duplicate-mode collisions to search past at wider
+  cross-sections. **There is no evidence, across the entire geometrically-
+  valid range (3.2 < W ≤ 10), that any candidate `mm_width` needs fewer
+  modes — hence is any cheaper to fully converge — than the current 6.0 µm
+  design.** Combined with `waveguide_offset` already being closed off
+  (above), the geometry-redesign search inside this (offset, mm_width)
+  family is not finding a cheap lever; the remaining untried candidates
+  from the 2026-08-09 open question are the still-unmeasured `taper_width`/
+  `taper_length` placeholders, or accepting the current CMRR/phase gap as
+  a real design limitation rather than a bug to fix.
 - **2026-08-14, `calibrate_body_neff`/`section_mode_beta()` investigation
   — real crash found, HANDED OFF to a separate, already-in-progress
   effort, not pursued further in this thread.** This device has never
@@ -1407,7 +1450,19 @@ device's own established precedent, not skipped carelessly.
 
 **Submitted 2026-08-14, job 11847078** (array 0-1, same task→port mapping
 as before: task 0 → `port="bot"` (port 1), task 1 → `input_idx=2`
-(port 3)). Results pending.
+(port 3)). Task 0 (port 1) started running normally. **Task 1 (port 3)
+stayed `PENDING` on `AssocGrpBillingMinutes`** — the `gts-sr108-ece`
+account's concurrent usage allocation was saturated (this session's own
+jobs plus a separate agent's concurrent work on other devices sharing the
+same account). Cancelled just the still-pending task 1 (`scancel
+11847078_1`, task 0 left running untouched) and **resubmitted it under
+the plain `gts-sr108` account (a separate allocation this user also has)
+as job 11859047** (`sbatch --account=gts-sr108 --array=1 batch/run_
+mmi_4x4_90hybrid_fdtd.batch`) — confirmed picked up correctly
+(`Account=gts-sr108`, reason changed from `AssocGrpBillingMinutes` to
+plain `Priority`, i.e. now just a normal queue wait). **Port 1 = job
+11847078 task 0; port 3 = job 11859047 task 1** — two different job IDs
+for the two halves of this one check, going forward. Results pending.
 
 ### Step 7 — metrics helper (A8) — ✅ math primitives landed 2026-08-05; the plot/report itself still pending Step 6
 

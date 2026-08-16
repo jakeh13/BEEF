@@ -77,6 +77,7 @@ Core public API:
         plot_hybrid_geometry       — Hybrid device + section geometry plot (+ sub-region plots)
         plot_performance           — transmission/insertion loss plots
         plot_splitting_ratio       — splitting ratio plot
+        plot_beta_calibration      — section_mode_beta() windows + per-mode fits + summary
 """
 
 __version__ = "0.1.0"
@@ -111,6 +112,8 @@ from .results import SMatrix
 from .solvers import EMESolver, FDTDSolver, PortSpec, HybridSolver
 from .sweep import ParallelSweep
 from .plot import (
+    plot_beta_calibration, plot_beta_calibration_fits,
+    plot_beta_calibration_geometry, plot_beta_calibration_summary,
     plot_eme_fields, plot_eme_geometry, plot_fdtd_geometry, plot_section_fdtd_geometry,
     plot_hybrid_geometry, plot_performance, plot_splitting_ratio,
 )
@@ -147,6 +150,8 @@ __all__ = [
     # sweep
     "ParallelSweep",
     # plot
+    "plot_beta_calibration", "plot_beta_calibration_fits",
+    "plot_beta_calibration_geometry", "plot_beta_calibration_summary",
     "plot_eme_fields", "plot_eme_geometry", "plot_fdtd_geometry", "plot_section_fdtd_geometry",
     "plot_hybrid_geometry", "plot_performance", "plot_splitting_ratio",
 ]

@@ -86,8 +86,14 @@ entries for this device (calibrate_body_neff is part of HybridSolver's own
 section cache key), so 11734486's numbers above predate this flag and must be
 re-measured, not assumed to still hold.
 
-MM_LENGTH = 206.0 um -- MEASURED 2026-08-04, see mmi_1x4_eme.py's module
-docstring and the constant's own comment below for the full provenance.
+MM_LENGTH = 39.90 um, WAVEGUIDE_OFFSET = 3.1 um -- CHANGED 2026-08-14,
+validation doc step 9c. Supersedes the original MM_LENGTH=206.0/
+WAVEGUIDE_OFFSET=2.4 pair. See mmi_1x4_eme.py's module docstring and the
+constants' own comments below for the full provenance (T=0.9620/0.75%
+imbalance vs. the old point's 0.6014/4.26%, CONFIRMED at N_WL=11 via
+mmi_1x4_sin_taper_offset_confirm.py, job 11840722 -- on EME only so far;
+this script's own real run at the new geometry is what would extend that
+confirmation to the FDTD/hybrid side, still open).
 
 Run:
     python /path/to/examples/mmi_1x4/python/mmi_1x4_hybrid.py
@@ -133,24 +139,24 @@ OUTPUT_METHOD = "fdtd"
 WAVEGUIDE_WIDTH = 1.1
 TAPER_WIDTH = 2.2
 TAPER_LENGTH = 5.0
-WAVEGUIDE_OFFSET = 2.4
+WAVEGUIDE_OFFSET = 3.1   # um -- CHANGED 2026-08-14 from 2.4, see module docstring
 MM_WIDTH = 12.0
 
-# MEASURED 2026-08-04, job array 11667114 + mmi_1x4_sin_body_length_sweep_merge.py.
-# mm_length=206.0 is on that sweep's integer grid exactly (linspace(20,300,281)
-# -> spacing 1.0), asserted below per the coupler-bug lesson (a "pinned" value
-# argmin'd onto a grid that didn't contain it exactly, differing by 0.0208 um
-# between two examples for weeks). NOT the pure argmin(spread) winner
-# (spread=0.0013 at 280.0 um) -- deliberately chosen instead for a better
-# balance of footprint, throughput, and split precision (spread=0.0052, 3.7%
-# relative imbalance, IL=-2.44 dB, vs. 280 um's 1.0% imbalance/-2.83 dB/6.2x
-# the length, and 45 um's 8.2% imbalance/-2.20 dB/shortest option). See
-# validation doc step 5 for the full three-way comparison this was picked
-# from -- a genuine design tradeoff, not a default.
-MM_LENGTH = 206.0
-_MM_LENGTH_GRID = np.linspace(20.0, 300.0, 281)   # mmi_1x4_sin_body_length_sweep.py's own grid
+# CHANGED 2026-08-14 from 206.0 -- validation doc step 9c; see mmi_1x4_eme.py's
+# own analogous comment for the full candidate history. mm_length=39.90 is on
+# this file's own mm_lengths grid exactly (linspace(20,300,2801) -> spacing
+# 0.1), asserted below per the coupler-bug lesson (a "pinned" value argmin'd
+# onto a grid that didn't contain it exactly, differing by 0.0208 um between
+# two examples for weeks).
+MM_LENGTH = 39.90
+_MM_LENGTH_GRID = np.linspace(20.0, 300.0, 2801)   # 0.1 um spacing -- see mm_lengths below
 _nearest = _MM_LENGTH_GRID[np.argmin(np.abs(_MM_LENGTH_GRID - MM_LENGTH))]
-assert _nearest == MM_LENGTH, (
+# np.isclose, not == : linspace's own float accumulation puts _nearest ~7e-15 off
+# MM_LENGTH at this grid density (unlike the old integer-spaced 206.0 grid, where
+# == held exactly) -- same atol=1e-9/rtol=0 convention directional_coupler_hybrid.py
+# already uses for this identical "pinned value must land exactly on its own grid"
+# check.
+assert np.isclose(_nearest, MM_LENGTH, rtol=0, atol=1e-9), (
     f"MM_LENGTH={MM_LENGTH} is not an exact point on the measured sweep grid "
     f"(nearest grid value: {_nearest}) -- do not silently snap, this is exactly "
     f"the coupler bug (0.0208 um discrepancy shipped for weeks)."
@@ -278,8 +284,8 @@ print(f"Sub-region plots saved -> {output_dir}/sections/")
 #    The body is a uniform mm_width slab, so HybridSolver.solve_length_sweep()
 #    solves it once per wavelength and applies every swept length as an
 #    analytic propagation phase (beef/solvers/hybrid.py's own docstring) --
-#    the whole 281-point length sweep costs the same as solving the single
-#    MM_LENGTH=206.0 result alone would. The two FDTD sections dedupe against
+#    the whole 2801-point length sweep costs the same as solving the single
+#    MM_LENGTH=39.90 result alone would. The two FDTD sections dedupe against
 #    any prior solve()/solve_length_sweep() call sharing this cache dict (same
 #    config = same cache key regardless of which method built it), so this
 #    costs no more than the single-length version did. output_idx is passed
@@ -317,7 +323,7 @@ print(f"Sub-region plots saved -> {output_dir}/sections/")
 #    slice at MM_LENGTH all agree exactly.
 # ---------------------------------------------------------------------------
 wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
-mm_lengths = np.linspace(20.0, 300.0, 281)   # um; MM_LENGTH=206.0 lands exactly on this grid
+mm_lengths = np.linspace(20.0, 300.0, 2801)   # um, 0.1 um spacing; MM_LENGTH=39.90 lands exactly on this grid
 body_lengths = mm_lengths - 2 * body_stub    # EME body section's own physical length
 BODY_SECTION = 1   # index into solvers=[input(0), body(1), output(2)]
 print(f"\nHybrid sweep: {wavelengths[0]:.3f} - {wavelengths[-1]:.3f} um "
@@ -338,7 +344,7 @@ for k in range(4):
 T_grids = np.abs(coeffs_grids) ** 2   # [4, n_L, n_wl]
 
 L_idx = int(np.argmin(np.abs(mm_lengths - MM_LENGTH)))
-assert mm_lengths[L_idx] == MM_LENGTH, (
+assert np.isclose(mm_lengths[L_idx], MM_LENGTH, rtol=0, atol=1e-9), (   # see the MM_LENGTH grid-check comment above for why isclose, not ==
     f"MM_LENGTH={MM_LENGTH} is not an exact point on this sweep's own grid "
     f"(nearest: {mm_lengths[L_idx]}) -- do not silently snap, this is exactly "
     f"the coupler bug (0.0208 um discrepancy shipped for weeks)."

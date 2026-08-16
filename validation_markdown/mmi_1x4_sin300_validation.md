@@ -1882,10 +1882,179 @@ mm_length=40.0 (or 39.9–40.1, functionally equivalent given the plateau).
 (28 raw files) and `taper_offset_length_refine.npz`/`.png` (merged result +
 plot).
 
+#### Full-fidelity confirmation — ✅ DONE 2026-08-14, holds up at N_WL=11
+
+New scripts `mmi_1x4_sin_taper_offset_confirm.py` / `..._confirm_merge.py`:
+offset FIXED at the confirmed 3.1 µm candidate (not swept — this is a
+confirmation, not another search), `mm_length` grid narrowed to
+[38.0, 42.0] µm (0.1 µm steps, bracketing the refined plateau), **N_WL=11**
+— the full production C-band, matching `mmi_1x4_eme.py`/
+`mmi_1x4_hybrid.py`'s own real config for the first time on this candidate.
+Two-step discipline again: smoke (job 11840705) then real 4-task array (job
+**11840722**, one task per output branch — no offset axis this time).
+
+**All 4 tasks completed cleanly** (sacct: 4/4 `COMPLETED`, exit `0:0`,
+4:17–4:41 hrs/task — notably faster than the ~10–14 hr estimate that
+assumed a steeper-than-actual N_WL cost scaling; real cost did not scale as
+steeply with N_WL as the coarse sweep's own N_WL=1→5 step suggested).
+
+**CONFIRMED: offset=3.1000 µm, mm_length=39.90 µm → total T=0.9620
+(IL=−0.17 dB), spread=0.00180 (0.75% relative imbalance)**, per-output
+band-mean T = `[0.2414, 0.2396, 0.2396, 0.2414]` (outputs at
+y = ∓4.65, ∓1.55 µm at this offset). This lands squarely inside the range
+both design-tool passes already predicted (T=0.960–0.971, imbalance
+0.33–0.77%) — the reduced-`N_WL` shortcuts were NOT hiding a
+band-averaging artifact; the full 11-point C-band average is consistent
+with both the 5-point and 1-point estimates to within a few tenths of a
+percent.
+
+**Final comparison, this device's full candidate history:**
+
+| design point | mm_length | offset | total T | rel. imbalance |
+|---|---|---|---|---|
+| current production | 206.0 µm | 2.4 µm | 0.6014 | 4.26% |
+| 44 µm + offset exploration (coarse, N_WL=1) | 44.0 µm | ~3.0–3.2 µm | ~0.755 | ~15% |
+| **this candidate — CONFIRMED (N_WL=11)** | **39.90 µm** | **3.1 µm** | **0.9620** | **0.75%** |
+
+**~60% more throughput, ~5.2× shorter multimode section, and better
+balance than production — measured at full production fidelity, not just
+design-tool shortcuts.** This is now a real, evidenced candidate to replace
+the production `MM_LENGTH=206.0`/`WAVEGUIDE_OFFSET=2.4` pair, pending the
+items below.
+
+**What this confirmation does NOT cover — still genuinely open before
+calling this a shipped design change:**
+- No cross-engine check (check 1) — this candidate has only ever been run
+  on EME (`tidy3d`); no hybrid/FDTD cross-check exists for it the way
+  production's own split-shape discrepancy (EME vs. hybrid, step 6d) is
+  still being chased.
+- No resolution convergence check (check 3) — `res=40`/`N_BODY=20`/
+  `N_TAPER=10`/`C_TAPER=8` throughout, same preliminary truncation flagged
+  as unvalidated for production.
+- `mm_width=12.0` held fixed the whole investigation — never tested whether
+  a wider body pushes this peak even higher (the offset ceiling this
+  candidate sits near, 3.2167 µm, is a `mm_width=12.0`-specific limit).
+  **User's explicit call, 2026-08-14: not blocking on this — ship with the
+  current `mm_width=12.0`.**
+- `mmi_1x4_hybrid.py` not yet updated — still carries the old
+  `MM_LENGTH=206.0`/`WAVEGUIDE_OFFSET=2.4` pair. This is also where the
+  cross-engine (check 1) gap above would actually get closed, since that
+  script is the only one of the two production scripts that touches FDTD.
+
+**`mmi_1x4_eme.py` updated 2026-08-14** — `MM_LENGTH`/`WAVEGUIDE_OFFSET`
+changed to `39.90`/`3.1` in place, full provenance in the module docstring
+and the constants' own comments. One mechanical bug caught and fixed while
+editing: the old `mm_lengths` grid (`linspace(20, 300, 281)`, integer
+spacing) doesn't contain `39.90`, and switching to a finer
+`linspace(20, 300, 2801)` (0.1 µm spacing) lands `39.90` only to within
+~7e-15 of exact due to `linspace`'s own float accumulation — the script's
+old `==` grid-alignment assertions (both of them) would have failed on a
+real floating-point non-issue. Fixed by switching to
+`np.isclose(..., rtol=0, atol=1e-9)`, the same convention
+`directional_coupler_hybrid.py` already uses for this identical
+pinned-value-on-grid check — tight enough to still catch a real mis-snap
+(the coupler's own 0.0208 µm discrepancy) while tolerating genuine
+floating-point noise. Confirmation run's own cache (`mmi_1x4_sin_taper_
+offset_confirm.py`, job 11840722) lived under `BEEF/example_sim_cache/`
+(off-by-one path, same as flagged for the sweep/refine scripts) while
+`mmi_1x4_eme.py` reads from `duty/example_sim_cache/` (its own correct
+depth) — so this script's own real run needed a fresh prewarm, not a reuse
+of that cache.
+
+**✅ DONE 2026-08-15 — prewarmed and run for real, production artifacts
+produced.** Prewarm (`_prewarm_mmi_1x4_eme_sweep.py`) hit the length-sweep
+cost bug documented in the next section below before landing cleanly; once
+fixed (mm_lengths narrowed to the same `[35,45]`/101-point window as the
+production script), the real 4-task prewarm array (job 11871657) completed
+in 6:37–6:50 hrs/branch, and `mmi_1x4_eme.py` itself then ran against the
+warm cache in **38 seconds** (job 11887395, matching the historical ~38s
+precedent for the old geometry exactly):
+
+| output | y (µm) | T | IL (dB) |
+|---|---|---|---|
+| 0 | −4.65 | 0.2431 | −6.14 |
+| 1 | −1.55 | 0.2423 | −6.16 |
+| 2 | +1.55 | 0.2423 | −6.16 |
+| 3 | +4.65 | 0.2431 | −6.14 |
+| **total** | | **0.9707** | **−0.13** |
+
+Consistent with the earlier full-band confirmation (T=0.9620, job
+11840722) — small difference from the finer local grid, not a
+discrepancy. The script's own local length-sweep optimum within `[35,45]`
+(40.3 µm, spread 0.0016) is essentially indistinguishable from the chosen
+39.9 µm (spread 0.0018), reconfirming the broad plateau found by the
+refine sweep. All production artifacts saved: `geometry.png`,
+`performance.png`, `smatrix.pkl`, `mm_length_sweep.png`/`.npz` in
+`example_output/mmi_1x4/mmi_1x4_eme/`.
+
+**Output**: `BEEF/example_output/verification/mmi_1x4_sin_taper_offset_confirm/confirm_branch{0-3}.npz`
+(4 raw files) and `taper_offset_confirm.npz`/`.png` (merged result + plot).
+
 **Output** (paths corrected per the note above):
 `BEEF/example_output/verification/mmi_1x4_sin_taper_offset_length_sweep/sweep_offset{0-4}_branch{0-3}.npz`
 (20 raw files) and `taper_offset_length_sweep.npz`/`.png` (merged result +
 plot).
+
+#### ⚠ Real bug found 2026-08-14: `EMESolver.solve_length_sweep()`'s "free length sweep" is NOT free at large point counts
+
+While prewarming `mmi_1x4_eme.py`'s own cache for the new geometry
+(`MM_LENGTH=39.90`/`WAVEGUIDE_OFFSET=3.1`), the real 4-task prewarm array
+(job **11848462**, full production config `N_WL=11`, `mm_lengths =
+linspace(20, 300, 2801)`) **timed out at 10 hours with zero progress
+markers** (`mode_solver="tidy3d"` gives none, same diagnostic blindness
+noted for this device's own earlier length-sweep-plot attempt below).
+
+**Root cause, found by reading `EMESolver.solve_length_sweep()`'s own
+source** (`beef/solvers/eme.py`), not guessed:
+
+```python
+for wl_idx, wl in enumerate(wavelengths):
+    ...
+    modes = [self.compute_modes(cs, nm) for cs, nm in zip(css, modes_per_cell)]  # shared across lengths
+    for k, L in enumerate(lengths):
+        ...
+        S, _ = mw.compute_s_matrix(modes, cells=cells, cell_lengths=cell_lengths)  # NOT shared
+```
+
+The eigenmode **solve** genuinely is computed once per wavelength and reused
+across every swept length, exactly as the docstring promises. But
+`mw.compute_s_matrix()` — the interface-stitching + propagation **cascade**
+across this device's full 19-cell chain (`wg_in | 8-cell taper_in | body |
+8-cell taper_out | wg_out`) — is called **once per length inside that
+loop**, and its own per-call cost is not negligible at this chain size.
+2801 lengths × 11 wavelengths = **30,811** such calls, vs. the CONFIRMED
+design point's own successful run at 41 lengths × 11 wavelengths = **451**
+calls (`mmi_1x4_sin_taper_offset_confirm.py`, job 11840722, 4:17–4:41 hrs)
+— a ~68× jump in call count for identical per-wavelength mode-solve cost.
+
+**This also retroactively explains an earlier unresolved mystery**: this
+same script's own N_WL=11 length-sweep-plot attempt (job 11783204, only
+**281** lengths) timed out at 8h with the identical zero-progress symptom,
+attributed at the time only to "N_WL scaling" (see below). The real driver
+was ALSO this per-length cascade cost compounding on top of the mode-solve
+cost — 281×11 = 3,091 calls, already enough to matter.
+
+**`mmi_1x4_hybrid.py` is NOT affected** — its body-length sweep goes
+through `EMESolver.solve_section_length_sweep()` (the **single-cell**
+variant: just the uniform body cross-section, no taper staircase in this
+call at all), where each `compute_s_matrix()` call is trivial. MEASURED:
+25.3s for all 4 branches × 281 lengths (job 11770532). The cost blowup is
+specific to the **multi-cell, full-device** `solve_length_sweep()` method
+`mmi_1x4_eme.py` alone uses.
+
+**Fix**: `mmi_1x4_eme.py`'s (and its prewarm companion's) `mm_lengths`
+narrowed from the full `[20, 300]` (2801 pts) to `[35, 45]` (101 pts,
+`np.arange(35.0, 45.001, 0.1)`), bracketing the confirmed `MM_LENGTH=39.90`
+with real margin (the refine sweep's own plateau was 39.5–40.3) at a call
+count (101×11=1,111) close to the confirmed-safe scale above. The broader
+design-space context this grid used to show is not lost — it already lives
+in `mmi_1x4_sin_taper_offset_length_sweep.py`'s/`..._refine.py`'s own plots
+(this section), just not duplicated here at prohibitive cost.
+
+**Status**: fix applied to both scripts; re-smoke-tested; real prewarm
+resubmitted (job 11871620 smoke → real array to follow) under `gts-sr108`
+(also switched off `gts-sr108-ece`, which is separately at 0.998 fair-share
+usage — see [[slurm-account-gts-sr108-ece]]).
 
 ---
 

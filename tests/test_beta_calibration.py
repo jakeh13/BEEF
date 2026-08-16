@@ -325,6 +325,7 @@ class TestSectionModeBetaDpmlClearance:
         solver.section_mode_beta(
             geometry=None, wavelengths=np.array([WL]),
             x0=-self.SPAN / 2.0, x1=self.SPAN / 2.0, n_modes=1,
+            use_merged_domain=False,
         )
         assert len(calls) == 3, "default is three fit lengths"
         for x0, x1 in calls:
@@ -341,6 +342,7 @@ class TestSectionModeBetaDpmlClearance:
         beta = solver.section_mode_beta(
             geometry=None, wavelengths=np.array([WL]),
             x0=-self.SPAN / 2.0, x1=self.SPAN / 2.0, n_modes=1,
+            use_merged_domain=False,
         )
         assert beta[0, 0] == pytest.approx(self.BETA, rel=1e-6)
 
@@ -363,6 +365,7 @@ class TestSectionModeBetaDpmlClearance:
         beta = solver.section_mode_beta(
             geometry=None, wavelengths=wl,
             x0=-self.SPAN / 2.0, x1=self.SPAN / 2.0, n_modes=n,
+            use_merged_domain=False,
         )
         return beta, np.array([x1 - x0 for x0, x1 in calls])
 
@@ -425,6 +428,7 @@ class TestSectionModeBetaDpmlClearance:
             solver.section_mode_beta(
                 geometry=None, wavelengths=np.array([1.50, WL, 1.60]),
                 x0=-self.SPAN / 2.0, x1=self.SPAN / 2.0, n_modes=3,
+                use_merged_domain=False,
             )
         assert "mode 1" in str(excinfo.value), (
             f"message must name the offending mode, got: {excinfo.value}"
@@ -444,6 +448,7 @@ class TestSectionModeBetaDpmlClearance:
             solver.section_mode_beta(
                 geometry=None, wavelengths=np.array([WL]),
                 x0=-solver.dpml, x1=solver.dpml, n_modes=1,
+                use_merged_domain=False,
             )
 
 

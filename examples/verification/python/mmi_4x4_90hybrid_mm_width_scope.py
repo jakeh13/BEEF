@@ -112,13 +112,22 @@ def mode_count_scope(mm_widths, n_request=24, sim_h=2.0):
 
 
 def main():
-    # Narrower than Step 1c's original 6.0-16.0 (only the geometric
-    # clearance floor, W>3.2, rules anything out), plus the existing
-    # baseline (6.0) and a couple of Step 1c's own already-known points
-    # (8.0, 10.0) for continuity/cross-check against that earlier data.
-    mm_widths = [3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 7.0, 8.0, 10.0]
-    lpi_scope(mm_widths)
-    mode_count_scope(mm_widths, n_request=24)
+    # Full candidate range: [3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 7.0, 8.0, 10.0]
+    # (narrower than Step 1c's original 6.0-16.0 -- only the geometric
+    # clearance floor, W>3.2, rules anything out -- plus the existing
+    # baseline 6.0 and Step 1c's own already-known 8.0/10.0).
+    #
+    # CONTINUATION run (job 11840371 TIMED OUT at -t 480 with the
+    # mode-count stage only 3/9 through -- 3.5/4.0/4.5 already measured:
+    # 23/24/24 guided modes, ~1.3-2h each). L_pi scope already fully
+    # completed and confirmed clean (L_pi/W^2 = 3.023-3.026 across the
+    # WHOLE 3.5-10.0 range, same as the original 6-16 measurement) -- not
+    # re-run here, no new information to gain. This script has no
+    # save_dir/caching of its own (a quick diagnostic, not a production
+    # solver call), so a plain resubmit would otherwise redo 3.5/4.0/4.5
+    # from scratch -- skip them explicitly instead.
+    remaining_widths = [5.0, 5.5, 6.0, 7.0, 8.0, 10.0]
+    mode_count_scope(remaining_widths, n_request=24)
 
 
 if __name__ == "__main__":

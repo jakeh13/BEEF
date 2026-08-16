@@ -265,6 +265,58 @@ class BetaFit(NamedTuple):
     turn_ambiguity: float   # worst of the DATA-determined decisions, [0, 0.5]
 
 
+class BetaCalibration(NamedTuple):
+    """Everything one `section_mode_beta()` call measured, not just its answer.
+
+    `section_mode_beta()` returns only `beta`, which is all its callers need
+    to propagate a body on. Plotting and diagnostics need the *inputs* to
+    that answer too — the fit lengths, the raw per-length phases, the MPB
+    seed each branch was chosen against, and the per-cell `BetaFit` — so
+    `section_mode_beta_details()` returns this and `section_mode_beta()` is
+    a one-line facade over it.
+
+    Exists to keep that data in ONE place. Before it, every consumer
+    (`diagnose_mmi1x2_calibration_phase_fit.py`, the three
+    `resolved/section_mode_beta_multi_monitor_validation.md` step 4-6 scripts)
+    re-derived the length selection by hand against the source; five copies
+    of a formula that has to agree exactly is how `section_fdtd_layout()`'s
+    own duplicate drifted (see that function's docstring).
+
+    Attributes:
+        beta: ``[n_wl, n_modes]`` rad/µm — exactly what `section_mode_beta()`
+            returns.
+        lengths: the fit lengths actually used (µm), in the order simulated.
+        phases: ``[n_L, n_wl, n_modes]`` wrapped ``arg(T_ii)``, i.e. the raw
+            measurement before any wrap counting.
+        wavelengths: ``[n_wl]`` µm, as passed in.
+        seed_beta: ``[n_wl, n_modes]`` rad/µm, MPB's answer — the branch
+            prior, never the result.
+        fits: ``fits[i][m]`` is the full `BetaFit` for wavelength i, mode m,
+            including the chosen `turns` a plot needs to unwrap `phases`.
+        x0, x1, mid: the device-frame span this calibrated, and its midpoint.
+        merged: True if the phases came from one shared-domain
+            `solve_section_multi_length()` call rather than `len(lengths)`
+            independent `solve_section()` runs (see `use_merged_domain`).
+        guard_failures: post-fit guard messages that would have raised under
+            `strict=True`. **Empty on any calibration usable for
+            propagation** — non-empty means the caller passed `strict=False`
+            and `beta` is for inspection only. A tuple, not a list, so the
+            default cannot be a shared mutable.
+    """
+
+    beta: np.ndarray
+    lengths: List[float]
+    phases: np.ndarray
+    wavelengths: np.ndarray
+    seed_beta: np.ndarray
+    fits: List[List[BetaFit]]
+    x0: float
+    x1: float
+    mid: float
+    merged: bool
+    guard_failures: Tuple[str, ...] = ()
+
+
 def _fit_line(lengths, values) -> Tuple[float, float]:
     A = np.vstack([lengths, np.ones_like(lengths)]).T
     (slope, intercept), *_ = np.linalg.lstsq(A, values, rcond=None)
@@ -1903,8 +1955,42 @@ class FDTDSolver:
         monitor_size: Optional[float] = None,
         save_dir: Optional[str] = None,
         cache_only: bool = False,
+        use_merged_domain: bool = True,
         **geometry_kwargs,
     ) -> np.ndarray:
+        """Propagation constants (rad/µm) per mode per wavelength — see
+        `section_mode_beta_details()`, of which this is the facade.
+
+        Returns only the fitted β, which is all any propagation caller needs.
+        Call `section_mode_beta_details()` instead for the measurement behind
+        it (fit lengths, raw per-length phases, MPB seed, per-cell `BetaFit`),
+        e.g. to plot the fits — same arguments, same cost, same guards.
+        """
+        return self.section_mode_beta_details(
+            geometry, wavelengths, x0, x1, n_modes,
+            lengths=lengths,
+            monitor_center=monitor_center, monitor_size=monitor_size,
+            save_dir=save_dir, cache_only=cache_only,
+            use_merged_domain=use_merged_domain,
+            **geometry_kwargs,
+        ).beta
+
+    def section_mode_beta_details(
+        self,
+        geometry,
+        wavelengths: np.ndarray,
+        x0: float,
+        x1: float,
+        n_modes: int,
+        lengths: Optional[Sequence[float]] = None,
+        monitor_center: Optional[float] = None,
+        monitor_size: Optional[float] = None,
+        save_dir: Optional[str] = None,
+        cache_only: bool = False,
+        use_merged_domain: bool = True,
+        strict: bool = True,
+        **geometry_kwargs,
+    ) -> "BetaCalibration":
         """Propagation constants this solver's FDTD *actually accumulates*
         through the section's cross-section (rad/µm), per mode per wavelength.
 
@@ -1949,9 +2035,50 @@ class FDTDSolver:
             monitor_center / monitor_size: as `solve_section()`. The default
                 here pins the full non-PML width on the ``y=0`` axis, which is
                 what a coupled pair's even/odd basis needs.
+            use_merged_domain: if True (the default) and no caching is
+                requested (`save_dir is None` and `cache_only` is False), fit
+                β from ONE shared-domain `solve_section_multi_length()` call
+                instead of `len(lengths)` independent `solve_section()` runs —
+                validated equivalent to float-noise precision (β agrees to
+                ~0.0003%, both guards' margins unaffected), see
+                `validation_markdown/section_mode_beta_multi_monitor_
+                validation.md` steps 4-6. Both post-fit guards below (and
+                Guard 2, above) apply identically either way, since they read
+                `phases` after it is filled, not how it was filled.
+
+                If `save_dir`/`cache_only` ARE requested, this method
+                automatically falls back to the per-length path regardless of
+                this flag: the merged path has no cache-key design of its own
+                yet (that doc's own open question), so every caller that
+                wants caching — which today means every real production
+                caller, `HybridSolver` and every hybrid example — keeps using
+                the proven, cacheable per-length path, unaffected. Set to
+                `False` explicitly to force the per-length path even without
+                caching, e.g. to re-validate against a future finding (mirrors
+                `mmi_2x2_hybrid.py`/`directional_coupler_hybrid.py`'s own
+                `SYMMETRIC_MODE_REUSE` fallback pattern).
+
+            strict: True (default) raises on either post-fit guard below,
+                exactly as `section_mode_beta()` always has. False downgrades
+                both to a WARNING and returns the calibration anyway, with the
+                messages in `.guard_failures` — **the returned β is then not
+                usable for propagation**, and the only reason this exists is
+                that a failing fit is precisely the one worth plotting: the
+                residual guard reduces the whole measurement to one number and
+                aborts, which is what sent `diagnose_mmi1x2_calibration_
+                phase_fit.py` to the on-disk cache to reconstruct by hand.
+                Guard 2 (pre-simulation, branch spacing) is unaffected and
+                still raises either way — it rejects the *request* before
+                spending FDTD time, so there is nothing measured to inspect.
 
         Returns:
-            Real ndarray ``[len(wavelengths), n_modes]`` of β in rad/µm.
+            `BetaCalibration` — `.beta` is the real ndarray
+            ``[len(wavelengths), n_modes]`` of β in rad/µm that
+            `section_mode_beta()` hands back; the rest is the measurement it
+            came from (fit lengths, raw phases, seed, per-cell `BetaFit`),
+            kept so plotting/diagnostics need not re-derive any of it. Check
+            `.guard_failures` is empty before trusting `.beta` when
+            `strict=False`.
 
         Raises:
             ValueError: if the phase-fit residual exceeds
@@ -2051,15 +2178,37 @@ class FDTDSolver:
                 f"{max_safe_spacing:.3f} µm apart."
             )
 
-        phases = np.zeros((len(lengths), len(wavelengths), n_modes))
-        for j, L in enumerate(lengths):
-            T = self.solve_section(
-                geometry, wavelengths, mid - L / 2.0, mid + L / 2.0,
-                n_modes_in=n_modes, n_modes_out=n_modes,
-                save_dir=save_dir, cache_only=cache_only,
-                **iface, **geometry_kwargs,
+        # Merged path needs no caching of its own to be correct here -- it
+        # just has none DESIGNED yet (validation doc's own open question on
+        # cache-key granularity), so a caller asking for caching falls back
+        # to the proven per-length path rather than silently losing it.
+        merged_active = use_merged_domain and save_dir is None and not cache_only
+        if use_merged_domain and not merged_active:
+            logger.info(
+                "section_mode_beta: use_merged_domain=True but save_dir=%r/"
+                "cache_only=%r requested -- the merged path has no cache-key "
+                "design yet, falling back to the per-length path for this call.",
+                save_dir, cache_only,
             )
-            phases[j] = np.angle(np.diagonal(T, axis1=1, axis2=2))
+
+        if merged_active:
+            # solve_section_multi_length() -- section_mode_beta_multi_monitor_
+            # validation.md steps 3-6: one shared domain, one decay wait per
+            # excited band, instead of len(lengths) independent domain builds.
+            T_multi = self.solve_section_multi_length(
+                geometry, wavelengths, mid, lengths, n_modes, **iface, **geometry_kwargs,
+            )
+            phases = np.angle(np.diagonal(T_multi, axis1=2, axis2=3))
+        else:
+            phases = np.zeros((len(lengths), len(wavelengths), n_modes))
+            for j, L in enumerate(lengths):
+                T = self.solve_section(
+                    geometry, wavelengths, mid - L / 2.0, mid + L / 2.0,
+                    n_modes_in=n_modes, n_modes_out=n_modes,
+                    save_dir=save_dir, cache_only=cache_only,
+                    **iface, **geometry_kwargs,
+                )
+                phases[j] = np.angle(np.diagonal(T, axis1=1, axis2=2))
 
         # Full grids, not running scalar maxima. The old code kept only
         # max()-so-far, so when job 11589770 blew the residual guard the message
@@ -2073,10 +2222,13 @@ class FDTDSolver:
         grid_excess = np.zeros((len(wavelengths), n_modes))
         grid_turn_amb = np.zeros((len(wavelengths), n_modes))
         n_shifted = 0
+        fits: List[List[BetaFit]] = []      # [i][m], retained for BetaCalibration
         for i in range(len(wavelengths)):
+            fits.append([])
             for m in range(n_modes):
                 fit = beta_fit_from_phases(
                     lengths, phases[:, i, m], seed_beta[i, m])
+                fits[i].append(fit)
                 beta[i, m] = fit.beta
                 grid_resid[i, m] = fit.resid
                 grid_margin[i, m] = fit.margin
@@ -2100,8 +2252,20 @@ class FDTDSolver:
         # to land here too and no longer do (see beta_fit_from_phases), so
         # turn_ambiguity is reported alongside to separate "an integer turn was
         # genuinely undecidable" from "the phase is smoothly curved".
+        guard_failures: List[str] = []
+
+        def _guard_failed(message: str) -> None:
+            """Raise (strict, the default and every propagation caller's path)
+            or record-and-warn, so a failing fit can still be returned for
+            inspection — see `strict` in the Args."""
+            if strict:
+                raise ValueError(message)
+            guard_failures.append(message)
+            logger.warning("section_mode_beta (strict=False, NOT usable for "
+                           "propagation): %s", message)
+
         if worst_resid > _BETA_FIT_RESIDUAL_MAX:
-            raise ValueError(
+            _guard_failed(
                 f"section_mode_beta: phase-fit residual {worst_resid:.3f} rad "
                 f"exceeds {_BETA_FIT_RESIDUAL_MAX} at {at_resid} (worst of "
                 f"{grid_resid.size} cells; {int((grid_resid > _BETA_FIT_RESIDUAL_MAX).sum())} "
@@ -2114,7 +2278,7 @@ class FDTDSolver:
         # Guard: the seed has to be able to pick the branch. This is the raise
         # section_mode_beta's own docstring has always promised and never made.
         if worst_margin > _BETA_BRANCH_MARGIN_RAISE:
-            raise ValueError(
+            _guard_failed(
                 f"section_mode_beta: branch margin {worst_margin:.3f} exceeds "
                 f"{_BETA_BRANCH_MARGIN_RAISE} at {at_margin} with lengths "
                 f"{lengths} — the MPB seed sat too close to a branch boundary to "
@@ -2140,7 +2304,12 @@ class FDTDSolver:
             100.0 * worst_excess, at_excess, worst_turn_amb,
             n_shifted, grid_resid.size,
         )
-        return beta
+        return BetaCalibration(
+            beta=beta, lengths=lengths, phases=phases, wavelengths=wavelengths,
+            seed_beta=seed_beta, fits=fits, x0=float(x0), x1=float(x1),
+            mid=float(mid), merged=bool(merged_active),
+            guard_failures=tuple(guard_failures),
+        )
 
     # ------------------------------------------------------------------
     # Generic section solver (used by HybridSolver)
@@ -2810,7 +2979,7 @@ class FDTDSolver:
         **geometry_kwargs,
     ) -> np.ndarray:
         """Modal transfer matrices at MULTIPLE lengths from ONE merged FDTD
-        domain — section_mode_beta_multi_monitor_validation.md's mechanism.
+        domain — resolved/section_mode_beta_multi_monitor_validation.md's mechanism.
 
         `section_mode_beta()` fits body beta from `len(lengths)` fully
         independent `solve_section()` calls, each a separate domain build +
@@ -2835,7 +3004,7 @@ class FDTDSolver:
         which reproduces each length's own single-domain interface-monitor
         distance from the source (`lengths[i] - monitor_margin`) exactly —
         checked algebraically in
-        section_mode_beta_multi_monitor_validation.md step 2, not
+        resolved/section_mode_beta_multi_monitor_validation.md step 2, not
         approximated.
 
         Unlike `solve_section()`: no `save_dir`/`cache_only` (deferred —

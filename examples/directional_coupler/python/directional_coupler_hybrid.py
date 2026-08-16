@@ -79,7 +79,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from beef import (
-    DirectionalCoupler, EMESolver, FDTDSolver, HybridSolver, SMatrix, SOI_220, plot_hybrid_geometry,
+    DirectionalCoupler, EMESolver, FDTDSolver, HybridSolver, SMatrix, SOI_220,
+    plot_beta_calibration, plot_hybrid_geometry,
 )
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -416,11 +417,26 @@ M_out_cross = M_in1.transpose(0, 2, 1)    # [n_wl, 1, N_MODES]
 # length in the sweep.
 _body_neff = None
 if CALIBRATE_BODY:
-    _beta = fdtd_solver.section_mode_beta(
+    # _details() rather than section_mode_beta(): same call, same cost, same
+    # guards — it just also hands back the measurement behind the answer, so
+    # the calibration can be plotted below. `.beta` is what the plain call
+    # returns.
+    _calibration = fdtd_solver.section_mode_beta_details(
         dc, wavelengths, boundaries[1], boundaries[2], N_MODES,
         save_dir=save_dir, **_iface_mon,
-    )  # [n_wl, N_MODES] — rad/µm, fitted from the FDTD's own phase vs length
+    )
+    _beta = _calibration.beta  # [n_wl, N_MODES] — rad/µm, fitted from the FDTD's own phase vs length
     _body_neff = _beta * wavelengths[:, None] / (2 * np.pi)
+
+    # What was actually simulated, and whether each cell's phase really is
+    # linear in length — the residual guard only raises past 0.1 rad, so a
+    # marginal fit passes silently and is invisible in `_beta`. No extra
+    # simulation: these plot the data the call above already produced.
+    plot_beta_calibration(
+        _calibration, dc, fdtd_solver,
+        os.path.join(output_dir, "calibration"), **_iface_mon,
+    )
+    print(f"Calibration plots saved → {output_dir}/calibration/ (geometry/ + fits/)")
     _i = int(np.argmin(np.abs(wavelengths - 1.55)))
     # The mode-solver number to compare against, for the log line only. Solved
     # on a SHORT window at the body midpoint, not on [boundaries[1],

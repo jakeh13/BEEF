@@ -22,11 +22,55 @@ guided modes at the taper's widest cross-section 2.2 um, comfortably under
 the N_TAPER=10 budget). See mmi_1x4_sin_body_length_sweep.py for the full
 provenance and the C_TAPER=8 discretization reasoning.
 
-MM_LENGTH = 206.0 um -- MEASURED 2026-08-04 (job array 11667114 +
-mmi_1x4_sin_body_length_sweep_merge.py), user-selected over the pure
-argmin(spread) winner (280.0 um) for a better footprint/throughput/balance
-tradeoff -- see the constant's own comment below and validation doc step 5
-for the full three-way comparison.
+MM_LENGTH = 39.90 um, WAVEGUIDE_OFFSET = 3.1 um -- CHANGED 2026-08-14,
+validation doc step 9c. Supersedes the original MM_LENGTH=206.0/
+WAVEGUIDE_OFFSET=2.4 pair (step 5, 2026-08-04): a user-requested
+taper-offset x mm_length joint sweep (coarse grid, job 11817364; refined
+grid, job 11839158) found this candidate, then CONFIRMED it at full
+production N_WL=11 (job 11840722, this script's own real config): total
+T=0.9620 (IL=-0.17 dB), 0.75% relative imbalance -- vs. the old point's
+T=0.6014/4.26%. ~60% more throughput, ~5.2x shorter multimode section,
+better balanced. mm_width=12.0 held fixed throughout that investigation
+(user's explicit call, step 9c) -- not re-optimized, just not blocking this
+change. See the constant's own comment below and validation doc step 9c for
+the full candidate history (including the two weaker candidates measured
+along the way: production's own 206.0/2.4, and an earlier 44.0 um/offset
+~3.0-3.2 exploration at T~0.755/~15% imbalance).
+
+mm_lengths window NARROWED 2026-08-14 to [35, 45] um (101 points) from the
+original full-range [20, 300] (2801 points after the same-day grid-density
+fix) -- NOT a cost-saving shortcut on the confirmed result, a real bug found
+the hard way. solve_length_sweep() (the multi-cell, full-19-cell-chain
+method this script uses) calls meow's compute_s_matrix() ONCE PER SWEPT
+LENGTH inside the per-wavelength loop (beef/solvers/eme.py) -- the mode
+SOLVE is genuinely shared across lengths as the docstring promises, but the
+CASCADE (interface stitching + propagation across all 19 cells) is not, and
+its own per-call cost is not negligible at this chain size. A real prewarm
+attempt at the full 2801-point grid (job 11848462, N_WL=11, matching this
+script's own config) TIMED OUT at 10 hours with zero progress markers
+(tidy3d gives none) -- 30,811 total compute_s_matrix() calls (2801 lengths x
+11 wavelengths) vs. the CONFIRMED candidate's own successful run
+(mmi_1x4_sin_taper_offset_confirm.py, job 11840722, 41 lengths x 11
+wavelengths = 451 calls, 4:17-4:41 hrs) is a ~68x jump in call count for the
+same per-wavelength mode-solve cost. This is also consistent with, and now
+explains, this script's OWN historical N_WL=11 length-sweep-plot attempt
+(job 11783204, 281 lengths) timing out at 8h with the same symptom, which
+was attributed only to N_WL scaling at the time -- the real driver was
+ALSO this per-length cascade cost, compounding on top.
+
+HybridSolver's own body-length sweep (mmi_1x4_hybrid.py) is NOT affected by
+this: it calls solve_section_length_sweep() (the SINGLE-cell variant) for
+the body region, where each compute_s_matrix() call is on one cell only --
+genuinely cheap regardless of length count (MEASURED: 25.3s for all 4
+branches x 281 lengths, job 11770532). The cost blowup here is specific to
+the multi-cell chain this script's own EMESolver.solve_length_sweep() walks.
+
+[35, 45] brackets the confirmed MM_LENGTH=39.90 with real margin (the
+refine sweep's own plateau was 39.5-40.3) at a call count (101 x 11 = 1111)
+close to the CONFIRMED-safe scale above, rather than re-deriving the full
+design-space view this script used to show -- that context already lives in
+mmi_1x4_sin_taper_offset_length_sweep.py's/..._refine.py's own plots
+(step 9c), not duplicated here at prohibitive cost.
 
 Run:
     python /path/to/examples/mmi_1x4/python/mmi_1x4_eme.py
@@ -59,25 +103,31 @@ N_WL = 11
 WAVEGUIDE_WIDTH = 1.1
 TAPER_WIDTH = 2.2
 TAPER_LENGTH = 5.0
-WAVEGUIDE_OFFSET = 2.4
+WAVEGUIDE_OFFSET = 3.1   # um -- CHANGED 2026-08-14 from 2.4, see module docstring
 MM_WIDTH = 12.0
 STRAIGHT_LENGTH = 0.5   # um -- short wg_in/wg_out stub, matches mmi_1x2_eme.py
 
-# MEASURED 2026-08-04, job array 11667114 + mmi_1x4_sin_body_length_sweep_merge.py.
-# mm_length=206.0 is on that sweep's integer grid exactly (linspace(20,300,281)
-# -> spacing 1.0), asserted below per the coupler-bug lesson (a "pinned" value
+# CHANGED 2026-08-14 from 206.0 -- CONFIRMED at this script's own real
+# config (N_WL=11, job 11840722), validation doc step 9c. mm_length=39.90 is
+# on this file's own mm_lengths grid exactly (linspace(20,300,2801) ->
+# spacing 0.1), asserted below per the coupler-bug lesson (a "pinned" value
 # argmin'd onto a grid that didn't contain it exactly, differing by 0.0208 um
-# between two examples for weeks). NOT the pure argmin(spread) winner
-# (spread=0.0013 at 280.0 um) -- deliberately chosen instead for a better
-# balance of footprint, throughput, and split precision (spread=0.0052, 3.7%
-# relative imbalance, IL=-2.44 dB, vs. 280 um's 1.0% imbalance/-2.83 dB/6.2x
-# the length, and 45 um's 8.2% imbalance/-2.20 dB/shortest option). See
-# validation doc step 5 for the full three-way comparison this was picked
-# from -- a genuine design tradeoff, not a default.
-MM_LENGTH = 206.0
-_MM_LENGTH_GRID = np.linspace(20.0, 300.0, 281)   # mmi_1x4_sin_body_length_sweep.py's own grid
+# between two examples for weeks -- the same failure mode this session's own
+# taper-offset x mm_length sweeps re-guarded against explicitly). NOT the
+# pure per-offset argmin(spread) winner at THIS offset either (the confirm
+# run's own merge picks the highest-throughput point under a 2% imbalance
+# cap, not the single tightest-balance point) -- see validation doc step 9c
+# for the full candidate history this was picked from.
+MM_LENGTH = 39.90
+_MM_LENGTH_GRID = np.arange(35.0, 45.001, 0.1)   # 0.1 um spacing, narrow window -- see mm_lengths below
 _nearest = _MM_LENGTH_GRID[np.argmin(np.abs(_MM_LENGTH_GRID - MM_LENGTH))]
-assert _nearest == MM_LENGTH, (
+# np.isclose, not == : linspace's own float accumulation puts _nearest ~7e-15 off
+# MM_LENGTH at this grid density (unlike the old integer-spaced 206.0 grid, where
+# == held exactly) -- same atol=1e-9/rtol=0 convention directional_coupler_hybrid.py
+# already uses for this identical "pinned value must land exactly on its own grid"
+# check, tight enough to still catch a real mis-snap (e.g. the coupler's own 0.0208
+# um discrepancy) while tolerating genuine floating-point noise.
+assert np.isclose(_nearest, MM_LENGTH, rtol=0, atol=1e-9), (
     f"MM_LENGTH={MM_LENGTH} is not an exact point on the measured sweep grid "
     f"(nearest grid value: {_nearest}) -- do not silently snap, this is exactly "
     f"the coupler bug (0.0208 um discrepancy shipped for weeks)."
@@ -131,11 +181,13 @@ print(f"Geometry plot saved -> {output_dir}/geometry.png")
 #    branch (four solves, no mirror-symmetry shortcut -- see module
 #    docstring). The body (region BODY_REGION=2 of the 5-region chain) is a
 #    uniform mm_width slab, so EMESolver.solve_length_sweep() solves its
-#    modes once per wavelength and applies every swept length as an analytic
-#    propagation phase (same "multi-cell generalization of the single-cell
-#    trick" step 5's own design tool, mmi_1x4_sin_body_length_sweep.py, is
-#    built on) -- the 281-point length sweep costs the same as solving the
-#    single MM_LENGTH=206.0 result alone would.
+#    MODES once per wavelength and applies every swept length via meow's
+#    compute_s_matrix() cascade -- BUT that cascade call itself is NOT free
+#    per length at this chain size (19 cells: wg_in|8-cell taper_in|body|
+#    8-cell taper_out|wg_out), unlike the single-cell body-only sweep
+#    mmi_1x4_hybrid.py uses. See module docstring's 2026-08-14 finding for
+#    the full story -- mm_lengths is deliberately a NARROW window now, not
+#    the historical full-range grid.
 #
 #    NOTE: solve_length_sweep() caches under its own method name, a genuinely
 #    different cache entry from solve()'s -- the first run after this change
@@ -143,14 +195,14 @@ print(f"Geometry plot saved -> {output_dir}/geometry.png")
 #    validation doc's own note on this, mmi_1x4_sin300_validation.md step 6).
 # ---------------------------------------------------------------------------
 wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
-mm_lengths = np.linspace(20.0, 300.0, 281)   # um; MM_LENGTH=206.0 lands exactly on this grid
+mm_lengths = np.arange(35.0, 45.001, 0.1)   # um, 0.1 um spacing, narrow window; MM_LENGTH=39.90 lands exactly on this grid -- see module docstring
 BODY_REGION = 2   # index into the 5-region chain: wg_in(0) taper_in(1) body(2) taper_out(3) wg_out(4)
 print(f"\nSweeping {len(wavelengths)} wavelengths: "
       f"{wavelengths[0]:.3f} - {wavelengths[-1]:.3f} um, "
       f"mm_length {mm_lengths[0]:.1f} - {mm_lengths[-1]:.1f} um ({len(mm_lengths)} pts)\n")
 
 L_idx = int(np.argmin(np.abs(mm_lengths - MM_LENGTH)))
-assert mm_lengths[L_idx] == MM_LENGTH, (
+assert np.isclose(mm_lengths[L_idx], MM_LENGTH, rtol=0, atol=1e-9), (   # see the MM_LENGTH grid-check comment above for why isclose, not ==
     f"MM_LENGTH={MM_LENGTH} is not an exact point on this sweep's own grid "
     f"(nearest: {mm_lengths[L_idx]}) -- do not silently snap, this is exactly "
     f"the coupler bug (0.0208 um discrepancy shipped for weeks)."

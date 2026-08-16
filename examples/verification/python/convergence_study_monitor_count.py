@@ -1,4 +1,4 @@
-"""Step 5 of validation_markdown/section_mode_beta_multi_monitor_validation.md.
+"""Step 5 of validation_markdown/resolved/section_mode_beta_multi_monitor_validation.md.
 
 Convergence study #1 -- number of monitors/lengths. Gated on step 4's
 numerical equivalence PASS (2026-08-13, job 11813378): with merging

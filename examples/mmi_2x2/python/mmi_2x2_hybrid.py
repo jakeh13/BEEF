@@ -52,7 +52,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from beef import MMI, EMESolver, FDTDSolver, HybridSolver, SMatrix, SOI_220, plot_hybrid_geometry
+from beef import (
+    MMI, EMESolver, FDTDSolver, HybridSolver, SMatrix, SOI_220,
+    plot_beta_calibration, plot_hybrid_geometry,
+)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_2x2", "mmi_2x2_hybrid"))
@@ -269,10 +272,28 @@ M_out_cross = M_in0.transpose(0, 2, 1)  # [n_wl, 1, N_MODES]
 # same span the length sweep below propagates through.
 body_neff = None
 if CALIBRATE_BODY:
-    beta = input_solver.section_mode_beta(
+    # _details() rather than section_mode_beta(): same call, same cost, same
+    # guards — it just also hands back the measurement behind the answer
+    # (fit lengths, per-length phases, per-cell fits) so the calibration can
+    # be plotted below. `.beta` is exactly what section_mode_beta() returns.
+    calibration = input_solver.section_mode_beta_details(
         mmi, wavelengths, boundaries[1], boundaries[2], N_MODES, save_dir=save_dir,
-    )  # [n_wl, N_MODES] rad/µm
+    )
+    beta = calibration.beta  # [n_wl, N_MODES] rad/µm
     body_neff = beta * wavelengths[:, None] / (2 * np.pi)
+
+    # What the calibration actually simulated, and whether each cell's phase
+    # is really linear in length. The residual guard reduces that to one
+    # number per cell and only raises past 0.1 rad, so a marginal fit passes
+    # silently and is invisible in `beta` — these plots are where it shows.
+    # Free: no extra simulation, just the data the call already produced.
+    plot_beta_calibration(
+        calibration, mmi, input_solver,
+        os.path.join(output_dir, "calibration"),
+        monitor_center=0.0, monitor_size=input_solver.sim_width,
+    )
+    print(f"Calibration plots saved → {output_dir}/calibration/"
+          f" (geometry/ + fits/)")
 
 M_body = body_solver.solve_section_length_sweep(
     mmi, wavelengths, boundaries[1], boundaries[2], body_lengths,

@@ -1,4 +1,4 @@
-"""Step 6 of validation_markdown/section_mode_beta_multi_monitor_validation.md.
+"""Step 6 of validation_markdown/resolved/section_mode_beta_multi_monitor_validation.md.
 
 Convergence study #2 -- total simulation/domain length, INDEPENDENT of
 monitor count. Step 5 (job 11838953) swept how many of ONE run's 6
