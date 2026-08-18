@@ -38,7 +38,7 @@ from beef import MMI, EMESolver, FDTDSolver, HybridSolver, SIN_300
 _HERE = os.path.dirname(os.path.abspath(__file__))
 save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
-RESOLUTION = float(os.environ.get("MMI1X4_HPREWARM_RES", 40.0))
+RESOLUTION = float(os.environ.get("MMI1X4_HPREWARM_RES", 30.0))
 WL_MIN, WL_MAX = 1.50, 1.60
 N_WL = int(os.environ.get("MMI1X4_HPREWARM_NWL", 11))
 DECAY_TOL = float(os.environ.get("MMI1X4_HPREWARM_DECAY_TOL", 1e-11))

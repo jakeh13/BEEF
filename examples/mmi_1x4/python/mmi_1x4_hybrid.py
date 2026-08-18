@@ -105,7 +105,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from beef import MMI, EMESolver, FDTDSolver, HybridSolver, SIN_300, SMatrix, plot_hybrid_geometry
+from beef import MMI, EMESolver, FDTDSolver, HybridSolver, SIN_300, SMatrix, plot_hybrid_geometry, plot_beta_calibration
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_1x4", "mmi_1x4_hybrid"))
@@ -468,3 +468,18 @@ plt.tight_layout()
 fig.savefig(os.path.join(output_dir, "mm_length_sweep.png"), dpi=300)
 plt.close("all")
 print(f"Length-sweep plot saved -> {output_dir}/mm_length_sweep.png")
+
+# ---------------------------------------------------------------------------
+# Calibration diagnostics. HybridSolver ran the calibration internally
+# (calibrate_body_neff above) and kept the measurement behind it on
+# .last_calibrations, keyed by section index -- so this costs no extra
+# simulation, it just plots data the solve already produced. Worth having:
+# the residual guard reduces a whole calibration to one number per cell and
+# only raises past 0.1 rad, so a marginal fit passes silently and is invisible
+# in the beta the body is actually propagated on. These plots are where it
+# shows.
+# ---------------------------------------------------------------------------
+for _sec, _cal in sorted(hybrid.last_calibrations.items()):
+    _cal_dir = os.path.join(output_dir, f"calibration_section{_sec}")
+    plot_beta_calibration(_cal, mmi, input_solver, _cal_dir)
+    print(f"Calibration plots (section {_sec}) saved -> {_cal_dir}/ (geometry/ + fits/)")

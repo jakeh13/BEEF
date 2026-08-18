@@ -1655,6 +1655,32 @@ itself) was produced WITHOUT this flag and must be re-measured under it, not
 assumed to still hold or to explain the discrepancy until an actual run says
 so.
 
+**9a, continued — first real attempt cancelled 2026-08-17, 3 days in, NOT a
+failure.** The real 4-task prewarm array (job 11856080, then resubmitted
+under `gts-sr108` as job 11859048 after the earlier account-headroom issue)
+was running the OLD `section_mode_beta()` calibration path the whole time —
+`len(calibrate_lengths)` (2) × `N_MODES` (12) = 24 fully independent FDTD
+domain builds, each decomposing the FULL 12×12 transfer matrix (not just the
+diagonal `T_ii` the calibration actually needs). Per
+`validation_markdown/resolved/section_mode_beta_multi_monitor_validation.md`
+step 9 (landed in `beef/solvers/fdtd.py` 2026-08-17 12:00:02, confirmed by
+file `mtime`, three days after job 11859048 started) — `measure_diagonal_only`
+(~4×) and a cache-key fix that finally let the merged-domain path
+(~1.9× more) activate for real production callers, combined ~8.3× on a
+comparable device (MMI 2×2: 30.6h calibration → ~3.7h). A running Python
+process keeps whatever code it imported at start, so 11859048 could not pick
+this up mid-flight — **cancelled** (user's explicit call after confirming
+the timeline) rather than let it run several more days on the slow path.
+
+**Resubmitted, 2026-08-17, same job otherwise unchanged**
+(`HybridSolver(calibrate_body_neff=True)` needs no code change per that
+doc's own "how to apply to another device" section) — smoke-tested first
+(job 11938126, reduced scale, 49m41s, clean) before the real array
+(job **11939350**, `-t 2-12:00:00`/60h, down from the cancelled run's blind
+96h guess — new cost estimate ~43-48h: input/output FDTD sections unchanged
+at ~41-45h since `measure_diagonal_only` only touches the calibration's own
+diagonal-only need, plus ~1.5-3h for the now-fast calibration itself).
+
 **9b. Symmetric mode reuse on the OUTPUT side — proposed, not implemented,
 no code written.** `mmi_2x2_hybrid.py`/`directional_coupler_hybrid.py` each
 cut their large-FDTD count in half by noticing their two *input* arms are

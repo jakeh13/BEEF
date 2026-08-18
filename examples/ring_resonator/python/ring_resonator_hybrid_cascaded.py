@@ -75,6 +75,13 @@ Simulation count: 2 FDTD (left section, bus-excited + ring-excited) + 1 FDTD
 supermode solves (new) + N_WL_SOLVE bare-strip solves (unchanged, for the
 side/far straight phases) — cheaper/smaller FDTD domains, more (individually
 cheap MPB) mode solves, same overall pattern DC's FDTD/EME split uses.
+Plus, since 2026-08-18 and on by default, 2 more FDTD runs: one merged
+multi-monitor beta calibration per cross-section (CALIBRATE_BODY, section 1).
+Those replace the n_eff the two mode solves report with the n_eff meep's own
+time-stepper accumulates, which is what P_body and the straight phases are
+ACTUALLY propagated on. The mode solves still run — they are the reference
+the calibrated curves are reported against, and the MPB seed the branch
+selection needs — but their indices no longer reach the assembly.
 
 Assembly (closed-form all-pass resonator, unchanged from ring_resonator_hybrid.py):
     phi = 2*pi*neff(lambda)*L_outer/lambda
@@ -99,14 +106,15 @@ import matplotlib.path as mpath
 import meep as mp
 import meow as mw
 
-from beef import extrude_polygons
+from beef import extrude_polygons, plot_beta_calibration
 from beef.cache import CacheMissError, load_result, lookup, save_run
+from beef.geometry import UniformCrossSection
 from beef.geometry.base import polygons_to_prisms
 from beef.materials import SOI_220
 from beef.materials.stack import resolved_material_config
 from beef.results import SMatrix
 from beef.solvers.fdtd import (
-    check_source_coverage, monitor_freq_grid, source_fwidth,
+    FDTDSolver, check_source_coverage, monitor_freq_grid, source_fwidth,
 )
 from beef.spectral import interp_complex
 
@@ -127,6 +135,13 @@ _three_d_env = os.environ.get("RING_THREE_D")
 if _three_d_env is not None:
     output_dir = os.path.join(output_dir,
                               "three_d" if bool(int(_three_d_env)) else "two_d")
+# Propagate BOTH analytic pieces -- the outer straights and the coupled-pair
+# body -- on the beta meep itself accumulates, not on MPB's mode index. See
+# the CALIBRATE_BODY block in section 1. Defined here, ahead of os.makedirs,
+# because turning it off has to redirect the output.
+CALIBRATE_BODY = bool(int(os.environ.get("RING_CALIBRATE_BODY", "1")))
+if not CALIBRATE_BODY:
+    output_dir = output_dir + "_uncalibrated"
 os.makedirs(output_dir, exist_ok=True)
 # Per-simulation geometry previews live here; the top level keeps the
 # whole-device assembly diagram and the results plots. One folder per kind of
@@ -285,6 +300,58 @@ MESH_HEIGHT = 2.0    # um, mode-solve mesh z-span                            the
 _MODE_MARGIN = MESH_WIDTH / 2 - W / 2             # per-strip lateral oxide clearance, reused for the coupled pair
 BODY_Y_CENTER = Y_RING / 2
 BODY_MESH_WIDTH = Y_RING + W + 2 * _MODE_MARGIN   # coupled-pair cross-section lateral mesh span
+
+# ---------------------------------------------------------------------------
+# n_eff CALIBRATION -- propagate the analytic pieces on the beta meep itself
+# accumulates, not on MPB's mode index.
+#
+# The same correctness fix every other hybrid example in this repo now takes
+# (resolved/directional_coupler_validation.md item 6; current mechanism and
+# cost model in step 9 of resolved/section_mode_beta_multi_monitor_
+# validation.md). It reaches the ring on 2026-08-18, last of the shipped
+# devices, because neither ring script goes through HybridSolver -- they are
+# raw meep/meow, so `calibrate_body_neff=True` had nothing to attach to and
+# the device was simply never audited for it.
+#
+# THIS SCRIPT HAS TWO THINGS TO CALIBRATE, and the second one is the strong
+# case -- the textbook `calibrate_body_neff` situation, not an analogy to it:
+#
+#   1. THE BARE STRIP, exactly as in ring_resonator_hybrid.py: neff feeds
+#      phi = 2*pi*neff*L_outer/lambda and the phi_bend_correction that
+#      de-embeds BEND_D_IN/BEND_D_OUT of straight out of run_bend_fdtd()'s
+#      measured coefficient. That second use has no self-consistency argument
+#      on the other side at all -- it subtracts an MPB phase from a phase
+#      meep's time-stepper put there.
+#
+#   2. THE COUPLED PAIR (P_body). This IS an EME body spliced between two
+#      FDTD sections: S_coupler = M_left.T @ P_body @ M_left, with M_left
+#      measured by meep at the interface plane and P_body = diag(exp(1j*phi_even),
+#      exp(1j*phi_odd)) propagated over BODY_LENGTH on meow's supermode
+#      indices. Item 6's finding applies here verbatim, including its
+#      amplification: both supermodes are biased the same way by ~2.2-2.4%,
+#      the differential is ~0.13 percentage points, and coupling depends on
+#      Delta-beta, so the beta/Delta-beta ~ 99 lever turns that into a ~10%
+#      error in the coupling this section reports. On the directional coupler
+#      that same mechanism moved L50 by 0.6 um and took a 5% gap to 0.11%.
+#
+# RING_CALIBRATE_BODY=0 restores both meow/MPB curves and redirects the
+# output to _uncalibrated (see the switch up by output_dir), so the previous
+# behaviour stays reproducible and comparable rather than being replaced.
+#
+# Not available in 2-D: a RING_THREE_D=0 run has no (y, z) cross-section for
+# UniformCrossSection to present, so the calibration is skipped with a printed
+# notice rather than quietly measuring a different structure.
+#
+# Longitudinal span the calibrations may cut their fit lengths from.
+# section_mode_beta() picks [s, 2s, 3s] with s = min((span - 2*dpml)/3,
+# max_safe_spacing/2); at beta ~ 9.5 rad/um the physics cap is 1.32 um, which
+# needs span >= 5.0 for the span not to be the binding constraint. 6.0 leaves
+# band-edge room. Both cross-sections are uniform in x, so this is a budget,
+# not a claim about the device: NOTE in particular that it is deliberately
+# NOT BODY_LENGTH -- the fit lengths are set by the 2*pi branch physics, and
+# tying them to the body's real length is exactly the mistake
+# section_mode_beta()'s own docstring warns about ("NOT span/2 and span").
+CALIBRATE_SPAN = 6.0
 
 IFACE_BUFFER = 1.0   # um, straight buffer past each near bend before the interface mode-decomposition
                      # monitor — comparable to the standalone bend's own STUB_LEN-MONITOR_MARGIN
@@ -879,6 +946,124 @@ def solve_body_supermodes(wl, save_dir=None, cache_only=False):
     if save_dir:
         save_run(save_dir, config, result)
     return result
+
+
+# ---------------------------------------------------------------------------
+# 8b. n_eff calibration -- the SAME beta measurement every other hybrid example
+#     in this repo uses, reached through the library rather than re-derived
+#     here. Two cross-sections, mirroring the two mode solves above. See the
+#     CALIBRATE_BODY block in section 1 for why this device needs both.
+#
+#     WHY UniformCrossSection + FDTDSolver AND NOT ANOTHER HAND-ROLLED MEEP RUN.
+#     Everything else in this file is raw meep, for the reason the module
+#     docstring gives: FDTDSolver only builds x-normal sources/monitors and the
+#     ring-side ports are y-normal. Neither of these two cross-sections has
+#     that problem -- both are straight, uniform, and x-normal end to end,
+#     which is precisely what beef/geometry/uniform.py was written for. Its own
+#     module docstring names BOTH of them as its motivating examples and gives
+#     them verbatim:
+#
+#         UniformCrossSection([(0.0, 0.45)], length=1.0)                # strip
+#         UniformCrossSection([(0.0, 0.45), (0.70, 0.45)], length=1.0)  # pair
+#
+#     Going through section_mode_beta_details() inherits, for free, everything
+#     step 9 of resolved/section_mode_beta_multi_monitor_validation.md built:
+#     the merged multi-monitor domain, the diagonal-only decode, the cached
+#     3-anchor MPB seed, the 2*pi branch guard, the phase-linearity residual
+#     guard, and plot_beta_calibration()'s figures.
+# ---------------------------------------------------------------------------
+def build_calibration_solver(sim_width):
+    """FDTDSolver configured from THIS script's constants.
+
+    `sim_width` differs between the two cross-sections (MESH_WIDTH for the lone
+    strip, BODY_MESH_WIDTH for the pair) so each calibration sees the same
+    transverse window its meow counterpart solves -- which is what makes the
+    excess between them a statement about the two ENGINES rather than about two
+    domain sizes. Everything else is the module-level value the ring's own
+    bend and coupler runs use, because the beta being measured has to be the
+    beta those simulations accumulate.
+    """
+    return FDTDSolver(
+        res=FDTD_RESOLUTION,
+        sim_width=sim_width,
+        sim_height=SIM_HEIGHT,
+        three_d=THREE_D,
+        dpml=DPML,
+        source_margin=SOURCE_MARGIN,
+        monitor_margin=MONITOR_MARGIN,
+        num_input_modes=1,
+        num_output_modes=1,
+        output_monitor_centers=[0.0],
+        material_stack=MATERIAL_STACK,
+        # This script's own A/B override (M4); None correctly inherits the
+        # stack's flag rather than hardcoding either answer.
+        dispersive=FDTD_DISPERSIVE,
+        decay_tol=DECAY_TOL,
+        source_bandwidth_factor=SOURCE_BANDWIDTH_FACTOR,
+    )
+
+
+def build_strip_calibration_geometry():
+    """solve_neff()'s bare strip, in the one form FDTDSolver can also consume.
+
+    Single source for the calibration call and its geometry plot, the same rule
+    build_strip_cross_section() already follows for the meow half.
+    """
+    return UniformCrossSection(
+        [(0.0, W)], length=CALIBRATE_SPAN,
+        waveguide_height=MATERIAL_STACK.wg_height,
+    )
+
+
+def build_body_calibration_geometry():
+    """solve_body_supermodes()' coupled bus+ring pair, likewise.
+
+    THE PAIR IS SHIFTED to (-Y_RING/2, +Y_RING/2), not left at the ring's own
+    (0, Y_RING) -- the same convention, for the same reason, as
+    examples/verification/python/verify_ring_eme_engine_agreement.py, which
+    states it at length: this script centres the coupled pair's oxide on
+    BODY_Y_CENTER = Y_RING/2, while FDTDSolver's domain (like every
+    DeviceGeometry's `section_gds()` oxide) is centred on y=0. Handing over the
+    unshifted centres would put the pair 0.35 um off-axis in its own
+    simulation window and in the monitor that decomposes it -- comparing a
+    different structure to the one meow solves, for no reason.
+
+    Translating structure and window together is an exact symmetry of the
+    problem: the cross-section is uniform in x and the cladding is homogeneous,
+    so only the pair's internal geometry and its clearance to the window edge
+    can matter, and the shift improves the latter from 1.43/2.13 um
+    (asymmetric) to 2.13/2.13.
+
+    Strip ORDER still matters and is not cosmetic: it is the port order
+    UniformCrossSection.width_at()/center_at() index into, and bus-then-ring
+    matches the order build_body_cross_section() lays its two rectangles down
+    in. Shifting preserves it -- bus is still first, at the negative offset.
+    """
+    return UniformCrossSection(
+        [(-Y_RING / 2, W), (+Y_RING / 2, W)], length=CALIBRATE_SPAN,
+        waveguide_height=MATERIAL_STACK.wg_height,
+    )
+
+
+def calibrate_beta(geometry, sim_width, n_modes, wavelengths,
+                   save_dir=None, cache_only=False):
+    """`BetaCalibration` from meep's own accumulated phase.
+
+    Returns the full details object rather than just `.beta` so the caller can
+    plot the fit behind the answer: the residual guard reduces a whole
+    calibration to one number per cell and only raises past 0.1 rad, so a
+    marginal fit passes silently and is invisible in the n_eff that ends up
+    being propagated on.
+
+    `save_dir`/`cache_only` mean what they do everywhere else in this script;
+    they go straight to the solver, which fingerprints the call itself
+    (beef/cache/) rather than reusing this file's _sim_params().
+    """
+    return build_calibration_solver(sim_width).section_mode_beta_details(
+        geometry, np.asarray(wavelengths, dtype=float),
+        -CALIBRATE_SPAN / 2.0, CALIBRATE_SPAN / 2.0, n_modes,
+        save_dir=save_dir, cache_only=cache_only,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1558,10 +1743,59 @@ M_right = M_left.transpose(0, 2, 1)                                # [n_wl, 2, N
 print("[3/4] Standalone bend FDTD...")
 b_raw = run_bend_fdtd(wl_fdtd, save_dir=save_dir)
 
+# Is the calibration actually going to run? CALIBRATE_BODY is the request;
+# 2-D has no (y, z) cross-section to measure, so it cannot be honoured there.
+CALIBRATE_NOW = CALIBRATE_BODY and THREE_D
+if CALIBRATE_BODY and not THREE_D:
+    print("RING_CALIBRATE_BODY=1 but this is a 2-D run (RING_THREE_D=0) — "
+          "calibration SKIPPED, both analytic pieces stay on the meow/MPB n_eff.")
+
 print(f"[4/4] Coupled-pair (body) supermode solve at {N_WL_SOLVE} wavelengths...")
 body_modes = [solve_body_supermodes(wl, save_dir=save_dir) for wl in wl_solve]
-neff_even_solve = np.array([m[0] for m in body_modes])
-neff_odd_solve = np.array([m[1] for m in body_modes])
+neff_even_mpb = np.array([m[0] for m in body_modes])
+neff_odd_mpb = np.array([m[1] for m in body_modes])
+
+# The MPB curves are solved unconditionally even when the calibration is on.
+# They cost nothing new (cached mode solves) and they are the only thing the
+# calibrated pair can be read against -- and on THIS section the quantity that
+# matters is not either supermode index but their DIFFERENCE, which is what the
+# print below reports. Item 6's whole point is that beta and Delta-beta move
+# very differently: both supermodes biased ~2.2-2.4% the same way, the
+# differential only ~0.13 points, and coupling riding the beta/Delta-beta ~ 99
+# lever on it.
+neff_even_solve, neff_odd_solve = neff_even_mpb, neff_odd_mpb
+body_calibration = None
+if CALIBRATE_NOW:
+    print(f"  Calibrating the body supermodes on meep's own beta "
+          f"({CALIBRATE_SPAN:.1f} um span, res {FDTD_RESOLUTION:g}, "
+          f"{N_MODES} modes)...")
+    body_calibration = calibrate_beta(
+        build_body_calibration_geometry(), BODY_MESH_WIDTH, N_MODES, wl_solve,
+        save_dir=save_dir,
+    )
+    neff_even_solve = body_calibration.beta[:, 0] * wl_solve / (2.0 * np.pi)
+    neff_odd_solve = body_calibration.beta[:, 1] * wl_solve / (2.0 * np.pi)
+    _i = len(wl_solve) // 2
+    _d_mpb = neff_even_mpb[_i] - neff_odd_mpb[_i]
+    _d_cal = neff_even_solve[_i] - neff_odd_solve[_i]
+    print(f"  Body supermode n_eff at lambda = {wl_solve[_i]:.3f} um "
+          f"(even/odd):")
+    print(f"    MPB mode index  {neff_even_mpb[_i]:.6f} {neff_odd_mpb[_i]:.6f}"
+          f"   delta_n_eff {_d_mpb:.6f}")
+    print(f"    FDTD own phase  {neff_even_solve[_i]:.6f} {neff_odd_solve[_i]:.6f}"
+          f"   delta_n_eff {_d_cal:.6f}   <- P_body propagates on this")
+    print(f"    per-mode excess {100*(neff_even_solve[_i]/neff_even_mpb[_i]-1):+.3f}% "
+          f"/ {100*(neff_odd_solve[_i]/neff_odd_mpb[_i]-1):+.3f}%, "
+          f"but delta_n_eff {100*(_d_cal/_d_mpb-1):+.3f}% "
+          f"— the amplification item 6 is about")
+    plot_beta_calibration(
+        body_calibration, build_body_calibration_geometry(),
+        build_calibration_solver(BODY_MESH_WIDTH),
+        os.path.join(output_dir, "calibration_body"),
+    )
+    print(f"  Body calibration plots saved -> {output_dir}/calibration_body/ "
+          f"(geometry/ + fits/)")
+
 neff_even_fit = np.polyfit(wl_solve, neff_even_solve, deg=2)
 neff_odd_fit = np.polyfit(wl_solve, neff_odd_solve, deg=2)
 neff_even_resid = neff_even_solve - np.polyval(neff_even_fit, wl_solve)
@@ -1619,18 +1853,61 @@ print(f"  reciprocity check: max|k1-k2| = {k_mismatch:.2e} — EXPECTED at machi
 #     bend reference-plane correction (unchanged from ring_resonator_hybrid.py).
 # ---------------------------------------------------------------------------
 print(f"\nBare-strip mode solve at {N_WL_SOLVE} wavelengths...")
-neff_solve = np.array([solve_neff(wl, save_dir=save_dir) for wl in wl_solve])
+neff_mpb = np.array([solve_neff(wl, save_dir=save_dir) for wl in wl_solve])
+neff_solve = neff_mpb
+strip_calibration = None
+if CALIBRATE_NOW:
+    print(f"  Calibrating the straights on meep's own beta "
+          f"({CALIBRATE_SPAN:.1f} um span, res {FDTD_RESOLUTION:g})...")
+    strip_calibration = calibrate_beta(
+        build_strip_calibration_geometry(), MESH_WIDTH, 1, wl_solve,
+        save_dir=save_dir,
+    )
+    neff_solve = strip_calibration.beta[:, 0] * wl_solve / (2.0 * np.pi)
+    _excess = neff_solve / neff_mpb - 1.0
+    _i = len(wl_solve) // 2
+    print(f"  Bare-strip n_eff at lambda = {wl_solve[_i]:.3f} um:")
+    print(f"    MPB mode index  {neff_mpb[_i]:.6f}")
+    print(f"    FDTD own phase  {neff_solve[_i]:.6f}   "
+          f"<- the straights propagate on this")
+    print(f"    excess {100*_excess[_i]:+.3f}%  "
+          f"(band range {100*_excess.min():+.3f}% .. {100*_excess.max():+.3f}%)")
+    # This route's analytic lever arm is the DC-style one when it is in use --
+    # 5.00 um of straight lives inside b rather than in L_outer -- so the
+    # round-trip consequence is smaller here than on the monolithic route. Read
+    # it off the arm actually in force rather than assuming either.
+    # Same selector USE_PHASE_STRIP applies further down (it is defined at the
+    # assembly, after this print); both read the sign of BEND_STRAIGHT_HEADROOM,
+    # which is a module-level constant, so they cannot disagree.
+    _arm = L_OUTER if BEND_STRAIGHT_HEADROOM < 0 else (L_OUTER - BEND_STRAIGHT_TOTAL)
+    _dphi = 2 * np.pi * (neff_solve[_i] - neff_mpb[_i]) * _arm / wl_solve[_i]
+    print(f"    -> round-trip phase shift {_dphi:+.4f} rad "
+          f"= {100*_dphi/(2*np.pi):+.1f}% of a full FSR "
+          f"(analytic arm {_arm:.2f} um)")
+    plot_beta_calibration(
+        strip_calibration, build_strip_calibration_geometry(),
+        build_calibration_solver(MESH_WIDTH),
+        os.path.join(output_dir, "calibration_strip"),
+    )
+    print(f"  Strip calibration plots saved -> {output_dir}/calibration_strip/ "
+          f"(geometry/ + fits/)")
+
 neff_fit = np.polyfit(wl_solve, neff_solve, deg=2)
 neff_resid = neff_solve - np.polyval(neff_fit, wl_solve)
 print(f"  neff fit residual (max abs): {np.max(np.abs(neff_resid)):.2e}")
 
 fig, ax = plt.subplots(figsize=(6, 4))
 wl_fine = np.linspace(WL_MIN, WL_MAX, 200)
-ax.plot(wl_solve, neff_solve, "o", label="mode-solve points")
+if CALIBRATE_NOW:
+    ax.plot(wl_solve, neff_mpb, "s", color="0.55", mfc="none",
+            label="meow/MPB mode index (not propagated on)")
+ax.plot(wl_solve, neff_solve, "o",
+        label="FDTD-calibrated (propagated on)" if CALIBRATE_NOW else "mode-solve points")
 ax.plot(wl_fine, np.polyval(neff_fit, wl_fine), "-", label="degree-2 fit")
 ax.set_xlabel("Wavelength (um)")
 ax.set_ylabel("neff")
-ax.set_title("Bare strip effective index")
+ax.set_title("Bare strip effective index"
+             + (" — FDTD-calibrated" if CALIBRATE_NOW else ""))
 ax.legend()
 ax.grid(True)
 plt.tight_layout()
@@ -1784,6 +2061,13 @@ np.savez(
     t=t, k1=k1, k2=k2, t_ring=t_ring, b_raw=b_raw,
     neff_solve=neff_solve, neff_dense=neff_dense,
     neff_even_solve=neff_even_solve, neff_odd_solve=neff_odd_solve,
+    # The uncalibrated curves alongside the propagated ones. Without these the
+    # npz cannot say WHICH engine's n_eff produced the comb it holds, and the
+    # calibrated/uncalibrated comparison would need a second full run to
+    # reconstruct. Equal to their *_solve partners when the calibration is off
+    # or skipped, which is itself the record that it was.
+    calibrated=CALIBRATE_NOW,
+    neff_mpb=neff_mpb, neff_even_mpb=neff_even_mpb, neff_odd_mpb=neff_odd_mpb,
     T=T, dips=np.array([(d[0], d[1], d[2], d[3]) for d in dips]) if dips else np.empty((0, 4)),
     perimeter=PERIMETER, fsr_guess=FSR_GUESS,
 )

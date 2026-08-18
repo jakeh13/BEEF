@@ -137,6 +137,79 @@ numbers that matter right now:**
   precedent exactly. **Not resolved here**: the user has a separate agent
   already working this implementation; this thread stood down to avoid
   duplicating cluster time/edits.
+- **2026-08-17, `section_mode_beta()` calibration RESUMED at the user's
+  direction — real fix found and confirmed, one new flag surfaced.** A
+  separate, unrelated shared-library effort completed 2026-08-12→16
+  (`resolved/section_mode_beta_multi_monitor_validation.md`) added
+  `use_merged_domain=True` (now `section_mode_beta()`'s default): ONE FDTD
+  domain sized to `max(lengths)` with multiple monitors, instead of
+  `len(lengths)` fully separate domains. Reasoned root cause of the
+  original crash: it almost certainly happened in the SHORTEST individual
+  per-length domain (0.885 µm + 2×0.5 dpml = 1.885 µm, 53% PML) — the
+  merged path builds to `max(lengths)`=2.655 µm instead (27% PML) and so
+  never constructs that domain at all. Caveat: the merged path silently
+  falls back to the old per-length path whenever `save_dir` is passed (no
+  cache-key design yet) — must be called without it to actually engage.
+  **Retested directly (same body cross-section, `save_dir` dropped,
+  reduced test settings) — ✅ SUCCESS.** FDTD decayed completely normally
+  (`t=111.5`, vs. the original crash's non-decaying `t≈4228`), all 16
+  modes' β computed, and at LOWER cost than the crashed attempt (5488 s vs.
+  13853 s). Root-cause diagnosis confirmed correct, not just plausible.
+  **New flag, not yet resolved**: the code's own built-in sanity check
+  fired — `"FDTD β exceeds the MPB seed by +13.69% at λ=1.26 µm mode 15 —
+  out of family with the +2%-ish discretization gap this calibration
+  exists to measure"`. Mode 15 (the highest of 16 requested, likely the
+  most weakly-guided/near-cutoff mode) shows a gap ~7× the size this whole
+  mechanism is designed to correct for. Not yet distinguished whether this
+  is real physics at this device's dense, near-degenerate mode spectrum,
+  or an artifact of the reduced test settings (`res=15`, not production
+  `res=40`). **Next step (not yet run): full production-settings
+  calibration (`res=40`/`decay_tol=1e-11`/`N_WL=3`)**, then use the
+  calibrated neff to re-check the current baseline design's CMRR/phase
+  numbers against the uncalibrated production run (job 11778128) — the
+  original motivation for this whole thread. **HOLDING, then UNBLOCKED,
+  2026-08-17.** The original 3-9+ day estimate (naive res-scaling) turned
+  out to be wrong: a real, measured shared-library fix
+  (`resolved/section_mode_beta_multi_monitor_validation.md` step 9, same
+  day) found `section_mode_beta()`'s dominant cost (89%, measured on job
+  11872191) is MPB eigenmode solves, which do **not** scale with meep
+  resolution at all — only the FDTD-stepping minority (11%) does. Two
+  fixes now apply automatically, no code change needed:
+  `measure_diagonal_only` (~4×) and the merged-domain path no longer
+  falling back to per-length just because `save_dir` is set (~1.9×
+  further, confirmed directly in `beef/solvers/fdtd.py`:
+  `merged_active = use_merged_domain`, no `save_dir`/`cache_only` gate
+  anymore). Real cost model: `n_modes×(n_lengths+1)×n_wl×14s +
+  n_modes×n_wl×14s + n_modes×timesteps×0.0089s` — for this device
+  (N=16, 3 lengths, N_WL=3), **~90 min for calibration alone**, not days.
+  **Submitted at full production settings, job 11938100**
+  (`run_mmi_4x4_90hybrid_calibrated_baseline.batch`, `-t 360`/6h budget,
+  real margin over the ~3h total estimate — calibration + the body's own
+  now-calibrated EME re-solve, reusing job 11778128's 4 cached input
+  solves unchanged).
+
+  **❌ TIMED OUT at the full 6h — never reached the calibration
+  measurement.** Root cause diagnosed: the script's own `cache_only=True`
+  fetch of the 4 baseline input matrices MISSED (job's own log: "input
+  matrices: cache MISS (expected at non-production settings) — solving
+  fresh", printed despite this being a production-settings run — a real
+  signal, not a benign message) — the entire 6h budget went to redoing
+  those 4 already-cached (job 11778128) solves from scratch, with the
+  actual `section_mode_beta()` calibration only starting in the run's
+  final moments (1 MPB solve logged) before the time limit hit. **The
+  underlying cache-fingerprint mismatch has since been fixed** by the
+  other agent's ongoing `fdtd.py` work — re-ran the identical
+  `cache_only=True` fetch immediately after with current code: all 4 HIT
+  instantly (0.25 s total, vs. the 6h the stale-code job burned). A fresh
+  resubmission now would skip straight to the real ~90 min calibration
+  measurement. **Resubmitted at the user's direction, job 11949712**
+  (same batch script, no changes needed — the script itself was correct,
+  the fix landed in the shared library). **Job 11949712 stuck PENDING on
+  `AssocGrpBillingMinutes` again** (same class of issue as Step 6b's own
+  task-1 delay, 2026-08-14) — cancelled and resubmitted under the plain
+  `gts-sr108` account as **job 11981048** (`sbatch --account=gts-sr108`),
+  confirmed picked up (reason `Priority`, normal queue wait). Results
+  pending.
 - **2026-08-14, Step 6b (full-device FDTD reference) RE-QUEUED at the
   user's direction, job 11847078** — see Step 6b's own updated section
   below for the full account (stale-geometry fix + budget raised to 3
@@ -1462,7 +1535,25 @@ mmi_4x4_90hybrid_fdtd.batch`) — confirmed picked up correctly
 (`Account=gts-sr108`, reason changed from `AssocGrpBillingMinutes` to
 plain `Priority`, i.e. now just a normal queue wait). **Port 1 = job
 11847078 task 0; port 3 = job 11859047 task 1** — two different job IDs
-for the two halves of this one check, going forward. Results pending.
+for the two halves of this one check, going forward.
+
+**❌ BOTH TIMED OUT 2026-08-17 at the full `-t 4320` (3-day) budget —
+still no successful full-device FDTD reference for this device, on the
+second real attempt.** Port 1: meep time≈11007 (step 880580). Port 3:
+meep time≈10991 (step 879252) — both essentially the same distance
+reached, both still stepping cleanly at a steady ~0.286 s/step, no NaNs,
+no slowdown, genuinely still converging toward `decay_tol=1e-11` when
+killed — the identical signature the ORIGINAL 6h attempt (job 11733865)
+showed at meep time≈876, just ~12.5× further along this time for
+~12× the budget (6h → 3 days). **Not resubmitted, per the user's
+explicit direction** — holding here rather than escalating the budget
+again without a decay-percentage diagnostic to bound how much further
+would actually be needed. `FDTDSolver` still has no checkpoint/restart,
+so both 3-day attempts are a full loss, not partial progress toward a
+future resubmission. Check 4 (Step 8) remains formally open — this
+device's full-device FDTD cross-check has now failed to complete at 6h,
+then at 3 days, and whether it is tractable at all within a reasonable
+budget is itself an open question, not just "needs more time.
 
 ### Step 7 — metrics helper (A8) — ✅ math primitives landed 2026-08-05; the plot/report itself still pending Step 6
 

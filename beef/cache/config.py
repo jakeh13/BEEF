@@ -57,6 +57,23 @@ _METHOD_ATTRS: Dict[Tuple[str, str], Tuple[str, ...]] = {
         "source_bandwidth_factor",
         "eps_averaging", "subpixel_tol", "subpixel_maxeval",
     ),
+    # section_mode_neff() runs MPB on an initialized grid with no time-stepping
+    # and no source, so decay_tol/source_margin/source_bandwidth_factor cannot
+    # reach it; monitor_margin cannot either (its monitor plane comes from
+    # monitor_center/monitor_size, both fingerprinted as call kwargs).
+    ("FDTDSolver", "section_mode_neff"): (
+        "res", "sim_width", "sim_height", "three_d", "dpml", "material_stack",
+        "eps_averaging", "subpixel_tol", "subpixel_maxeval",
+    ),
+    # Same attribute set as solve_section(): the merged method builds its
+    # domain through the very same section_fdtd_layout() call, differing only
+    # in how many monitors it hangs inside it.
+    ("FDTDSolver", "solve_section_multi_length"): (
+        "res", "sim_width", "sim_height", "three_d", "dpml", "source_margin",
+        "monitor_margin", "half_domain_aperture", "material_stack", "decay_tol",
+        "source_bandwidth_factor",
+        "eps_averaging", "subpixel_tol", "subpixel_maxeval",
+    ),
     ("EMESolver", "solve_section"): (
         "material_stack", "oxide_width", "oxide_height", "res", "temperature", "mode_solver",
     ),

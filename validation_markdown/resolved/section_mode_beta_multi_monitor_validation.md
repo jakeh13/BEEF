@@ -1,6 +1,17 @@
 # Merging `section_mode_beta()`'s per-length FDTD sims into one multi-monitor simulation — plan
 
-**COMPLETE — the mechanism this document specs is built, validated, and wired in (steps 1-8, 2026-08-12 → 2026-08-16).** It is not yet the path production actually takes: every real caller passes `save_dir`, and the merged path has no cache-key design, so all of them still fall back to the per-length path. See the Status section and the open questions at the end.
+**COMPLETE — the mechanism this document specs is built, validated, and wired in (steps 1-8, 2026-08-12 → 2026-08-16).**
+
+**★ SUPERSEDED IN PART, 2026-08-17 — step 9 below. The merged path is now the
+DEFAULT path for every caller, and the reason it is worth taking turned out not
+to be the reason this document gives.** The cost model underneath steps 1-8
+("the dominant cost doesn't scale with monitor count") was measured wrong: the
+dominant cost is the modal decomposition, which scales *exactly* with monitor
+count, and merging alone is worth ~1.09x at production scale, not the 2.49x-3x
+this document projects. The fix that actually pays is `measure_diagonal_only`,
+worth ~4x, and merging is worth a further ~1.9x on top of it. Both landed
+2026-08-17. **If you are here to make another device's calibration cheaper, read
+step 9 and nothing else — it is self-contained and tells you what to do.**
 Prompted by a direct question during manuscript-figure work on the 2×2 MMI's
 `calibrate_body_neff` geometry (`calibrate_body_neff_mmi_2x2_geometry.ipynb`),
 2026-08-12: `FDTDSolver.section_mode_beta()` fits body β from `len(lengths)`
@@ -751,3 +762,847 @@ assumed, to be measured for real in step 1 below.
   today and revisit once caching is designed? Not decided; step 8 itself
   doesn't need an answer to proceed, since it's re-validating shipped
   numbers either way.
+
+---
+
+# Step 9 — the real cost model, and the standard way to calibrate (2026-08-17)
+
+**Read this section on its own if you are here to fix another device's β
+calibration.** It supersedes this document's cost reasoning; the mechanism and
+convergence work in steps 1-8 still stand.
+
+## What every calibration was actually spending its time on
+
+Measured on job **11872191** (`mmi_2x2_hybrid.py`, cold cache, 48 ranks,
+31.4 h), by tallying its own log rather than by reasoning:
+
+| | amount | cost | share |
+|---|---|---|---|
+| MPB eigenmode solves | 7,249 @ ~13.9 s | **27.9 h** | **89 %** |
+| FDTD time-stepping | 1,428,073 steps @ 0.0089 s | 3.5 h | 11 % |
+| structure builds (`set_epsilon`) | 44 | 21 s | ~0 % |
+
+The per-solve figure is confirmed independently at two rank counts — 13.8 s at
+48 ranks (11872191) and 13.9 s at 24 ranks (job 11935291: 154 solves, **zero
+timesteps**, 2,142 s). **The dominant cost does not scale with rank count.**
+Adding nodes buys speed on the 11 % and nothing on the 89 %.
+
+Stage breakdown of the same job, from cache-folder timestamps (the log prints
+only one total):
+
+| stage | wall | share |
+|---|---|---|
+| startup + geometry plots + input-arm FDTD (`M_in1`) | 44 min | 2.3 % |
+| **β calibration** | **30 h 38 min** | **97.6 %** |
+| EME body length sweep (+ its n_eff) | 23 s | 0.02 % |
+| cascade + result plots | 13 s | 0.01 % |
+
+The EME is free — `neff_override` skips the mode solve and propagation is
+analytic. **Calibration is essentially the entire cost of a hybrid example.**
+
+## Why: 42 simulations, each computing 14× what it needs
+
+Two multipliers, and the second one was pure waste:
+
+1. `EigenModeSource` launches **one band per simulation** (`eig_band=k`), so a
+   14×14 transfer matrix costs 14 runs — × 3 fit lengths = **42**. The
+   wavelength axis is *not* one of the multipliers: each run is one broadband
+   Gaussian pulse with DFT monitors at all 11 wavelengths.
+2. Each run then decomposed its monitor into **all** `n_measure` bands at
+   **all** wavelengths — 14 × 11 = 154 MPB solves, ~36 min — and
+   `section_mode_beta_details()` kept one of them, via `np.diagonal(T)`.
+
+Split the log into per-`mp.Simulation` blocks and every calibration run is
+**exactly 165 eigensolves**, with the same composition each time:
+
+| what | band | solves |
+|---|---|---|
+| measurement monitor, the 13 bands the caller discards | ≠ k | 13 × 11 = **143** |
+| measurement monitor, the one band the caller keeps | k | 11 |
+| normalization monitor near the source | k | 11 |
+| the `EigenModeSource` itself | k | **0** (no separate eigensolve logged) |
+| | | **165** |
+
+Whole-job accounting, which closes to the line:
+
+    42 calibration sims × 165   = 6,930
+    + MPB seed (14 bands × 11λ) =   154
+    + M_in1 (14×11 + 11 norm)   =   165
+                                  -----
+                                  7,249   ← exactly the log's count
+
+Per-solve cost follows from the same job two ways: (30.6 h − 3.4 h stepping) /
+6,930 = **14.1 s**, and job 11935291's seed-only run 2,142 s / 154 = 13.9 s.
+Take it as ~14 s.
+
+## The fix: `measure_diagonal_only` (~4×, exact)
+
+`FDTDSolver.solve_section(measure_diagonal_only=True)` decomposes band `k` only
+in run `k`. **Exact, not an approximation** — the removed entries are the ones
+the caller already discards. Off-diagonals return **NaN, not 0**, so a consumer
+reading a never-measured entry fails loudly instead of taking "not computed"
+for "no coupling".
+
+Verified against job 11872191's cached full matrices, all three fit lengths:
+diagonals **bit-identical** (`max|Δ| = 0.0e+00`), fitted phases bit-identical,
+off-diagonals all NaN.
+
+Two design points that are load-bearing:
+
+- **The flag is written into the cache fingerprint ONLY when True.** Writing it
+  unconditionally changes every config's hash and invalidated all 566 entries in
+  `example_sim_cache/` at a stroke — caught during implementation, and now
+  pinned by `tests/test_beta_calibration.py::TestMeasureDiagonalOnly::
+  test_the_flag_is_omitted_from_the_fingerprint_when_false`.
+- **A cached full matrix serves a diagonal request** by extracting its diagonal,
+  so turning the flag on never discards a cache an earlier full run paid for.
+  The reverse (a diagonal serving a full request) is refused, and mode-count
+  superset reuse is disabled for diagonal runs.
+
+## The merged path is now the default (a further ~1.9×)
+
+`solve_section_multi_length()` has a cache key of its own as of 2026-08-17,
+which was **the only thing** keeping it out of production. `merged_active` no
+longer depends on `save_dir`/`cache_only`; the per-length path is still
+reachable with `use_merged_domain=False`.
+
+Post-fix, at 14 modes × 11 λ:
+
+| | per sim | measure solves | normalization | stepping | total |
+|---|---|---|---|---|---|
+| 42 sims × 1 monitor | 11 + 11 = **22** | 42 × 11 = **462** | 42 × 11 = 462 | 3.4 h | **~7.0 h** |
+| 14 sims × 3 monitors | 33 + 11 = **44** | 14 × 33 = **462** | 14 × 11 = 154 | 1.3 h | **~3.7 h** |
+
+Note what merging does and does not do: **the measurement work is identical
+either way** — 462 solves, because you decompose band `k` at three planes
+regardless of whether those planes live in one domain or three. Merging removes
+28 of the 42 *normalization* monitors (one per simulation, and there are 28
+fewer simulations) and two-thirds of the decay waits. That is a real ~1.9×, but it is not the ~3× this document projected, and
+step 4's measured 2.49× came from a configuration doing 36 MPB solves against
+production's 7,249: **reducing `n_modes` 14→2 and wavelengths 11→1 removed
+precisely the axis that dominates a real run.** Reduced-scale speedups from this
+mechanism do not transfer; reduced-scale *equivalence* numbers still do.
+
+Cumulative on the MMI 2×2: **30.6 h → ~3.7 h, ~8.3×.**
+
+## What was considered and rejected
+
+- **One simulation for all 14 modes.** Superposing sources makes the monitor
+  read `c_i = Σ_j T_ij a_j` with no way to separate `T_ii`. Measured from the
+  cached matrices, off-diagonal leakage reaches **5.6 %** of the diagonal
+  (worst at modes 9 and 12), i.e. ~0.055 rad of phase error — over half the
+  0.1 rad residual guard and ~10 % of the 1.55-4.2 % β excess being measured.
+  It would also undo the diagonal fix, since with all bands present every band
+  must be decomposed at every monitor.
+- **More ranks.** See the two-rank-count measurement above.
+
+## The MPB seed: cached, and solved at 3 wavelengths (2026-08-17, later same day)
+
+Cutting the decode exposed a third cost that had always been there and had
+always been invisible. **`section_mode_neff` — the MPB seed — is 154
+eigensolves, ~31.5 min, and became ~39 % of the calibration** (job 11937894's
+own breakdown at 4 of 14 modes). It was 1.9 % of the 30.6 h version. Nothing
+about it changed; everything around it got ~10× cheaper.
+
+The seed exists to do two things, and neither is produce the answer:
+
+1. **Pick the 2π branch.** `arg(T_ii)` comes back wrapped into (−π, π], and with
+   β ≈ 6-11.7 rad/µm over 1.086 µm spacings the true phase advances 7-13 rad
+   between fit points. The wrapped values fit infinitely many lines, one per turn
+   count; MPB's β — within 1.55-4.2 % of the answer — says which.
+2. **Space the fit lengths**, via `beta_max` → `max_safe_spacing` (Guard 2).
+
+Both are coarse. Branch selection needs the estimate within ~25 %
+(`_BETA_MIN_BRANCH_FRACTION`), and production margins sit at 0.05-0.095 of the
+half-distance to the neighbouring branch. Two changes followed:
+
+### Cached
+
+`section_mode_neff()` now takes `save_dir`/`cache_only`, looked up **before the
+simulation is built**. Measured: cold 38.4 s → warm 0.001 s on a scaled-down
+seed, identical `n_eff`. Mode-count superset reuse applies, legitimately here in
+a way it does not for `solve_section()`: this method's monitor plane is pinned by
+`monitor_center`/`monitor_size` and does not widen with the mode count, and band
+*i* is MPB's *i*-th distinct band however many were requested — so a stored
+14-mode seed serves a 6-mode request by slicing.
+
+Its `_METHOD_ATTRS` allowlist is deliberately tighter than `solve_section()`'s:
+a mode solve never time-steps and has no source, so `decay_tol`,
+`source_margin`, `source_bandwidth_factor` and `monitor_margin` cannot reach it
+and must not be fingerprinted, or two physically identical seeds miss each other.
+`pad` **is** fingerprinted — it changes the solved domain without appearing in
+any other kwarg. Pinned by `tests/test_beta_calibration.py::TestSeedCache`.
+
+This does not help a first cold run. What it kills is the repeat: job 11935291
+was 35:42 of which essentially all was the seed, and `cache_only=True` now
+covers the seed too, so a plot/documentation re-run can no longer silently spend
+half an hour there.
+
+### Solved at 3 wavelengths and interpolated — `seed_anchors=3`, on by default
+
+`n_eff(λ)` across a device band is smooth and very nearly quadratic, so the seed
+does not need the caller's whole grid. `seed_anchors` (default **3**, active for
+any caller with more than 3 wavelengths) solves `linspace(min, max, n)` and fits
+each band with a degree-(n−1) polynomial on band-centred x — exact interpolation
+through those points, not a least-squares compromise. `None` restores the old
+behaviour; subsampling is skipped automatically for a single-point band or ≤ 3
+wavelengths, so no degenerate fit is reachable.
+
+**Only the seed is subsampled.** The FDTD time-stepping and the modal decode
+always run on every wavelength passed in. Confirmed on the live call path: the
+log reads `seed solved at 3 of 11 wavelengths and interpolated (degree 2); FDTD
+and decode still use all 11`, and the run then demanded merged simulations on
+all 11.
+
+**MEASURED against the real 11-wavelength MPB seed — job 11940556, COMPLETED
+46:31, exit 0** (`verify_seed_anchor_interpolation.py`, production scale: 14
+modes, res 40, the same 2 µm seed window the calibration uses). The pre-
+implementation budget had used this device's *calibrated* n_eff curve as a
+stand-in, because the MPB seed had never been cached and so its own 11-point
+curve did not exist anywhere. It is now cached, and these are the real numbers:
+
+| | worst \|Δn_eff\| | as Δβ_seed | of branch half-spacing |
+|---|---|---|---|
+| modes 0-11 | ≤ 5.5e-06 | ≤ 2.2e-05 rad/µm | ≤ 7.7e-06 |
+| mode 12 | 2.05e-05 | 8.3e-05 rad/µm | 2.9e-05 |
+| mode 13 (nearest cutoff, most curved) | **1.53e-04** | 6.2e-04 rad/µm | **2.15e-04** |
+
+Against production branch margins of 0.05-0.095, the interpolation consumes
+~0.2 % of the available headroom at the worst mode. (The stand-in curve had
+predicted 1.10e-04; the real seed is 1.53e-04 — same order, slightly worse.)
+
+**The fit lengths do not move at all**, which is the result that matters for
+every cache entry on disk:
+
+    beta_max  truth 11.571417845   interpolated 11.571417845   d = 0.00e+00
+    lengths   truth  [1.085983652, 2.171967305, 3.257950957]
+              interp [1.085983652, 2.171967305, 3.257950957]
+
+Exactly zero, for a structural reason rather than luck: `beta_max` is
+`max(2πn/λ)`, which sits at mode 0 at λ_min — and λ_min is an anchor, so it is
+solved, not interpolated. The anchors also reproduce the truth **exactly** where
+they overlap (`max|Δ| = 0.00e+00`): the anchored solve is the same solve, not an
+approximation of one. So enabling this default invalidates nothing — not the
+merged entries, not the 30.6 h of per-length entries from job 11872191.
+
+Cost: **154 eigensolves → 42, 36.3 min → 9.8 min (3.7×)**, and zero on any
+re-run now that the seed is cached.
+
+### Convergence in `seed_anchors` — measured, free
+
+On-grid subsets of the same 11-point truth, so no extra solves:
+
+| anchors | worst \|Δn_eff\| | of branch half-spacing |
+|---|---|---|
+| 3 (the default) | 1.53e-04 | 2.15e-04 |
+| 5 | 3.01e-06 | 4.23e-06 |
+| 7 | 3.60e-08 | 5.05e-08 |
+
+Roughly two orders per two anchors. `seed_anchors=5` costs ~3 extra minutes if a
+device's band ever needs it. **This is the answer to "was the default
+convergence-tested"** — yes, at production scale, on this device.
+
+One caveat stands: **`seed_excess` (β/β_seed − 1) is now computed against an
+interpolated β_seed**, and that quantity is *the* reported measurement of this
+calibration, not an internal. Measured range on this device 1.535 %-4.227 %,
+worst shift from interpolating **0.0104 percentage points** (mode 13). The
+docstring says so rather than leaving it implied.
+
+### Raise `seed_anchors` when
+
+a band is wide, `n_eff(λ)` is not well described by a degree-(n−1) polynomial
+across it, or a mode crossing sits inside the band. Cost is linear in the
+number. `tests/.../test_more_anchors_help_the_curved_mode` asserts the knob
+works in the direction you would want.
+
+## Still on the table: the modal basis is re-derived ~47 times
+
+The eigenbasis depends only on (cross-section, band, frequency), and a uniform
+body section presents the same cross-section to every run. Job 11872191's log:
+**7,249 mode solves producing 165 distinct results** — 38 minutes of distinct
+work stretched into 27.9 h, because each `mp.Simulation` starts fresh and
+`get_eigenmode_coefficients()` has no cross-simulation basis cache.
+`section_mode_neff()` computes that exact basis for the seed and discards it.
+
+Post-fix, merged + diagonal still executes 616 solves against those 165 — a
+remaining ~3.7×. Reaching it means computing the overlap integrals by hand from
+`get_dft_array()` instead of calling `get_eigenmode_coefficients()`, which means
+re-deriving meep's normalization convention. **Treat that as high-risk**: this
+repo already carries `_EXCITE_NORM_MISMATCH_TOL` from being bitten by exactly
+that (transfer-matrix columns 10-20× too large, `fdtd.py:51`). Not attempted.
+
+## How to apply this to another device
+
+`mmi_2x2_hybrid.py` needed **no change** — both fixes are in the library, so any
+script calling `section_mode_beta()` / `section_mode_beta_details()` /
+`HybridSolver(calibrate_body_neff=True)` gets them automatically. For another
+device:
+
+1. **Change nothing in the example.** Just re-run it.
+2. **Budget the re-run from the cost model**, not from its last wall time.
+   Three terms, all measured on the MMI 2×2:
+
+       merged calibration   n_modes x (n_lengths + 1) x n_wl x 14 s
+                            one decode per fit-length monitor plus one for
+                            normalization, excited band only
+       MPB seed             n_modes x seed_anchors x 14 s   (0 if cached)
+                            seed_anchors is 3 by default, NOT n_wl
+       time-stepping        n_modes x timesteps x 0.0089 s
+
+   Rank count does not help the first two — they are MPB, measured at the same
+   ~14 s per solve at both 24 and 48 ranks.
+3. **Expect the calibration to re-simulate once.** Its per-length entries do not
+   serve the merged path, deliberately — see step 6's domain-length sensitivity.
+   Everything else in the script (input-section FDTD, EME sweeps) still hits
+   cache. Devices with a calibration in `example_sim_cache/` today:
+   `directional_coupler_hybrid.py` (last cold: 3 h 31 m, job 11872184),
+   `directional_coupler_soi160_hybrid.py` (1 h 51 m, job 11872185).
+4. **Verify against the previous β, don't assume.** Two things changed under
+   the calibration, and both are guard-safe but real:
+   - the merged domain is a different simulation (step 6: `5.78e-04` rad/µm of
+     domain-length sensitivity, reduced scale, **production scale still
+     unchecked**);
+   - `β_seed` is interpolated from `seed_anchors` wavelengths, which shifts the
+     reported `seed_excess` by ~0.007 pp at the worst mode.
+
+   Compare the new `calibration/fits/calibration_summary.png` against the old
+   one, and check the residual and branch-margin grids against their 0.1 rad and
+   0.9 guards. **If the branch margin moved materially, raise `seed_anchors`
+   before anything else** — that is the one failure mode the interpolation can
+   introduce, and it is visible in exactly that panel.
+5. **`cache_only=True` now covers the seed as well as the simulations**, so a
+   plot-only re-run is genuinely free and can no longer surprise you with half
+   an hour of MPB.
+6. **Do not reduce `n_modes` or `n_wl` to make a convergence study affordable**
+   without saying so — that is the exact move that produced this document's
+   wrong cost model.
+
+## Production result — job 11937894, COMPLETED 04:14:12, exit 0
+
+The first real run of the merged path at production scale (`mmi_2x2_hybrid.py`,
+14 modes, 11 wavelengths, 48 ranks). Both fixes confirmed by the log's own
+arithmetic, not by inspection:
+
+    FDTD sims  :  14   (42 -> 14: merged domains)
+    eigensolves: 770   = 154 seed + 14 x 44   (165 -> 44 per sim: diagonal decode)
+
+**Cost 30.6 h -> 4.14 h, 7.4x.** Short of the ~3.7 h projection only because
+this job predates the seed cache and the 3-anchor default by a few hours and so
+still paid a full 36-minute 154-solve seed; the next run of this script pays
+neither and should land near 3.4 h.
+
+### The device answer moves — measured, and it is step 6's effect
+
+Against the per-length baseline from job 11872191 (same script, same cache, only
+the calibration path differing), over the full 201-length x 11-wavelength grid:
+
+| | max \|Δ\| | mean \|Δ\| |
+|---|---|---|
+| `T_bar` | **5.5e-03** | 1.7e-03 |
+| `T_cross` | **3.6e-03** | 1.5e-03 |
+
+At the nominal 28.0 µm, λ=1.5475 µm: bar 0.456172 -> 0.455807, cross 0.518707 ->
+0.518836.
+
+**This is not noise and not a regression.** It is step 6's domain-length
+sensitivity (`5.78e-04` rad/µm of β, reduced scale, non-monotonic) arriving at
+production scale for the first time, propagated through a 27.5 µm body and the
+full cascade. Three snug domains and one shared long one are different
+simulations; that was the stated reason per-length cache entries deliberately do
+not serve the merged path, and this is the size of the thing that reasoning was
+protecting against.
+
+Scale: ~0.1 % of the split ratio, an order of magnitude inside this device's own
+gap-5 discrepancy (0.76 %/0.59 % max|ΔT| vs the full-device FDTD reference), and
+both post-fit guards stayed clean throughout.
+
+**So the correct claim is narrower than "the two paths agree":** they agree
+exactly on the fit lengths (β_max sits on an anchor, verified `d = 0.00e+00` by
+job 11940556), and they differ at the 1e-3 level on the device answer. Any
+device re-run onto this path should expect a shift of that order and check it
+against its own error budget rather than assuming bit-identity. Production-scale
+merged-vs-per-length β equivalence — the per-mode number behind this
+transmission shift — is still unmeasured; see the open questions.
+
+## Rollout, 2026-08-17 — every calibrating example moved to the new path
+
+`mmi_2x2_hybrid.py` first (job 11937894), then the rest. **Only one script
+needed an edit**, which is the point: all three changes live in the library, so
+any script reaching the calibration through `section_mode_beta()`,
+`section_mode_beta_details()` or `HybridSolver(calibrate_body_neff=True)` picks
+them up by re-running.
+
+| example | script change | job |
+|---|---|---|
+| `mmi_2x2_hybrid` | none | 11937894 |
+| `directional_coupler_hybrid` | none — already `CALIBRATE_BODY = True` | 11942633_0 |
+| `directional_coupler_soi160_hybrid` | none — already `CALIBRATE_BODY = True` | 11942633_1 |
+| `mmi_1x2_hybrid` | **default flipped off → on** | 11942633_2 |
+| `directional_coupler_soi160_hybrid_length_sweep` | none | 11942662 |
+| `hcg_fabry_perot_hybrid` | none — calibrates nothing itself | 11942662 |
+
+Two ordering facts that matter:
+
+- **`hcg_fabry_perot_hybrid` is downstream of the SOI160 coupler.** It is a
+  `beef.network.Circuit` assembly that consumes that coupler's saved
+  `smatrix_hybrid.pkl` rather than solving anything itself, so it must run
+  *after* 11942633_1 or it republishes a cavity spectrum built on the old
+  coupler. Submitted with `--dependency=afterok:11942633_1`. The HCG mirror half
+  is unaffected — no body section, nothing to calibrate.
+- **Each calibration re-simulates once**, deliberately: per-length entries do
+  not serve the merged path (step 6's domain-length sensitivity is real).
+  Everything else in every script still hits cache.
+
+### The one script edit: `mmi_1x2_hybrid.py`
+
+`CALIBRATE_BODY` defaulted **off** (`MMI1X2_CALIBRATE_BODY=0`) on measured
+grounds that still stand: job 11608690 (2026-08-01) found calibration takes this
+device's gap from 9.11 % to 7.30 % — ~20 % relative against the coupler's 98 % —
+with the sign structure untouched. **That has not changed, and gap 5 stays open
+on exactly those grounds.** What changed is the tradeoff: a calibration used to
+be ~97.6 % of a hybrid example's wall time, so "off unless it earns its keep"
+described a real cost. At ~3.7 h on the 2×2 it no longer does, and propagating
+the body on the FDTD's own β is the self-consistent choice regardless of whether
+it closes a given device's residual error — `directional_coupler_validation.md`
+calls it "a correctness fix rather than a fudge" for that reason.
+
+The escape hatch is still one env var (`MMI1X2_CALIBRATE_BODY=0`), the output
+suffix inverted (`_uncalibrated` now, `_calibrated` before), and gap 5's
+baseline was copied to `example_output/mmi_1x2/mmi_1x2_hybrid_uncalibrated/`
+before the flip. **`tests/golden/mmi_1x2_hybrid.json` is unaffected**: that
+target is an independent reduced-scale re-implementation in
+`tests/test_golden_examples.py` (res 20, `n_modes=6`, no `calibrate_body_neff`),
+not a run of this script — checked, not assumed.
+
+### Notebooks: a checker, and the drift it found
+
+Notebooks here are hand-mirrored copies of the scripts (`notes.md` Solvers item
+6), and its predicted drift had already happened once by audit. The calibration
+work would have made it worse — three notebooks were still calling the old
+`section_mode_beta()` and had never received the `plot_beta_calibration` block.
+
+`scripts/check_notebook_sync.py` is the cheap half of that item's
+recommendation: it diffs a named set of constants and API calls between every
+`.ipynb` and its paired `.py`, normalises the deliberate differences (a script's
+`os.environ.get(NAME, "11")` default equals a notebook's literal `11`) and
+exits 1 on drift, so it can gate CI. It does not generate notebooks from
+scripts; that remains the better fix and remains unbuilt.
+
+Run on the tree it found **six** out of sync — three from this session's work
+and three pre-existing, both of the latter being exactly the failure mode item 6
+warned about:
+
+| notebook | drift | age |
+|---|---|---|
+| `directional_coupler_hybrid` | missing `plot_beta_calibration` / `section_mode_beta_details` | this session |
+| `directional_coupler_soi160_hybrid` | same | this session |
+| `mmi_2x2_hybrid` | same | this session |
+| `mmi_1x2_hybrid` | `CALIBRATE_BODY` default | this session |
+| **`mmi_2x2_fdtd`** | **`N_WL` 11 vs the script's 51** | since 2026-08-10 (job 11791990_1) |
+| **`modal_multiplexer_hybrid`** | **`N_MODES` 16 vs the script's 15** | pre-existing |
+
+All six fixed; the checker now exits 0 on 18 pairs. Every notebook re-validated
+as parseable JSON with every code cell compiling — worth doing, because the
+first attempt at injecting the new import produced `from beef import (,
+plot_beta_calibration` in two of them and only that check caught it.
+
+### The geometry plot now draws the domain that ran (2026-08-17, later)
+
+The rollout above left one thing stale, found by looking at job 11937894's own
+output rather than at the code: `calibration/geometry/` still held **three**
+PNGs, one per fit length, each drawing a snug window with its own private
+source. The merged run is one domain with three monitors. The plot was
+merged-*aware* — `plot_beta_calibration_geometry()` appends "(merged run —
+per-length equivalent shown)" to each title when `cal.merged` — so it was never
+false, but the module's own stated purpose is "what was actually simulated," and
+under the new default it no longer showed that.
+
+`plot_beta_calibration_merged_geometry()` draws the real thing: one domain at
+`max(lengths)`, one source, one interface monitor per length.
+`plot_beta_calibration()` now picks off `cal.merged`, so **no example script
+changed** — same rule as the rest of step 9. Per-length windows still render for
+a per-length calibration, and `per_length=True` asks for both on a merged one
+(useful against a pre-merge run's figures); asking for a merged figure from a
+per-length calibration raises rather than inventing a domain that never existed.
+
+The monitor positions are **not** re-derived in the plot. The formula moved out
+of `solve_section_multi_length()` into `merged_mea_positions()`, which both now
+call — the same anti-duplication rule `section_fdtd_layout()` and
+`BetaCalibration` each already record, and the third time this file has had to
+apply it.
+
+Verified against job 11937894's cached calibration (`cache_only=True`, no
+simulation): `merged=True`, lengths 1.086/2.172/3.258, guards clean. The drawn
+domain is `[-1.629, 1.629]`, source at local `x=3.258` (`source_margin=0`), norm
+monitor at `3.008`, interface monitors at `2.172 / 1.086 / 0.000` — each exactly
+`L_i - source_margin` from the source, i.e. its per-length twin's distance.
+Every affected script passes the same `monitor_center`/`monitor_size` to the
+calibration and to the plot (`_iface_mon` in the three couplers, nothing in
+either for the 1×2), so the drawn window is the simulated one in all of them.
+Landed before 11942633 started, so all four pending devices produce it on this
+run.
+
+**What the picture is for:** the shortest length's monitor sits 1.086 µm from
+the source in the 2×2 — interior, with two more monitors and the source's own
+near field between it and the domain edge. That clearance is the open question
+below, and it is not visible at all in a plot that redraws each length with its
+own source.
+
+## Open questions this step opens or changes
+
+- **Production-scale merged-vs-per-length equivalence is still unmeasured.**
+  A script exists for it —
+  `examples/verification/python/equivalence_test_solve_section_multi_length_production.py`
+  — comparing merged against the cached per-length β at 14 modes × 11 λ, with
+  the per-length half served free from cache. Submitted as job 11935871 and
+  **cancelled**: it was budgeted at 20 h from the old 3× cost model when the
+  real figure is ~28 h. Re-budget before resubmitting.
+- **Does the merged path need a minimum source-to-monitor clearance rule?**
+  Unchanged from step 6 — still open, still only 4 domain sizes tested. Now at
+  least *visible* per device, in the merged geometry plot above (1.086 µm on
+  the 2×2); a plot is not a threshold, and none is asserted.
+- **Is the basis-reuse 4× worth the normalization risk?** New, undecided.
+
+---
+
+# Step 10 — the audit that closes the rollout (2026-08-18)
+
+Step 9's rollout table was written as "every calibrating example moved to the
+new path." A direct audit of that claim, prompted by the user asking whether the
+2×2, the 1×2, the coupler, the HCG Fabry-Perot and the **ring resonator** were
+all on the current calibration with a run behind them, found it true for the
+five it listed and **incomplete in two ways it could not see**: one device was
+never in the table at all, and one of the devices that was in it had run with
+its calibration diagnostics silently disabled.
+
+## Every shipped example, re-run on one library state — jobs 11981703, 11982196
+
+The five step-9 devices were re-run together rather than trusted, because
+`mmi_2x2_hybrid`'s result (job 11937894, finished 16:19) predated the last three
+library edits of 2026-08-17 (16:48–16:50: `merged_mea_positions()` extraction,
+`plot_beta_calibration_merged_geometry()`, and the seed cache / `seed_anchors=3`
+default). Its calibration *figures* had been regenerated afterwards by a
+`cache_only` pass, but its device answer had not been produced under the current
+library, and "nothing should move" was an argument, not a measurement.
+
+Nothing moved. Every device came back bit-identical to its step-9 run, in
+**under 90 seconds each** — the merged calibration entries all hit cache, which
+is itself the evidence that none of the three late edits perturbed a cache key:
+
+| example | job | wall | result vs step 9 |
+|---|---|---|---|
+| `mmi_1x2_hybrid` | 11981703_0 | 0:53 | T 0.3749 / 0.3749 / 0.7498 — identical |
+| `mmi_2x2_hybrid` | 11981703_1 | 0:56 | bar 0.4558, cross 0.5188, total 0.9746 — identical |
+| `directional_coupler_hybrid` | 11981703_2 | 1:21 | L₅₀ 15.080479 µm, T 0.5071 / 0.4911 — identical |
+| `directional_coupler_soi160_hybrid` | 11981703_3 | 0:46 | T 0.8989 / 0.0979 — identical |
+| `..._soi160_hybrid_length_sweep` | 11981703_4 | 0:45 | L₅₀ 11.9016 µm — identical |
+| `hcg_fabry_perot_hybrid` | 11982196 | 7:50 | FSR 2.255 nm — identical |
+
+So the seed cache and `seed_anchors=3` really are inert on an already-calibrated
+device, at production scale, on four devices rather than the one job 11940556
+measured. `hcg_fabry_perot_hybrid` ran after the coupler again, for the reason
+step 9 gives.
+
+Two stale artifacts cleaned while there: both couplers'
+`calibration/geometry/` still held the three `length_*.png` windows from their
+last *pre-merged* run (2026-08-16) sitting beside the current
+`merged_domain.png`. Neither was regenerated by the merged path and neither
+describes the simulation that ran. Deleted; the length sweep's folder, which
+never had a pre-merge run, already showed the correct clean state and is the
+reference for what these should look like.
+
+## Finding 1 — `mmi_1x2_hybrid` was calibrating and reporting nothing
+
+Job 11942633_2 is recorded in step 9's table as the 1×2's rollout run, and it
+was: `calibrate_body_neff = True`, printed by the script, body propagated on the
+FDTD's β. But its output directory has **no `calibration_section1/`**, and its
+log never printed the "Calibration plots saved" line. A calibrated run with no
+calibration diagnostics, exit 0, no warning.
+
+The cause is an interaction between two things that are individually correct.
+`HybridSolver._solve_sections()` cleared `self.last_calibrations` at the top of
+every pass — deliberately, so a stale entry from an earlier pass can never be
+plotted as this one's. And `mmi_1x2_hybrid.py` calls `solve()` **once per output
+port with a shared `cache=` dict**, deliberately, so the input and body sections
+are simulated once rather than twice. On the second call the body section hit
+that cache and `continue`d before `_calibrated_neff()` ran, so the dict the
+script then loops over was empty and its `plot_beta_calibration()` block did
+nothing at all.
+
+**Fixed in `beef/solvers/hybrid.py`:** a section served from the in-memory cache
+now carries its previous entry forward. That is not a weakening of the
+no-stale-entries rule — the cache key includes `calibrate_body_neff` along with
+everything else that changes the matrix, so a hit means this pass is *reusing
+the matrix that very calibration produced*. The entry describes what is being
+used, which is exactly the contract.
+
+Pinned by `tests/test_beta_calibration.py::
+TestLastCalibrationsSurvivesTheInMemoryCache`, four tests: the carry-forward
+itself, that a genuinely re-solving pass still reports its own measurement and
+not the previous one, that the no-cache path is unchanged, and that turning the
+flag off still empties the dict. Verified to fail without the fix
+(`assert set() == {1}`), not just to pass with it.
+
+Re-run as job 11981703_0: `calibration_section1/` now holds 8 per-mode fits, the
+summary, and `merged_domain.png`, and the device answer is unchanged — which is
+the expected shape, since only the *reporting* was broken, never the β.
+
+**Scope: this affects any script that calls `solve()` more than once with a
+shared cache and then reads `last_calibrations`.** Two scripts in this repo do,
+not one:
+
+- `mmi_1x2_hybrid.py` — two `solve()` calls, one per output port. Fixed and
+  re-run here.
+- **`mmi_1x4_hybrid.py` — four `solve()` calls sharing one `section_cache`
+  (line 333), `CALIBRATE_BODY = True` since 2026-08-13, and the same
+  `last_calibrations` plotting loop copied from the 1×2 (line 482).** It has the
+  bug identically, and its shipped output directory has no `calibration_section*`
+  folder either. The library fix repairs it, but **this device is not re-run
+  here**: it is mid-campaign (`mmi_1x4_sin300_validation.md`, prewarm jobs still
+  running), and starting a run against that would collide with work in flight.
+  Its next run picks the diagnostics up for free — no script edit needed. Flagged
+  rather than done.
+
+The 2×2 and both couplers call `section_mode_beta_details()` directly and were
+never affected. Fixing this in the library rather than in the script is what
+makes the 1×4 a free repair instead of a second edit — and what keeps it from
+being a trap for the next multi-port device.
+
+## Finding 2 — the ring resonator was never audited for this at all
+
+**`ring_resonator_hybrid.py` and `ring_resonator_hybrid_cascaded.py` do not
+appear in step 9's rollout table, and the reason is that they had never been
+considered for calibration at any point.** `ring_resonator_validation.md` — a
+3,000-line document — does not contain the strings `calibrate_body_neff` or
+`section_mode_beta` anywhere.
+
+The reason is structural, not an oversight in the rollout: **neither ring script
+goes through `HybridSolver`.** They are raw meep/meow, because `FDTDSolver` only
+builds x-normal sources and monitors and the two ring-side ports are y-normal
+(each script's module docstring says so). So `calibrate_body_neff=True` had
+nothing to attach to, and a rollout that swept "every script reaching the
+calibration through `section_mode_beta*()` or `HybridSolver`" swept past the one
+device that reached it through neither.
+
+### It applies, and on the cascaded route it applies harder than on a coupler
+
+Three consumers of an MPB index, all of them inside a loop whose every other
+term is a meep measurement:
+
+1. **`phi_bend_correction`, both scripts.** `run_bend_fdtd()`'s coefficient is
+   measured between monitor planes that sit `BEND_D_IN`/`BEND_D_OUT` of straight
+   waveguide from the arc ends, and the assembly de-embeds that straight with
+   `exp(-1j·2π·n_eff·(D_IN+D_OUT)/λ)`. The phase being removed was put there by
+   meep's time-stepper. Removing it with MPB's index subtracts the wrong number
+   from a measured quantity — **there is no self-consistency argument on the
+   other side of this one**; it is simply the wrong β.
+2. **`phi = 2π·n_eff·L_outer/λ`, both scripts.** The analytic straights. Same
+   argument as an EME body spliced between FDTD sections: a round trip assembled
+   from `b`, `t`, `k1`, `k2`, `t_ring` (all meep) plus `phi` (MPB) changes answer
+   depending on which engine carried which segment.
+3. **`P_body`, cascaded only — and this is the textbook `calibrate_body_neff`
+   case, not an analogy to it.** `S_coupler = M_left.T @ P_body @ M_left`, with
+   `M_left` measured by meep at the interface plane and
+   `P_body = diag(exp(1j·φ_even), exp(1j·φ_odd))` propagated over `BODY_LENGTH`
+   on meow's supermode indices. That is an EME body between two FDTD sections,
+   with item 6's amplification intact: both supermodes biased the same way, the
+   differential tiny, and coupling riding the `β/Δβ ≈ 99` lever on it.
+
+Scale, on the monolithic route's own numbers: the res-40 MPB-vs-meep gap
+measured on the coupler is ~2.2–2.4 % in β; on `L_OUTER = 7.00 µm` at 1.55 µm
+that is ~1.5 rad of round-trip phase, **roughly a quarter of an FSR**. That is
+the same order as this device's gap-3 mode-resolution finding, which its own
+validation document calls "not a caveat, it is a wrong answer for the one
+quantity this device exists to report." The cascaded route's analytic arm is
+2.00 µm rather than 7.00 µm (the DC-style bend accounting moved 5.00 µm into
+`b`), so term 2 is ~3.5× smaller there — but term 3 is unique to it.
+
+### What was built
+
+`UniformCrossSection` — which exists for exactly this and whose module docstring
+names **both** of these cross-sections as its motivating examples, verbatim —
+plus `FDTDSolver.section_mode_beta_details()`. Nothing was re-derived: going
+through the library inherits the merged multi-monitor domain, the diagonal-only
+decode, the cached 3-anchor seed, the 2π branch guard, the residual guard and
+`plot_beta_calibration()`'s figures. Hand-rolling a β fit against this script's
+own conventions would have duplicated tested code and produced a β with none of
+the guards attached.
+
+The solvers are configured from **each script's own module-level constants** —
+resolution, PML, source/monitor margins, decay tolerance, source bandwidth,
+2-D/3-D, and the resolved dispersion flag — because the β being measured is only
+the β the ring's bend and coupler runs accumulate if the simulation around it
+matches. `sim_width` is `MESH_WIDTH` for the strip and `BODY_MESH_WIDTH` for the
+pair, matching each meow counterpart's transverse window, so the excess between
+the two engines is a statement about the engines and not about two domain sizes.
+
+`CALIBRATE_SPAN = 6.0 µm` is a budget, not a device dimension: `spacing =
+min((span − 2·dpml)/3, max_safe_spacing/2)` and at β ≈ 9.5 rad/µm the physics cap
+is 1.32 µm, needing span ≥ 5.0 for the span not to bind. It is deliberately
+**not** `BODY_LENGTH` — tying fit lengths to the body's real length is the
+mistake `section_mode_beta()`'s own docstring warns about.
+
+Both scripts keep the meow/MPB curves and report the calibrated ones against
+them (per-mode excess, and for the pair the Δn_eff excess, which is the number
+item 6 is actually about). Both write `calibrated` and the uncalibrated curves
+into `ring_data.npz`, so the comparison never needs a second run to reconstruct.
+`RING_CALIBRATE_BODY=0` restores the old behaviour and inverts the output suffix
+to `_uncalibrated`, the same escape hatch `mmi_1x2_hybrid.py` uses.
+
+**Skipped in 2-D, loudly.** A `RING_THREE_D=0` run has no (y, z) cross-section
+for `UniformCrossSection` to present, so the calibration is skipped with a
+printed notice rather than quietly measuring a different structure.
+
+Notebooks: both ring notebooks were brought back into sync and
+`scripts/check_notebook_sync.py` is at **0 out of sync across 18 pairs**, with
+every code cell in both re-verified as compiling — worth doing for the reason
+step 9 records, since a previous hand-edit of notebook JSON produced
+`from beef import (, plot_beta_calibration`.
+
+### Status: submitted, NOT yet landed
+
+`batch/verification/run_ring_calibrated.batch` — four runs sequentially in one
+job (monolithic calibrated, cascaded calibrated, then both uncalibrated
+baselines). Sequential deliberately: the two scripts request an **identical**
+bare-strip calibration and so share a cache key, which concurrent tasks would
+race to write.
+
+Two things were checked before submitting, both cheaply and both worth the
+minutes:
+
+- **The calibration path itself runs on a `UniformCrossSection`**, measured
+  rather than assumed — a reduced-scale 3-D probe (res 20, 3 λ, 22 min). It
+  came back `merged=True`, fit lengths `[1.3102, 2.6204, 3.9307]` µm — i.e.
+  capped by `max_safe_spacing/2` as intended and **not** by `CALIBRATE_SPAN`,
+  which is the check that 6.0 µm is large enough — `n_eff` 2.4287 / 2.3635 /
+  2.2962 across 1.50–1.60 µm, worst residual **3.62e-03 rad** against the 0.1
+  guard, worst branch margin **0.243** against 0.9, turn ambiguity 0.0017, and
+  no wrap count moved off the seed's own rounding. Production res 40 should
+  tighten all of these.
+- **`plot_beta_calibration()` renders both cross-sections.** This runs *after*
+  the expensive part in both scripts, so a raise there would waste the
+  simulation it had just paid for. Exercised with a synthetic
+  `BetaCalibration` of the real shape — no meep, seconds — for the strip and
+  the pair, at their respective `sim_width`s.
+
+That second check paid for itself immediately, on something no assertion would
+have caught: the drawn domain showed **the coupled pair sitting 0.35 µm
+off-axis**. The first version handed `UniformCrossSection` the ring's own
+`(0, Y_RING)` centres, on the reasoning that the monitors span the full
+`sim_width` about y=0 so shifting would move the pair off its window. That is
+backwards — FDTDSolver's domain *is* centred on y=0, so not shifting is what
+puts the pair off-centre, in the simulation and in the monitor that decomposes
+it. `verify_ring_eme_engine_agreement.py` had already settled this convention
+and states it explicitly: the ring centres this cross-section's oxide on
+`BODY_Y_CENTER = Y_RING/2` while every `DeviceGeometry.section_gds()` centres
+its oxide on y=0, so the strips go in at `(-Y_RING/2, +Y_RING/2)` and the
+comparison is between the same structure rather than two different ones.
+Corrected to match; clearance goes from 1.43/2.13 µm to 2.13/2.13. The first
+submission (job 11982549) was **cancelled 2 min in** to make the change — it
+was still on the strip calibration, which this does not touch. Resubmitted as
+**job 11983058**.
+
+### The cost model was wrong, and the reason is a finding of its own
+
+The batch script budgeted this from step 9's calibration cost model "not from
+these scripts' last wall times (their FDTD halves are all cached; only the
+calibrations are new)". **The second half of that was false**, and job 11983058
+showed it within the hour: `run_coupler_fdtd('bus')` took **~55 min to
+simulate** rather than loading.
+
+Checked against the cache rather than guessed at — every stored entry's
+`config.json` compared field-by-field against the one this run wrote:
+
+| family | entries usable at 3-D / res 40 / 101 λ |
+|---|---|
+| `RH_run_coupler_fdtd_bus` | 1 of 8 — and that one is this run's own, written 11:56 |
+| `RH_run_coupler_fdtd_ring` | **0 of 7** |
+| `RH_run_bend_fdtd` | **0 of 7** |
+| `RH_cascaded_run_left_fdtd_bus` | 1 of 16 |
+| `RH_cascaded_run_left_fdtd_ring` | 1 of 16 |
+| `RH_cascaded_run_bend_fdtd` | 1 of 16 |
+
+The older monolithic entries miss on `three_d` (eight of them are 2-D runs) and,
+for the one 3-D entry, on `resolved_dispersive`/`resolved_si_reparam`/
+`resolved_sio2_reparam` being `None` where today's run resolves them — i.e. it
+predates the 2026-08-03 **M3/M4 material fingerprint**. So:
+
+**`ring_resonator_hybrid.py`'s FDTD half has been stranded since 2026-08-03 and
+this is its first 3-D production run under the current material model.** The
+ring's own validation document predicted exactly this ("⚠️ This strands the 39
+mode-solve cache entries… The 6 FDTD entries… remain stranded by the earlier axis
+fix, and are now *additionally* stranded by the M3 material fingerprint") — the
+prediction simply was never cashed in, because the device was not re-run again.
+The **cascaded** route is fully cached, consistent with it being the validated
+one (post-M1 3-D job 11658568).
+
+Revised estimate, from this run's own measured 55 min/domain rather than from a
+model: monolithic ≈ 55 (bus) + 55 (ring) + ~15 (bend) + ~25 (strip calibration)
+≈ **2.5 h**; cascaded ≈ **45 min** (FDTD cached, strip calibration cached from
+stage 1, only the coupled pair new); the two uncalibrated stages a few minutes
+each. **≈ 3.5 h against an 8 h wall.** A timeout would be recoverable rather
+than wasteful — everything computed is cached, so a resubmit resumes.
+
+Worth stating plainly: **the ring's comb will move for two reasons at once on
+this run**, the calibration and the first post-M3/M4 3-D FDTD, and the
+uncalibrated baseline in the same job separates them — it is being produced under
+the same material model, so the calibrated-vs-uncalibrated difference isolates
+the calibration alone.
+
+### Stage 1 landed — and it reproduces item 6's number on a different stack
+
+`ring_resonator_hybrid.py`, calibrated (job 11983058):
+
+    Bare-strip n_eff at lambda = 1.550 um:
+        MPB mode index  2.339523
+        FDTD own phase  2.363938   <- the straights propagate on this
+        excess +1.044%  (band range +0.998% .. +1.044%)
+        -> round-trip phase shift +0.6928 rad = +11.0% of a full FSR
+    Measured mean FSR: 12.560 nm (predicted 12.87)
+
+Guards clean with room to spare, read off `calibration/fits/
+calibration_summary.png`: fit residual **0.0018–0.0026 rad** against the 0.1
+guard (~40×), branch margin **0.084–0.089** against 0.9 — and that margin range
+sits exactly where step 9 says production margins sit (0.05–0.095). Fit lengths
+`[1.264, 2.528, 3.792]` µm inside the 6.0 µm span, so `CALIBRATE_SPAN` was not
+the binding constraint, as intended.
+
+**The +1.044% is smaller than the ~2.2–2.4 % this document's estimate assumed,
+and the reason is not a discrepancy — it is gap 3.** The script reports the
+excess against the ring's own **res-100** meow curve, because that is what it
+would otherwise have propagated on. The calibration's own `seed_excess` panel,
+which measures against `FDTDSolver`'s res-40 MPB seed, reads **2.23 % → 2.37 %
+across the band** — the like-for-like comparison. By hand against gap 3's own
+res-40 figure for this recipe (2.311706): `2.363938 / 2.311706 − 1 = +2.259 %`.
+
+Set beside `directional_coupler_validation.md` item 6, measured on **SOI_160**,
+different waveguide dimensions, different device:
+
+| | meep(res 40) vs MPB(res 40) |
+|---|---|
+| coupler, even supermode | +2.233 % |
+| **ring, bare strip** | **+2.259 %** |
+| coupler, odd supermode | +2.361 % |
+
+The ring lands between the coupler's two modes. **This is the first independent
+reproduction of item 6's discretization gap on another stack**, and it was not
+sought — it fell out of a device audit. It also settles what the two fixes are
+each doing: gap 3's move to `MODE_RESOLUTION = 100` already closed a bit over
+half the res-40 gap, and the residual +1.044 % is the part **mesh refinement of
+MPB cannot reach**, which is exactly item 6's claim about why this is a
+correctness fix and not a convergence problem.
+
+The comb moved to 12.560 nm. **That number is not yet attributable**: this run
+is also the monolithic route's first 3-D FDTD under the M3/M4 material model
+(see above), so two things changed at once. Stage 3's uncalibrated baseline,
+same material model, is what separates them.
+
+**No further numbers are claimed yet** — stages 2–4 still running. When it lands, the things to check are the
+ones step 9's "how to apply this to another device" section names — the residual
+and branch-margin grids against their 0.1 rad and 0.9 guards, and the comb shift
+against the ~quarter-FSR estimate above — plus one specific to this device:
+whether the shift moves the monolithic and cascaded routes' **half-FSR offset**
+(`ring_resonator_validation.md` Order item 1, still open) or leaves it intact.
+The two routes' analytic arms differ by 3.5×, so the calibration does not affect
+them equally, and that is a real prediction this run tests rather than a
+hope.

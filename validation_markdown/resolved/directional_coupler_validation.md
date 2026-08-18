@@ -1,5 +1,25 @@
 # Directional coupler validation
 
+> **★ 2026-08-17 — both DC hybrid examples' β calibrations are now stale, and
+> re-running them is cheap.** `calibrate_body_neff` (item 6's mechanism) now
+> takes the merged multi-monitor path with a diagonal-only decomposition, and
+> its MPB seed is both cached and solved at 3 wavelengths instead of the full
+> band — all three landed in the library — `directional_coupler_hybrid.py` and
+> `directional_coupler_soi160_hybrid.py` need **no edits**, only a re-run. Their
+> calibrations will re-simulate once (per-length cache entries do not serve the
+> merged path, deliberately); everything else in both scripts still hits cache.
+> Last cold runs for budgeting: 3 h 31 m (job 11872184) and 1 h 51 m (job
+> 11872185), both on the old path, so expect substantially less. **Budget from
+> the cost model in step 9 of
+> [`section_mode_beta_multi_monitor_validation.md`](section_mode_beta_multi_monitor_validation.md),
+> not from those wall times**, and compare the new β against the old before
+> trusting it — the merged domain is a different simulation and its
+> domain-length sensitivity is measured but only at reduced scale, and
+> `seed_excess` now rides on an interpolated β_seed. If either coupler's
+> branch-margin grid moves materially, raise `seed_anchors` first: the SOI160
+> device's band is the wider of the two, so it is the likelier of the pair to
+> want more than 3.
+
 Status, open work, and outstanding verification. **Everything already closed — items 1–7,
 9–12 and 14, with their measurements, jobs and reasoning — lives in
 [`archive/dc_validation_20260727.md`](../archive/dc_validation_20260727.md).** (Item 14 closed

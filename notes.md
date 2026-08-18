@@ -1665,6 +1665,18 @@ lives in "Current library reference" above, not here.
    as *the* failure mode (degenerate bands piling up at cutoff on SOI_160), so
    running that tutorial reproduced a known-bad basis.
 
+   **Half of this is now built (2026-08-17): `scripts/check_notebook_sync.py`.**
+   It diffs a named set of constants and API calls between every `.ipynb` and
+   its paired `.py`, normalises the deliberate differences (a script's
+   `os.environ.get(NAME, "11")` default equals a notebook's literal `11`) and
+   exits 1 on drift, so it can gate CI. Run on the tree it immediately found six
+   pairs out of sync — three from that day's calibration work, and three that
+   had been sitting there: `mmi_2x2_fdtd`'s `N_WL` still 11 against the script's
+   51 (stale since 2026-08-10, job 11791990_1) and `modal_multiplexer_hybrid`'s
+   `N_MODES` still 16 against the script's 15. All fixed; the checker now exits
+   0 on 18 pairs. **Generation from scripts is still the better fix and is still
+   unbuilt** — this only detects drift, it does not prevent it.
+
    The fourth is the reverse and the more interesting one: the notebook was
    right. `COUPLING_LENGTH` was deliberately set to 15.13 in four places with
    documented reasoning (item 5's ground-truth crossing 15.129 µm, not the

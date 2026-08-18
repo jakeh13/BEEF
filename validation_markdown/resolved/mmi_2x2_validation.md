@@ -1,5 +1,28 @@
 # 2×2 MMI validation — to-do
 
+> **★ 2026-08-17 — this device is the reference case for the new β-calibration
+> cost model, and its calibration was re-run on the merged multi-monitor path.**
+> Two library changes landed and both apply automatically to every device
+> (`mmi_2x2_hybrid.py` itself is unchanged): `measure_diagonal_only=True` stops
+> each run decomposing 14 bands it discards 13 of (~4x, exact — verified
+> bit-identical against this device's own cached matrices), and
+> `solve_section_multi_length()` gained a cache key, making 14 sims × 3 monitors
+> the default instead of 42 sims × 1 monitor (~1.9x more). This device's
+> calibration went 30.6 h → **4.14 h measured** (job 11937894, COMPLETED, 14
+> sims and 770 eigensolves exactly as predicted); the next run should reach
+> ~3.4 h now that the seed is cached and anchored. The device answer moved
+> max 5.5e-03 in T_bar / 3.6e-03 in T_cross across the 201×11 grid — step 6's
+> domain-length effect at production scale, ~0.1% of the split ratio and an
+> order of magnitude inside this device's own gap-5 discrepancy. Its 42 per-length entries in `example_sim_cache/` remain valid and are
+> NOT reused by the merged path, deliberately. A third change landed the same
+> day: the MPB seed is now cached and solved at `seed_anchors=3` wavelengths
+> instead of all 11 (154 eigensolves → 42, ~31.5 min → ~8.6 min, free on a
+> re-run) — verified against this device's real 11-wavelength seed by job
+> 11940556. **Read step 9 of
+> `section_mode_beta_multi_monitor_validation.md` before re-running any other
+> device's calibration** — it is self-contained and carries the cost model to
+> budget with, since a calibration is ~97.6% of a hybrid example's wall time.
+
 > **2026-07-28 — the material model changed under every device here.** Both engines
 > now evaluate one analytic Sellmeier model (Salzberg Si, Malitson SiO2) instead of
 > each doing its own nearest-tabulated lookup, which shifts n_Si by ~0.002 and

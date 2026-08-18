@@ -57,7 +57,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from beef import (
-    DirectionalCoupler, EMESolver, FDTDSolver, HybridSolver, SOI_160, plot_hybrid_geometry,
+    DirectionalCoupler, EMESolver, FDTDSolver, HybridSolver, SOI_160, plot_beta_calibration, plot_hybrid_geometry,
 )
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -238,11 +238,24 @@ M_out_cross = M_in1.transpose(0, 2, 1)    # [n_wl, 1, N_MODES]
 
 _body_neff = None
 if CALIBRATE_BODY:
-    _beta = fdtd_solver.section_mode_beta(
+    # _details() rather than section_mode_beta(): same call, same cost, same
+    # guards -- it just also hands back the measurement behind the answer, so
+    # the calibration can be plotted below. `.beta` is what the plain call
+    # returns. Matches directional_coupler_soi160_hybrid.py, whose body span
+    # this shares.
+    _calibration = fdtd_solver.section_mode_beta_details(
         dc, wavelengths, boundaries[1], boundaries[2], N_MODES,
         save_dir=save_dir, **_iface_mon,
-    )  # [n_wl, N_MODES] -- cache HIT, same body span as the L_REF=3.0 production run
+    )  # cache HIT, same body span as the L_REF=3.0 production run
+    _beta = _calibration.beta  # [n_wl, N_MODES]
     _body_neff = _beta * wavelengths[:, None] / (2 * np.pi)
+
+    # No extra simulation -- plots the data the call above already produced.
+    plot_beta_calibration(
+        _calibration, dc, fdtd_solver,
+        os.path.join(output_dir, "calibration"), **_iface_mon,
+    )
+    print(f"Calibration plots saved -> {output_dir}/calibration/ (geometry/ + fits/)")
     _i = int(np.argmin(np.abs(wavelengths - 1.55)))
     _seed_half = min(1.0, half_body - 2.0 * fdtd_solver.dpml)
     _mpb = fdtd_solver.section_mode_neff(

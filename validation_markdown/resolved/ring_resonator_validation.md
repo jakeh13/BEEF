@@ -1,5 +1,56 @@
 # Ring resonator validation — to-do
 
+> ## 🔴 NEW OPEN ITEM — the n_eff calibration reached this device on 2026-08-18
+>
+> **Both ring scripts propagated their analytic phases on meow/MPB mode indices
+> while every measured term around them was a meep phase, and this document had
+> never raised it.** Searching this file for `calibrate_body_neff` or
+> `section_mode_beta` returns nothing — the device was not deferred on the
+> question, it was never asked it. `resolved/directional_coupler_validation.md`
+> item 6 calls propagating on the wrong engine's β "a correctness fix rather
+> than a fudge"; every other shipped hybrid example took it during the
+> 2026-08-17 rollout and these two did not, because neither goes through
+> `HybridSolver` and so nothing swept them up.
+>
+> Three consumers, in increasing order of how badly it matters:
+>
+> 1. `phi = 2π·n_eff·L_outer/λ` — the analytic straights.
+> 2. `phi_bend_correction` — de-embeds `BEND_D_IN`/`BEND_D_OUT` of straight out
+>    of `run_bend_fdtd()`'s **measured** coefficient. This one has no
+>    self-consistency argument on the other side: it subtracts an MPB phase
+>    from a phase meep's time-stepper put there.
+> 3. `P_body` (**cascaded only**) — the coupled-pair supermode propagation in
+>    `S_coupler = M_left.T @ P_body @ M_left`. This is literally item 6's
+>    configuration: an EME body between two FDTD sections, with the
+>    `β/Δβ ≈ 99` amplification intact.
+>
+> Estimated scale on the monolithic route from the coupler's measured ~2.2–2.4 %
+> β gap at res 40: ~1.5 rad on `L_OUTER = 7.00 µm`, **roughly a quarter of an
+> FSR** — the same order as gap 3's mode-resolution finding, which this document
+> already calls "a wrong answer for the one quantity this device exists to
+> report." The cascaded route's analytic arm is 2.00 µm, so its term 2 is ~3.5×
+> smaller, but term 3 is unique to it.
+>
+> **Built and submitted, not yet landed** (job 11983058; 11982549 was cancelled
+> 2 min in to fix the coupled pair's y-placement — see step 10). Both scripts now reach
+> the same library calibration every other example uses, via
+> `UniformCrossSection` + `FDTDSolver.section_mode_beta_details()` — the class
+> whose own module docstring was written naming these two cross-sections as its
+> motivating examples. `RING_CALIBRATE_BODY=0` restores the previous behaviour
+> and redirects to `*_uncalibrated/`; both baselines are being produced in the
+> same job so the comparison is on one library state.
+>
+> **The specific thing to check when it lands**, beyond the standard residual
+> and branch-margin guards: whether this moves the monolithic-vs-cascaded
+> **half-FSR route offset** (`## Order` item 1, still open). The two routes'
+> analytic arms differ by 3.5×, so the calibration does not shift them equally
+> — that is a real prediction this run tests. Full account:
+> `resolved/section_mode_beta_multi_monitor_validation.md` step 10.
+>
+> ⚠️ Every number recorded below predates the calibration and describes the
+> uncalibrated device. Nothing below has been restated or retracted.
+
+
 > ## 📁 FILED INTO `resolved/` — 2026-08-03
 >
 > Per this directory's README, `resolved/` means *"whole docs sufficiently

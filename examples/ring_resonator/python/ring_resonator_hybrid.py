@@ -34,7 +34,7 @@ Why this is a feedback-loop sum, not a HybridSolver matrix chain:
     coupling region every round trip. That's the closed-form all-pass
     resonator sum below, not a product of transfer matrices.
 
-Simulation count — 3 FDTD runs + 13 mode solves total:
+Simulation count — 4 FDTD runs + 13 mode solves total:
     (a) Coupler-section FDTD, bus-excited  -> t (bus->bus), k1 (bus->ring)
     (b) Coupler-section FDTD, ring-excited -> t_ring (ring->ring), k2 (ring->bus)
     (c) Standalone 90 degree bend FDTD     -> b(lambda), reused for BOTH far
@@ -44,6 +44,13 @@ Simulation count — 3 FDTD runs + 13 mode solves total:
     class — same pattern as directional_coupler_mode.py) at 13 wavelengths
     -> neff(lambda), used for the 3 straight-propagation phases (2 side
     straights + 1 far straight) AND to reference-plane-correct b(lambda).
+    (d) Bare-strip beta calibration, CALIBRATE_BODY (default on, 2026-08-18)
+        -> the n_eff those straight phases are ACTUALLY propagated on. The
+        meow/MPB curve above is still solved, but only as the reference the
+        calibrated one is reported against; meep's own accumulated phase is
+        what the assembly uses, because every other term in the round trip
+        (b, t, k1, k2, t_ring) is a meep measurement. See the CALIBRATE_BODY
+        block in section 1. One merged multi-monitor FDTD run, 1 mode.
 
 Wavelength strategy:
     FDTD DFT monitors sample N_WL_FDTD points (moderate — dense DFT across
@@ -84,15 +91,16 @@ import matplotlib.path as mpath
 import meep as mp
 import meow as mw
 
-from beef import extrude_polygons
+from beef import extrude_polygons, plot_beta_calibration
 from beef.cache import CacheMissError, load_result, lookup, save_run
+from beef.geometry import UniformCrossSection
 from beef.geometry.base import polygons_to_prisms
 from beef.materials import SOI_220
 from beef.materials.stack import resolved_material_config
 from beef.results import SMatrix
 from beef.spectral import interp_complex
 from beef.solvers.fdtd import (
-    check_source_coverage, monitor_freq_grid, source_fwidth,
+    FDTDSolver, check_source_coverage, monitor_freq_grid, source_fwidth,
 )
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -117,6 +125,13 @@ _three_d_env = os.environ.get("RING_THREE_D")
 if _three_d_env is not None:
     output_dir = os.path.join(output_dir,
                               "three_d" if bool(int(_three_d_env)) else "two_d")
+# Propagate the analytic straights on the beta meep itself accumulates rather
+# than on MPB's mode index -- see the CALIBRATE_SPAN block in section 1 for
+# why this device needs it and what it moves. Defined here, ahead of
+# os.makedirs, because turning it off has to redirect the output.
+CALIBRATE_BODY = bool(int(os.environ.get("RING_CALIBRATE_BODY", "1")))
+if not CALIBRATE_BODY:
+    output_dir = output_dir + "_uncalibrated"
 os.makedirs(output_dir, exist_ok=True)
 # Per-simulation geometry previews live here, NOT at the top level: the output
 # root is for whole-device results. Mirrors ring_resonator_hybrid_cascaded.py.
@@ -174,6 +189,57 @@ L_FAR = L_C                 # um, far straight (analytic neff only)
 FDTD_RESOLUTION = float(os.environ.get(
     "RING_FDTD_RES", 20.0 if TEST_MODE else 40.0))   # pts/um -- meep; NOT converged
 MODE_RESOLUTION = 20.0 if TEST_MODE else 100.0   # pts/um -- meow/MPB; gap 3 converged
+
+# ---------------------------------------------------------------------------
+# n_eff CALIBRATION -- propagate the analytic straights on the beta meep
+# itself accumulates, not on MPB's mode index.
+#
+# This is the same correctness fix every other hybrid example in this repo
+# now takes (resolved/directional_coupler_validation.md item 6; the current
+# mechanism and cost model are step 9 of resolved/section_mode_beta_multi_
+# monitor_validation.md). It reaches the ring LAST, on 2026-08-18, because
+# this device does not go through HybridSolver -- it is raw meep/meow, so
+# `calibrate_body_neff=True` had nothing to attach to and the device was
+# simply never audited for it.
+#
+# WHY IT APPLIES HERE, and in fact applies harder than on a coupler body.
+# Two consumers of neff, both of them mixing an MPB index into a quantity
+# meep measured:
+#
+#   1. phi_bend_correction. run_bend_fdtd()'s raw coefficient is measured
+#      between monitor planes that sit BEND_D_IN/BEND_D_OUT of straight
+#      waveguide away from the arc ends, and the assembly de-embeds that
+#      straight by dividing out exp(1j*2*pi*neff*(D_IN+D_OUT)/lambda). The
+#      phase being removed was accumulated by meep's time-stepper. Removing
+#      it with MPB's index subtracts the wrong number from a measured
+#      quantity -- there is no self-consistency argument on the other side
+#      of this one.
+#   2. phi = 2*pi*neff*L_outer/lambda, the analytic straight propagation.
+#      Same argument as an EME body spliced between FDTD sections: the
+#      round-trip sum is a closed loop through b (meep), t/k1/k2/t_ring
+#      (meep) and phi (MPB), and a loop that changes answer depending on
+#      which engine carried which segment is not measuring the device.
+#
+# SCALE, from this device's own numbers rather than the coupler's. The
+# res-40 MPB-vs-meep gap measured on the coupler is ~2.2-2.4% in beta. On
+# L_OUTER = 7.00 um at 1.55 um that is ~1.5 rad of round-trip phase, i.e.
+# roughly a quarter of an FSR -- the same order as gap 3's mode-resolution
+# finding, which the validation doc calls "not a caveat, it is a wrong
+# answer for the one quantity this device exists to report". So this is not
+# a refinement; it moves the comb.
+#
+# The switch itself is up with output_dir (it inverts the folder suffix, the
+# same escape-hatch shape as mmi_1x2_hybrid.py's MMI1X2_CALIBRATE_BODY).
+#
+# Longitudinal span the calibration is allowed to cut its fit lengths from.
+# section_mode_beta() picks [s, 2s, 3s] with s = min(usable_span/3,
+# max_safe_spacing/2) and usable_span = span - 2*dpml, so the span only has
+# to be large enough not to be the binding constraint: at beta ~ 9.5 rad/um
+# the physics cap is max_safe_spacing/2 = 1.32 um, which needs span >= 5.0.
+# 6.0 leaves room for the band edge without making the merged domain longer
+# than it has to be. The strip is uniform, so the span is a budget, not a
+# structure -- nothing about the ring's real geometry is being asserted here.
+CALIBRATE_SPAN = 6.0
 # 2-D/3-D is its OWN knob, split out of TEST_MODE 2026-08-03 -- see the same
 # comment in ring_resonator_hybrid_cascaded.py. Short version: validation check
 # 4 can only afford the full device in 2-D (3-D is 167 h at res 40), so it needs
@@ -778,6 +844,101 @@ def solve_neff(wl, save_dir=None, cache_only=False):
 
 
 # ---------------------------------------------------------------------------
+# 8b. n_eff calibration -- the SAME beta measurement every other hybrid example
+#     in this repo uses, reached through the library rather than re-derived
+#     here. See the CALIBRATE_BODY block in section 1 for why this device
+#     needs it.
+#
+#     WHY UniformCrossSection + FDTDSolver AND NOT ANOTHER HAND-ROLLED MEEP RUN.
+#     Everything else in this file is raw meep, for the reason the module
+#     docstring gives: FDTDSolver only builds x-normal sources/monitors and the
+#     ring's two ring-side ports are y-normal. That constraint does not apply
+#     to a straight strip. The bare cross-section is x-normal end to end, which
+#     is exactly the case beef/geometry/uniform.py was written for -- its own
+#     module docstring names solve_neff()'s bare strip as motivating example #1
+#     and gives `UniformCrossSection([(0.0, 0.45)], length=1.0)` verbatim.
+#
+#     So this goes through section_mode_beta_details() and inherits, for free,
+#     everything step 9 of resolved/section_mode_beta_multi_monitor_
+#     validation.md built: the merged multi-monitor domain, the diagonal-only
+#     decode, the cached 3-anchor MPB seed, the 2*pi branch guard, the
+#     phase-linearity residual guard, and plot_beta_calibration()'s figures.
+#     Re-deriving any of that against this script's own conventions would be
+#     duplicating tested library code and would produce a beta with none of
+#     the guards attached.
+#
+#     The solver is configured from THIS script's constants, not FDTDSolver's
+#     defaults -- resolution, PML, margins, decay tolerance, source bandwidth,
+#     3-D/2-D and the dispersion resolution all come from the module-level
+#     values the ring's own runs use. That is what makes the measured beta the
+#     one this script's bend and coupler simulations actually accumulate,
+#     rather than some other meep run's.
+# ---------------------------------------------------------------------------
+def build_calibration_geometry():
+    """The bare strip as a DeviceGeometry, i.e. solve_neff()'s cross-section
+    in the one form FDTDSolver can also consume.
+
+    Single source for the calibration call and its geometry plot, same rule as
+    build_bend_polys() -- the picture cannot drift from what was simulated.
+    """
+    return UniformCrossSection(
+        [(0.0, W)], length=CALIBRATE_SPAN,
+        waveguide_height=MATERIAL_STACK.wg_height,
+    )
+
+
+def build_calibration_solver():
+    """FDTDSolver configured from THIS script's constants.
+
+    Every value here is the module-level one the ring's own bend and coupler
+    runs use. That is the whole point: the beta being measured has to be the
+    beta those simulations accumulate, which it only is if the mesh, the PML,
+    the monitor placement, the decay criterion, the source bandwidth, the
+    2-D/3-D choice and the material resolution all match.
+    """
+    return FDTDSolver(
+        res=FDTD_RESOLUTION,
+        # MESH_WIDTH, so the calibrated n_eff and solve_neff()'s meow n_eff
+        # describe the same transverse window and the excess between them is a
+        # statement about the two ENGINES rather than about two domain sizes.
+        sim_width=MESH_WIDTH,
+        sim_height=SIM_HEIGHT,
+        three_d=THREE_D,
+        dpml=DPML,
+        source_margin=SOURCE_MARGIN,
+        monitor_margin=MONITOR_MARGIN,
+        num_input_modes=1,
+        num_output_modes=1,
+        output_monitor_centers=[0.0],
+        material_stack=MATERIAL_STACK,
+        # This script's own A/B override (M4); None correctly inherits the
+        # stack's flag rather than hardcoding either answer.
+        dispersive=FDTD_DISPERSIVE,
+        decay_tol=DECAY_TOL,
+        source_bandwidth_factor=SOURCE_BANDWIDTH_FACTOR,
+    )
+
+
+def calibrate_strip_beta(wavelengths, save_dir=None, cache_only=False):
+    """`BetaCalibration` for the bare single-mode strip, from meep's own phase.
+
+    Returns the full details object (not just `.beta`) so the caller can plot
+    the fit behind the answer: the residual guard reduces a whole calibration
+    to one number per cell and only raises past 0.1 rad, so a marginal fit
+    passes silently and is invisible in the n_eff the straights end up on.
+
+    `save_dir`/`cache_only` have the same meaning as everywhere else in this
+    script; they are handed straight to the solver, which fingerprints the
+    call itself (beef/cache/) rather than reusing this file's _sim_params().
+    """
+    return build_calibration_solver().section_mode_beta_details(
+        build_calibration_geometry(), np.asarray(wavelengths, dtype=float),
+        -CALIBRATE_SPAN / 2.0, CALIBRATE_SPAN / 2.0, 1,
+        save_dir=save_dir, cache_only=cache_only,
+    )
+
+
+# ---------------------------------------------------------------------------
 # 9. Interpolation helpers
 # ---------------------------------------------------------------------------
 # interp_complex now comes from beef.spectral (imported above) rather than
@@ -1117,18 +1278,70 @@ print(f"  reciprocity check: |k1|={np.abs(k1[mid]):.4f} vs |k2|={np.abs(k2[mid])
 # ---------------------------------------------------------------------------
 print(f"\nMode solve at {N_WL_SOLVE} wavelengths...")
 wl_solve = np.linspace(WL_MIN, WL_MAX, N_WL_SOLVE)
-neff_solve = np.array([solve_neff(wl, save_dir=save_dir) for wl in wl_solve])
+neff_mpb = np.array([solve_neff(wl, save_dir=save_dir) for wl in wl_solve])
+
+# The MPB curve is solved unconditionally even when the calibration is on --
+# it costs nothing new (13 cached mode solves) and it is the only thing the
+# calibrated curve can be read against. `seed_excess` on the calibration says
+# the same thing per mode, but against the FDTD solver's OWN seed at
+# MODE_RESOLUTION-independent settings, not against the res-100 curve this
+# script would otherwise have propagated on.
+neff_solve = neff_mpb
+calibration = None
+_calibrate_now = CALIBRATE_BODY and THREE_D
+if CALIBRATE_BODY and not THREE_D:
+    # A 2-D run has no (y, z) cross-section, so there is nothing here that
+    # corresponds to the 3-D strip the calibration would measure. Skip loudly:
+    # silently calibrating against a different structure is the failure mode
+    # this device's own validation history is full of.
+    print("  RING_CALIBRATE_BODY=1 but this is a 2-D run (RING_THREE_D=0) — "
+          "calibration SKIPPED, straights stay on the meow/MPB n_eff.")
+if _calibrate_now:
+    print(f"  Calibrating the straights on meep's own beta "
+          f"({CALIBRATE_SPAN:.1f} um span, res {FDTD_RESOLUTION:g})...")
+    calibration = calibrate_strip_beta(wl_solve, save_dir=save_dir)
+    neff_solve = calibration.beta[:, 0] * wl_solve / (2.0 * np.pi)
+    _excess = neff_solve / neff_mpb - 1.0
+    _i = len(wl_solve) // 2
+    print(f"  Bare-strip n_eff at lambda = {wl_solve[_i]:.3f} um:")
+    print(f"    MPB mode index  {neff_mpb[_i]:.6f}")
+    print(f"    FDTD own phase  {neff_solve[_i]:.6f}   "
+          f"<- the straights propagate on this")
+    print(f"    excess {100*_excess[_i]:+.3f}%  "
+          f"(band range {100*_excess.min():+.3f}% .. {100*_excess.max():+.3f}%)")
+    # What that excess is worth on the quantity this device reports. L_OUTER is
+    # the analytic lever arm; the bend correction rides the same n_eff but with
+    # the opposite sign, so this is the straight-phase term alone.
+    _dphi = 2 * np.pi * (neff_solve[_i] - neff_mpb[_i]) * L_OUTER / wl_solve[_i]
+    print(f"    -> round-trip phase shift {_dphi:+.4f} rad "
+          f"= {100*_dphi/(2*np.pi):+.1f}% of a full FSR")
+
+    # The measurement behind the answer. Free -- no extra simulation, just the
+    # data section_mode_beta_details() already produced. Same builders the
+    # calibration itself used, so the drawn domain is the simulated one.
+    plot_beta_calibration(
+        calibration, build_calibration_geometry(), build_calibration_solver(),
+        os.path.join(output_dir, "calibration"),
+    )
+    print(f"  Calibration plots saved -> {output_dir}/calibration/ "
+          f"(geometry/ + fits/)")
+
 neff_fit = np.polyfit(wl_solve, neff_solve, deg=2)
 neff_resid = neff_solve - np.polyval(neff_fit, wl_solve)
 print(f"  neff fit residual (max abs): {np.max(np.abs(neff_resid)):.2e}")
 
 fig, ax = plt.subplots(figsize=(6, 4))
 wl_fine = np.linspace(WL_MIN, WL_MAX, 200)
-ax.plot(wl_solve, neff_solve, "o", label="mode-solve points")
+if _calibrate_now:
+    ax.plot(wl_solve, neff_mpb, "s", color="0.55", mfc="none",
+            label="meow/MPB mode index (not propagated on)")
+ax.plot(wl_solve, neff_solve, "o",
+        label="FDTD-calibrated (propagated on)" if _calibrate_now else "mode-solve points")
 ax.plot(wl_fine, np.polyval(neff_fit, wl_fine), "-", label="degree-2 fit")
 ax.set_xlabel("Wavelength (um)")
 ax.set_ylabel("neff")
-ax.set_title("Bare strip effective index")
+ax.set_title("Bare strip effective index"
+             + (" — FDTD-calibrated" if _calibrate_now else ""))
 ax.legend()
 ax.grid(True)
 plt.tight_layout()
@@ -1227,6 +1440,12 @@ np.savez(
     wl_fdtd=wl_fdtd, wl_dense=wl_dense, wl_solve=wl_solve,
     t=t, k1=k1, k2=k2, t_ring=t_ring, b_raw=b_raw,
     neff_solve=neff_solve, neff_dense=neff_dense,
+    # The uncalibrated curve alongside the propagated one. Without it the npz
+    # cannot say WHICH engine's n_eff produced the comb it holds, and the
+    # calibrated/uncalibrated comparison would need a second full run to
+    # reconstruct. Equal to neff_solve when the calibration is off or skipped,
+    # which is itself the record that it was.
+    calibrated=_calibrate_now, neff_mpb=neff_mpb,
     T=T, dips=np.array([(d[0], d[1], d[2], d[3]) for d in dips]) if dips else np.empty((0, 4)),
     perimeter=PERIMETER, fsr_guess=FSR_GUESS,
 )

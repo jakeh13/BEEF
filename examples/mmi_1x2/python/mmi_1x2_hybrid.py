@@ -28,7 +28,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from beef import MMI, EMESolver, FDTDSolver, HybridSolver, SOI_160, plot_hybrid_geometry
+from beef import MMI, EMESolver, FDTDSolver, HybridSolver, SOI_160, plot_hybrid_geometry, plot_beta_calibration
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_1x2", "mmi_1x2_hybrid"))
@@ -57,13 +57,33 @@ output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "exampl
 # library bug -- a 2*pi turn-count error in beta_from_phases, fixed the same
 # day, notes.md Solvers item 20 -- not a limit of this device.)
 #
-# Off by default -- every recorded golden and the gap-5 baseline predate it,
-# same reasoning as directional_coupler_hybrid_stub_sweep.py's DC_CALIBRATE_BODY.
-# Separate output dir so the calibrated run cannot overwrite the uncalibrated
-# baseline gap 5 was measured against.
-CALIBRATE_BODY = bool(int(os.environ.get("MMI1X2_CALIBRATE_BODY", "0")))
-if CALIBRATE_BODY:
-    output_dir = output_dir + "_calibrated"
+# ON by default since 2026-08-17 -- the default flipped, the measurement above
+# did not. Calibration still does NOT close this device's gap (9.11% -> 7.30%);
+# that remains structural, and gap 5 stays open on those grounds. What changed
+# is the cost and the argument:
+#
+#   Cost. A calibration used to be ~97.6% of a hybrid example's wall time. Three
+#   library changes on 2026-08-17 -- diagonal-only decode, the merged
+#   multi-monitor path, and a cached/3-anchor MPB seed -- took the 2x2's from
+#   30.6 h to ~3.7 h, so "off unless it earns its keep" no longer describes a
+#   real tradeoff. See step 9 of resolved/section_mode_beta_multi_monitor_
+#   validation.md.
+#
+#   Argument. Propagating the body on the FDTD's own beta is what makes the
+#   cascade self-consistent -- a hybrid result should not depend on where the
+#   chain was cut -- and that holds whether or not it happens to close a given
+#   device's remaining error. resolved/directional_coupler_validation.md calls
+#   it "a correctness fix rather than a fudge" for exactly this reason.
+#
+# The uncalibrated run is still one env var away, and gap 5's baseline is
+# preserved at example_output/mmi_1x2/mmi_1x2_hybrid_uncalibrated/ (copied
+# 2026-08-17 before this flip, from the run gap 5 was measured against).
+# tests/golden/mmi_1x2_hybrid.json is unaffected either way: that target is an
+# independent reduced-scale re-implementation in tests/test_golden_examples.py
+# (res=20, n_modes=6, no calibrate_body_neff), not a run of this script.
+CALIBRATE_BODY = bool(int(os.environ.get("MMI1X2_CALIBRATE_BODY", "1")))
+if not CALIBRATE_BODY:
+    output_dir = output_dir + "_uncalibrated"
 os.makedirs(output_dir, exist_ok=True)
 save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
@@ -258,6 +278,21 @@ smat._data.update(smat_bot._data)
 smat.check_passive()  # sanity: total output power must not exceed 1 at any wavelength
 smat.save(os.path.join(output_dir, "smatrix_hybrid.pkl"))
 print(f"\nSMatrix saved → {output_dir}/smatrix_hybrid.pkl")
+
+# ---------------------------------------------------------------------------
+# Calibration diagnostics. HybridSolver ran the calibration internally
+# (calibrate_body_neff above) and kept the measurement behind it on
+# .last_calibrations, keyed by section index -- so this costs no extra
+# simulation, it just plots data the solve already produced. Worth having:
+# the residual guard reduces a whole calibration to one number per cell and
+# only raises past 0.1 rad, so a marginal fit passes silently and is invisible
+# in the beta the body is actually propagated on. These plots are where it
+# shows.
+# ---------------------------------------------------------------------------
+for _sec, _cal in sorted(hybrid.last_calibrations.items()):
+    _cal_dir = os.path.join(output_dir, f"calibration_section{_sec}")
+    plot_beta_calibration(_cal, mmi, input_solver, _cal_dir)
+    print(f"Calibration plots (section {_sec}) saved -> {_cal_dir}/ (geometry/ + fits/)")
 
 fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 

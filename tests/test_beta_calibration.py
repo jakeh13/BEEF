@@ -703,3 +703,289 @@ class TestWiring:
         import json
         from beef.solvers.eme import _neff_fingerprint
         json.dumps(_neff_fingerprint(np.array([[2.325 + 0j, 2.301 + 0j]])))
+
+
+class TestMeasureDiagonalOnly:
+    """`solve_section(measure_diagonal_only=True)` — the calibration's cost fix.
+
+    Each calibration run decomposes its monitor into n_measure bands at every
+    wavelength (154 MPB solves at ~14 s on the MMI 2x2 body) and the caller
+    then keeps one of them, via `np.diagonal(T)`. Job 11872191 spent 27.9 h of
+    its 31.4 h in that decomposition against 3.5 h of time-stepping, so
+    dropping the discarded columns is a 4x cut and — since they are discarded —
+    an exact one.
+    """
+
+    def test_diagonal_of_keeps_the_diagonal_and_nans_the_rest(self):
+        from beef.solvers.fdtd import _diagonal_of
+        T = np.arange(2 * 3 * 3, dtype=complex).reshape(2, 3, 3) + 1j
+        out = _diagonal_of(T)
+        assert out.shape == T.shape
+        for w in range(2):
+            for i in range(3):
+                assert out[w, i, i] == T[w, i, i]
+        off = out.copy()
+        for i in range(3):
+            off[:, i, i] = np.nan
+        assert np.all(np.isnan(off)), "off-diagonals must be NaN, never 0"
+
+    def test_diagonal_of_handles_the_measure_margins_shape(self):
+        """measure_margins adds a position axis; the diagonal is per-position."""
+        from beef.solvers.fdtd import _diagonal_of
+        T = np.ones((2, 4, 3, 3), dtype=complex)
+        out = _diagonal_of(T)
+        assert out.shape == T.shape
+        assert np.array_equal(np.diagonal(out, axis1=2, axis2=3),
+                              np.diagonal(T, axis1=2, axis2=3))
+
+    def test_off_diagonals_are_nan_not_zero(self):
+        """A measured 0 and a never-measured entry must not look alike: a
+        consumer that reads one has a bug, and NaN is what makes it say so
+        instead of quietly treating 'not computed' as 'no coupling'."""
+        from beef.solvers.fdtd import _diagonal_of
+        T = np.zeros((1, 2, 2), dtype=complex)
+        out = _diagonal_of(T)
+        assert out[0, 0, 0] == 0, "a genuinely measured zero survives"
+        assert np.isnan(out[0, 0, 1]), "an unmeasured entry does not"
+
+    def test_the_flag_is_omitted_from_the_fingerprint_when_false(self):
+        """The regression that ate the cache once already.
+
+        Adding a key to every config changes every config's hash. When this
+        flag was first written unconditionally into the fingerprint it
+        invalidated all 566 entries in example_sim_cache/ at a stroke — the
+        30.6 h of MMI 2x2 calibration this flag exists to never pay again
+        among them. It must therefore appear ONLY when True, so a default
+        call fingerprints exactly as it did before the flag existed.
+        """
+        from beef.cache.store import _hash_config
+        base = {"solver_type": "FDTDSolver", "method": "solve_section",
+                "call_kwargs": {"x0": -1.0, "x1": 1.0}}
+        with_flag = {"solver_type": "FDTDSolver", "method": "solve_section",
+                     "call_kwargs": {"x0": -1.0, "x1": 1.0,
+                                     "measure_diagonal_only": True}}
+        false_flag = {"solver_type": "FDTDSolver", "method": "solve_section",
+                      "call_kwargs": {"x0": -1.0, "x1": 1.0,
+                                      "measure_diagonal_only": False}}
+        assert _hash_config(base) != _hash_config(with_flag), (
+            "a diagonal-only run must not collide with its full-matrix twin")
+        assert _hash_config(base) != _hash_config(false_flag), (
+            "writing the flag as False is exactly what invalidated the cache; "
+            "this asserts that it is not harmless")
+
+
+class TestSeedCache:
+    """The MPB seed (`section_mode_neff`) is cacheable — and after 2026-08-17
+    it is the largest single item in a calibration (154 eigensolves, ~31.5 min
+    on the MMI 2x2, ~39% of job 11937894) purely because everything around it
+    got ~10x cheaper."""
+
+    def _cfg(self, n_modes, **over):
+        from beef.cache.config import build_run_config
+        from beef.geometry.taper import Taper
+        from beef.solvers.fdtd import FDTDSolver
+        from beef.materials.stack import resolved_material_config
+        solver = FDTDSolver(res=20.0, sim_width=4.0, sim_height=1.5, dpml=0.5,
+                            **over)
+        geom = Taper(length=4.0, width_start=0.45, width_end=0.45, waveguide_height=0.22)
+        wl = np.array([1.55])
+        call = dict(x0=-2.0, x1=2.0, wavelengths=wl,
+                    monitor_center=0.0, monitor_size=4.0, pad=0.5,
+                    geometry_kwargs={},
+                    **resolved_material_config(
+                        solver.material_stack, wl,
+                        solver.material_stack.resolve_dispersive(solver.dispersive)))
+        if n_modes is not None:
+            call["n_modes"] = n_modes
+        return build_run_config(solver, "section_mode_neff", call, geom)
+
+    def test_mode_count_is_what_separates_entry_from_family(self):
+        """The family config (no n_modes) is what superset reuse keys on, so a
+        stored 14-mode seed can serve a 6-mode request by slicing."""
+        from beef.cache.store import _hash_config
+        assert _hash_config(self._cfg(6)) != _hash_config(self._cfg(14))
+        assert _hash_config(self._cfg(None)) == _hash_config(self._cfg(None))
+
+    def test_decay_tol_does_not_change_the_seed_fingerprint(self):
+        """A mode solve never time-steps, so decay_tol cannot reach it. If it
+        were in the allowlist, every solver built for a different decay_tol
+        would miss a seed that is physically identical."""
+        from beef.cache.store import _hash_config
+        assert _hash_config(self._cfg(4, decay_tol=1e-9)) == \
+               _hash_config(self._cfg(4, decay_tol=1e-11))
+
+    def test_resolution_does_change_it(self):
+        """The counter-check to the above: res IS in the allowlist, because
+        MPB solves on the meep grid and a different grid is a different n_eff."""
+        from beef.cache.config import build_run_config
+        from beef.cache.store import _hash_config
+        a = self._cfg(4)
+        b = self._cfg(4)
+        b["solver_config"]["res"] = 40.0
+        assert _hash_config(a) != _hash_config(b)
+
+
+class TestSeedAnchorInterpolation:
+    """The MPB seed is solved at `seed_anchors` wavelengths and fitted to the
+    rest. It can afford that because it only picks the 2π branch and spaces the
+    fit lengths — both coarse — while the FDTD and the modal decode still run
+    on every wavelength the caller asked for."""
+
+    # The MMI 2x2 body's real n_eff(lambda), 14 modes across the C-band, read
+    # from the neff_override in job 11872191's cached EME length-sweep entry.
+    WL = np.linspace(1.530, 1.565, 11)
+    NEFF_0 = np.array([2.861100422, 2.859042830, 2.856979964, 2.854911328,
+                       2.852836724, 2.850755962, 2.848668674, 2.846574401,
+                       2.844472770, 2.842363531, 2.840246335])
+    NEFF_13 = np.array([1.604176509, 1.595332871, 1.586546126, 1.577827810,
+                        1.569190017, 1.560645751, 1.552208668, 1.543892915,
+                        1.535712765, 1.527682101, 1.519814052])
+
+    def _interp(self, wl_full, neff_full, n_anchor):
+        """Exactly what section_mode_beta_details does with the anchors."""
+        wl_seed = np.linspace(wl_full.min(), wl_full.max(), n_anchor)
+        anchor = np.interp(wl_seed, wl_full, neff_full)   # stand-in for the MPB solve
+        x_mid = float(np.mean(wl_seed))
+        co = np.polyfit(wl_seed - x_mid, anchor, n_anchor - 1)
+        return np.polyval(co, wl_full - x_mid)
+
+    def test_three_anchors_reproduce_a_real_dispersion_curve(self):
+        """Mode 0 — the well-guided end, where the curve is nearly straight."""
+        err = np.abs(self._interp(self.WL, self.NEFF_0, 3) - self.NEFF_0).max()
+        assert err < 1e-5, f"3-anchor error {err:.2e} on mode 0"
+
+    def test_the_worst_mode_is_the_one_nearest_cutoff(self):
+        """Mode 13 is the outlier at 1.1e-04 — still 1.6e-04 of the branch
+        half-spacing, which is what the seed actually has to resolve."""
+        err = np.abs(self._interp(self.WL, self.NEFF_13, 3) - self.NEFF_13).max()
+        assert err < 2e-4, f"3-anchor error {err:.2e} on mode 13"
+        d_beta = 2 * np.pi * err / 1.5475
+        half_branch = np.pi / 1.085983652
+        assert d_beta / half_branch < 1e-3, "must not eat into the branch margin"
+
+    def test_more_anchors_help_the_curved_mode(self):
+        e3 = np.abs(self._interp(self.WL, self.NEFF_13, 3) - self.NEFF_13).max()
+        e5 = np.abs(self._interp(self.WL, self.NEFF_13, 5) - self.NEFF_13).max()
+        assert e5 < e3, "seed_anchors is the knob to raise on a difficult band"
+
+    def test_subsampling_is_skipped_when_it_cannot_help(self):
+        """Fewer wavelengths than anchors, or a single-point band, must fall
+        through to solving the caller's grid — no degenerate polyfit."""
+        wl = np.array([1.55])
+        assert not (len(wl) > 3 and float(np.ptp(wl)) > 0.0)
+        wl3 = np.linspace(1.53, 1.565, 3)
+        assert not (len(wl3) > 3)
+
+
+class TestLastCalibrationsSurvivesTheInMemoryCache:
+    """`HybridSolver.last_calibrations` must still describe the matrices a
+    multi-port script actually used.
+
+    Found on a real run, not by reading the code. `mmi_1x2_hybrid.py` calls
+    `solve()` once per output port with a shared `cache=` dict, precisely so
+    the input and body sections are simulated once rather than twice. Its
+    calibration-diagnostics block then loops over `last_calibrations` and
+    writes `plot_beta_calibration()` figures.
+
+    Job 11942633_2 was a fully calibrated run of that script
+    (`calibrate_body_neff = True`, printed by the script itself) that produced
+    **no calibration figures at all**: `_solve_sections()` cleared
+    `last_calibrations` at the top of every pass, and on the second pass the
+    body section hit the in-memory cache and `continue`d before
+    `_calibrated_neff()` could repopulate it. Empty dict, empty loop, no
+    output, no error.
+
+    A cache hit is not a reason to forget the measurement: the key carries
+    `calibrate_body_neff` along with everything else that changes the matrix,
+    so a hit means this pass is reusing the matrix that very calibration
+    produced.
+    """
+
+    @staticmethod
+    def _chain():
+        from beef import HybridSolver
+
+        n_wl, n_modes = 3, 2
+
+        class FakeCalibration:
+            """Stands in for BetaCalibration — `_calibrated_neff` reads
+            `.beta` and nothing else."""
+            def __init__(self):
+                self.beta = np.full((n_wl, n_modes), BETA_FDTD[0])
+
+        class FakeFDTD:
+            def __init__(self):
+                self.calls = 0
+
+            def section_mode_beta(self, geom, wl, x0, x1, n, lengths=None, **kw):
+                return np.full((len(wl), n), BETA_FDTD[0])
+
+            def section_mode_beta_details(self, geom, wl, x0, x1, n, **kw):
+                self.calls += 1
+                return FakeCalibration()
+
+            def solve_section(self, geom, wl, x0, x1, n_modes_in=1, n_modes_out=1,
+                              stub_left=0.0, stub_right=0.0, **kw):
+                return np.ones((len(wl), n_modes_out, n_modes_in), dtype=complex)
+
+        class FakeEME:
+            def solve_section(self, geom, wl, x0, x1, n_modes_in=1, n_modes_out=1,
+                              stub_left=0.0, stub_right=0.0, neff_override=None, **kw):
+                return np.ones((len(wl), n_modes_out, n_modes_in), dtype=complex)
+
+        fdtd_in, fdtd_out = FakeFDTD(), FakeFDTD()
+        h = HybridSolver([fdtd_in, FakeEME(), fdtd_out], [0.0, 1.0, 2.0, 3.0],
+                         [n_modes, n_modes], calibrate_body_neff=True)
+        return h, fdtd_in, np.linspace(1.53, 1.565, n_wl), n_modes
+
+    def _pass(self, h, wl, n_modes, cache):
+        return h._solve_sections(
+            geometry=None, wavelengths=wl,
+            kwargs_per_section=[{}, {}, {}],
+            n_in_list=[1, n_modes, n_modes], n_out_list=[n_modes, n_modes, 1],
+            cache=cache,
+        )
+
+    def test_the_body_calibration_survives_a_second_shared_cache_pass(self):
+        h, fdtd_in, wl, n_modes = self._chain()
+        cache = {}
+
+        self._pass(h, wl, n_modes, cache)
+        assert set(h.last_calibrations) == {1}, "first pass calibrates the body"
+        first = h.last_calibrations[1]
+        assert fdtd_in.calls == 1
+
+        self._pass(h, wl, n_modes, cache)
+        assert fdtd_in.calls == 1, "the point of the shared cache — no re-solve"
+        assert set(h.last_calibrations) == {1}, (
+            "the second pass reused the matrix this calibration produced, so it "
+            "must still be able to report it (job 11942633_2 could not)"
+        )
+        assert h.last_calibrations[1] is first
+
+    def test_a_fresh_cache_still_recalibrates_rather_than_carrying_over(self):
+        """The carry-forward is scoped to an actual cache hit. A pass that
+        really re-solves must report its own measurement, not the last one."""
+        h, fdtd_in, wl, n_modes = self._chain()
+        self._pass(h, wl, n_modes, {})
+        first = h.last_calibrations[1]
+        self._pass(h, wl, n_modes, {})
+        assert fdtd_in.calls == 2
+        assert h.last_calibrations[1] is not first
+
+    def test_no_cache_at_all_is_unchanged(self):
+        h, fdtd_in, wl, n_modes = self._chain()
+        self._pass(h, wl, n_modes, None)
+        self._pass(h, wl, n_modes, None)
+        assert fdtd_in.calls == 2
+        assert set(h.last_calibrations) == {1}
+
+    def test_it_is_still_emptied_when_calibration_is_off(self):
+        """No stale entry may outlive the flag that produced it."""
+        h, _fdtd_in, wl, n_modes = self._chain()
+        cache = {}
+        self._pass(h, wl, n_modes, cache)
+        assert h.last_calibrations
+        h.calibrate_body_neff = False
+        self._pass(h, wl, n_modes, {})      # fresh cache: really re-solves
+        assert h.last_calibrations == {}

@@ -131,6 +131,16 @@ class HybridSolver:
             symmetry check — tight enough to catch a wrong input_idx/
             output_idx pairing (a port-pitch-scale mismatch) while
             tolerant of floating-point noise.
+        last_calibrations: `{section index: BetaCalibration}` from the most
+            recent solve — the measurement behind `calibrate_body_neff`, kept so
+            a caller can plot it with `beef.plot_beta_calibration()`. Empty when
+            `calibrate_body_neff` is False, and replaced (not appended to) on
+            every solve — except that a section served from the in-memory
+            `cache=` dict carries its previous entry forward, since that hit
+            means this solve is reusing the matrix that calibration produced.
+            Without that, a script calling `solve()` once per output port with
+            a shared cache reads back an empty dict and plots nothing. Read it
+            after solving; see `mmi_1x2_hybrid.py` for the usual four lines.
         calibrate_body_neff: propagate each body section on the β its
             neighbouring FDTD sections actually accumulate, instead of on its
             own mode solver's n_eff. **Default False** — this changes results
@@ -286,6 +296,18 @@ class HybridSolver:
         self.mirror_check_samples = mirror_check_samples
         self.mirror_check_tol = mirror_check_tol
         self.calibrate_body_neff = bool(calibrate_body_neff)
+        # {section index: BetaCalibration} from the most recent solve, so a
+        # caller can PLOT what the calibration measured. Without this a
+        # HybridSolver-driven example (mmi_1x2_hybrid.py, mmi_1x4_hybrid.py)
+        # gets a calibrated body and no way to see the fit behind it, while the
+        # examples that call section_mode_beta_details() themselves
+        # (mmi_2x2_hybrid.py, both couplers) get the full diagnostic set. The
+        # residual guard reduces a whole calibration to one number per cell and
+        # only raises past 0.1 rad, so a marginal fit passes silently and is
+        # invisible in the beta these examples propagate on -- the plots are
+        # where it shows. Empty until solve()/solve_sweep() runs; replaced, not
+        # appended to, on each solve.
+        self.last_calibrations: dict = {}
         self.calibrate_lengths = (
             None if calibrate_lengths is None else [float(L) for L in calibrate_lengths]
         )
@@ -1273,12 +1295,27 @@ class HybridSolver:
             "phase (dc_validation.md item 6)",
             k + 1, len(self.solvers), type(source).__name__,
         )
-        beta = source.section_mode_beta(
-            geometry, wavelengths, x0, x1, n_modes,
+        call_kwargs = dict(
             lengths=self.calibrate_lengths,
             save_dir=save_dir, cache_only=cache_only,
             **passthrough,
         )
+        # Prefer _details(): same call, same cost, same guards -- it just also
+        # hands back the measurement behind the answer, retained on
+        # self.last_calibrations so the caller can plot it. But the contract for
+        # a calibration source is `section_mode_beta()` (see
+        # _calibration_source), and tightening that to require _details() would
+        # break any solver satisfying the documented interface -- including
+        # tests/test_beta_calibration.py's own FakeFDTD, which is how this was
+        # caught. So the richer call is an upgrade, not a requirement.
+        if hasattr(source, "section_mode_beta_details"):
+            calibration = source.section_mode_beta_details(
+                geometry, wavelengths, x0, x1, n_modes, **call_kwargs)
+            self.last_calibrations[k] = calibration
+            beta = calibration.beta
+        else:
+            beta = source.section_mode_beta(
+                geometry, wavelengths, x0, x1, n_modes, **call_kwargs)
         return beta * np.asarray(wavelengths, dtype=float)[:, None] / (2.0 * np.pi)
 
     def _solve_sections(
@@ -1295,6 +1332,24 @@ class HybridSolver:
         cache_only: bool = False,
     ) -> List[np.ndarray]:
         K = len(self.solvers)
+        # Replaced per pass, never accumulated: solve()/solve_length_sweep() may
+        # be called repeatedly on one solver (every port of a multi-output
+        # device, every geometry_kwargs variant), and a stale entry from an
+        # earlier pass plotted as this one's would be worse than no plot.
+        #
+        # EXCEPT for a section served from the in-memory `cache` below, which is
+        # why `previous` is kept. That cache is keyed on `calibrate_body_neff`
+        # among everything else that changes the matrix, so a hit means THIS
+        # pass is reusing the very matrix the earlier pass's calibration
+        # produced — the entry is this pass's measurement, not a stale one, and
+        # dropping it loses a real result. Found on mmi_1x2_hybrid.py, which
+        # calls solve() once per output port with a shared `cache`: the body
+        # section hit on the second call, so `_calibrated_neff()` never ran
+        # again, `last_calibrations` came back empty, and the script's
+        # plot_beta_calibration() loop silently produced no figures at all
+        # (job 11942633_2 — a calibrated run with no calibration diagnostics).
+        previous = self.last_calibrations
+        self.last_calibrations = {}
         mats = []
         for k, solver in enumerate(self.solvers):
             x0, x1 = self.boundaries[k], self.boundaries[k + 1]
@@ -1316,6 +1371,8 @@ class HybridSolver:
                 if cache_key in cache:
                     logger.info("Section %d/%d: %s (cached)", k + 1, K, type(solver).__name__)
                     mats.append(cache[cache_key])
+                    if k in previous:
+                        self.last_calibrations[k] = previous[k]
                     continue
 
             if k in self.mirror_pairs:

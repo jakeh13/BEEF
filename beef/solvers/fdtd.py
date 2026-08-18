@@ -289,6 +289,9 @@ class BetaCalibration(NamedTuple):
         phases: ``[n_L, n_wl, n_modes]`` wrapped ``arg(T_ii)``, i.e. the raw
             measurement before any wrap counting.
         wavelengths: ``[n_wl]`` µm, as passed in.
+        seed_wavelengths: the wavelengths the seed was actually solved at.
+            Equal to `wavelengths` unless `seed_anchors` subsampled it, in
+            which case `seed_beta` is interpolated from these.
         seed_beta: ``[n_wl, n_modes]`` rad/µm, MPB's answer — the branch
             prior, never the result.
         fits: ``fits[i][m]`` is the full `BetaFit` for wavelength i, mode m,
@@ -315,12 +318,32 @@ class BetaCalibration(NamedTuple):
     mid: float
     merged: bool
     guard_failures: Tuple[str, ...] = ()
+    seed_wavelengths: Optional[np.ndarray] = None
 
 
 def _fit_line(lengths, values) -> Tuple[float, float]:
     A = np.vstack([lengths, np.ones_like(lengths)]).T
     (slope, intercept), *_ = np.linalg.lstsq(A, values, rcond=None)
     return float(slope), float(intercept)
+
+
+def _diagonal_of(T: np.ndarray) -> np.ndarray:
+    """`T` with every off-diagonal entry replaced by NaN, shape unchanged.
+
+    The return shape of a `solve_section(measure_diagonal_only=True)` run,
+    and the conversion that lets a cached FULL matrix serve one. NaN rather
+    than 0 so a consumer reading an entry this run never measured fails
+    loudly instead of taking "not computed" for "measured zero" — the whole
+    point of the flag is that those entries are unknown, not small.
+
+    Handles both `solve_section()` shapes: `[n_wl, n_out, n_in]` and
+    `measure_margins`' `[n_wl, n_pos, n_out, n_in]`.
+    """
+    out = np.full_like(T, np.nan + 0j)
+    n = min(T.shape[-2], T.shape[-1])
+    idx = np.arange(n)
+    out[..., idx, idx] = T[..., idx, idx]
+    return out
 
 
 def beta_fit_from_phases(lengths, phases, seed_beta) -> BetaFit:
@@ -773,6 +796,41 @@ def section_fdtd_layout(
         src_c=src_c, src_width=src_width, mea_c=mea_c, mea_w=mea_w,
         kpoint=kpoint, alpha_idx=alpha_idx,
     )
+
+
+def merged_mea_positions(layout: SectionFDTDLayout, lengths: Sequence[float]) -> List[float]:
+    """Interior interface-monitor positions for a merged multi-length domain,
+    in the same section-local frame `section_fdtd_layout()` returns.
+
+    One monitor per requested length, all reading a single shared source in
+    ONE domain sized to ``max(lengths)``:
+
+        position[i] = (layout.L - lengths[i]) if layout.reverse else lengths[i]
+
+    which reproduces each length's own single-domain source-to-monitor
+    distance exactly -- derived algebraically in
+    `resolved/section_mode_beta_multi_monitor_validation.md` step 2, not
+    approximated. The longest length lands on `layout.mea_x` (the domain
+    boundary); every shorter one sits interior, nearer the source.
+
+    Factored out of `solve_section_multi_length()` for the same reason
+    `section_fdtd_layout()` itself was: `beef/plot/calibration.py` draws
+    these monitors and must not re-derive the formula to do it. A silently
+    drifting second copy of exactly this kind of position math is the
+    failure `section_fdtd_layout()`'s and `BetaCalibration`'s own docstrings
+    both record.
+
+    Args:
+        layout: the merged domain's resolved layout -- i.e.
+            `section_fdtd_layout()` called once with
+            ``x0, x1 = mid -+ max(lengths)/2``.
+        lengths: the propagation distances being measured (µm), in the
+            order they are simulated/returned.
+
+    Returns:
+        One local-frame x position per entry of `lengths`, same order.
+    """
+    return [(layout.L - float(L_i)) if layout.reverse else float(L_i) for L_i in lengths]
 
 
 class FDTDSolver:
@@ -1517,6 +1575,8 @@ class FDTDSolver:
         monitor_center: Optional[float] = None,
         monitor_size: Optional[float] = None,
         pad: Optional[float] = None,
+        save_dir: Optional[str] = None,
+        cache_only: bool = False,
         **geometry_kwargs,
     ) -> np.ndarray:
         """Effective indices of the first `n_modes` modes at this section's
@@ -1532,10 +1592,20 @@ class FDTDSolver:
         silently mixes modes and nothing else in the codebase would notice.
         See dc_validation.md item 12.
 
-        Cheap: ``get_eigenmode()`` runs MPB on the initialized grid and returns
-        without any time-stepping, so this costs a ``set_epsilon`` plus one
-        eigensolve per mode per wavelength — seconds, not the minutes a
-        ``solve_section()`` run needs.
+        No time-stepping: ``get_eigenmode()`` runs MPB on the initialized grid
+        and returns, so this costs a ``set_epsilon`` plus one eigensolve per
+        mode per wavelength.
+
+        **Cheap only relative to what it used to sit next to.** "Seconds, not
+        minutes" was this docstring's claim while a `solve_section()` run took
+        ~44 min; measured on the MMI 2x2 body it is 14 modes x 11 wavelengths =
+        154 eigensolves at ~12.3 s = **31.5 min** (job 11937894). That was 1.9%
+        of the pre-2026-08-17 calibration and is ~39% of one now — nothing
+        about it changed, everything around it got ~10x cheaper. Hence
+        `save_dir`: the result is a pure function of the cross-section,
+        wavelengths, mode count and monitor plane, and re-running a calibrating
+        example otherwise pays those 31.5 min again for an answer that cannot
+        have moved.
 
         n_eff is ``k/f``: meep reports the Bloch wavevector in units of 2π/a
         and the frequency in c/a, so their ratio is the index directly, with no
@@ -1568,6 +1638,11 @@ class FDTDSolver:
                 make "even/odd" meaningless.
             pad: see `_build_section_mode_sim()`. None (default) is `self.dpml`,
                 unchanged from before this parameter existed.
+            save_dir / cache_only: as `solve_section()`. A hit returns the
+                stored n_eff without building the simulation at all. Mode-count
+                superset reuse applies: a cached 14-mode solve serves a later
+                request for fewer modes by slicing, since band *i* does not
+                depend on how many bands were asked for.
 
         Returns:
             Real ndarray ``[len(wavelengths), n_modes]`` of effective indices,
@@ -1575,6 +1650,48 @@ class FDTDSolver:
         """
         wavelengths = np.asarray(wavelengths, dtype=float)
         wl_center = float(np.mean(wavelengths))
+
+        # Cache before building anything: on a hit there is no simulation to
+        # build at all. The fingerprint carries `pad` explicitly because it
+        # changes the solved domain (via _build_section_mode_sim) without
+        # appearing anywhere else in these kwargs.
+        family_config = config = None
+        if save_dir:
+            call = dict(
+                x0=x0, x1=x1, wavelengths=wavelengths,
+                monitor_center=monitor_center, monitor_size=monitor_size,
+                pad=(self.dpml if pad is None else pad),
+                geometry_kwargs=geometry_kwargs,
+                **resolved_material_config(
+                    self.material_stack, wavelengths,
+                    self.material_stack.resolve_dispersive(self.dispersive)),
+            )
+            # family = everything except the mode count, so a stored 14-mode
+            # solve can serve a 6-mode request by slicing (lookup_superset).
+            # Legitimate here in a way it is not for solve_section(): this
+            # method's monitor plane is pinned by monitor_center/monitor_size
+            # and does not widen with n_modes, and band i is whatever MPB's
+            # i-th distinct band is regardless of how many were requested.
+            family_config = build_run_config(
+                self, "section_mode_neff", dict(call), geometry)
+            config = build_run_config(
+                self, "section_mode_neff", dict(call, n_modes=n_modes), geometry)
+            hit = lookup(save_dir, config)
+            if hit is not None:
+                logger.info("section_mode_neff: cache hit at %s", hit)
+                return load_result(hit)
+            superset = lookup_superset(save_dir, family_config, (n_modes,))
+            if superset is not None:
+                folder, _stored = superset
+                logger.info("section_mode_neff: superset cache hit at %s (sliced)", folder)
+                return load_result(folder)[:, :n_modes]
+        if cache_only:
+            raise CacheMissError(
+                f"section_mode_neff(): cache_only=True but no cached run found "
+                f"for this config (save_dir={save_dir!r}). Run once with "
+                f"cache_only=False to populate the cache."
+            )
+
         # Hand the whole band down, not just its centre: under
         # `dispersive=True` the media are then built across it rather than
         # frozen at wl_center, which is the point of the flag for a multi-
@@ -1602,6 +1719,12 @@ class FDTDSolver:
                 neff[i, band - 1] = float(np.real(em.k.x)) / f
 
         sim.reset_meep()
+
+        if save_dir:
+            folder = save_run(save_dir, config, neff)
+            update_family_pointer(save_dir, family_config, (n_modes,),
+                                  os.path.basename(folder))
+            logger.info("section_mode_neff: cache saved at %s", folder)
         return neff
 
     def _build_section_mode_sim(
@@ -1956,6 +2079,7 @@ class FDTDSolver:
         save_dir: Optional[str] = None,
         cache_only: bool = False,
         use_merged_domain: bool = True,
+        seed_anchors: Optional[int] = 3,
         **geometry_kwargs,
     ) -> np.ndarray:
         """Propagation constants (rad/µm) per mode per wavelength — see
@@ -1971,7 +2095,7 @@ class FDTDSolver:
             lengths=lengths,
             monitor_center=monitor_center, monitor_size=monitor_size,
             save_dir=save_dir, cache_only=cache_only,
-            use_merged_domain=use_merged_domain,
+            use_merged_domain=use_merged_domain, seed_anchors=seed_anchors,
             **geometry_kwargs,
         ).beta
 
@@ -1988,6 +2112,7 @@ class FDTDSolver:
         save_dir: Optional[str] = None,
         cache_only: bool = False,
         use_merged_domain: bool = True,
+        seed_anchors: Optional[int] = 3,
         strict: bool = True,
         **geometry_kwargs,
     ) -> "BetaCalibration":
@@ -2058,6 +2183,36 @@ class FDTDSolver:
                 `mmi_2x2_hybrid.py`/`directional_coupler_hybrid.py`'s own
                 `SYMMETRIC_MODE_REUSE` fallback pattern).
 
+            seed_anchors: how many wavelengths the MPB seed is actually
+                solved at, the rest being interpolated. 3 (default, and active
+                for any caller with more than 3 wavelengths); None or 0 solves
+                the seed on the caller's full grid, as before this existed.
+
+                **Only the seed is affected.** The FDTD time-stepping and the
+                modal decode always run on every wavelength passed in — this
+                changes the *estimate* used to pick the 2π branch and to space
+                the fit lengths, never the measurement.
+
+                The seed can afford it because both of its jobs are coarse.
+                Branch selection needs the estimate within ~25% of β
+                (`_BETA_MIN_BRANCH_FRACTION`), and production margins sit at
+                0.05-0.095 of the half-distance to the next branch. A 3-anchor
+                quadratic reproduced the MMI 2×2's real 14-mode C-band n_eff
+                curve to 1.10e-04 worst case (modes 0-12: ≤ 9.1e-06; mode 13,
+                nearest cutoff, is the outlier) = 4.5e-04 rad/µm of β_seed
+                = 1.6e-04 of that half-distance.
+
+                Cost: linear in this number. On the MMI 2×2 it takes the seed
+                from 154 eigensolves to 42, ~31.5 min to ~8.6 min. Raise it if
+                a device's n_eff(λ) is not well described by a degree-(n−1)
+                polynomial across its band — a strongly non-parabolic curve, a
+                very wide band, or a mode crossing inside it — or set None to
+                switch the subsampling off entirely.
+
+                Visible in the returned calibration as `seed_wavelengths`, and
+                the one reported quantity it perturbs is `seed_excess`
+                (β/β_seed − 1): ~0.007 percentage points on a 2.5% excess at
+                the worst mode.
             strict: True (default) raises on either post-fit guard below,
                 exactly as `section_mode_beta()` always has. False downgrades
                 both to a WARNING and returns the calibration anyway, with the
@@ -2120,13 +2275,63 @@ class FDTDSolver:
                 f"long, leaving no room for the {self.dpml} µm PML clearance the "
                 f"mode solve needs on each side."
             )
-        seed = self.section_mode_neff(
-            geometry, wavelengths, mid - seed_span / 2.0, mid + seed_span / 2.0,
+        # The seed is solved on `seed_anchors` wavelengths and fitted to the
+        # rest, rather than on the caller's whole grid. Its two jobs are coarse
+        # decisions -- which 2*pi branch each measured phase sits on, and (via
+        # beta_max) how far apart the fit lengths may be -- while n_eff(lambda)
+        # across a device band is smooth and very nearly quadratic. Measured on
+        # this device's own 14-mode C-band curve, a 3-anchor quadratic
+        # reproduces the 11-point n_eff to 1.10e-04 worst case (modes 0-12 are
+        # <= 9.1e-06; mode 13, nearest cutoff and so most curved, is the
+        # outlier). That is 4.5e-04 rad/um on beta_seed, or 1.6e-04 of the
+        # half-distance to the neighbouring branch -- against production branch
+        # margins of 0.05-0.095, three orders of magnitude of headroom.
+        #
+        # ONLY the seed is subsampled. The FDTD time-stepping and the modal
+        # decode below both run on every wavelength the caller passed; nothing
+        # downstream of seed_beta ever sees a reduced grid. The one visible
+        # consequence is that `seed_excess` (beta/beta_seed - 1, the
+        # discretization gap this calibration exists to report) is computed
+        # against an interpolated beta_seed -- shifting a 2.5% excess by
+        # ~0.007 percentage points at the worst mode.
+        #
+        # save_dir/cache_only ride along: the seed is the single largest item
+        # in a calibration once the decode is cut down (154 eigensolves,
+        # ~31.5 min on the MMI 2x2), so a re-run that hits cache for every
+        # simulation should not pay it again, and a documentation/plot re-run
+        # under cache_only must not silently spend half an hour here.
+        wl_seed = wavelengths
+        if (seed_anchors is not None and seed_anchors >= 2
+                and len(wavelengths) > seed_anchors
+                and float(np.ptp(wavelengths)) > 0.0):
+            wl_seed = np.linspace(
+                float(np.min(wavelengths)), float(np.max(wavelengths)), seed_anchors)
+
+        seed_at = self.section_mode_neff(
+            geometry, wl_seed, mid - seed_span / 2.0, mid + seed_span / 2.0,
             n_modes,
             monitor_center=iface["monitor_center"],
             monitor_size=iface["monitor_size"],
+            save_dir=save_dir, cache_only=cache_only,
             **geometry_kwargs,
         )
+
+        if wl_seed is wavelengths:
+            seed = seed_at
+        else:
+            # Degree len-1 through len points is exact interpolation, not a
+            # least-squares compromise. x is centred on the band so the fit is
+            # well conditioned at lambda ~ 1.5 with a 0.035 um span.
+            x_mid = float(np.mean(wl_seed))
+            seed = np.empty((len(wavelengths), n_modes))
+            for m in range(n_modes):
+                coeffs = np.polyfit(wl_seed - x_mid, seed_at[:, m], len(wl_seed) - 1)
+                seed[:, m] = np.polyval(coeffs, wavelengths - x_mid)
+            logger.info(
+                "section_mode_beta: seed solved at %d of %d wavelengths and "
+                "interpolated (degree %d); FDTD and decode still use all %d.",
+                len(wl_seed), len(wavelengths), len(wl_seed) - 1, len(wavelengths),
+            )
         seed_beta = 2.0 * np.pi * seed / wavelengths[:, None]
         beta_max = float(np.max(np.abs(seed_beta)))
         max_safe_spacing = 2.0 * np.pi / (_BETA_MIN_BRANCH_FRACTION * beta_max)
@@ -2178,25 +2383,20 @@ class FDTDSolver:
                 f"{max_safe_spacing:.3f} µm apart."
             )
 
-        # Merged path needs no caching of its own to be correct here -- it
-        # just has none DESIGNED yet (validation doc's own open question on
-        # cache-key granularity), so a caller asking for caching falls back
-        # to the proven per-length path rather than silently losing it.
-        merged_active = use_merged_domain and save_dir is None and not cache_only
-        if use_merged_domain and not merged_active:
-            logger.info(
-                "section_mode_beta: use_merged_domain=True but save_dir=%r/"
-                "cache_only=%r requested -- the merged path has no cache-key "
-                "design yet, falling back to the per-length path for this call.",
-                save_dir, cache_only,
-            )
+        # The merged path now carries its own cache key (see
+        # solve_section_multi_length), so caching no longer forces the
+        # per-length fallback and this is the path every caller takes by
+        # default. Set use_merged_domain=False for the per-length path.
+        merged_active = use_merged_domain
 
         if merged_active:
             # solve_section_multi_length() -- section_mode_beta_multi_monitor_
             # validation.md steps 3-6: one shared domain, one decay wait per
             # excited band, instead of len(lengths) independent domain builds.
             T_multi = self.solve_section_multi_length(
-                geometry, wavelengths, mid, lengths, n_modes, **iface, **geometry_kwargs,
+                geometry, wavelengths, mid, lengths, n_modes,
+                measure_diagonal_only=True, save_dir=save_dir, cache_only=cache_only,
+                **iface, **geometry_kwargs,
             )
             phases = np.angle(np.diagonal(T_multi, axis1=2, axis2=3))
         else:
@@ -2205,6 +2405,7 @@ class FDTDSolver:
                 T = self.solve_section(
                     geometry, wavelengths, mid - L / 2.0, mid + L / 2.0,
                     n_modes_in=n_modes, n_modes_out=n_modes,
+                    measure_diagonal_only=True,
                     save_dir=save_dir, cache_only=cache_only,
                     **iface, **geometry_kwargs,
                 )
@@ -2309,6 +2510,7 @@ class FDTDSolver:
             seed_beta=seed_beta, fits=fits, x0=float(x0), x1=float(x1),
             mid=float(mid), merged=bool(merged_active),
             guard_failures=tuple(guard_failures),
+            seed_wavelengths=wl_seed,
         )
 
     # ------------------------------------------------------------------
@@ -2333,6 +2535,7 @@ class FDTDSolver:
         measure_port: Optional[PortSpec] = None,
         measure_margin: Optional[float] = None,
         measure_margins: Optional[Sequence[float]] = None,
+        measure_diagonal_only: bool = False,
         save_dir: Optional[str] = None,
         cache_only: bool = False,
         **geometry_kwargs,
@@ -2456,6 +2659,40 @@ class FDTDSolver:
                 (lookup_superset(), family_config below) is skipped
                 whenever this is given — that mechanism assumes the usual
                 3-D return shape.
+            measure_diagonal_only: compute ONLY the diagonal T_ii, leaving
+                every off-diagonal entry NaN. False (default) is unchanged
+                behavior in every respect.
+
+                This is a cost knob, not a physics one, and the cost it
+                cuts is the dominant one. Each run already time-steps once
+                per excited band; what it then pays for is decomposing the
+                measurement monitor into `n_measure` bands at every
+                wavelength — `n_measure * len(wavelengths)` MPB solves,
+                ~14 s each, against ~5 min of actual time-stepping. On the
+                MMI 2×2 body calibration (14 bands, 11 wavelengths) that is
+                154 MPB solves per run at ~36 min, i.e. 89% of the job:
+                job 11872191 spent 27.9 h of its 31.4 h there and 3.5 h
+                time-stepping. Run k needs exactly one of those 154 columns
+                — its own, T_kk — so 93% of the dominant cost is computed
+                and discarded by the caller's `np.diagonal(T)`.
+
+                Restricting the decomposition to band k is EXACT, not an
+                approximation: the discarded entries are the ones the
+                caller never reads. Measured 4.0x on the 2×2 calibration
+                (30.6 h -> ~7.6 h).
+
+                Off-diagonals come back NaN rather than 0 so that any
+                consumer who reads one fails loudly instead of silently
+                treating "not computed" as "measured zero". Requires a
+                square problem (n_excite == n_measure); raises otherwise,
+                since a diagonal is not defined otherwise. The post-hoc
+                duplicate-mode scan is skipped (it compares whole columns),
+                and the cache's mode-count "superset" reuse is disabled for
+                these runs (a diagonal cannot serve a full request). The
+                REVERSE reuse does work and is automatic: a diagonal-only
+                request whose full-matrix twin is already cached is served
+                from it by extracting the diagonal, so turning this on
+                never invalidates a cache a previous full run paid for.
             save_dir: persistent on-disk cache directory (see beef/cache/).
                 None/"" (default) disables the cache entirely — every call
                 re-runs the simulation, same as before this parameter
@@ -2574,8 +2811,21 @@ class FDTDSolver:
         def _port_key(p: Optional[PortSpec]) -> Optional[dict]:
             return asdict(p) if p is not None else None
 
+        if measure_diagonal_only and n_modes_in != n_modes_out:
+            raise ValueError(
+                f"solve_section(measure_diagonal_only=True) needs a square "
+                f"problem, got n_modes_in={n_modes_in}, n_modes_out={n_modes_out}. "
+                f"T_ii is only defined when the excited and measured bases are "
+                f"the same size."
+            )
+
+        # A diagonal-only result cannot serve a later full-matrix request for
+        # fewer modes, so it must never be registered as (or matched against)
+        # a mode-count family superset. The useful direction -- a full matrix
+        # serving a diagonal request -- is handled explicitly below instead.
         family_config = None
-        if save_dir and monitor_size is not None and measure_margins is None:
+        if (save_dir and monitor_size is not None and measure_margins is None
+                and not measure_diagonal_only):
             family_config = build_run_config(
                 self, "solve_section",
                 dict(x0=x0, x1=x1, wavelengths=wavelengths,
@@ -2592,27 +2842,54 @@ class FDTDSolver:
             )
 
         if save_dir:
-            config = build_run_config(
-                self, "solve_section",
-                dict(x0=x0, x1=x1, wavelengths=wavelengths,
-                     n_modes_in=n_modes_in, n_modes_out=n_modes_out,
-                     stub_left=stub_left, stub_right=stub_right,
-                     monitor_center=monitor_center, monitor_size=monitor_size,
-                     y0=y0, y1=y1, excite_port=_port_key(excite_port),
-                     measure_port=_port_key(measure_port), measure_margin=measure_margin,
-                     measure_margins=(list(measure_margins) if measure_margins is not None else None),
-                     geometry_kwargs=geometry_kwargs,
-                     resolved_layout=(asdict(layout) if layout is not None else None),
-                     **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor),
-                     **resolved_material_config(
-                         self.material_stack, wavelengths,
-                         self.material_stack.resolve_dispersive(self.dispersive))),
-                geometry,
-            )
+            def _run_config(diagonal_only: bool) -> dict:
+                # `measure_diagonal_only` is added to the fingerprint ONLY when
+                # True. A key present on every config would change the hash of
+                # every config, invalidating the entire existing save_dir --
+                # 566 entries here, including the 30.6 h of MMI 2x2 calibration
+                # this flag exists to avoid ever paying again. Keeping it
+                # additive means a False call fingerprints exactly as it did
+                # before the flag existed, so every prior entry still hits and
+                # `_run_config(False)` below is a real lookup of the full-matrix
+                # twin rather than of something that was never written.
+                call = dict(
+                    x0=x0, x1=x1, wavelengths=wavelengths,
+                    n_modes_in=n_modes_in, n_modes_out=n_modes_out,
+                    stub_left=stub_left, stub_right=stub_right,
+                    monitor_center=monitor_center, monitor_size=monitor_size,
+                    y0=y0, y1=y1, excite_port=_port_key(excite_port),
+                    measure_port=_port_key(measure_port), measure_margin=measure_margin,
+                    measure_margins=(list(measure_margins) if measure_margins is not None else None),
+                    geometry_kwargs=geometry_kwargs,
+                    resolved_layout=(asdict(layout) if layout is not None else None),
+                    **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor),
+                    **resolved_material_config(
+                        self.material_stack, wavelengths,
+                        self.material_stack.resolve_dispersive(self.dispersive)),
+                )
+                if diagonal_only:
+                    call["measure_diagonal_only"] = True
+                return build_run_config(self, "solve_section", call, geometry)
+
+            config = _run_config(measure_diagonal_only)
             hit = lookup(save_dir, config)
             if hit is not None:
                 logger.info("solve_section: cache hit at %s", hit)
                 return load_result(hit)
+            if measure_diagonal_only:
+                # A full matrix already contains the diagonal this call wants.
+                # Reusing it is what keeps switching a calibration over to
+                # diagonal-only from throwing away the cache an earlier full
+                # run paid for -- e.g. the MMI 2x2's own 30.6 h in job
+                # 11872191, whose three cached matrices still serve the
+                # calibration unchanged after this flag was introduced.
+                full_hit = lookup(save_dir, _run_config(False))
+                if full_hit is not None:
+                    logger.info(
+                        "solve_section: diagonal served from the full-matrix "
+                        "cache entry at %s", full_hit,
+                    )
+                    return _diagonal_of(load_result(full_hit))
             if family_config is not None:
                 superset = lookup_superset(save_dir, family_config, (n_modes_out, n_modes_in))
                 if superset is not None:
@@ -2687,10 +2964,14 @@ class FDTDSolver:
             for p in prisms
         ]
 
+        # NaN, not 0, under measure_diagonal_only: the untouched entries are
+        # never measured by this run, and must not read as a measured zero.
+        _fill = np.nan + 0j if measure_diagonal_only else 0
         if measure_margins is not None:
-            T = np.zeros((len(wavelengths), len(measure_margins), n_modes_out, n_modes_in), dtype=complex)
+            T = np.full((len(wavelengths), len(measure_margins), n_modes_out, n_modes_in),
+                        _fill, dtype=complex)
         else:
-            T = np.zeros((len(wavelengths), n_modes_out, n_modes_in), dtype=complex)
+            T = np.full((len(wavelengths), n_modes_out, n_modes_in), _fill, dtype=complex)
 
         # source_margin/monitor_margin are documented (see class docstring) as
         # offsets from the PML *inner* edge — i.e. from lo/hi (device frame),
@@ -2915,9 +3196,14 @@ class FDTDSolver:
                           f"flux={_f[_i]:.6g}  sqrt(flux)/|alpha|={np.sqrt(_f[_i])/_a[_i]:.6g}  "
                           f"flux/|alpha|^2={_f[_i]/_a[_i]**2:.6g}", flush=True)
 
+            # Run k needs only its own column entry when the caller asked for
+            # the diagonal -- decomposing the other n_measure-1 bands is the
+            # single largest cost in the method (see measure_diagonal_only).
+            measure_bands = [k] if measure_diagonal_only else range(1, n_measure + 1)
+
             if measure_margins is not None:
                 for pos_idx, mea_flux_i in enumerate(mea_fluxes):
-                    for m in range(1, n_measure + 1):
+                    for m in measure_bands:
                         c = sim.get_eigenmode_coefficients(mea_flux_i, [m], eig_parity=mp.NO_PARITY)
                         # [wl_order] lifts the ratio out of meep's ascending-frequency
                         # monitor order back onto `wavelengths` as the caller gave it.
@@ -2927,7 +3213,7 @@ class FDTDSolver:
                         else:
                             T[:, pos_idx, m - 1, k - 1] = coeff  # excited=in(k), measured=out(m)
             else:
-                for m in range(1, n_measure + 1):
+                for m in measure_bands:
                     c = sim.get_eigenmode_coefficients(mea_flux, [m], eig_parity=mp.NO_PARITY)
                     # [wl_order] lifts the ratio out of meep's ascending-frequency
                     # monitor order back onto `wavelengths` as the caller gave it.
@@ -2948,7 +3234,11 @@ class FDTDSolver:
         # arithmetic on it.
         from ..mode_identity import warn_on_transfer_duplicate
 
-        if measure_margins is not None:
+        # The scan compares whole transfer-matrix columns; under
+        # measure_diagonal_only there are no columns, only a diagonal.
+        if measure_diagonal_only:
+            pass
+        elif measure_margins is not None:
             for pos_idx, mm in enumerate(measure_margins):
                 # hi - mm: this position's actual absolute measurement
                 # plane (matches how mea_along itself was derived above),
@@ -2976,6 +3266,9 @@ class FDTDSolver:
         n_modes: int,
         monitor_center: Optional[float] = None,
         monitor_size: Optional[float] = None,
+        measure_diagonal_only: bool = False,
+        save_dir: Optional[str] = None,
+        cache_only: bool = False,
         **geometry_kwargs,
     ) -> np.ndarray:
         """Modal transfer matrices at MULTIPLE lengths from ONE merged FDTD
@@ -2996,7 +3289,9 @@ class FDTDSolver:
         `mea_c`/`mea_w`/`kpoint`/`alpha_idx` don't depend on length at all,
         and `layout.mea_x` (computed for the `max(lengths)`-length window)
         already gives the boundary case directly. Only `mea_x` needs a
-        per-length variant, added here as `mea_positions`:
+        per-length variant, which lives in `merged_mea_positions()` (shared
+        with the plotting code that draws these monitors, so the two cannot
+        drift):
 
             mea_positions[i] = (layout.L - lengths[i]) if layout.reverse
                                 else lengths[i]
@@ -3007,12 +3302,23 @@ class FDTDSolver:
         resolved/section_mode_beta_multi_monitor_validation.md step 2, not
         approximated.
 
-        Unlike `solve_section()`: no `save_dir`/`cache_only` (deferred —
-        this method's own cache-key shape is still an open question, see
-        the validation doc), no `PortSpec`/`y0`/`y1` support (not needed by
-        `section_mode_beta()`'s calls, which are always plain x-normal with
-        `n_modes_in == n_modes_out`) — narrower than `solve_section()` on
-        purpose, not a general replacement for it.
+        Caching keys on the whole call — `mid`, the full `lengths` list, the
+        merged domain's own resolved layout, and the section geometry drawn
+        for `[mid ± max(lengths)/2]` — so one entry covers one merged run's
+        complete N-length result, which is the granularity the run actually
+        has. That deliberately does NOT interoperate with the per-length
+        `solve_section()` entries a pre-merge calibration wrote: they are
+        different simulations (three snug domains vs one long shared one),
+        and step 6 measured that the difference is real, if guard-safe
+        (`5.78e-04` rad/µm of domain-length sensitivity). Serving one from
+        the other would silently mix two measurements; a merged run whose
+        per-length twin is cached therefore re-simulates, once.
+
+        Unlike `solve_section()`: no `PortSpec`/`y0`/`y1` support (not needed
+        by `section_mode_beta()`'s calls, which are always plain x-normal
+        with `n_modes_in == n_modes_out`), and no mode-count "superset"
+        family reuse — narrower than `solve_section()` on purpose, not a
+        general replacement for it.
 
         Args:
             mid: device-frame x-coordinate the lengths are centered on
@@ -3058,10 +3364,41 @@ class FDTDSolver:
         # smallest when not) -- how close, for a real device, is exactly
         # what step 6's convergence study (simulation/domain length) is for;
         # not asserted against an invented threshold here.
-        mea_positions_local = [
-            (layout.L - L_i) if layout.reverse else L_i
-            for L_i in lengths
-        ]
+        mea_positions_local = merged_mea_positions(layout, lengths)
+
+        # Cache lookup sits here, after the monitor positions are resolved, so
+        # the fingerprint can carry them: `lengths` alone is the *request*,
+        # while mea_positions_local is what actually gets simulated, and
+        # Solver recommendation #4 is specifically that a future change to
+        # that derivation must not leave an old entry looking identical.
+        if save_dir:
+            call = dict(
+                x0=x0, x1=x1, mid=mid, lengths=lengths, wavelengths=wavelengths,
+                n_modes=n_modes, stub_left=0.0, stub_right=0.0,
+                monitor_center=monitor_center, monitor_size=monitor_size,
+                geometry_kwargs=geometry_kwargs,
+                resolved_layout=asdict(layout),
+                resolved_mea_positions=list(mea_positions_local),
+                **_resolved_spectral_config(wavelengths, self.source_bandwidth_factor),
+                **resolved_material_config(
+                    self.material_stack, wavelengths,
+                    self.material_stack.resolve_dispersive(self.dispersive)),
+            )
+            if measure_diagonal_only:
+                call["measure_diagonal_only"] = True   # additive, as solve_section()
+            config = build_run_config(self, "solve_section_multi_length", call, geometry)
+            hit = lookup(save_dir, config)
+            if hit is not None:
+                logger.info("solve_section_multi_length: cache hit at %s", hit)
+                return load_result(hit)
+        if cache_only:
+            raise CacheMissError(
+                f"solve_section_multi_length(): cache_only=True but no cached run "
+                f"found for this config (save_dir={save_dir!r}). Run once with "
+                f"cache_only=False to populate the cache. NOTE: a per-length "
+                f"solve_section() cache from a pre-merge calibration does NOT "
+                f"satisfy this — the merged domain is a different simulation."
+            )
 
         wl_center = float(np.mean(wavelengths))
         si_med, sio2_med = self._media(wavelengths)
@@ -3099,7 +3436,8 @@ class FDTDSolver:
             for p in prisms
         ]
 
-        T = np.zeros((len(lengths), len(wavelengths), n_modes, n_modes), dtype=complex)
+        T = np.full((len(lengths), len(wavelengths), n_modes, n_modes),
+                    np.nan + 0j if measure_diagonal_only else 0, dtype=complex)
 
         ex_width = layout.src_width
         ex_transverse = layout.src_c
@@ -3190,8 +3528,13 @@ class FDTDSolver:
             else:
                 src_alpha = alpha_raw
 
+            # As solve_section(): the caller wanting only T_ii makes the other
+            # n_measure-1 decompositions per monitor pure waste, and here that
+            # waste is multiplied by the monitor count.
+            measure_bands = [k] if measure_diagonal_only else range(1, n_measure + 1)
+
             for i, mea_flux in enumerate(mea_fluxes):
-                for m in range(1, n_measure + 1):
+                for m in measure_bands:
                     c = sim.get_eigenmode_coefficients(mea_flux, [m], eig_parity=mp.NO_PARITY)
                     coeff = (c.alpha[0, :, mea_alpha_idx] / src_alpha)[wl_order]
                     if layout.reverse:
@@ -3200,6 +3543,10 @@ class FDTDSolver:
                         T[i, :, m - 1, k - 1] = coeff
 
             sim.reset_meep()
+
+        if save_dir:
+            folder = save_run(save_dir, config, T)
+            logger.info("solve_section_multi_length: cache saved at %s", folder)
 
         from ..mode_identity import warn_on_transfer_duplicate
 

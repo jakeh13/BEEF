@@ -327,6 +327,7 @@ def plot_section_fdtd_geometry(
     stub_right: float = 0.0,
     monitor_center: Optional[float] = None,
     monitor_size: Optional[float] = None,
+    interface_monitors: Optional[List[Tuple[float, str]]] = None,
     show_pml: bool = True,
     ax=None,
     title: Optional[str] = None,
@@ -357,6 +358,13 @@ def plot_section_fdtd_geometry(
             not a drawn mode count.
         stub_left, stub_right, monitor_center, monitor_size: same as
             solve_section()'s own args.
+        interface_monitors: explicit ``[(x_local, label), ...]`` interface
+            monitors, replacing the single one this draws by default —
+            what a MERGED multi-length domain
+            (`FDTDSolver.solve_section_multi_length()`) actually contains:
+            one shared source, one monitor per length. Positions belong in
+            the section-local frame and should come from
+            `merged_mea_positions()`, not be re-derived by the caller.
         show_pml: shade the PML absorbing-boundary rectangles.
         ax: existing Axes; creates a new figure if None.
         title: plot title (defaults to a generic section description).
@@ -390,6 +398,7 @@ def plot_section_fdtd_geometry(
         ax, geometry, solver, x0, x1, stub_left, stub_right,
         oxide_width, n_in, n_out, geometry_kwargs,
         monitor_center=monitor_center, monitor_size=monitor_size,
+        interface_monitors=interface_monitors,
     )
     margin = max(0.5, 0.08 * L)
     if show_pml:
@@ -643,7 +652,8 @@ def plot_hybrid_geometry(
 
 def _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub_right,
                                 oxide_width, n_in, n_out, geometry_kwargs,
-                                monitor_center=None, monitor_size=None):
+                                monitor_center=None, monitor_size=None,
+                                interface_monitors=None):
     """Source/monitor markers for one HybridSolver FDTD section, in the
     section's own local frame — left edge of its section_gds()/
     section_prisms() domain (i.e. x0-stub_left) at x_local=0, matching the
@@ -655,6 +665,14 @@ def _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub
     FDTDSolver.solve_section() calls — so this plot can't independently
     drift out of sync with what actually gets simulated; see that
     function's docstring in beef/solvers/fdtd.py for the full rules.
+   
+    `interface_monitors`, when given, REPLACES the single interface monitor
+    with an explicit ``[(x_local, label), ...]`` set -- for a merged
+    multi-length domain, which carries one interior monitor per length off a
+    single shared source (`FDTDSolver.solve_section_multi_length()`). The
+    caller supplies the whole set, boundary monitor included, so nothing is
+    drawn twice; positions must come from `merged_mea_positions()` rather
+    than be re-derived here, for the drift reason above.
     """
     dpml = getattr(sub_solver, "dpml", 0.0) or 0.0
     sim_width = getattr(sub_solver, "sim_width", oxide_width - 2 * dpml)
@@ -678,7 +696,11 @@ def _draw_section_fdtd_markers(ax, geometry, sub_solver, x0, x1, stub_left, stub
     _draw_marker(ax, layout.norm_x, y_lo, y_hi, "norm mon", "darkorange", "--")
 
     mea_lo, mea_hi = _clamped_span(layout.mea_c, layout.mea_w)
-    _draw_marker(ax, layout.mea_x, mea_lo, mea_hi, "interface mon", "seagreen", "--")
+    if interface_monitors is None:
+        _draw_marker(ax, layout.mea_x, mea_lo, mea_hi, "interface mon", "seagreen", "--")
+    else:
+        for _x, _label in interface_monitors:
+            _draw_marker(ax, _x, mea_lo, mea_hi, _label, "seagreen", "--")
 
 
 def _draw_pml_rect(ax, xa, xb, ya, yb, label=None):
