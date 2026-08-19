@@ -31,8 +31,36 @@
 > report." The cascaded route's analytic arm is 2.00 µm, so its term 2 is ~3.5×
 > smaller, but term 3 is unique to it.
 >
-> **Built and submitted, not yet landed** (job 11983058; 11982549 was cancelled
-> 2 min in to fix the coupled pair's y-placement — see step 10). Both scripts now reach
+> **LANDED — job 11983058 COMPLETED, exit 0, all four stages** (calibrated and
+> uncalibrated, both routes, ~3 h 20 m). Comb shift **monolithic +0.392 nm
+> (+3.12 % of an FSR)**, **cascaded +0.951 nm (+7.45 %)**; FSR itself essentially
+> unmoved (12.560 → 12.560, 12.752 → 12.753) because the excess is nearly
+> wavelength-independent, so the comb translates rigidly. Guards clean (residual
+> 0.0018–0.0026 rad vs 0.1; branch margin 0.084–0.089 vs 0.9).
+>
+> **The half-FSR route offset is NOT closed** — the calibration moved the two
+> routes by different amounts (the cascaded has a second calibration, `P_body`,
+> worth +4.33 % on top of the shared strip term), so it *changed* the offset by
+> ~4.3 % of an FSR. `## Order` item 1 stays open with one more term accounted for.
+>
+> **Control:** stage 4's uncalibrated cascaded FSR is **12.752 nm**, exactly the
+> post-M1 3-D figure recorded in the box at the top of this file (job 11658568) —
+> even though every cascaded FDTD domain was re-simulated this run under a new
+> translation-normalised cache key. The uncalibrated numbers below are therefore
+> still live, not superseded.
+>
+> **`ring_resonator_hybrid.py`'s FDTD half had been stranded since 2026-08-03**
+> (`three_d` plus the M3/M4 material fingerprint) exactly as gap 3's own warning
+> box predicted; this run is its first 3-D production simulation under the
+> current material model. Its uncalibrated FSR is 12.560 nm.
+>
+> One defect this run exposed and fixed: the script's printed round-trip shift
+> used `L_OUTER = 7.00 µm`, but n_eff enters the round trip twice with opposite
+> signs (`phi − 2·phi_bend_correction`), so the **net** arm is
+> `L_OUTER − BEND_STRAIGHT_TOTAL = 2.00 µm`. It printed +11.0 % where the comb
+> moved +3.12 %. Diagnostic print only — never the assembly — so the landed
+> comb is unaffected. Full account: step 10 of
+> `resolved/section_mode_beta_multi_monitor_validation.md`. Both scripts now reach
 > the same library calibration every other example uses, via
 > `UniformCrossSection` + `FDTDSolver.section_mode_beta_details()` — the class
 > whose own module docstring was written naming these two cross-sections as its

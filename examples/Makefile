@@ -160,14 +160,20 @@ directional_coupler_soi160_hybrid_length_sweep:
 directional_coupler_soi160_hybrid_dense:
 	$(my_python) directional_coupler/python/directional_coupler_soi160_hybrid_dense.py
 
-# high_contrast_grating_fabry_perot_validation.md step 4 -- assembles the
-# already-solved HCG mirror + DC + connecting waveguides via
-# beef.network.Circuit. No srun/MPI needed: reads existing SMatrix files
-# and runs a cheap (no-FDTD) MPB mode-solve for the connecting waveguide,
-# safe on a login node. Deliberately NOT added to EXAMPLES/DEVICES -- same
-# reasoning as directional_coupler_soi160_hybrid above.
+# high_contrast_grating_fabry_perot_validation.md step 4 -- the HCG mirror +
+# DC + connecting waveguides, assembled via beef.network.Circuit.
+#
+# $(runner) since 2026-08-18: this used to read two other scripts' saved
+# SMatrix pickles and do one cheap MPB mode-solve, so it was login-node safe
+# and deliberately ran serial. It now SOLVES all three pieces itself against
+# example_sim_cache/ -- the mirror's solve_reflection(), the coupler's two
+# solve_section() S-bends plus its beta calibration, and a new FDTD beta
+# calibration of the connecting waveguide. Cache hits make a re-run cheap,
+# but a cold call is real 3-D FDTD and needs the ranks.
+# Deliberately NOT added to EXAMPLES/DEVICES -- same reasoning as
+# directional_coupler_soi160_hybrid above.
 hcg_fabry_perot_hybrid:
-	$(my_python) high_contrast_grating_fabry_perot/python/hcg_fabry_perot_hybrid.py
+	$(runner) $(my_python) high_contrast_grating_fabry_perot/python/hcg_fabry_perot_hybrid.py
 
 # TEMPORARY (see VERIFICATION above). VERIFY_ARGS=--static-only runs just the
 # no-meep checks, which is safe on a login node.

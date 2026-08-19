@@ -1681,6 +1681,78 @@ doc's own "how to apply to another device" section) — smoke-tested first
 at ~41-45h since `measure_diagonal_only` only touches the calibration's own
 diagonal-only need, plus ~1.5-3h for the now-fast calibration itself).
 
+**Correction: default calibration lengths is 3, not 2.** Repeated
+throughout this doc's own step 9a writeup above and in several batch-file
+comments — `section_mode_beta()`'s own docstring says "Default is three,
+evenly spaced," and job 11982321's own real run confirmed it:
+`lengths=[1.789, 3.577, 5.366] µm` auto-selected. Not corrected retroactively
+everywhere above; noted here so a future reader doesn't propagate the error
+further.
+
+**9a, second cancellation, 2026-08-17 — job 11939350's own estimate was
+also wrong, for a different reason: `measure_diagonal_only` doesn't touch
+the FDTD *stepping* cost, only decomposition, and stepping is what
+dominates on this device.** At 21h23m in, task 0's own log showed
+calibration mode 1 of 12 needing 12,706 timesteps (~7.3 hrs) to decay —
+extrapolating linearly across all 12 modes projected ~85-100h for
+calibration alone, far past the 60h budget. Compounding the risk:
+`solve_section_multi_length()` (`beef/solvers/fdtd.py:3260`) has **no
+incremental caching** — `save_run()` sits after the full per-mode loop
+(line 3548, loop starts line 3473) — so a wall-time kill mid-calibration
+discards the entire attempt, not just the unfinished modes.
+`scontrol update JobId=... TimeLimit=...` on the running job was refused
+(permission denied) — no way to extend in place. **Cancelled again**
+(user's explicit call after reviewing the projection), rebudgeted to
+`-t 6-00:00:00` (144h) from the real per-mode number, and resubmitted as
+job **11981595** — immediately hit `AssocGrpBillingMinutes` on `gts-sr108`
+(climbed to 0.706 usage from this session's own accumulated work in the
+few days since the last account switch), moved to `gts-sr108-gedc_main`
+(0.065 usage, the account this exact calibration doc's own step 8 needed
+for an analogous large MMI 2×2 job) as job **11981595** for real this time.
+
+**Resolution dropped 40→30 before letting 11981595 run to completion,
+measured first.** Rule-of-thumb check: `n_SiN(1.55µm)=1.996` →
+23.3 points/wavelength in the core at res=30, comfortably above the 15-20
+PPW "good accuracy" bar (vs. 31.1 PPW at res=40). The only prior in-repo
+resolution check for this device (`mmi_1x4_sin_body_res_convergence.py`,
+step 8 check 3) tested the EME/tidy3d side only, inconclusively — meep/FDTD's
+own resolution convergence had never been checked at all. Cancelled
+11981595 (only ~23s in, negligible loss) and ran two parallel timing probes
+before committing the real run again: `investigate_mmi1x4_res30_input_
+timing.py` (job **11982320**, real production input-section solve, cached
+and reusable) and `investigate_mmi1x4_res30_calibration_timing.py` (job
+**11982321**, one calibration mode, n_modes=1 probe, not cached).
+
+**MEASURED, and the two section types respond differently to the same
+resolution drop:**
+- Calibration (uniform straight-waveguide domain): genuine **~2.1-2.5×
+  speedup** — 3.39 hrs/mode at res=30 vs. 7.3 hrs/mode at res=40.
+  `lengths=[1.789, 3.577, 5.366] µm` auto-selected; fitted β ranged
+  6.55–7.06 rad/µm across the C-band, a sane dispersion trend.
+- Input/output taper+stub sections: **no measured benefit** — 11.49 hrs at
+  res=30, essentially unchanged from the ~11-12 hr res=40 baseline. Real
+  cause, not assumed: res=30 needed ~1.4× MORE timesteps to reach
+  `decay_tol=1e-11` (23,388 steps/t=389.8 vs. res=40's own ~17,000
+  steps/t≈213) than the naive Courant-limited-Δt argument predicted, which
+  roughly cancels the ~2× per-step speedup the coarser grid does deliver.
+
+Net: still a real, worthwhile overall win (calibration was already the
+majority of total cost), just not the ~3.2× a naive `(30/40)^4` grid-cell
+argument would predict — closer to **~2×** once the input/output sections'
+own non-response is folded in. `RESOLUTION` changed to `30.0` in both
+`mmi_1x4_hybrid.py` and `_prewarm_mmi_1x4_hybrid.py` (must match exactly —
+same cache key). Revised per-branch projection: input (11.49h, measured) +
+calibration (12×3.39h = 40.7h, still a 1-mode extrapolation — per-mode
+variance across the other 11 modes unmeasured) + output (~11.5h, ASSUMED
+similar to input, same geometry class, itself unmeasured) ≈ **64h**.
+
+**Real run resubmitted at res=30, job 12014403** (`-t 5-00:00:00`/120h, ~1.9×
+margin over the 64h projection), account `gts-sr108-gedc_main`. No fresh
+smoke test — the two timing probes themselves already exercised this exact
+config (real res=30, real `decay_tol=1e-11`) to clean completion, a more
+rigorous check than a reduced-scale smoke test would have been. **In
+flight, not yet complete.**
+
 **9b. Symmetric mode reuse on the OUTPUT side — proposed, not implemented,
 no code written.** `mmi_2x2_hybrid.py`/`directional_coupler_hybrid.py` each
 cut their large-FDTD count in half by noticing their two *input* arms are

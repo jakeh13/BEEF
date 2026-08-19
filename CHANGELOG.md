@@ -7,6 +7,64 @@ fuller write-up, it points there rather than repeating it.
 
 ---
 
+## 2026-08-18 (later)
+
+One library change, found while making the HCG Fabry-Pérot example solve its
+own pieces. Full write-up:
+`validation_markdown/resolved/section_mode_beta_multi_monitor_validation.md`
+step 11.
+
+### Fixed — `minimum_run_time` was both stranding cache entries and invisible to the ones that mattered
+
+`FDTDSolver.minimum_run_time` (added 2026-08-08 with the modal multiplexer's
+early-stop fix) was tracked inconsistently by `beef/cache/config.py`, in
+opposite directions:
+
+| method | mechanism | consequence |
+|---|---|---|
+| `solve_reflection` | no `_METHOD_ATTRS` entry, so the full `vars()` dump — the new key had no counterpart in older stored configs | **48 stranded entries**, including the HCG mirror's ~55 min res-60 3-D production run, still perfectly valid (the runs it described had no floor, which is what the new default `0.0` means) |
+| `solve`, `solve_section`, `solve_section_multi_length` | all pass it to `stop_when_dft_decayed()`, all omitted it from their allowlists | a **silent false-positive hit** — a floored run reusing an unfloored result. `_METHOD_ATTRS`' own comment calls this "strictly worse than the spurious-miss cost of over-including" |
+
+The second was live, not latent: `modal_multiplexer_hybrid.py` sets `100.0`
+and `modal_multiplexer_fdtd.py` sets `1000.0`, both added *because* a loose
+`decay_tol` stopped a 66 µm device at t≈107, before the pulse could cross it.
+A key that cannot see the floor can serve the pre-fix result to the post-fix
+request.
+
+**Fix**: `_DEFAULT_OMITTED_ATTRS` — an attribute in that set is left out of
+the fingerprint while it holds its constructor default (read off
+`inspect.signature`, not duplicated) and tracked normally when it does not.
+Both faults close at once: entries written before the attribute existed still
+hash equal, so the 48 un-stranded with **no re-simulation**; and
+`minimum_run_time` is now listed in all three allowlists that read it, so a
+non-zero floor is a different entry.
+
+**Deliberately not** "skip every default-valued attribute": most tracked
+attributes *are* at their defaults in real runs (`material_stack`, `dpml`,
+`decay_tol`, `sim_height`, `eps_averaging`, the subpixel pair) and every
+existing entry records them — dropping those would strand the whole cache,
+i.e. cause the exact damage being undone. **Also deliberately not** giving
+`solve_reflection` its own allowlist entry: it genuinely over-includes six
+attributes it never reads, but narrowing the key would strand those same 48
+entries a second time, and over-inclusion only costs spurious misses.
+
+`tests/test_cache_config.py::TestDefaultOmittedAttrs`, 7 tests. Verified
+against the real cache by a read-only `cache_only=True` probe before and
+after: the mirror, both coupler S-bends, the coupler body calibration and the
+EME body all hit afterwards.
+
+### Changed — `examples/.../hcg_fabry_perot_hybrid.py` is self-contained and calibrates its arms
+
+Not a library change, but it is why the above was found. The script solves the
+mirror, the coupler and a new connecting-arm β calibration itself instead of
+loading two other scripts' pickles, moving the last uncalibrated segment in
+the device (2 × 53.08 µm of arm) off MPB's index onto the FDTD's own β. Job
+11995681: +1.463 % in `n_eff`, **+4.28 FSR** of comb position. The Makefile
+target moved from `$(my_python)` to `$(runner)` — a cold run is now real 3-D
+FDTD. See `resolved/high_contrast_grating_fabry_perot_validation.md` step 7.
+
+---
+
 ## 2026-08-03
 
 Two corrections to recorded results, both from measurement rather than

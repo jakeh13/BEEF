@@ -551,3 +551,78 @@ class TestOneDispersionModelForBothEngines:
         b = resolved_material_config(_FlatAtMidband(wg_height=0.22, sz=2.0), wls)
         assert a["resolved_si_index"][1] == b["resolved_si_index"][1]   # agree at centre
         assert a != b, "fingerprint must see the dispersion, not just midband"
+
+
+class TestDefaultOmittedAttrs:
+    """`_DEFAULT_OMITTED_ATTRS` — adding an attribute to a solver's __init__
+    must not invalidate entries written before it existed, while a NON-default
+    value must still be distinguished.
+
+    Written 2026-08-18 from the real failure: `FDTDSolver.minimum_run_time`
+    (added with the modal multiplexer's early-stop fix) stranded all 48
+    `solve_reflection` entries in `example_sim_cache/`, the HCG mirror's own
+    res-60 3-D production run among them, while the three methods whose
+    allowlists omitted it could not tell a floored run from an unfloored one
+    at all. See that set's own comment in beef/cache/config.py."""
+
+    # solve_reflection has no allowlist, so it takes the full vars() dump —
+    # the path the stranding actually happened on.
+    METHODS = ["solve", "solve_section", "solve_section_multi_length",
+               "solve_reflection"]
+
+    @pytest.mark.parametrize("method", METHODS)
+    def test_default_value_is_absent_from_the_key(self, method):
+        """The whole point: at its default the attribute leaves no trace, so
+        a config written before it existed still hashes equal."""
+        assert "minimum_run_time" not in _solver_config(FDTDSolver(), method)
+
+    @pytest.mark.parametrize("method", METHODS)
+    def test_pre_existing_entry_still_matches(self, method):
+        """The regression this exists to prevent, stated as the cache sees it:
+        a stored config that never had the key must hash the same as one built
+        from a default-valued solver today."""
+        stored = _solver_config(FDTDSolver(), method)
+        stored.pop("minimum_run_time", None)   # a no-op if the fix holds
+        assert _hash_config(stored) == _hash_config(_solver_config(FDTDSolver(), method))
+
+    @pytest.mark.parametrize("method", METHODS)
+    def test_non_default_value_is_tracked(self, method):
+        """The other half. All four of these pass minimum_run_time to
+        stop_when_dft_decayed(), so a floored run is a physically different
+        run and must not reuse an unfloored result — the silent
+        false-positive direction _METHOD_ATTRS calls strictly worse."""
+        floored = FDTDSolver(minimum_run_time=100.0)   # modal_multiplexer_hybrid's value
+        assert _solver_config(floored, method)["minimum_run_time"] == 100.0
+        assert _solver_config(floored, method) != _solver_config(FDTDSolver(), method)
+
+    def test_section_mode_neff_never_tracks_it(self):
+        """MPB on an initialized grid does no time-stepping, so there is no
+        decay criterion for a floor to apply to — it must stay out of that
+        key at any value, not merely at the default."""
+        cfg = _solver_config(FDTDSolver(minimum_run_time=100.0), "section_mode_neff")
+        assert "minimum_run_time" not in cfg
+
+    def test_only_listed_attributes_get_the_treatment(self):
+        """The set is deliberately explicit: most tracked attributes sit at
+        their defaults in real runs (material_stack, dpml, decay_tol...), and
+        omitting those would strand the whole cache instead of un-stranding
+        part of it."""
+        cfg = _solver_config(FDTDSolver(), "solve_section")
+        for key in ("dpml", "decay_tol", "sim_height", "eps_averaging",
+                    "material_stack", "source_bandwidth_factor"):
+            assert key in cfg, f"{key} is at its default but must stay in the key"
+
+    def test_bool_and_zero_are_not_confused(self):
+        """`False == 0` and `0 == 0.0` in Python, so the default check is
+        type-exact — otherwise a bool attribute defaulting to False would
+        swallow a real 0 (and vice versa)."""
+        assert config._is_omitted_default(FDTDSolver(), "minimum_run_time", 0.0)
+        assert not config._is_omitted_default(FDTDSolver(), "minimum_run_time", False)
+        assert not config._is_omitted_default(FDTDSolver(), "minimum_run_time", 1.0)
+        # not in the set at all -> never omitted, whatever it equals
+        assert not config._is_omitted_default(FDTDSolver(), "dpml", 0.5)
+
+    def test_defaults_are_read_off_the_constructor(self):
+        """Read from the signature, not duplicated — a changed default must
+        move the rule with it rather than leaving it behind."""
+        assert config._constructor_defaults(FDTDSolver)["minimum_run_time"] == 0.0

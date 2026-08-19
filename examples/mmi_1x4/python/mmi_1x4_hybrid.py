@@ -115,7 +115,19 @@ save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_
 # ---------------------------------------------------------------------------
 # Global simulation parameters
 # ---------------------------------------------------------------------------
-RESOLUTION = 40.0
+# RESOLUTION = 30.0, CHANGED 2026-08-18 from 40.0 -- rule-of-thumb check first
+# (n_SiN=1.996 @ 1.55um -> 23.3 points/wavelength in the core at res=30, still
+# comfortably above the 15-20 PPW "good accuracy" bar), then MEASURED before
+# committing (jobs 11982320/11982321): the calibration's own straight-
+# waveguide domain genuinely speeds up ~2.1-2.5x (7.3h -> 3.39h/mode at
+# res=40->30), but the input/output taper+stub sections do NOT -- input
+# measured 11.49 hrs at res=30, essentially unchanged from the ~11-12 hr
+# res=40 baseline, because res=30 needed ~1.4x MORE timesteps to reach
+# decay_tol=1e-11 (23,388 steps/t=389.8 vs ~17,000/t~=213), which roughly
+# cancels the ~2x per-step speedup. Net effect across the whole hybrid chain
+# is still a real ~2x improvement (calibration dominates total cost), just
+# not the ~3.2x a naive (30/40)^4 grid-scaling argument would predict.
+RESOLUTION = 30.0
 WL_MIN = 1.50
 WL_MAX = 1.60
 N_WL = 11
@@ -210,8 +222,13 @@ _fdtd_common = dict(
 # timed-out run showed near-cutoff modes taking far more iterations to
 # converge than well-confined ones (up to 191 vs 8-10) -- dropping the
 # marginal top modes should cut cost by more than the naive 12/20 ratio.
-# Revisit at step 8's resolution/mode-count convergence check, alongside
-# the still-open res=40 question that check already needs to answer.
+# Revisit at step 8's resolution/mode-count convergence check -- still open
+# for the EME/tidy3d side (job 11675082, inconclusive). The FDTD/meep side
+# picked up real (if partial) data 2026-08-18: RESOLUTION dropped 40->30
+# after measuring genuine ~2.1-2.5x speedup on the calibration domain but
+# NONE on the input/output taper sections (see the RESOLUTION comment
+# above) -- not a full convergence check, just the first real FDTD-side
+# measurement this device has had.
 N_MODES = 12
 
 

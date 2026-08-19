@@ -208,8 +208,114 @@ numbers that matter right now:**
   `AssocGrpBillingMinutes` again** (same class of issue as Step 6b's own
   task-1 delay, 2026-08-14) — cancelled and resubmitted under the plain
   `gts-sr108` account as **job 11981048** (`sbatch --account=gts-sr108`),
-  confirmed picked up (reason `Priority`, normal queue wait). Results
-  pending.
+  confirmed picked up (reason `Priority`, normal queue wait), started
+  2026-08-18 10:25:56.
+
+  **❌ TIMED OUT AGAIN at the full 6h — a different, more concerning
+  failure this time.** The cache-fingerprint bug is confirmed fixed
+  (`input matrices: cache HIT (all 4, no new FDTD)` in this run's own
+  log). But the calibration itself hit a severe, unestimated cost: only
+  ONE `Initializing structure...` block appears after the MPB seed phase
+  — after the full 6h, the job was still stuck inside the FIRST of 16
+  excited-mode calibration runs, at meep time≈8303 (660,245+ timesteps),
+  still stepping cleanly (no NaN, no crash) but nowhere near decaying.
+  The reduced-settings smoke test of this exact same domain (res=15,
+  decay_tol=1e-9) decayed cleanly by t=111.5 — this production run is
+  ~74× further in simulated time alone and still not converged. **This
+  is the same failure signature as Step 6b's full-device timeouts**: a
+  slow, non-decaying (not crashing) run, plausibly tied to this device's
+  dense, closely-spaced mode spectrum interacting badly with
+  `decay_tol=1e-11`'s strictness — not simply "needs more wall-clock
+  budget," the same lesson Step 6b already taught twice. The earlier
+  ~90 min calibration estimate (step 9's cost formula) assumed a
+  `timesteps` value that does not hold for THIS device's first excited
+  mode specifically — the formula itself may be fine for a well-behaved
+  mode; this device's mode 1 is evidently not one. **Not resubmitted** —
+  treating this the same as the user's standing Step 6b policy rather
+  than assuming a bigger `-t` fixes it.
+- **2026-08-18, investigating WHY mode 1 stalls — real findings, not yet
+  a root cause.** Two checks, both at zero/near-zero new cluster cost:
+  1. **Mode spacing is NOT anomalously close.** Pulled the MPB seed's own
+     band-1..16 values from job 11981048's log: the gap between band 1
+     and band 2 (0.004370, in the same units as the printed k-vector) IS
+     the smallest gap in the whole spectrum, but the full sequence of
+     gaps grows smoothly and monotonically (ratio of successive gaps
+     drops smoothly from 1.67 down to 1.09 by band 16) — textbook
+     dispersion for a wide multimode slab where the lowest-order modes
+     are always most closely spaced near the bulk index. **This is the
+     expected shape, not evidence of true pathological near-degeneracy**
+     — retracting the initial hypothesis that mode 1 has an anomalously
+     close partner.
+  2. **Directly compared bands 1, 2, 3's own decay behavior at matched
+     reduced settings** (res=15, decay_tol=1e-9, same merged-domain
+     mechanism, explicit solver construction — not via env var, after a
+     first attempt accidentally ran at res=40 because
+     `mmi_4x4_90hybrid_offset_sweep.py`'s env var name
+     (`MMI4X4_OFFSET_RES`) doesn't match `MMI4X4_CAL_RES`, caught before
+     wasting real time on it). **Band 1 decayed FASTEST of the three**
+     (t=108.0, 3241 steps), not slowest (band 2: t=114.7/3441 steps;
+     band 3: t=150.7/4521 steps) — the opposite of what an intrinsic
+     mode-1 pathology would predict. All three also triggered the same
+     "near-degenerate excited mode" normalization-mismatch guard at
+     essentially identical magnitude (36.4-36.8%), so that warning isn't
+     singling out mode 1 either — it fires generically on this basis.
+  **Conclusion so far: the production-scale stall on mode 1 is very
+  unlikely to be an intrinsic property of that physical mode** — reduced
+  settings show it decaying cleanly and fastest of the three tested.
+  The failure most likely depends specifically on production resolution/
+  `decay_tol`, not on which mode is excited per se. **Two live,
+  undistinguished candidates**: (a) a genuine numerical effect (marginal
+  reflection/resonance) that only appears at finer discretization or
+  stricter tolerance and gets damped out at reduced settings; (b) mode
+  reordering — "band 1" at res=15 is not guaranteed to be the same
+  physical mode as "band 1" at res=40, and this repo has hit real
+  mode-identity/ordering issues across resolutions/solvers before
+  (`fdtd_vs_EME_mode_validation.md`, the modal multiplexer's own gaps).
+  **Checked at res=25 (decay_tol still 1e-9, same 3-band comparison):**
+
+  | band | res=15 decay (t) | res=25 decay (t) |
+  |---|---|---|
+  | 1 | 108.0 | 99.0 |
+  | 2 | 114.7 | 130.7 |
+  | 3 | 150.7 | 93.7 |
+
+  All three still decay in a modest, similar range — no sign of building
+  toward the catastrophic res=40 stall. The near-degenerate normalization
+  mismatch actually SHRANK from ~36% (res=15) to ~15.6% (res=25) — moving
+  in the healthy direction, not the unhealthy one. **This makes the
+  res=40 failure look like a sharp threshold, not a gradual slowdown** —
+  shifts the balance toward candidate (b), mode reordering/crossing
+  somewhere between res=25 and res=40 (or a resolution-specific numerical
+  resonance coincident with res≈40 for this cross-section), over a smooth
+  numerical degradation.
+
+  **✅ Mode-identity check done — candidate (b), reordering, is RULED
+  OUT.** Cheap `section_mode_neff()` calls (no time-stepping, ~seconds,
+  short window at the body's own midpoint per that method's own PML
+  convention) at res=15/25/40 for bands 0-5:
+
+  | band | res=15 | res=25 | res=40 |
+  |---|---|---|---|
+  | 0 | 2.893802 | 2.940424 | 2.962350 |
+  | 1 | 2.887617 | 2.934357 | 2.956336 |
+  | 2 | 2.877280 | 2.924218 | 2.946286 |
+  | 3 | 2.862749 | 2.909967 | 2.932160 |
+  | 4 | 2.843960 | 2.891543 | 2.913899 |
+  | 5 | 2.820833 | 2.868868 | 2.891428 |
+
+  Every band increases smoothly and monotonically with resolution
+  (expected discretization convergence), the ORDERING never changes at
+  any resolution, and the band-0-to-1 gap stays essentially constant
+  (~0.006) across all three — no resolution-dependent near-degeneracy
+  emerging either. **Band 1 at res=40 is unambiguously the same physical
+  mode as band 1 at res=15/25.** This rules out mode-crossing/reordering
+  as the explanation, leaving only candidate (a): a genuine,
+  resolution-specific numerical effect in the FDTD time-stepping/
+  decay-detection itself (not which mode is targeted) — e.g. a
+  coincidental numerical resonance specific to res≈40 for this exact
+  domain. **Not yet identified further** — next step, if pursued, would
+  be a res≈35 decay-time probe to narrow exactly where the sharp
+  transition sits, since the mode itself is confirmed consistent.
 - **2026-08-14, Step 6b (full-device FDTD reference) RE-QUEUED at the
   user's direction, job 11847078** — see Step 6b's own updated section
   below for the full account (stale-geometry fix + budget raised to 3

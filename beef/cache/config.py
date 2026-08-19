@@ -3,6 +3,7 @@ JSON-safe dict, for the persistent save-folder cache (see beef/cache/__init__.py
 """
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any, Dict, Tuple
 
@@ -47,14 +48,14 @@ _METHOD_ATTRS: Dict[Tuple[str, str], Tuple[str, ...]] = {
     ("FDTDSolver", "solve"): (
         "res", "sim_width", "sim_height", "three_d", "dpml", "source_margin",
         "monitor_margin", "num_output_modes", "output_monitor_centers",
-        "output_monitor_widths", "material_stack", "decay_tol", "waveguide_length",
-        "source_bandwidth_factor",
+        "output_monitor_widths", "material_stack", "waveguide_length",
+        "decay_tol", "minimum_run_time", "source_bandwidth_factor",
         "eps_averaging", "subpixel_tol", "subpixel_maxeval",
     ),
     ("FDTDSolver", "solve_section"): (
         "res", "sim_width", "sim_height", "three_d", "dpml", "source_margin",
-        "monitor_margin", "half_domain_aperture", "material_stack", "decay_tol",
-        "source_bandwidth_factor",
+        "monitor_margin", "half_domain_aperture", "material_stack",
+        "decay_tol", "minimum_run_time", "source_bandwidth_factor",
         "eps_averaging", "subpixel_tol", "subpixel_maxeval",
     ),
     # section_mode_neff() runs MPB on an initialized grid with no time-stepping
@@ -70,8 +71,8 @@ _METHOD_ATTRS: Dict[Tuple[str, str], Tuple[str, ...]] = {
     # in how many monitors it hangs inside it.
     ("FDTDSolver", "solve_section_multi_length"): (
         "res", "sim_width", "sim_height", "three_d", "dpml", "source_margin",
-        "monitor_margin", "half_domain_aperture", "material_stack", "decay_tol",
-        "source_bandwidth_factor",
+        "monitor_margin", "half_domain_aperture", "material_stack",
+        "decay_tol", "minimum_run_time", "source_bandwidth_factor",
         "eps_averaging", "subpixel_tol", "subpixel_maxeval",
     ),
     ("EMESolver", "solve_section"): (
@@ -89,6 +90,78 @@ _METHOD_ATTRS: Dict[Tuple[str, str], Tuple[str, ...]] = {
         "oxide_height", "res", "material_stack", "temperature", "mode_solver",
     ),
 }
+
+
+# Attributes omitted from the fingerprint **when they hold their constructor
+# default**, and included as normal when they do not.
+#
+# WHY THIS EXISTS, from the failure that produced it. Adding an attribute to a
+# solver's __init__ silently invalidates every cache entry written before it,
+# because the entry's stored config simply has no such key and so cannot hash
+# equal. That is not hypothetical: `FDTDSolver.minimum_run_time` (added
+# 2026-08-08 with the modal multiplexer's early-stop fix) stranded all 48
+# `solve_reflection` entries in `example_sim_cache/`, including the HCG
+# mirror's own res-60 3-D production run — a ~55 min result that was still
+# perfectly valid, since the runs it described had no floor, which is exactly
+# what the new default (0.0) means. Found 2026-08-18 while making
+# `hcg_fabry_perot_hybrid.py` solve its own pieces; confirmed by deleting the
+# one attribute off a freshly built solver and watching the same call hit.
+#
+# WHY NOT JUST "SKIP EVERY DEFAULT-VALUED ATTRIBUTE". Because most tracked
+# attributes ARE at their defaults in real runs — `material_stack`, `dpml`,
+# `decay_tol`, `sim_height`, `eps_averaging`, the subpixel pair — and every
+# existing entry records them. Dropping those from the key would strand the
+# whole cache, i.e. cause precisely the damage this is meant to undo. The set
+# is therefore explicit and additive: an attribute belongs here only because
+# it postdates entries that are still wanted.
+#
+# THE OTHER HALF OF THE FIX. Omission alone is not enough — a method whose
+# _METHOD_ATTRS allowlist never listed the attribute could not distinguish a
+# NON-default value either, which is the strictly worse direction (a silent
+# false-positive hit, see _METHOD_ATTRS above). `solve`, `solve_section` and
+# `solve_section_multi_length` all pass `minimum_run_time` to
+# `stop_when_dft_decayed()` but omitted it from their allowlists, so
+# `modal_multiplexer_hybrid.py` (100.0) and `modal_multiplexer_fdtd.py`
+# (1000.0) could have reused a no-floor result — defeating the very fix those
+# values were added for. It is listed in all three now; the default-omission
+# below is what keeps their existing 0.0 entries matching regardless.
+_DEFAULT_OMITTED_ATTRS = frozenset({"minimum_run_time"})
+
+
+def _constructor_defaults(solver_cls) -> Dict[str, Any]:
+    """`{parameter: default}` for one solver's ``__init__``, cached per class.
+
+    Read off the signature rather than hardcoded, so the omission rule cannot
+    drift from the constructor the way a duplicated constant would.
+    """
+    cached = getattr(solver_cls, "_beef_ctor_defaults", None)
+    if cached is None:
+        cached = {
+            name: p.default
+            for name, p in inspect.signature(solver_cls.__init__).parameters.items()
+            if p.default is not inspect.Parameter.empty
+        }
+        try:
+            solver_cls._beef_ctor_defaults = cached
+        except (AttributeError, TypeError):      # e.g. a slotted/frozen class
+            pass
+    return cached
+
+
+def _is_omitted_default(solver, key: str, value: Any) -> bool:
+    """True when `key` is default-omitted AND `value` is that default.
+
+    `type(...) is type(...)` guards the one way `==` lies here: `False == 0`
+    and `0 == 0.0`, so a bool attribute defaulting to False would otherwise
+    also swallow a real 0, and vice versa.
+    """
+    if key not in _DEFAULT_OMITTED_ATTRS:
+        return False
+    defaults = _constructor_defaults(type(solver))
+    if key not in defaults:
+        return False
+    default = defaults[key]
+    return type(value) is type(default) and value == default
 
 
 def _json_safe(obj: Any, precision: int = _PRECISION) -> Any:
@@ -122,11 +195,18 @@ def _solver_config(solver, method_name: str) -> Dict[str, Any]:
     warning rather than silently dropped, since an omitted attribute that
     actually affects the physical result would produce a silent false-
     positive cache hit — see beef/cache/__init__.py.
+
+    An attribute in `_DEFAULT_OMITTED_ATTRS` sitting at its constructor
+    default is left out entirely, so that adding it to a solver does not
+    invalidate entries written before it existed — see that set's own
+    comment for the stranding it was written to undo.
     """
     allowlist = _METHOD_ATTRS.get((type(solver).__name__, method_name))
     out: Dict[str, Any] = {}
     for key, value in vars(solver).items():
         if allowlist is not None and key not in allowlist:
+            continue
+        if _is_omitted_default(solver, key, value):
             continue
         cache_key = getattr(value, "cache_key", None)
         if callable(cache_key):

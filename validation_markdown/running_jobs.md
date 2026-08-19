@@ -1,5 +1,107 @@
 # Active SLURM jobs — snapshot
 
+**★ TWENTY-EIGHTH SNAPSHOT — 2026-08-18, verified against
+`squeue -u jhiesener3`. This is the current one. Everything below the next
+rule is the twenty-seventh snapshot (2026-08-10), not reverified this pass.**
+
+Two new jobs only — a resolution replica of the 2x2 MMI dense stub sweep.
+Both are SUBMITTED AND RUNNING, neither has landed, so nothing below is a
+result yet.
+
+| job | state | what |
+|---|---|---|
+| **11995441** | 🏃 RUNNING (launched 17:50, `-t 3-00:00:00`, 1 node/4 cores) | `beef_mmi2x2_bodystub_sweep_alt_2nm_res30` — `mmi_2x2_body_stub_sweep_alt.py` at **res=30**, a replica of the manuscript's dense 2 nm grid (51 monitors, 0–0.10 µm past the taper end, `x1_fixed=-13.85`, 11 wl pts, 14 interface modes, top-arm excitation) with ONLY `self.res` changed. Log confirms `res=30`, 51 positions, `Computational cell is 5.66667 x 6 x 2.5 with resolution 30`. Budget extrapolated from the res=40 run's measured split (see below): ~15h worst case, so 72h is ~4.8x. → `data/mode_coeffs_body_stub_alt_dense_res30_2nm_0-100nm.npz` |
+| **11995442** | 🏃 RUNNING (launched 17:50, `-t 7-00:00:00`, 1 node/4 cores) | `beef_mmi2x2_bodystub_sweep_alt_2nm_res50` — same replica at **res=50**, the expensive leg. Log confirms `res=50`, 51 positions, `Computational cell is 5.66 x 6 x 2.5 with resolution 50`. Budget ~46h (res² decomp scaling) to ~56h (res³), so 7 days is ~3.0–3.6x. → `data/mode_coeffs_body_stub_alt_dense_res50_2nm_0-100nm.npz` |
+| **11982320** | 🏃 RUNNING (6h58m elapsed at snapshot time) | `beef_inv_res30_input` — another session's work, not independently verified this snapshot |
+
+### Landed this pass — job 11995681, `beef_hcgfp_selfcontained` ✅ COMPLETED
+
+| job | state | what |
+|---|---|---|
+| **11995681** | ✅ COMPLETED 18:25→19:15, **49:34**, exit 0 (1 node/24 cores, `gts-sr108-gedc_main`) | `hcg_fabry_perot_hybrid` rewritten to solve all three of its pieces itself against `example_sim_cache/` instead of loading two other scripts' pickles, **and to calibrate the connecting arms on the FDTD's own β** — the last uncalibrated segment in the device (2 × 53.08 µm against the coupler's 23 µm). Only the arm calibration time-stepped (47,604 steps, 48.4 min, res 60); mirror, both S-bends, coupler body calibration and EME body all hit cache. Task 2 (the `HCGFP_CALIBRATE_ARM=0` baseline) was 21.6 s, all hits. → `example_output/high_contrast_grating_fabry_perot/hcg_fabry_perot_hybrid{,_uncalibrated_arm}/` |
+
+**Result**: arm n_eff 2.138038 (MPB) → **2.169312** (FDTD), **+1.463 %**, worth
+**+4.28 FSR** of comb position over the 4 × L_ARM = 212.32 µm round trip.
+45 resonances, mean FSR **2.245 nm** (baseline 2.268 nm), Q 9,998–16,071.
+Rebuilt mirror `r(λ)` matched its published pickle to **0.000e+00** and the
+coupler's `t`/`k` to 1.8e-15, so the rebuild is a refactor, not a new device.
+Full write-up: `resolved/high_contrast_grating_fabry_perot_validation.md`
+step 7.
+
+**Account note**: submitted under `gts-sr108-gedc_main`, not the
+`gts-sr108` in most batch files — `sshare -U -u jhiesener3` at submit time
+showed EffectvUsage 0.979 (`-ece`) / 0.716 (`gts-sr108`) / **0.064**
+(`-gedc_main`). Started immediately. Re-check before reusing; which of the
+three has headroom has now moved three times.
+
+**Library fix that this job depended on**: `beef/cache/config.py` gained
+`_DEFAULT_OMITTED_ATTRS`, because `FDTDSolver.minimum_run_time` had stranded
+all 48 `solve_reflection` cache entries (the HCG mirror's ~55 min res-60 3-D
+production run among them) while simultaneously being invisible to
+`solve`/`solve_section`/`solve_section_multi_length`, where the modal
+multiplexer actually sets it non-zero. See
+`resolved/section_mode_beta_multi_monitor_validation.md` step 11.
+
+### Where the res=30/res=50 time budgets came from (measured, not guessed)
+
+The res=40 2 nm production run (**job 11880200**,
+`batch/verification/reports/11880200.out`) is the only real cost datum for
+this grid, and it splits cleanly:
+
+| phase | cost | how it was counted |
+|---|---|---|
+| time-stepping | 8,874 s (2.5 h) | 35,425 timesteps × 0.2505 s/step, from the log's own `on time step` progress lines and `run 0 finished at t = 442.8125 (35425 timesteps)` |
+| eigenmode decomposition | 91,293 s (25.4 h) | total − time-stepping, i.e. **1,790 s per monitor position** over 51 positions (consistent with the ~1,712 s/position measured mid-run on the earlier 126-position attempt, job 11847954) |
+| **total** | **100,167 s (27.8 h)** | the log's own `Elapsed run time` |
+
+Scaled: time-stepping ~res⁴ in 3-D (three spatial dims + the
+Courant-limited step count); decomposition is dominated by the per-monitor
+MPB cross-section solves (11 wl × 14 modes each) so it scales somewhere
+between res² and res³. **The decomposition exponent is EXTRAPOLATED, not
+measured** — when these two jobs land, size any future run from their real
+rates instead. Margins are deliberately fat because `solve_section()` saves
+its result ONCE at the very end (no incremental checkpoint), so a timeout
+loses the whole run including the already-completed time-stepping.
+
+### Two things changed about the job shape, both evidence-backed
+
+1. **1 node/4 cores, down from 2 nodes/48 cores.** Job 11880200's own log
+   records `Using MPI version 4.1, 1 processes` and `mem=3361476K` (~3.4 GB)
+   against 384 GB requested — there is no `mpirun`/`srun` in these batch
+   scripts, so 47 of the 48 requested cores sat idle for 27.8 h. res=50's
+   cell is 10.6M pixels (1.95x res=40's 5.4M) and its DFT monitor bank grows
+   1.56x, so ~6–8 GB peak; 4 × 8G = 32 GB keeps ~4x headroom on the largest
+   leg.
+2. **`OMP_NUM_THREADS=1` now explicit.** Previously left to meep's implicit
+   default. Threads measurably HURT this workload (`OMP_NUM_THREADS=8` ran
+   ~3.7x SLOWER than `=1` on a 101-position smoke case), so pinning removes
+   a variable the res=40 baseline left unpinned. Physics is unaffected.
+
+### Script change enabling this
+
+`mmi_2x2_body_stub_sweep_alt.py` gained a `BODY_STUB_RES` env var (default
+40.0 = `LEGACY_RES`). Output filenames carry a `res{N}_` tag for every
+resolution EXCEPT 40, whose two already-published files
+(`mode_coeffs_body_stub_alt_dense_{2nm_0-100nm,5nm_0-250nm}.npz`, read by
+`mmi_2x2_body_stub_dense_analysis.py` by exact name) keep their untagged
+names — so the new runs are self-describing with no manuscript data renamed.
+`RESOLUTION` is also stored inside every `.npz`. `example_sim_cache/`
+separates the three resolutions automatically: `res` is in
+`solve_section()`'s cache fingerprint allowlist (`beef/cache/config.py`,
+`_METHOD_ATTRS`), so neither job can false-positive onto the res=40 cached
+result. Verified before submitting: default (unset) still resolves to
+res=40 and the untagged legacy filename, and a sub-minute real-meep smoke
+(res=10 / 2 modes / 1 wl / 6 monitors) ran `solve_section()` with
+`measure_port`/`measure_margins` end to end and wrote a correctly
+`res10_`-tagged `.npz`.
+
+**Still open when these land:** `mmi_2x2_body_stub_dense_analysis.py` reads
+exactly two hardcoded files (the res=40 2 nm and 5 nm grids) and has no
+resolution axis. Overlaying 30/40/50 needs a new/extended analysis script;
+that has NOT been written yet.
+
+---
+
 **★ TWENTY-SEVENTH SNAPSHOT — 2026-08-10, verified against
 `squeue -u jhiesener3`. This is the current one. Everything below the rule
 is the twenty-sixth snapshot (2026-08-05), not reverified this pass except

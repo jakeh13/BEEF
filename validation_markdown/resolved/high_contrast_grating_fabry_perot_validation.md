@@ -14,13 +14,28 @@
 > | Step 2 — DC coupling + resolution | ✅ real coupling landed; resolution convergence MEASURED (= check 3) |
 > | Step 3 — waveguide phase blocks | ✅ real 21-pt `n_eff(λ)`, bidirectional block (real bug found+fixed) |
 > | Step 4 — `Circuit` assembly | ✅ matches the closed form to floating-point precision (`max\|ΔR\|=6.9e-17`) |
-> | Step 5 — resolved spectrum | ✅ **44 real resonances**, mean FSR 2.255 nm, Q≈9990–16000, via interpolation not brute-force |
+> | Step 5 — resolved spectrum | ✅ resolved by per-factor interpolation, not brute-force — **superseded by Step 7's numbers** |
+> | Step 7 — self-contained + arms calibrated | ✅ **2026-08-18, job 11995681** — every piece solved in-script; arms moved off MPB onto the FDTD's own β (+1.463 %), comb **+4.28 FSR**, **45 resonances**, FSR **2.245 nm**, Q 9,998–16,071 |
 > | Check 1 — engine agreement | ✅ CLOSED — full-band ratio stable (0.28%); stub/cut-point drift fully explained by `CALIBRATE_BODY` |
 > | Check 2 — mode identity/ordering | ✅ CLOSED — identity correspondence, worst `\|dn_eff\|=0.00048` |
 > | Check 3 — resolution convergence | ✅ CLOSED — converged at production `res=40/80` |
 > | Check 4 — full-device FDTD | ⛔ decided OUT OF SCOPE (see A4) — a documented choice, not a gap |
 >
-> **Open, not blocking**: none for this device's own core physics. Two
+> **⚠️ Open and NOT merely cosmetic (2026-08-18)**: the real device's measured
+> FSR (2.2608 nm, `right_chip_N_LUNA`) sits ABOVE both the calibrated and
+> the uncalibrated simulation, and calibrating the arms moved the simulation
+> ~2x FURTHER from it. Not evidence the calibration is wrong — `L_ARM`'s own
+> approximations (two real arms averaged 3.0 µm apart; bends modelled as
+> straight) are of comparable size, and the arm β is unconverged — but the
+> two explanations are not yet separated. See Step 7's own ⚠️ section for
+> what would settle it. Manuscript FSR/FWHM figures are stale until re-run.
+>
+> **Open, not blocking**: the arm β is measured at ONE resolution per run
+> (res 60) and nothing here converges it — `HCGFP_ARM_RES` is the hook for
+> that sweep, and it is the largest remaining uncertainty on absolute comb
+> position (Step 7). The coupler body (res 40) and the arms (res 60) also
+> now sit on different discretization errors, a stated cost of that choice.
+> Otherwise none for this device's own core physics. Two
 > minor, optional items remain — dedicated pytest coverage for the newer
 > interpolation scripts, and formally reformatting this doc's status into
 > README's own four-checks gap-list table (this box is the informal
@@ -1436,6 +1451,223 @@ choice, not by oversight.
 
 ---
 
+### Step 7 — self-contained rebuild, and the last uncalibrated segment — ✅ LANDED 2026-08-18, job 11995681
+
+Two problems, one rewrite of
+`examples/high_contrast_grating_fabry_perot/python/hcg_fabry_perot_hybrid.py`.
+
+**Problem 1 — provenance.** The script consumed
+`high_contrast_grating_fdtd/smatrix.pkl` and
+`directional_coupler_soi160_hybrid/smatrix_hybrid.pkl` from two other
+scripts' output folders, plus a dense pickle from a third. So this cavity's
+answer depended on which revision of three other scripts had last written
+those files, and the run had to be ordered behind them by SLURM dependency
+(step 9 of `section_mode_beta_multi_monitor_validation.md` records exactly
+that `--dependency=afterok` reasoning).
+
+**Problem 2 — the arms were the one segment never calibrated.** Step 3 built
+them from a `meow`/MPB mode index. Everything they cascade with is
+referenced to meep's own β: the HCG's `r(λ)` is a meep mode-monitor
+measurement, the coupler's S-bends are meep, and its EME body propagates on
+its own FDTD-calibrated β. At 2 × 53.08 µm against the coupler's 23 µm,
+**~106 µm of the ~130 µm one-way path was carried by the other engine's
+index** — and the closed round trip is exactly where mixing engines is not
+allowed. The β-calibration audit could not see this, because it audited
+which examples *reach* a calibration, and this one reached none.
+
+Both are fixed: the script now solves all three pieces itself against
+`example_sim_cache/`, and calibrates the arms.
+
+**The rebuild is a refactor — measured, not asserted.** The script compares
+its own rebuilt coefficients against the published pickles whenever those are
+still on disk:
+
+| rebuilt here | vs published | max abs difference |
+|---|---|---|
+| HCG mirror `r(λ)`, 21 pts | `high_contrast_grating_fdtd/smatrix.pkl` | **0.000e+00** |
+| coupler `t(λ)`, 11 pts | `directional_coupler_soi160_hybrid/smatrix_hybrid.pkl` | **1.848e-15** |
+| coupler `k(λ)`, 11 pts | same | **1.878e-15** |
+
+The coupler's are float noise, not exactness, because the body is now reached
+through `EMESolver.solve_section()` at the one real length rather than
+`solve_section_length_sweep()` at 200 — with `neff_override` both take the
+same diagonal fast path, so the residual is summation order.
+
+#### The arm calibration — MEASURED, job 11995681 task 1
+
+`UniformCrossSection([(0.0, 0.5)], length=6.0)` through
+`FDTDSolver.section_mode_beta_details()`, the same route
+`ring_resonator_hybrid.py` uses for its own straights. Merged domain
+5.1 × 5.0 × 2.5 µm, fit lengths [1.365, 2.731, 4.096] µm, 47,604 timesteps to
+t = 396.7, **48.4 min on 24 ranks** — the only thing in the job that
+time-stepped; every other piece hit cache.
+
+**`ARM_RESOLUTION = 60`, matching the HCG mirror rather than the coupler's 40
+— the user's explicit call.** There is no single device resolution to inherit
+here, and a bare strip is cheap enough at 60 that the dominant lever on the
+comb is measured on the finer of the two meshes this device already uses.
+
+| at λ = 1.55 µm | n_eff | excess over MPB |
+|---|---|---|
+| arm, MPB mode index | 2.138038 | — |
+| arm, FDTD's own accumulated phase (res 60) | **2.169312** | **+1.463 %** (band +1.442 % … +1.475 %) |
+| coupler body even, MPB / FDTD (res 40) | 2.128829 / 2.181649 | +2.481 % |
+| coupler body odd, MPB / FDTD (res 40) | 2.099957 / 2.156245 | +2.680 % |
+
+**An unplanned result worth more than the planned one.** The arm's excess at
+res 60 (+1.46 %) is a little over *half* the coupler body's at res 40
+(+2.48 %/+2.68 %) — on a simpler cross-section, but the same MPB-vs-meep
+comparison. That is direct evidence the gap is discretization rather than
+anything physical, which is what the whole calibration argument assumes and
+what `section_mode_beta_details()`' own docstring asserts from the coupler
+alone. **It is also the stated cost of the res-60 choice**: the two blocks in
+this cavity now sit on *different* discretization errors, so a milder version
+of the inconsistency this step removes survives — over the coupler's 23 µm
+instead of the arms' 106 µm. `HCGFP_ARM_RES` redirects output to its own
+folder so a real convergence sweep can settle it without touching this.
+
+#### What it does to the spectrum — MEASURED, both arms of job 11995681
+
+**The lever arm is 4 × L_ARM = 212.32 µm, not L_ARM.** The resonant
+denominator is `1 − ρ²t²` with `ρ = r·phase²`, so the arm index enters the
+round trip through `phase⁴`. (The ring hit the analogous trap from the other
+direction — job 11983058, `L_OUTER` vs the net arm.)
+
+| | arms on MPB index (task 2) | arms on FDTD β (task 1, production) |
+|---|---|---|
+| resonances resolved, 1.50–1.60 µm | 44 | **45** |
+| mean FSR | 2.268 nm | **2.245 nm** (−1.01 %) |
+| Q range | — | **9,998 – 16,071** |
+| T_min range | — | 0.026 – 0.309 |
+| comb position | — | **shifted +26.9163 rad = +4.28 FSR** (≈ 9.6 nm) |
+| `Circuit` vs closed form | agrees | max\|ΔR\| 9.71e-17, max\|ΔT\| 6.66e-16 |
+| dense passivity, max R+T | 0.9955 | 0.9955 |
+
+**This is not a refinement; it re-registers the comb.** The +1.46 % index
+change is worth more than four free spectral ranges of position, while FSR
+moves 1 % and Q/depth barely at all — the expected signature, since the
+former is an absolute phase over 212 µm and the latter are ratios.
+
+**Stated honestly, and stated in the script's own docstring and printout:
+calibrating makes the loop self-consistent, it does NOT make the absolute
+resonance positions converged.** Both MPB's index and meep's β are
+discretizations of the same continuum problem and neither is the truth. What
+changes is that one engine now carries every segment of a closed loop, which
+is the thing a round trip actually requires. The residual is a real,
+unmeasured error on absolute comb position; FSR, Q and depth are
+differences/ratios and are insensitive to it at the same order.
+
+**The baseline is preserved, and is not a bit-identical replay.**
+`HCGFP_CALIBRATE_ARM=0` writes to
+`example_output/high_contrast_grating_fabry_perot/hcg_fabry_perot_hybrid_uncalibrated_arm/`
+(21.6 s, all cache hits). It puts the arms back on an MPB index but asks
+*meep's* eigensolver on the FDTD grid, not `meow`'s `Mesh2D` at res 100 as
+the pre-rewrite script did — deliberately, so that holding the grid fixed
+makes the two curves a statement about the two ENGINES rather than about two
+meshes. That is why its FSR (2.268 nm) is near but not equal to the
+2026-08-18 published 2.255 nm. **The original is archived byte-identical at
+`archive/example_output_20260818/`** (verified by md5 before anything was
+overwritten).
+
+#### ⚠️ OPEN, and it cuts against this change — the measured FSR sits ABOVE both simulations
+
+Found 2026-08-18 while auditing what consumes this device's outputs, **not**
+part of the work above and not resolved by it.
+`beef_manuscript_figures/fp_resonator_figures/HCG_plotting_LUNA.ipynb` is a
+measured-vs-simulated manuscript figure, and its stored outputs (last executed
+elsewhere, against the PRE-rewrite dense pickle) record real ground truth this
+device's simulations have never been read against in this doc:
+
+| | mean FSR, in the figure's own window | vs measured |
+|---|---|---|
+| **measured** — `right_chip_N_LUNA`, real fabricated device, 15 points | **2.2608 nm** | — |
+| simulated, pre-rewrite (arms on `meow`/MPB res 100), 16 points | 2.2497 nm | −0.49 % |
+
+Both are *windowed* statistics from that notebook's own peak finder, so they
+are not directly comparable to the band-wide means above — but the offset is
+calibratable: the same pre-rewrite data gives 2.255 nm band-wide against
+2.2497 nm windowed, ≈0.005 nm. Carrying that across:
+
+| band-wide (this doc) | → windowed estimate | vs measured 2.2608 nm |
+|---|---|---|
+| uncalibrated arms, 2.268 nm | ≈2.263 nm | **−0.1 %** |
+| **calibrated arms (production), 2.245 nm** | ≈2.240 nm | **−0.9 %** |
+
+**So calibrating the arms moved the simulated FSR AWAY from the measured
+value, by roughly a factor of two.** Stated plainly rather than buried: the
+real device's round-trip optical path is *shorter* than either model's, and
+raising `n_eff` by +1.46 % lengthens it further. Consistent with meep's Yee
+operator biasing `n_eff` high — which is exactly what the +1.46 % excess is —
+and therefore consistent with MPB's index happening to sit closer to reality
+on this cross-section.
+
+**Why this does NOT by itself say the calibration is wrong**, and why it is
+recorded as open rather than acted on:
+
+1. **The cavity-length model has errors of comparable or larger size.**
+   `L_ARM = 53.08 µm` is the *average* of two real arms that differ by
+   **3.0 µm** — 2.8 % of the 106 µm arm total — and each arm's 90° bend
+   (R = 10 µm, 15.708 µm of arc) is **treated as straight waveguide** per
+   Step 1's own framing, though a bend's effective index is not a straight's.
+   Either approximation can move FSR by ~1 %, i.e. as much as or more than
+   the calibration does. Absolute FSR on this device is currently limited by
+   cavity-length modeling, not by which β the arms carry.
+2. **The self-consistency argument is about the loop, not about absolute
+   accuracy.** A closed round trip through blocks measured by two different
+   discretizations is not measuring the device, whatever the FSR comes out
+   at. That argument stands unchanged.
+3. **The arm β is not converged** (one resolution, res 60 — see the open item
+   above). A res sweep could move the +1.46 % excess materially, and the gap
+   already shrinks with resolution (+2.48 % at res 40 on the coupler body).
+
+**What would actually settle it**, cheapest first, all with every other piece
+already cached: (a) an `HCGFP_ARM_RES` sweep, to see whether the excess
+extrapolates toward zero — if it does, the converged answer may land near the
+MPB curve and the tension dissolves; (b) modelling the bends as bends rather
+than straights, and/or running the two real arm lengths asymmetrically, to
+size approximation 1 against the calibration; (c) only then re-reading the
+measured comparison. **Nothing here should be read as validating either
+convention against the LUNA data until (a) and (b) are done** — the two
+candidate explanations are not yet separated.
+
+**Downstream consequence, unactioned**: that manuscript notebook's
+`fp_resonator_fsr.{svg,png}`, its FWHM/extinction-ratio tables, and any
+figure built on `smatrix_fabry_perot_dense.pkl` will change when re-run —
+the comb moved **+4.28 FSR** and the FSR by −1.01 %. It has NOT been re-run
+here; its stored outputs still describe the pre-rewrite simulation.
+
+#### A cache-key bug found on the way, and fixed
+
+The mirror's `solve_reflection()` call missed a cache entry that visibly
+matched it. Cause: `FDTDSolver.minimum_run_time` (commit `d7910e8`) is
+tracked inconsistently — over-included for `solve_reflection` (no
+`_METHOD_ATTRS` entry, so the full `vars()` dump), stranding all 48
+`solve_reflection` entries including this mirror's ~55 min res-60 3-D
+production run; and **under**-included for `solve`/`solve_section`/
+`solve_section_multi_length`, which all pass it to `stop_when_dft_decayed()`
+— a silent false-positive hit, live on the modal multiplexer (100.0 and
+1000.0, both added 2026-08-08 to fix a real early-stop bug). Fixed in
+`beef/cache/config.py` (`_DEFAULT_OMITTED_ATTRS`); the mirror hit cache again
+with **no re-simulation**. Full write-up:
+`section_mode_beta_multi_monitor_validation.md` step 11.
+
+#### Consequences for how this example is run
+
+- **No `--dependency` any more.** It is not downstream of either constituent
+  script; `batch/run_hcg_fabry_perot_hybrid.batch` submits standalone.
+- **The Makefile target moved from `$(my_python)` to `$(runner)`.** It used to
+  be login-node safe (two pickle loads plus one cheap mode solve); a cold run
+  is now real 3-D FDTD.
+- **The output folder is self-contained.** Both calibrations' merged-domain
+  and per-mode fit figures, the mirror's domain/reflection plots, and the
+  coupler's hybrid-section plots are all *generated* here from the same
+  geometry/solver objects that were simulated, rather than copied out of
+  another script's folder — the picture cannot drift from what ran.
+- **The companion notebook was regenerated from the script** and executed
+  end-to-end under `CACHE_ONLY = True`, reproducing these exact numbers
+  (+1.463 %, +4.28 FSR, 45 dips, FSR 2.245 nm).
+  `scripts/check_notebook_sync.py`: 18 pairs, 0 out of sync.
+
 ## Measured vs argued — read this before quoting anything above
 
 **MEASURED (read from source or real MPB mode solves, no FDTD)**: A1's
@@ -1465,7 +1697,9 @@ either a brute-force linear solve or each other, to floating-point
 precision; **Step 2's real DC coupling** (job 11716260, `T_through=0.8989`,
 `T_cross=0.0979` at λ=1.55 µm, complex `t(λ)`/`k(λ)` at 11 wavelengths,
 `decay_tol=1e-11` not loosened); **Step 3's real waveguide `n_eff(λ)`**
-(21-pt `meow`/MPB sweep) and the real `rho(λ) = r(λ)·p(λ)²` built from it
+(21-pt `meow`/MPB sweep — SUPERSEDED 2026-08-18 by Step 7's FDTD β
+calibration, job 11995681: the arms propagate on `n_eff = 2.169312` at
+λ=1.55 µm, not MPB's `2.138038`) and the real `rho(λ) = r(λ)·p(λ)²` built from it
 plus the HCG's own real production spectrum; **Step 5's real evaluated
 sparse spectrum at the 20 µm placeholder length (2026-08-07, superseded)**
 — the closed form fed entirely real numbers, giving a real resonance at

@@ -1309,12 +1309,26 @@ if _calibrate_now:
           f"<- the straights propagate on this")
     print(f"    excess {100*_excess[_i]:+.3f}%  "
           f"(band range {100*_excess.min():+.3f}% .. {100*_excess.max():+.3f}%)")
-    # What that excess is worth on the quantity this device reports. L_OUTER is
-    # the analytic lever arm; the bend correction rides the same n_eff but with
-    # the opposite sign, so this is the straight-phase term alone.
-    _dphi = 2 * np.pi * (neff_solve[_i] - neff_mpb[_i]) * L_OUTER / wl_solve[_i]
+    # What that excess is worth on the quantity this device reports.
+    #
+    # THE LEVER ARM IS THE **NET** ONE, and getting this wrong is easy: it is
+    # not L_OUTER. n_eff enters the round trip TWICE with OPPOSITE SIGNS --
+    # P = b_corrected**2 * exp(1j*phi) with b_corrected = b_d*exp(-1j*
+    # phi_bend_correction), so the total analytic phase is
+    # phi - 2*phi_bend_correction, i.e. n_eff acting over
+    # L_OUTER - 2*(BEND_D_IN + BEND_D_OUT) = L_OUTER - BEND_STRAIGHT_TOTAL.
+    # Here that is 7.00 - 5.00 = 2.00 um, not 7.00.
+    #
+    # MEASURED 2026-08-18 (job 11983058), which is how the L_OUTER version was
+    # caught: it printed +11.0% of an FSR, and the calibrated-vs-uncalibrated
+    # comb actually moved +0.392 nm = +3.12%. The net arm predicts +3.15%. The
+    # 3.5x discrepancy is exactly L_OUTER / (L_OUTER - BEND_STRAIGHT_TOTAL).
+    # Same expression the cascaded script's own print already used.
+    _arm = L_OUTER if BEND_STRAIGHT_HEADROOM < 0 else (L_OUTER - BEND_STRAIGHT_TOTAL)
+    _dphi = 2 * np.pi * (neff_solve[_i] - neff_mpb[_i]) * _arm / wl_solve[_i]
     print(f"    -> round-trip phase shift {_dphi:+.4f} rad "
-          f"= {100*_dphi/(2*np.pi):+.1f}% of a full FSR")
+          f"= {100*_dphi/(2*np.pi):+.1f}% of a full FSR "
+          f"(net analytic arm {_arm:.2f} um = L_OUTER - BEND_STRAIGHT_TOTAL)")
 
     # The measurement behind the answer. Free -- no extra simulation, just the
     # data section_mode_beta_details() already produced. Same builders the

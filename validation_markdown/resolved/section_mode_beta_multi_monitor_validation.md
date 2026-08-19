@@ -1533,14 +1533,40 @@ ring's own validation document predicted exactly this ("⚠️ This strands the 
 mode-solve cache entries… The 6 FDTD entries… remain stranded by the earlier axis
 fix, and are now *additionally* stranded by the M3 material fingerprint") — the
 prediction simply was never cashed in, because the device was not re-run again.
-The **cascaded** route is fully cached, consistent with it being the validated
-one (post-M1 3-D job 11658568).
+**The cascaded route was NOT cached either — retracting a claim made one
+paragraph too early.** The table above was built from a filter over four fields
+(`three_d`, `resolution`, a non-null `resolved_dispersive`, 101 wavelengths),
+which is *necessary but not sufficient*: it reported 1 usable entry per cascaded
+family, and stage 2 then re-simulated all three anyway, with **zero cache hits**.
+A full field-by-field diff — which is what should have been done from the start,
+and was done for the monolithic — finds the real reason, and it is a different
+one:
 
-Revised estimate, from this run's own measured 55 min/domain rather than from a
-model: monolithic ≈ 55 (bus) + 55 (ring) + ~15 (bend) + ~25 (strip calibration)
-≈ **2.5 h**; cascaded ≈ **45 min** (FDTD cached, strip calibration cached from
-stage 1, only the coupled pair new); the two uncalibrated stages a few minutes
-each. **≈ 3.5 h against an 8 h wall.** A timeout would be recoverable rather
+    closest pre-existing entry (2026-08-03 18:30), differs in 2 fields:
+      L_C                : now None   old 4.0
+      geometry_polygons  : now x in [-4.5, 4.5]   old x in [-9.5, -0.5]
+
+`run_left_fdtd()` acquired a **translation-invariance normalisation** after that
+run: it expresses its polygons in a canonical centred frame and drops `L_C` from
+the key, precisely so that editing `L_C` no longer invalidates an entry whose
+physics does not depend on it. `ring_resonator_hybrid.py`'s own `_sim_params()`
+docstring refers to it ("no translation-invariance trick available the way there
+is in `ring_resonator_hybrid_cascaded.py`'s `run_left_fdtd()`"). Like any
+re-keying it turns its old entries over exactly once, and this is that once.
+
+So **all six ring FDTD families were cold, for two unrelated reasons**: the
+monolithic on the M3/M4 material fingerprint plus `three_d`, the cascaded on the
+`run_left_fdtd` re-keying. The methodological lesson is the one this document
+keeps re-learning about duplicated formulas: **diff the whole config, never a
+hand-picked subset of its fields.**
+
+Revised estimate, from measured wall times rather than from a model: monolithic
+came in at **1 h 55 m** (bus + ring-excited + bend + strip calibration);
+cascaded needs its own three FDTD domains too (see the retraction above) plus
+the coupled-pair calibration, running ~**1 h 30 m**; the two uncalibrated stages
+are a few minutes each once everything above is cached. **≈ 3.5 h against an
+8 h wall** — the total happens to be what was projected, for different reasons
+than projected. A timeout would be recoverable rather
 than wasteful — everything computed is cached, so a resubmit resumes.
 
 Worth stating plainly: **the ring's comb will move for two reasons at once on
@@ -1592,17 +1618,206 @@ half the res-40 gap, and the residual +1.044 % is the part **mesh refinement of
 MPB cannot reach**, which is exactly item 6's claim about why this is a
 correctness fix and not a convergence problem.
 
-The comb moved to 12.560 nm. **That number is not yet attributable**: this run
-is also the monolithic route's first 3-D FDTD under the M3/M4 material model
-(see above), so two things changed at once. Stage 3's uncalibrated baseline,
-same material model, is what separates them.
+## LANDED — job 11983058 COMPLETED, exit 0, all four stages, ~3 h 20 m
 
-**No further numbers are claimed yet** — stages 2–4 still running. When it lands, the things to check are the
-ones step 9's "how to apply this to another device" section names — the residual
-and branch-margin grids against their 0.1 rad and 0.9 guards, and the comb shift
-against the ~quarter-FSR estimate above — plus one specific to this device:
-whether the shift moves the monolithic and cascaded routes' **half-FSR offset**
-(`ring_resonator_validation.md` Order item 1, still open) or leaves it intact.
-The two routes' analytic arms differ by 3.5×, so the calibration does not affect
-them equally, and that is a real prediction this run tests rather than a
-hope.
+| stage | route | FSR (nm) | dips |
+|---|---|---|---|
+| 1 | monolithic, **calibrated** | 12.560 | 7 |
+| 2 | cascaded, **calibrated** | 12.753 | 8 |
+| 3 | monolithic, uncalibrated | 12.560 | 7 |
+| 4 | cascaded, uncalibrated | 12.752 | 8 |
+
+**Control, and a good one: stage 4's 12.752 nm is exactly the FSR this device's
+own validation document records for the post-M1 3-D cascaded route (job
+11658568, 2026-08-03).** Every cascaded FDTD domain was re-simulated on this run
+under the new translation-normalised cache key, and it reproduced the old physics
+to the printed precision — the re-keying turned entries over without changing an
+answer, which is what a re-keying is supposed to do.
+
+**FSR barely moves; the COMB does.** Judging the calibration by FSR would have
+found nothing (12.560 → 12.560, 12.752 → 12.753). That is correct behaviour, not
+a null result: the excess is nearly wavelength-independent (+0.998 % … +1.044 %
+across the band), so the comb translates almost rigidly while the *spacing*,
+set by the group index, barely changes. The measurement is the dip positions:
+
+| route | comb shift | as a fraction of an FSR |
+|---|---|---|
+| monolithic | **+0.392 nm** | **+3.12 %** |
+| cascaded | **+0.951 nm** | **+7.45 %** |
+
+### Two predictions in this document were wrong, and both are instructive
+
+**1. The "roughly a quarter of an FSR" estimate was wrong, and so was the
+script's own printed +11.0 %.** Both used `L_OUTER = 7.00 µm` as the lever arm.
+**n_eff enters the round trip twice with opposite signs:**
+`P = b_corrected² · exp(1j·phi)` with
+`b_corrected = b_d · exp(-1j·phi_bend_correction)`, so the analytic phase is
+`phi − 2·phi_bend_correction` and the **net** arm is
+`L_OUTER − BEND_STRAIGHT_TOTAL = 7.00 − 5.00 = 2.00 µm`. The net arm predicts
+**+3.15 %** against **+3.12 %** measured; the discrepancy was exactly
+`L_OUTER / (L_OUTER − BEND_STRAIGHT_TOTAL) = 3.5`. Fixed in
+`ring_resonator_hybrid.py` to the same expression the cascaded script's print
+already used correctly. **The printed line in job 11983058's log is wrong; the
+comb it produced is not** — this only ever fed a diagnostic print, never the
+assembly, so no re-run is owed.
+
+**2. "The two routes' analytic arms differ by 3.5×, so the calibration will not
+shift them equally — a real prediction this run tests."** Right conclusion,
+wrong at every step of the reasoning. The arms do **not** differ: both are
+2.00 µm net, which this document already knew from the other direction
+(`max |P_phase-strip − P_DC-style| = 7.2e-15`, "not a physics difference"). And
+the ordering came out **backwards** — the cascaded route moved *more* (+7.45 %)
+than the monolithic (+3.12 %), not 3.5× less.
+
+The real asymmetry is that **the cascaded route has a second calibration.** Its
+`P_body` supermode phase is calibrated too, and that term is the difference:
+`7.45 − 3.12 = +4.33 %` of an FSR on top of the strip term the routes share. The
+strip term alone reproduces on both at +3.12 / +3.15 %.
+
+**So the half-FSR route offset is NOT closed.** Monolithic 12.560 nm against
+cascaded 12.753 nm; the calibration *changed* the offset by ~4.3 % of an FSR
+rather than removing it. `ring_resonator_validation.md`'s `## Order` item 1 stays
+open, with one more term now accounted for.
+
+### `P_body` reproduces item 6's amplification, and independently validates the new code
+
+    Body supermode n_eff at lambda = 1.550 um (even/odd):
+        MPB mode index  2.349085 2.326731   delta_n_eff 0.022353
+        FDTD own phase  2.375605 2.354529   delta_n_eff 0.021076   <- P_body propagates on this
+        per-mode excess +1.129% / +1.195%, but delta_n_eff -5.714%
+
+Per-mode excesses differing by 0.066 percentage points produce a **−5.714 %**
+change in `Δn_eff` — the `β/Δβ` lever, on this device, measured.
+
+And a check that was not designed, which is worth more than one that was.
+`directional_coupler_hybrid.py` is **SOI_220, `waveguide_width = 0.45`,
+`gap = 0.25`, res 40, C-band** — the *same physical cross-section* as the ring's
+coupled bus+ring pair (`W = 0.45`, `GAP = 0.25`, `SOI_220`, res 40). Two
+independent code paths: one through `HybridSolver(calibrate_body_neff=True)` on a
+`DirectionalCoupler` geometry at `oxide_width = 6.0`, the other through this
+session's new `UniformCrossSection` calibration inside a raw-meep script at
+`BODY_MESH_WIDTH = 4.70`:
+
+| | even | odd | Δn_eff |
+|---|---|---|---|
+| coupler (job 11981703_2) | 2.375702 | 2.354625 | **0.021077** |
+| ring pair (job 11983058) | 2.375605 | 2.354529 | **0.021076** |
+| \|Δ\| | 9.7e-05 | 9.6e-05 | **1e-06** |
+
+**Δn_eff agrees to 1e-06 (0.005 %)** while the individual modes differ by ~1e-04
+— the expected signature rather than a coincidence: the residual per-mode offset
+is a common-mode effect of the different transverse window (6.0 vs 4.70 µm) and
+cancels in the differential, which is the quantity that matters. **This is the
+strongest available evidence that the new ring calibration measures the right
+thing**: it reproduces a separately validated device's FDTD β on a shared
+cross-section, through a different geometry class, a different solver
+configuration, and a different script.
+
+---
+
+# Step 11 — the last uncalibrated segment, and a cache-key bug found on the way there (2026-08-18)
+
+Step 9's rollout table recorded `hcg_fabry_perot_hybrid` as needing **"none —
+calibrates nothing itself"**, and step 10 re-ran it unchanged. Both were true of
+the script as it then stood and both missed the same thing, for the same reason
+the ring was missed: *a device that reaches no calibration cannot be audited by
+looking at which calibrations it reaches.*
+
+That script was a `beef.network.Circuit` assembly of two saved pickles plus one
+`meow`/MPB mode solve. The mode solve was the **connecting waveguide** —
+2 × 53.08 µm of straight strip, against the coupler's 23 µm — i.e. **~106 µm of
+the ~130 µm one-way optical path was propagating on MPB's index while every
+block it cascaded with was referenced to meep's β.** Same argument as the ring's
+`phi`, with a much longer lever: the resonant denominator is `1 - ρ²t²` with
+`ρ = r·phase²`, so the arm index acts over a **4 × L_ARM = 212.32 µm** round trip.
+
+## What changed
+
+`examples/high_contrast_grating_fabry_perot/python/hcg_fabry_perot_hybrid.py`
+now solves all three pieces itself against `example_sim_cache/` — the mirror's
+`solve_reflection()`, the coupler's two `solve_section()` S-bends and its
+`section_mode_beta_details()` body calibration, and a **new
+`section_mode_beta_details()` calibration of the arm**, reached through
+`UniformCrossSection` exactly as the ring's straights are (step 10, finding 2).
+`CALIBRATE_ARM` defaults on; `HCGFP_CALIBRATE_ARM=0` inverts the output suffix.
+It no longer reads `smatrix.pkl`/`smatrix_hybrid.pkl` from either constituent
+script's output folder.
+
+**The rebuild is a refactor, and that is measured, not argued.** The script
+compares its own rebuilt coefficients against those two published pickles
+whenever they are still on disk, and both agreed on the first run:
+
+| rebuilt in `hcg_fabry_perot_hybrid.py` | vs published | max abs difference |
+|---|---|---|
+| HCG mirror `r(λ)`, 21 pts | `high_contrast_grating_fdtd/smatrix.pkl` | **0.000e+00** |
+| coupler `t(λ)`, 11 pts | `directional_coupler_soi160_hybrid/smatrix_hybrid.pkl` | **1.85e-15** |
+| coupler `k(λ)`, 11 pts | same | **1.88e-15** |
+
+The coupler's are float noise rather than exact because the body is now reached
+through `EMESolver.solve_section()` at the one real length instead of
+`solve_section_length_sweep()` at 200; with `neff_override` both take the same
+diagonal fast path, so the difference is summation order.
+
+## The cache-key bug — `minimum_run_time`, found because a cache hit was expected and missed
+
+Building the above, the mirror's `solve_reflection()` call **missed** a cache
+entry that visibly matched it (`FDTDSolver_solve_reflection_GdsGeometry_
+993cdeb82669a277`: 21 pts, 1.50–1.60 µm, res 60, 3-D, `extend_input_waveguide`).
+Diffing the built fingerprint against the stored `config.json` left exactly one
+difference — `solver_config[minimum_run_time]: mine=0.0, cached=<absent>` — and
+deleting that one attribute off a freshly built solver made the same call hit,
+returning the real result (peak R 0.9714 @ 1.580 µm, matching job 11673551).
+
+`FDTDSolver.minimum_run_time` was added in commit `d7910e8` with the modal
+multiplexer's early-stop fix. It has **two independent faults**, in opposite
+directions, and the second is the dangerous one:
+
+| | mechanism | consequence |
+|---|---|---|
+| `solve_reflection` | no `_METHOD_ATTRS` entry → full `vars()` dump → the new key has no counterpart in older configs | **48 stranded entries**, including a ~55 min res-60 3-D production run that was still perfectly valid — the runs it described had no floor, which is exactly what the new default `0.0` means |
+| `solve`, `solve_section`, `solve_section_multi_length` | all pass it to `stop_when_dft_decayed()`, all **omitted it from their allowlists** | a **silent false-positive hit**: a floored run reusing an unfloored result. `_METHOD_ATTRS`' own comment calls this "strictly worse than the spurious-miss cost of over-including" |
+
+The second was **live, not latent**: `modal_multiplexer_hybrid.py` sets
+`minimum_run_time=100.0` and `modal_multiplexer_fdtd.py` sets `1000.0`, both
+added 2026-08-08 *because* a loose `decay_tol` stopped a 66 µm device at
+t≈107–112, before the pulse could physically cross it. A key that cannot see the
+floor can serve the pre-fix result to the post-fix request — defeating the fix.
+(`decay_tol` **is** in the allowlists and changed at the same time, which
+narrows but does not close the exposure: `MUX_FDTD_DECAY_TOL=1e-11`, documented
+as the way to "reproduce the two prior (broken) runs exactly", lands on exactly
+the ambiguous combination, and `modal_multiplexer_hybrid.py`'s own
+`decay_tol=1e-11` never changed at all.)
+
+### The fix — `_DEFAULT_OMITTED_ATTRS` (`beef/cache/config.py`)
+
+An attribute in that set is **left out of the fingerprint while it holds its
+constructor default, and tracked normally when it does not.** Defaults are read
+off `inspect.signature`, not duplicated. Both faults close at once:
+
+- entries written before the attribute existed still hash equal to a
+  default-valued solver today → the 48 `solve_reflection` entries un-strand, and
+  the HCG mirror did **not** have to be re-simulated;
+- `minimum_run_time` is now listed in all three allowlists that read it, so a
+  non-zero floor is a different cache entry — the modal multiplexer's 100.0 and
+  1000.0 stop being invisible.
+
+**Deliberately not "skip every default-valued attribute".** Most tracked
+attributes *are* at their defaults in real runs (`material_stack`, `dpml`,
+`decay_tol`, `sim_height`, `eps_averaging`, the subpixel pair) and every existing
+entry records them; dropping those would strand the whole cache — the exact
+damage being undone. The set is explicit and additive: an attribute belongs there
+only because it postdates entries that are still wanted.
+
+**Also deliberately not done**: giving `solve_reflection` its own `_METHOD_ATTRS`
+entry. It genuinely over-includes today (`num_input_modes`, `num_output_modes`,
+`output_monitor_centers`, `output_monitor_widths`, `half_domain_aperture`,
+`waveguide_length` are all unread by it), but narrowing the key would strand
+those same 48 entries a second time. Over-inclusion only costs spurious misses,
+which is the safe direction; left as a known, deliberate wart.
+
+**Verified**: `tests/test_cache_config.py::TestDefaultOmittedAttrs` (7 tests,
+4 of them parameterised across all four affected methods) pins both directions,
+plus the `False == 0` / `0 == 0.0` type-exactness the default check needs. Full
+suite 670 passed / 19 skipped. Measured, not argued: the same read-only
+`cache_only=True` probe that found the miss was re-run after the fix and the
+mirror, both S-bends, the coupler body calibration and the EME body all hit.

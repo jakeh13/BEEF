@@ -29,6 +29,18 @@ CONSTANTS = [
     "N_MODES", "RESOLUTION", "WL_MIN", "WL_MAX", "N_WL", "CALIBRATE_BODY",
     "COUPLING_LENGTH", "SYMMETRIC_MODE_REUSE", "BODY_STUB", "INTERFACE_MODES",
     "L_ARM", "MM_LENGTH", "SEED_ANCHORS",
+    # Added 2026-08-18. CALIBRATE_ARM/ARM_RESOLUTION are hcg_fabry_perot_
+    # hybrid.py's arm-calibration switch and its mesh -- the exact analogue of
+    # CALIBRATE_BODY above, and the pair that decides whether the connecting
+    # arms propagate on meep's beta or MPB's index (worth 4.28 FSR of comb
+    # position, so a notebook silently on the wrong one teaches the wrong
+    # device). The other four were already load-bearing in the coupler/MMI
+    # scripts and simply ungated: this checker exists because a stale N_WL went
+    # unnoticed for eight days, and a stale resolution is the same failure.
+    # Verified to surface no pre-existing drift when added (18 pairs, 0 out of
+    # sync), so this is coverage, not a new backlog.
+    "CALIBRATE_ARM", "ARM_RESOLUTION",
+    "FDTD_RESOLUTION", "EME_RESOLUTION", "N_WL_HCG", "N_WL_DENSE",
 ]
 # calls whose absence from a notebook means the tutorial is teaching an older
 # version of the workflow, not merely a cosmetic difference
