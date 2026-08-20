@@ -1036,6 +1036,15 @@ settled `mm_length=206 µm`: total device length ≈216 µm makes a
 time-domain FDTD cost scales with volume, and 200+ µm of propagation is a
 different cost class than the ~5 µm devices `mmi_1x2_fdtd.py`/
 `mmi_2x2_fdtd.py` simulate whole. This device ships as **EME + hybrid only**.
+
+> **⚠ This justification is stale as of 2026-08-20 and the decision should be
+> re-taken, not inherited.** `MM_LENGTH` became **39.90 µm** on 2026-08-14
+> (`examples/mmi_1x4/python/mmi_1x4_hybrid.py:157`), so the total device length is
+> now ≈50 µm rather than ≈216 µm — the reasoning above is off by more than 4×, and
+> a whole-device FDTD reference (check 4) may well be affordable. The 2×2's own
+> full-3-D runs at comparable scale take 1.7–2.5 h each
+> (`running_jobs.md:116-121`). Re-ask the cost question before concluding this
+> device ships EME + hybrid only.
 The aperture design below still matters for 6d's FDTD input/output
 *sections* (short, ~5.5 µm — not the whole device), just not for a
 whole-device FDTD reference. **Use `use_neighbor_aperture=True`** on the

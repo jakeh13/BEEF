@@ -52,7 +52,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 import beef
-from beef import SMatrix
+from beef import SMatrix, interp_complex
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", "..", ".."))
@@ -116,14 +116,35 @@ def main():
     smat_hybrid = SMatrix.load(HYBRID_PKL)
 
     wl_fdtd, wl_hybrid = smat_fdtd.wavelengths, smat_hybrid.wavelengths
-    if wl_fdtd.shape != wl_hybrid.shape or not np.allclose(wl_fdtd, wl_hybrid):
-        raise SystemExit(
-            f"verify_mmi_2x2_hybrid_vs_fdtd: wavelength grids differ between "
-            f"the two saved SMatrix files ({wl_fdtd} vs {wl_hybrid}) -- one of "
-            f"the two example scripts' WL_MIN/WL_MAX/N_WL has drifted from the "
-            f"other. Re-run both from the current source before comparing."
+    # The two grids are ALLOWED to differ, and today they do: mmi_2x2_hybrid.py
+    # sweeps N_WL=11 and mmi_2x2_fdtd.py N_WL=51 (raised 2026-08-10). Requiring
+    # equality made this script un-runnable against the shipped configuration
+    # and would have forced a re-run of the expensive side to compare at all.
+    #
+    # Resample the FDTD reference onto the hybrid's grid instead. Interpolating
+    # the denser side onto the sparser one is the safe direction: no new
+    # structure is invented, and every hybrid point is bracketed by real FDTD
+    # samples rather than extrapolated. beef.spectral.interp_complex() is the
+    # right tool (magnitude + unwrapped phase, NOT real/imag -- see its module
+    # docstring for the measured damping that real/imag interpolation causes),
+    # with check_unwrap wired on so a grid too coarse for the coefficient's
+    # phase rate fails loudly instead of quietly picking the wrong branch.
+    resample = not (wl_fdtd.shape == wl_hybrid.shape and np.allclose(wl_fdtd, wl_hybrid))
+    if resample:
+        if wl_hybrid.min() < wl_fdtd.min() - 1e-12 or wl_hybrid.max() > wl_fdtd.max() + 1e-12:
+            raise SystemExit(
+                f"verify_mmi_2x2_hybrid_vs_fdtd: the hybrid grid "
+                f"[{wl_hybrid.min():.4f}, {wl_hybrid.max():.4f}] is not contained "
+                f"in the FDTD grid [{wl_fdtd.min():.4f}, {wl_fdtd.max():.4f}], so "
+                f"comparing them would extrapolate the reference. Re-run both "
+                f"scripts over the same band before comparing."
+            )
+        print(
+            f"NOTE: wavelength grids differ ({wl_fdtd.size} FDTD vs "
+            f"{wl_hybrid.size} hybrid points) -- resampling the FDTD reference "
+            f"onto the hybrid grid via beef.spectral.interp_complex().\n"
         )
-    wavelengths = wl_fdtd
+    wavelengths = wl_hybrid
 
     print(f"Loaded {FDTD_PKL}\n  ports={smat_fdtd.ports()}")
     print(f"Loaded {HYBRID_PKL}\n  ports={smat_hybrid.ports()}\n")
@@ -137,6 +158,8 @@ def main():
     for (fdtd_port, hybrid_port), ax in zip(PORT_PAIRS, axes):
         c_fdtd = smat_fdtd.coeff(port=fdtd_port, in_mode=1, out_mode=1)
         c_hybrid = smat_hybrid.coeff(port=hybrid_port, in_mode=1, out_mode=1)
+        if resample:
+            c_fdtd = interp_complex(wl_fdtd, c_fdtd, wavelengths, check_unwrap=0.5)
         T_fdtd = np.abs(c_fdtd) ** 2
         T_hybrid = np.abs(c_hybrid) ** 2
 

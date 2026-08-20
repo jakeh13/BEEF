@@ -536,7 +536,8 @@ class MaterialStack:
         given wavelength — the frozen-band limitation remains, the silent
         engine-to-engine disagreement does not.
 
-        **`dispersive=True` changes this** (opt-in, off by default). `wl` may
+        **`dispersive=True` changes this** (the default since 2026-08-01; pass
+        `dispersive=False` for the frozen-band behaviour described above). `wl` may
         then be the run's whole wavelength array, and the medium is built by
         `meep_medium_reparam()` — eps_inf carrying ~100% of the core/clad
         contrast so subpixel smoothing still acts, one Lorentzian carrying the

@@ -271,6 +271,29 @@ class TestMirrorPairs:
         hybrid.solve(geometry=geom, wavelengths=WAVELENGTHS, cache=cache)
         assert s0.call_count == 1 and s1.call_count == 1 and s2.call_count == 0
 
+    def test_mirror_guardrail_still_runs_on_a_cache_hit(self):
+        """A mirrored section served from `cache=` must STILL be re-validated.
+
+        The guardrail's whole reason for being re-checked every solve() call
+        (rather than validated once at construction, as mp.Mirror is) is that
+        geometry_kwargs can change which physical port is live between calls.
+        An in-memory cache hit used to `continue` before reaching the check, so
+        the second call below silently reused a transpose whose symmetry no
+        longer held. Regression test for that ordering.
+        """
+        good = FakeGeometry(width=0.45)
+        bad = FakeGeometry(width=0.45, asymmetric_beyond=0.5)
+        hybrid, s0, s1, s2 = self._make_hybrid(mirror_pairs={2: 0})
+        cache: dict = {}
+
+        # First call populates the cache against a symmetric geometry.
+        hybrid.solve(geometry=good, wavelengths=WAVELENGTHS, cache=cache)
+        assert len(cache) == 3
+
+        # Second call reuses that cache but the pairing is no longer valid.
+        with pytest.raises(ValueError, match="width_at mismatch"):
+            hybrid.solve(geometry=bad, wavelengths=WAVELENGTHS, cache=cache)
+
 
 class RecordingSolver(FakeSolver):
     """FakeSolver that also records the extra kwargs of every call."""

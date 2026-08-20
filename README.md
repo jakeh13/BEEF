@@ -33,28 +33,40 @@ Requires Python ≥3.10.
 from beef import (
     # geometry
     MMI, MMIPort, BendGeometry, DirectionalCoupler, Taper, SBend,
-    CompoundGeometry, WaveguideRun,
+    CompoundGeometry, WaveguideRun, GdsGeometry, load_gds_polygons,
     arc_polygon, RingResonatorCouplerSection, RingResonatorBendSection,
     # materials
-    MaterialStack, SOI_160, SOI_220,
+    MaterialStack, SOI_160, SOI_220, SIN_300,
     # solvers
     EMESolver, FDTDSolver, PortSpec, HybridSolver,
     # network
-    SMatrixBlock, connect, close_loop, Circuit,
+    SMatrixBlock, connect, close_loop, close_loop_pair, Circuit,
     from_transfer_matrix, from_smatrix, to_smatrix,
     # mode identity
     field_overlap_matrix, best_correspondence, mesh_cell_centers, stack_meow_mode_fields,
+    overlap_diagnostics, self_overlap_diagnostics,
+    # device-agnostic checks
+    cut_position_invariance, interface_modes_convergence,
+    # spectral resampling
+    interp_complex, unwrap_is_safe,
     # results
     SMatrix,
     # sweep
     ParallelSweep,
     # plot
     plot_eme_fields, plot_eme_geometry, plot_fdtd_geometry, plot_hybrid_geometry,
-    plot_performance, plot_splitting_ratio,
+    plot_section_fdtd_geometry, plot_performance, plot_splitting_ratio,
+    plot_beta_calibration, plot_beta_calibration_fits,
+    plot_beta_calibration_geometry, plot_beta_calibration_merged_geometry,
+    plot_beta_calibration_summary,
     # utilities
-    extrude_polygons,
+    extrude_polygons, atomic_replace_write,
 )
 ```
+
+> This block mirrors `beef/__init__.py`'s `__all__`; if you add a public name
+> there, add it here too. (`UniformCrossSection` is exported from
+> `beef.geometry` only, not from the top level.)
 
 - **Geometry** (`beef/geometry/`) — `MMI` (N×M splitter/combiner, per-port `MMIPort` taper specs,
   `input_idx`/`output_idx` to isolate a single port on multi-port devices like a 2×2),

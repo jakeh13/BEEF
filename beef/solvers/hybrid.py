@@ -169,7 +169,10 @@ class HybridSolver:
             whose solver has no `section_mode_beta()` of its own — in practice
             the EME bodies; an all-FDTD chain is unaffected.
         calibrate_lengths: section lengths (µm) the calibration fits β over.
-            Default `[span/2, span]` of the body being calibrated. Widening
+            None (default) lets `FDTDSolver.section_mode_beta()` choose them —
+            three β-capped lengths at `[spacing, 2*spacing, 3*spacing]`, NOT
+            `[span/2, span]`; see that method for why the spacing is derived
+            from β rather than from the body span. Widening
             the spacing risks the 2π branch ambiguity
             `FDTDSolver.section_mode_beta()` guards against; it will raise
             rather than guess.
@@ -958,12 +961,16 @@ class HybridSolver:
         """Warn when the sections are not modelling the same material.
 
         The chain contracts one section's modes against the next's assuming
-        both were solved in the same medium. Nothing checked that until now,
-        and today the default configuration **fails it**: a broadband FDTD
-        section freezes its index at band centre while an EME body re-solves
-        per wavelength, so the two disagree by up to 0.008 in n_Si across the
-        O-band — a real, silent, pre-existing mismatch, not one this flag
-        introduced (`validation_markdown/material_model_validation.md`).
+        both were solved in the same medium. Nothing checked that until this
+        was added, and at the time the default configuration **failed it**: a
+        broadband FDTD section froze its index at band centre while an EME body
+        re-solved per wavelength, so the two disagreed by up to 0.008 in n_Si
+        across the O-band — a real, silent, pre-existing mismatch, not one this
+        flag introduced (`validation_markdown/resolved/material_model_validation.md`).
+        Since dispersion became the default on the FDTD side (2026-08-01) the
+        shipped configuration passes: the FDTD's re-parameterised band fit sits
+        within ~1e-3 of exact Sellmeier against this check's 2e-3 tolerance. The
+        frozen case is now reached only by passing `dispersive=False`.
 
         Warning-only and best-effort, deliberately. This is the cheap half of
         that doc's work item 5; the hard-assert-with-tolerance version is
@@ -1357,6 +1364,20 @@ class HybridSolver:
             kwargs = kwargs_per_section[k]
             is_swept = k == sweep_section
 
+            # Before the cache short-circuit, not after: a mirror pair's
+            # geometric guardrail is only meaningful if it is checked on every
+            # solve() call, and the whole point of re-checking it (rather than
+            # validating once at construction, as mp.Mirror does) is that
+            # geometry_kwargs can change which physical port is live between
+            # calls. A cached mirrored section that skipped this would silently
+            # reuse a transpose whose symmetry no longer holds for this call's
+            # port selection -- exactly the failure the check exists to catch.
+            if k in self.mirror_pairs:
+                self._validate_mirror_pair(
+                    geometry, k, self.mirror_pairs[k], kwargs,
+                    kwargs_per_section[self.mirror_pairs[k]],
+                )
+
             cache_key = None
             if cache is not None:
                 # calibrate_body_neff belongs in the key for the same reason it
@@ -1377,7 +1398,6 @@ class HybridSolver:
 
             if k in self.mirror_pairs:
                 j = self.mirror_pairs[k]
-                self._validate_mirror_pair(geometry, k, j, kwargs, kwargs_per_section[j])
                 mat = mats[j].transpose(0, 2, 1).copy()
                 logger.info("Section %d/%d: %s (mirror of section %d)", k + 1, K, type(solver).__name__, j + 1)
             elif is_swept:

@@ -241,7 +241,9 @@ PORTS = [("top", 0), ("mid", 1), ("bot", 2)]
 #    slot of its type in the chain — sections are told apart by their
 #    x-ranges (and cached per-section), not by which object solves them.
 # ---------------------------------------------------------------------------
-N_MODES = 15    # body supermodes carried at all four section interfaces.
+N_MODES = 15    # body supermodes carried at the four MMI-body interfaces
+                # (the two connector interfaces carry CONN_MODES instead --
+                # see interface_modes below, which has six entries, not four).
                 # RAISED 14->15, 2026-08-09 (modal_multiplexer_validation.md
                 # gap 7's 2026-08-09 entry): check_mode_correspondence
                 # measured a real basis-incompleteness at 14 modes at the

@@ -1,6 +1,21 @@
 # Skipping the EME mode solve when `calibrate_body_neff` makes it moot — plan
 
-**BUILD PLAN — the mechanism this document specs does not exist yet.**
+**✅ CLOSED 2026-08-11 — built, measured, and verified bit-exact against the
+reconstructed old path on the real 2×2 MMI body. The mode solve was 99.7% of
+`solve_section()`'s cost.** (This header read "BUILD PLAN — the mechanism this
+document specs does not exist yet" until 2026-08-20; the body below is the
+original plan, and its step-by-step status lines are the record of it being
+carried out. `README.md`'s index has said CLOSED since the work landed.)
+
+**⚠ Scope limit worth reading before relying on this.** The fast path gates on
+`neff_override is not None`, **not** on the section being uniform, and
+`solve_section()` always builds a single cell (`eme.py:565`, `Ls=[length]`), so
+there is no multi-cross-section path for it to fall back to. Applying
+`calibrate_body_neff` to a *tapered* body therefore reduces it to a diagonal
+propagation matrix with no warning. Every shipped example's body is uniform, so
+nothing in the repo is affected today — see
+[`mmi_1x4_tapered_body_validation.md`](../mmi_1x4_tapered_body_validation.md)
+step 1 for the guard.
 Cross-device (any `HybridSolver` body solved with `calibrate_body_neff=True`
 and a single-cell EME section — the shape every shipped example's body
 actually is). Prompted by a direct question during manuscript-writing,

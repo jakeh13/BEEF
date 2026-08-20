@@ -32,7 +32,7 @@ into that cascade.
 | Nonlinear materials (χ2/χ3) | None | Yes (Kerr, χ2) | No | Yes | — |
 | Lossy/absorptive materials | None (imaginary index discarded) | Yes | Partial | Yes | — |
 | Anisotropic / magneto-optic | None | Yes | No | Yes | — |
-| Material library breadth | 2 stacks: `SOI_160`, `SOI_220` (Si/SiO2 only, thickness-parametrized) | `meep.materials` — dozens of real fits (SiN, III-V, metals, oxides) | Some via meow | Large curated library | — |
+| Material library breadth | 3 stacks: `SOI_160`, `SOI_220`, `SIN_300` (Si/SiO2/Si3N4 via one shared Sellmeier table, thickness- and core-kind-parametrized) | `meep.materials` — dozens of real fits (SiN, III-V, metals, oxides) | Some via meow | Large curated library | — |
 | Periodic structures / gratings / PhC | None (no Bloch BCs anywhere) | Yes (Bloch-periodic boundaries) | No | Yes | RCWA is the standard faster-than-FDTD tool for this: **S4** (long-standing C++/Python reference implementation) plus a newer wave of autodiff-native Python rewrites — **Meent**, **FMMAX**, **grcwa**, **nannos**, **inkstone**; **MPB** for full PhC band structure (transitively available via meow but not exposed) |
 | Symmetry exploitation | None — always draws/simulates full both-arm geometry even for mirror-symmetric devices | `mp.Mirror`/`mp.Rotate2` — 2-4x speedup for symmetric structures | n/a | Yes | — |
 | Adjoint / inverse design / topology optimization | None | Adjoint solver (`meep.adjoint`, autograd/JAX-based) | No | Native `autograd` support (the older JAX-based adjoint plugin has been deprecated in favor of this) | **FDTDX** — JAX-native FDTD with autodiff built into the solver itself via time-reversibility, not bolted on afterward; **Ceviche**/**EMopt** — earlier autograd-based FDTD/inverse-design frameworks in the same lineage |
@@ -48,7 +48,7 @@ into that cascade.
 | Parallel parameter sweeps | `ParallelSweep` — local `multiprocessing.Pool` grid sweep, but only calls whole-device `solver.solve()`, **not** `HybridSolver`-aware, no cloud/cluster backend beyond an external SLURM Makefile | n/a (user-driven) | n/a | Cloud batch is tidy3d's core value prop | — |
 | Field visualization | Static EME field heatmaps only (`plot_eme_fields`); **no FDTD time-domain field/movie export at all** | `mp.Animate2D`, live field plotting | n/a | Interactive Plotly 3D viewer | — |
 | Interactive/3D visualization | None (matplotlib static PNGs only) | Some (via `mp.plot2D`) | n/a | Yes, core feature | — |
-| Testing | 77 fast unit tests (`tests/`, meep/meow-free) run in CI on every push; 4 slow golden-value integration tests (real reduced-res meep/meow sims) run in CI as a manual-only `workflow_dispatch` matrix via conda-forge `pymeep` (`pytest --runslow` locally); no lint/type-checking yet | n/a | n/a | n/a | — |
+| Testing | 619 fast unit test functions across 38 modules (`tests/`, almost all meep/meow-free) run in CI on every push; slow golden-value integration tests (real reduced-res meep/meow sims) run in CI as a manual-only `workflow_dispatch` matrix via conda-forge `pymeep` (`pytest --runslow` locally) — `test_golden_examples.py` declares 7 targets but only 4 golden JSON files exist, and all 4 predate the 2026-07-28 Sellmeier change and the 2026-08-01 dispersion flip (README parity item P7); no lint/type-checking yet | n/a | n/a | n/a | — |
 
 ## Current library reference
 
