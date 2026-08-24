@@ -78,6 +78,39 @@ WL_MIN = 1.50
 WL_MAX = 1.60
 N_WL = 11
 
+# DC160_WL_MIN/DC160_WL_MAX/DC160_N_WL override the full-band window above --
+# the SAME env-var family (and the same "the guard is the env var, not the
+# value" rule) directional_coupler_soi160_hybrid.py already uses, deliberately
+# reused verbatim rather than inventing a second convention: these two scripts
+# are supposed to share a cache, so they have to agree on what a window IS.
+# Unset (the default) reproduces the original full-band behavior exactly,
+# output_dir unchanged. Any override redirects output_dir to its own subfolder
+# so a re-band run can never overwrite the full-band production
+# length_sweep.npz this script already produced once.
+#
+# NOTE the cache consequence, which is the whole reason this knob is worth
+# having here: the wavelength array is hashed into every FDTD fingerprint
+# (fdtd.py's _resolved_spectral_config), so an overridden window is a total
+# cache MISS against the 1.50-1.60 entries -- but it is a cache HIT against
+# directional_coupler_soi160_hybrid.py run at the SAME override, since that
+# script builds the identical geometry/boundaries at COUPLING_LENGTH=L_REF=3.0
+# with the identical BODY_STUB=0.25. Run that script first at a given window
+# and this one second, and the 2 FDTD bend solves + the beta calibration are
+# reused rather than repeated.
+_win_env = (os.environ.get("DC160_WL_MIN"), os.environ.get("DC160_WL_MAX"), os.environ.get("DC160_N_WL"))
+if any(v is not None for v in _win_env):
+    if not all(v is not None for v in _win_env):
+        raise SystemExit(
+            "DC160_WL_MIN/DC160_WL_MAX/DC160_N_WL must be set together (or "
+            "not at all) -- got a partial override, which would silently "
+            "mix a custom window with the default WL_MIN/WL_MAX/N_WL above."
+        )
+    WL_MIN, WL_MAX, N_WL = float(_win_env[0]), float(_win_env[1]), int(_win_env[2])
+    output_dir = os.path.join(output_dir, "windows", f"{WL_MIN:.4f}-{WL_MAX:.4f}_n{N_WL}")
+    print(f"DC160 wavelength window override: WL_MIN={WL_MIN} WL_MAX={WL_MAX} "
+          f"N_WL={N_WL} -> output_dir={output_dir}")
+    os.makedirs(output_dir, exist_ok=True)
+
 BODY_STUB = 0.25   # um -- must match directional_coupler_soi160_hybrid.py exactly for the cache hit
 
 N_MODES = 2   # measured simplification -- see directional_coupler_soi160_hybrid.py's own docstring point 2
@@ -323,7 +356,7 @@ for _L, _name in DEVICE_LENGTHS:
             ha="right", va="bottom", color="gray")
 
 ax.set_xlabel("Coupling length (um)")
-ax.set_ylabel("Transmission (mean over 1.50-1.60 um, shaded = min-max)")
+ax.set_ylabel(f"Transmission (mean over {WL_MIN:.3f}-{WL_MAX:.3f} um, shaded = min-max)")
 ax.set_title("Directional Coupler (SOI_160, duty/dc.gds dims) — Power Transfer vs Coupling Length")
 ax.legend(fontsize=8)
 ax.grid(True)

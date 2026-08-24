@@ -959,6 +959,40 @@ class FDTDSolver:
             one full pulse transit of the actual structure (device length /
             group velocity, in meep's c=1 units) before trusting decay_tol
             alone to know when to stop.
+        decay_method: which meep early-stop condition every `sim.run()` call
+            in this solver uses. **Default `"dft"`** — `mp.stop_when_dft_
+            decayed(tol=decay_tol, minimum_run_time=minimum_run_time)`,
+            unchanged from this solver's own established behavior; no
+            existing device/golden moves. `mp.stop_when_dft_decayed()`
+            requires *every* field component and frequency on *every* DFT
+            monitor to individually decay below `decay_tol` — watching the
+            whole registered DFT content, not one monitor (confirmed
+            directly against meep's own docs/source). No `maximum_run_time`
+            is ever set, so there is no built-in ceiling: if any one
+            component decays anomalously slowly, the run has nothing to
+            stop it early. Set `"energy"` to use `mp.stop_when_energy_
+            decayed(dt=energy_decay_dt, decay_by=decay_tol)` instead — a
+            single bulk-energy-over-the-whole-cell check, checked every
+            `energy_decay_dt` (meep time units), not conditioned on every
+            individual DFT component separately. **Investigative, not yet
+            validated as a general replacement**: added 2026-08-18 while
+            diagnosing a real stall on the 4×4 90° hybrid's body
+            calibration (`section_mode_beta()`'s merged-domain path,
+            mode 1, res=40) — the DFT criterion never triggered past
+            660,000+ timesteps with no sign of decaying, despite the same
+            mode/geometry decaying normally (a few hundred timesteps) at
+            lower resolution and mode-identity confirmed unchanged across
+            resolutions (validation doc). Whether energy-decay actually
+            stops in that case, and whether the resulting β still passes
+            the existing residual/branch-margin guards, is exactly what
+            this flag exists to let you check — not assumed here.
+        energy_decay_dt: window (meep time units) `stop_when_energy_
+            decayed()` re-checks total cell energy over, when
+            `decay_method="energy"`. Unused otherwise. No principled
+            default yet — 20.0 is a starting guess (long enough to not
+            trigger on a single oscillation, short enough to check often
+            relative to the ~100-unit decay times seen at lower resolution
+            for this same body), not a measured/validated choice.
         source_bandwidth_factor: Gaussian pulse width as a multiple of the
             requested frequency span 1/λ_min - 1/λ_max (see source_fwidth()).
             Must exceed 1 or the band edges are starved — the default 2.0
@@ -999,6 +1033,8 @@ class FDTDSolver:
         dispersive: Optional[bool] = None,
         decay_tol: float = 1e-11,
         minimum_run_time: float = 0.0,
+        decay_method: str = "dft",
+        energy_decay_dt: float = 20.0,
         source_bandwidth_factor: float = 2.0,
         eps_averaging: bool = True,
         subpixel_tol: float = 1e-4,
@@ -1020,12 +1056,25 @@ class FDTDSolver:
         self.dispersive = dispersive
         self.decay_tol = decay_tol
         self.minimum_run_time = minimum_run_time
+        if decay_method not in ("dft", "energy"):
+            raise ValueError(f"FDTDSolver: decay_method must be 'dft' or 'energy', got {decay_method!r}.")
+        self.decay_method = decay_method
+        self.energy_decay_dt = energy_decay_dt
         self.source_bandwidth_factor = source_bandwidth_factor
         self.eps_averaging = eps_averaging
         self.subpixel_tol = subpixel_tol
         self.subpixel_maxeval = subpixel_maxeval
         # Derived: stub long enough that source + monitors sit in physical waveguide
         self.waveguide_length = max(source_margin, monitor_margin) + 0.25
+
+    def _stop_condition(self):
+        """The early-stop condition every `sim.run()` call in this solver
+        uses — see `decay_method`'s own docstring above for what each
+        option does and why `"energy"` exists (investigative, 2026-08-18)."""
+        import meep as mp
+        if self.decay_method == "energy":
+            return mp.stop_when_energy_decayed(self.energy_decay_dt, self.decay_tol)
+        return mp.stop_when_dft_decayed(tol=self.decay_tol, minimum_run_time=self.minimum_run_time)
 
     # 2-D/3-D switches — the three quantities that differ between the modes,
     # so solve()/solve_section() share one code path (a z extent of 0 makes
@@ -1306,7 +1355,7 @@ class FDTDSolver:
             for yc, yw in zip(self.output_monitor_centers, out_widths)
         ]
 
-        sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol, minimum_run_time=self.minimum_run_time))
+        sim.run(until_after_sources=self._stop_condition())
 
         # Normalise by forward input-mode amplitude so |coeff|² = physical T.
         # Same mismatch guard as solve_section()'s x-axis excite branch (see
@@ -1543,7 +1592,7 @@ class FDTDSolver:
                           size=mp.Vector3(0, src_width, self._mon_sz)),
         )
 
-        sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol, minimum_run_time=self.minimum_run_time))
+        sim.run(until_after_sources=self._stop_condition())
 
         coeff = sim.get_eigenmode_coefficients(mon, [input_mode], eig_parity=mp.NO_PARITY)
         fwd = coeff.alpha[0, :, 0]   # [nfreq] incident amplitude, monitor order
@@ -3141,7 +3190,7 @@ class FDTDSolver:
                                   size=mp.Vector3(*_port_size(mea_axis, mea_width, self._mon_sz))),
                 )
 
-            sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol, minimum_run_time=self.minimum_run_time))
+            sim.run(until_after_sources=self._stop_condition())
 
             norm_coeff = sim.get_eigenmode_coefficients(norm_flux, [k], eig_parity=mp.NO_PARITY)
             alpha_raw = norm_coeff.alpha[0, :, ex_alpha_idx]
@@ -3504,7 +3553,7 @@ class FDTDSolver:
                 for mea_along in mea_along_list
             ]
 
-            sim.run(until_after_sources=mp.stop_when_dft_decayed(tol=self.decay_tol, minimum_run_time=self.minimum_run_time))
+            sim.run(until_after_sources=self._stop_condition())
 
             norm_coeff = sim.get_eigenmode_coefficients(norm_flux, [k], eig_parity=mp.NO_PARITY)
             alpha_raw = norm_coeff.alpha[0, :, ex_alpha_idx]

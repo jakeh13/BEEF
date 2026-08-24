@@ -57,6 +57,28 @@ def _wrapped(beta, lengths, offset=0.0):
     return np.angle(np.exp(1j * (beta * np.asarray(lengths, float) + offset)))
 
 
+class UniformStubGeometry:
+    """Constant cross-section everywhere — the minimum a calibration path needs.
+
+    The tests below exercise the β→n_eff conversion and the
+    `last_calibrations` bookkeeping; geometry is irrelevant to what they
+    assert, so they passed `geometry=None` until `_calibrated_neff()` grew a
+    uniformity guard (2026-08-20, `mmi_1x4_tapered_body_validation.md` step 1)
+    that necessarily reads `width_at`/`center_at`.
+
+    A *uniform* stub, specifically: the guard exists to refuse a body whose
+    cross-section VARIES, so a stub that is uniform keeps these tests on the
+    same path they always took. `None` was never realistic — `width_at`'s own
+    `NotImplementedError` says it is "required for use with HybridSolver".
+    """
+
+    def width_at(self, x: float, **kwargs) -> float:
+        return 1.0
+
+    def center_at(self, x: float, **kwargs) -> float:
+        return 0.0
+
+
 class TestBetaFromPhases:
     """The per-mode fit. Ill-conditioned in a way that fails silently, which is
     why it gets more tests than the well-conditioned difference fit."""
@@ -680,7 +702,8 @@ class TestWiring:
 
         h = HybridSolver([FakeFDTD(), FakeEME(), FakeFDTD()], [0, 1, 2, 3], [2, 2],
                          calibrate_body_neff=True)
-        neff = h._calibrated_neff(None, np.array([WL]), 1, 2, {}, None, False)
+        neff = h._calibrated_neff(UniformStubGeometry(), np.array([WL]), 1, 2,
+                                  {}, None, False)
         assert neff.shape == (1, 2)
         assert neff[0, 0] == pytest.approx(BETA_FDTD[0] * WL / (2 * np.pi))
         # and it is above MPB's, by the same 2.2% the phase was
@@ -940,7 +963,7 @@ class TestLastCalibrationsSurvivesTheInMemoryCache:
 
     def _pass(self, h, wl, n_modes, cache):
         return h._solve_sections(
-            geometry=None, wavelengths=wl,
+            geometry=UniformStubGeometry(), wavelengths=wl,
             kwargs_per_section=[{}, {}, {}],
             n_in_list=[1, n_modes, n_modes], n_out_list=[n_modes, n_modes, 1],
             cache=cache,
@@ -989,3 +1012,142 @@ class TestLastCalibrationsSurvivesTheInMemoryCache:
         h.calibrate_body_neff = False
         self._pass(h, wl, n_modes, {})      # fresh cache: really re-solves
         assert h.last_calibrations == {}
+
+
+class TestCalibrationRefusesANonUniformBody:
+    """`calibrate_body_neff` on a TAPERED body must raise, not answer.
+
+    `mmi_1x4_tapered_body_validation.md` step 1. A calibrated body is
+    propagated as a diagonal ``exp(2j·π·neff/wl·L)``
+    (`EMESolver.solve_section()`'s `neff_override` fast path), and that
+    diagonal form follows from a single cell's mode basis serving both ports
+    — true for a uniform span, false for a tapered one, whose transfer matrix
+    depends on the mode *fields* at every internal interface. Before this
+    guard the gate was `if neff_override is not None`, so a tapered body
+    returned a plausible wrong answer with no warning at all.
+    """
+
+    class TaperedStubGeometry:
+        """Width grows linearly with x — the case the guard exists for."""
+
+        def width_at(self, x: float, **kwargs) -> float:
+            return 1.0 + 0.5 * x
+
+        def center_at(self, x: float, **kwargs) -> float:
+            return 0.0
+
+    class WalkingCentreStubGeometry:
+        """Constant width, but the centre walks — an S-bend-like span.
+
+        Checked separately because a width-only test would pass a geometry
+        that is still emphatically non-uniform; the real directional coupler's
+        S-bends are exactly this shape.
+        """
+
+        def width_at(self, x: float, **kwargs) -> float:
+            return 1.0
+
+        def center_at(self, x: float, **kwargs) -> float:
+            return 0.5 * x
+
+    @staticmethod
+    def _chain():
+        from beef import HybridSolver
+
+        class FakeFDTD:
+            def section_mode_beta(self, geom, wl, x0, x1, n, lengths=None, **kw):
+                return np.full((len(wl), n), BETA_FDTD[0])
+
+            def solve_section(self, *a, **k):
+                pass
+
+        class FakeEME:
+            def solve_section(self, *a, neff_override=None, **k):
+                pass
+
+        return HybridSolver([FakeFDTD(), FakeEME(), FakeFDTD()],
+                            [0.0, 1.0, 2.0, 3.0], [2, 2],
+                            calibrate_body_neff=True)
+
+    @pytest.mark.parametrize("stub_name", ["TaperedStubGeometry",
+                                           "WalkingCentreStubGeometry"])
+    def test_it_raises_naming_the_offending_x(self, stub_name):
+        h = self._chain()
+        geom = getattr(self, stub_name)()
+        with pytest.raises(ValueError, match="not uniform"):
+            h._calibrated_neff(geom, np.array([WL]), 1, 2, {}, None, False)
+
+    def test_a_uniform_body_is_unaffected(self):
+        """The guard must be inert for every existing device — all of their
+        bodies are uniform (verified directly against the real 1×2/2×2/1×4/
+        coupler geometries, not just this stub)."""
+        h = self._chain()
+        neff = h._calibrated_neff(UniformStubGeometry(), np.array([WL]), 1, 2,
+                                  {}, None, False)
+        assert neff is not None
+        assert neff.shape == (1, 2)
+
+
+class TestCalibrationRefusesARealTaperedMMIBody:
+    """The same refusal, on the REAL geometry rather than a stub.
+
+    `mmi_1x4_tapered_body_validation.md` step 4, option (a): a tapered body
+    gets NO β calibration — it propagates on the mode solver's own n_eff and
+    accepts the ~2.3%/mode MPB-vs-time-stepper gap
+    (`resolved/directional_coupler_validation.md` item 6), rather than being
+    handed a single per-mode β that cannot describe it. Per-cell calibration
+    (option (b)) and middle-only calibration (option (c)) are deliberately
+    left as follow-on work with their own measurement.
+
+    Step 1's guard is what implements this, and its own tests (above) predate
+    step 2 and so could only use hand-written stub geometries. This closes
+    that loop: the refusal is exercised through `MMI(body_taper_length=...)`,
+    the actual class the tapered 1x4 device will be built from, so a future
+    change to `MMI.width_at`/`body_width_at` that broke the guard's ability
+    to see the taper would fail here even though the stub tests still passed.
+    """
+
+    @staticmethod
+    def _mmi(**kw):
+        from beef.geometry.mmi import MMI
+
+        return MMI(n_inputs=1, n_outputs=4, mm_length=20.0, mm_width=12.0,
+                   waveguide_width=1.1, taper_length=5.0, taper_width=2.2,
+                   waveguide_offset=3.1, waveguide_height=0.30, **kw)
+
+    def _chain(self, boundaries):
+        from beef import HybridSolver
+
+        class FakeFDTD:
+            def section_mode_beta(self, geom, wl, x0, x1, n, lengths=None, **kw):
+                return np.full((len(wl), n), BETA_FDTD[0])
+
+            def solve_section(self, *a, **k):
+                pass
+
+        class FakeEME:
+            def solve_section(self, *a, neff_override=None, **k):
+                pass
+
+        return HybridSolver([FakeFDTD(), FakeEME(), FakeFDTD()],
+                            boundaries, [2, 2], calibrate_body_neff=True)
+
+    def test_it_refuses_a_real_tapered_mmi_body(self):
+        m = self._mmi(body_taper_length=4.0, body_start_width=8.0)
+        half = m.mm_length / 2
+        # The body section spans the whole body, both taper bands included --
+        # exactly what the tapered 1x4's own cascade will ask for.
+        h = self._chain([-half - 1.0, -half, half, half + 1.0])
+        with pytest.raises(ValueError, match="not uniform"):
+            h._calibrated_neff(m, np.array([WL]), 1, 2, {}, None, False)
+
+    def test_it_still_calibrates_the_straight_mmi_body(self):
+        """The untapered default must keep calibrating — this is the existing
+        straight 1x4's own production path, and step 2's whole premise is that
+        it is unaffected."""
+        m = self._mmi()  # body_taper_length=0.0 (default)
+        half = m.mm_length / 2
+        h = self._chain([-half - 1.0, -half, half, half + 1.0])
+        neff = h._calibrated_neff(m, np.array([WL]), 1, 2, {}, None, False)
+        assert neff is not None
+        assert neff.shape == (1, 2)

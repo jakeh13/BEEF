@@ -132,10 +132,22 @@ WL_MIN = 1.50
 WL_MAX = 1.60
 N_WL = 11
 
-CALIBRATE_BODY = True   # propagate the EME body on the input FDTD section's own
-                        # measured beta rather than tidy3d's mode index -- see
-                        # module docstring for why this device needs it more than
-                        # mmi_2x2_hybrid.py/directional_coupler_hybrid.py do
+# Propagate the EME body on the input FDTD section's own measured beta rather
+# than tidy3d's mode index -- see module docstring for why this device needs it
+# more than mmi_2x2_hybrid.py/directional_coupler_hybrid.py do.
+#
+# Env-overridable as of 2026-08-23, DEFAULT UNCHANGED (True), for one specific
+# experiment: step 6d recorded a split-shape discrepancy (EME favouring one
+# port pair, the hybrid the other) at the OLD 206.0/2.4 geometry, and
+# calibration was the leading hypothesis for it. But calibration was turned on
+# (2026-08-13) and the geometry replaced (2026-08-14) within a day of each
+# other, so no uncalibrated hybrid run exists at the CURRENT geometry and the
+# two changes are confounded. Setting MMI1X4_CALIBRATE_BODY=0 runs the
+# otherwise-identical device with calibration off, which isolates it -- and is
+# cheap, because the FDTD input/output section cache entries do not depend on
+# calibration at all (only the EME body's neff_override does), so it reuses the
+# 3-day prewarm rather than repeating it.
+CALIBRATE_BODY = os.environ.get("MMI1X4_CALIBRATE_BODY", "1") not in ("0", "false", "False")
 
 # ---------------------------------------------------------------------------
 # 0. Simulation method per section
@@ -160,6 +172,29 @@ MM_WIDTH = 12.0
 # 0.1), asserted below per the coupler-bug lesson (a "pinned" value argmin'd
 # onto a grid that didn't contain it exactly, differing by 0.0208 um between
 # two examples for weeks).
+# WHY THIS FILE KEEPS THE FULL [20, 300] GRID WHILE mmi_1x4_eme.py DOES NOT
+# (checked 2026-08-22 -- the two files genuinely sweep different windows, and
+# that is deliberate, not drift):
+#
+#   mmi_1x4_eme.py narrowed to arange(35, 45.001, 0.1) = 101 points because
+#   EMESolver.solve_length_sweep() -- the WHOLE-DEVICE multi-cell cascade --
+#   re-runs mw.compute_s_matrix() once per swept length, contrary to how its
+#   own docstring frames the cost. At 2801 lengths that prewarm timed out at
+#   10 h; at 101 it runs clean.
+#
+#   This file uses HybridSolver.solve_length_sweep() instead, which is a
+#   DIFFERENT path and is genuinely length-count-free: it calls
+#   solve_section_length_sweep() once on the swept section (one mode solve, any
+#   number of lengths -- the analytic diagonal-phase trick), broadcasts every
+#   non-swept section with np.broadcast_to() as a ZERO-STRIDE view, and the
+#   only length-scaling work left is the closing
+#   np.einsum("Lmij,Lmjk->Lmik", ...) over [2801, 11, 12, 12] complex128
+#   (~71 MB, sub-second). So the wide grid costs this script essentially
+#   nothing and buys a sweep curve over the whole design space.
+#
+# Do NOT "fix" the discrepancy by narrowing this grid to match the EME
+# script's: they are answering different questions at different costs, and
+# MM_LENGTH=39.90 lands exactly on BOTH grids (asserted below in each file).
 MM_LENGTH = 39.90
 _MM_LENGTH_GRID = np.linspace(20.0, 300.0, 2801)   # 0.1 um spacing -- see mm_lengths below
 _nearest = _MM_LENGTH_GRID[np.argmin(np.abs(_MM_LENGTH_GRID - MM_LENGTH))]
@@ -191,10 +226,27 @@ print(f"Output ports at y = {mmi.output_ys} um")
 # ---------------------------------------------------------------------------
 # 2. Configure sub-solvers -- one per section, per the METHOD switches above.
 # ---------------------------------------------------------------------------
+# FDTD_SIM_WIDTH/FDTD_SIM_HEIGHT, CHANGED 2026-08-19 from MM_WIDTH+8.0=20.0
+# and SIN_300.sz=5.0 -- MEASURED via mmi_1x4_sin_body_domain_size_
+# convergence.py (job 12029224), a cheap tidy3d-only check, not assumed:
+# tracking mode 10 (the second-to-last of this device's own N_MODES=12 KEPT
+# modes -- modes 19/22 in that sweep are beyond N_MODES and irrelevant to
+# what production actually needs), mesh_width converges by 13-14 um and
+# sz by 4.0 um. 16.0/4.0 keep real margin above those (mesh_width also
+# clears mode 19's own 16.0 convergence point, covering the untracked mode
+# 11). Deliberately does NOT touch SIN_300.sz itself (still 5.0) -- that is
+# a shared MaterialStack constant other solvers/devices also read (e.g.
+# EMESolver's own oxide_height), and this finding is specific to the FDTD
+# domain's own requirement for this device's kept body modes, not a
+# correction to SIN_300's own validated value. ~36% fewer grid cells
+# (16/20 x 4/5 = 0.64x) on top of the res=40->30 change already applied.
+FDTD_SIM_WIDTH = MM_WIDTH + 4.0    # 16.0 -- was +8.0=20.0
+FDTD_SIM_HEIGHT = 4.0              # was SIN_300.sz (5.0) -- see comment above
+
 _fdtd_common = dict(
     res=RESOLUTION,
-    sim_width=MM_WIDTH + 8.0,
-    sim_height=SIN_300.sz,
+    sim_width=FDTD_SIM_WIDTH,
+    sim_height=FDTD_SIM_HEIGHT,
     dpml=0.5,
     source_margin=0.0,
     monitor_margin=0.25,
@@ -229,7 +281,19 @@ _fdtd_common = dict(
 # NONE on the input/output taper sections (see the RESOLUTION comment
 # above) -- not a full convergence check, just the first real FDTD-side
 # measurement this device has had.
-N_MODES = 12
+# Env-overridable as of 2026-08-23, DEFAULT UNCHANGED (12), to test the
+# leading explanation for the check-1 engine disagreement: mmi_1x4_eme.py
+# carries N_BODY=20 body modes while this chain truncates every interface to
+# 12, so the two engines are not being asked the same question. The hybrid's
+# total T is 0.9454 against EME's 0.9707 -- the right direction for truncation
+# losing power. A DOWNWARD sweep (N_MODES < 12) is the cheap probe: FDTD
+# solve_section supports superset cache reuse, so a 12-mode cached solve can
+# serve a smaller request by slicing -- but only when monitor_size is pinned
+# (the default monitor width depends on n_measure > 1, so otherwise the
+# simulated geometry itself changes with mode count). Whether that holds here
+# is measured, not assumed -- run with a short walltime and see if it is a
+# cache hit or starts time-stepping.
+N_MODES = int(os.environ.get("MMI1X4_N_MODES", 12))
 
 
 def make_section_solver(method: str):
@@ -242,7 +306,7 @@ def make_section_solver(method: str):
     if method == "eme":
         return EMESolver(
             num_modes=[N_MODES], num_cells=[1], lengths=[1.0],
-            oxide_width=MM_WIDTH + 8.0, oxide_height=SIN_300.sz,
+            oxide_width=FDTD_SIM_WIDTH, oxide_height=FDTD_SIM_HEIGHT,   # same 2026-08-19 finding -- see _fdtd_common's own comment
             res=RESOLUTION, material_stack=SIN_300,
             mode_solver="tidy3d",   # step 4's fix -- see module docstring
         )

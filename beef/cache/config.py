@@ -49,13 +49,15 @@ _METHOD_ATTRS: Dict[Tuple[str, str], Tuple[str, ...]] = {
         "res", "sim_width", "sim_height", "three_d", "dpml", "source_margin",
         "monitor_margin", "num_output_modes", "output_monitor_centers",
         "output_monitor_widths", "material_stack", "waveguide_length",
-        "decay_tol", "minimum_run_time", "source_bandwidth_factor",
+        "decay_tol", "minimum_run_time", "decay_method", "energy_decay_dt",
+        "source_bandwidth_factor",
         "eps_averaging", "subpixel_tol", "subpixel_maxeval",
     ),
     ("FDTDSolver", "solve_section"): (
         "res", "sim_width", "sim_height", "three_d", "dpml", "source_margin",
         "monitor_margin", "half_domain_aperture", "material_stack",
-        "decay_tol", "minimum_run_time", "source_bandwidth_factor",
+        "decay_tol", "minimum_run_time", "decay_method", "energy_decay_dt",
+        "source_bandwidth_factor",
         "eps_averaging", "subpixel_tol", "subpixel_maxeval",
     ),
     # section_mode_neff() runs MPB on an initialized grid with no time-stepping
@@ -72,11 +74,26 @@ _METHOD_ATTRS: Dict[Tuple[str, str], Tuple[str, ...]] = {
     ("FDTDSolver", "solve_section_multi_length"): (
         "res", "sim_width", "sim_height", "three_d", "dpml", "source_margin",
         "monitor_margin", "half_domain_aperture", "material_stack",
-        "decay_tol", "minimum_run_time", "source_bandwidth_factor",
+        "decay_tol", "minimum_run_time", "decay_method", "energy_decay_dt",
+        "source_bandwidth_factor",
         "eps_averaging", "subpixel_tol", "subpixel_maxeval",
     ),
+    # num_cells added 2026-08-20 (mmi_1x4_tapered_body_validation.md step 3):
+    # solve_section()'s real-solve branch now reads self.num_cells[0] to build
+    # a genuine multi-cell EME body instead of always Ls=[length]. Every
+    # existing entry predates this key and so misses once (same accepted cost
+    # as the minimum_run_time/decay_method precedent above) rather than
+    # risking a single-cell result silently serving a multi-cell request.
+    #
+    # num_modes is deliberately NOT here: solve_section() still takes its mode
+    # count from n_modes_in/n_modes_out (call kwargs, already fingerprinted),
+    # never from self.num_modes -- see that method's own comment on why
+    # reading it would silently change modal_multiplexer_hybrid.py. Adding it
+    # here would additionally strand every existing entry for no behavioural
+    # reason, splitting the cache on an attribute the method does not read.
     ("EMESolver", "solve_section"): (
-        "material_stack", "oxide_width", "oxide_height", "res", "temperature", "mode_solver",
+        "material_stack", "oxide_width", "oxide_height", "res", "temperature",
+        "mode_solver", "num_cells",
     ),
     ("EMESolver", "solve_section_length_sweep"): (
         "material_stack", "oxide_width", "oxide_height", "res", "temperature", "mode_solver",
@@ -125,7 +142,15 @@ _METHOD_ATTRS: Dict[Tuple[str, str], Tuple[str, ...]] = {
 # (1000.0) could have reused a no-floor result — defeating the very fix those
 # values were added for. It is listed in all three now; the default-omission
 # below is what keeps their existing 0.0 entries matching regardless.
-_DEFAULT_OMITTED_ATTRS = frozenset({"minimum_run_time"})
+# decay_method/energy_decay_dt (added 2026-08-18, same reasoning as
+# minimum_run_time above): a "dft"-default run must keep matching every
+# entry written before these attributes existed. A non-default
+# decay_method="energy" run is a genuinely different simulation (a
+# different meep stop condition — see FDTDSolver's own docstring) and
+# must NOT be served by, or serve, a "dft" entry, which is exactly what
+# listing both in _METHOD_ATTRS above (not just omitting the default
+# here) guarantees.
+_DEFAULT_OMITTED_ATTRS = frozenset({"minimum_run_time", "decay_method", "energy_decay_dt"})
 
 
 def _constructor_defaults(solver_cls) -> Dict[str, Any]:

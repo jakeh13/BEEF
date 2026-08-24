@@ -49,8 +49,21 @@ convergence investigation" (before Step 8) for the full trail. **The
 numbers that matter right now:**
 
 - `N_MODES_TAPER=12` (mmi_4x4_90hybrid_eme.py), `N_MODES_BODY=16`
-  (body_sweep.py/hybrid.py) -- both converged, both measured, not
-  guessed. `num_cells=30` for the EME-only script's taper (job 11736983).
+  (body_sweep.py/hybrid.py **and, since 2026-08-21, the EME script too**)
+  -- both converged, both measured, not guessed. `num_cells=30` for the
+  EME-only script's taper (job 11736983).
+  > ⚠ **The "Step 6 (all 3 example scripts) done and RE-RUN at a
+  > properly-converged body mode basis" claim above was FALSE for 12 days,
+  > and the parenthetical "(body_sweep.py/hybrid.py)" on this very line is
+  > what gave it away.** The 2026-08-09 redo reached exactly those two
+  > scripts. `mmi_4x4_90hybrid_eme.py` and
+  > `verification/python/plot_mmi4x4_90hybrid_eme_fields.py` were both
+  > missed and sat at the superseded `N_MODES_BODY=8` / `ΔL=-1.50` /
+  > `mm_length=80.1896` point -- the basis this doc's own convergence
+  > check measured as 50-64% under-converged, at a design point this
+  > project had already rejected. Found 2026-08-21 by checking artifact
+  > mtimes against the redo date, not by reading the scripts. Both
+  > corrected; see "EME script staleness" below.
 - Settled geometry: `mm_width=6.0`, `waveguide_width=0.35`,
   `waveguide_offset=1.5`, `taper_width=0.8`, `taper_length=1.0`,
   **`ΔL=-2.75` (mm_length=78.9396)** -- re-derived from the old
@@ -313,9 +326,342 @@ numbers that matter right now:**
   resolution-specific numerical effect in the FDTD time-stepping/
   decay-detection itself (not which mode is targeted) — e.g. a
   coincidental numerical resonance specific to res≈40 for this exact
-  domain. **Not yet identified further** — next step, if pursued, would
-  be a res≈35 decay-time probe to narrow exactly where the sharp
-  transition sits, since the mode itself is confirmed consistent.
+  domain.
+
+  **New shared-library option added 2026-08-18 to test this directly:
+  `FDTDSolver(decay_method=...)`.** Investigated which meep early-stop
+  condition is actually in use — confirmed directly against meep's own
+  API (`dir(meep)` lists six: `stop_when_dft_decayed`,
+  `stop_when_fields_decayed`, `stop_when_energy_decayed`,
+  `stop_after_walltime`, `stop_at_direction`, `stop_on_interrupt`) — that
+  **every** `sim.run()` call in `beef/solvers/fdtd.py` uses only
+  `stop_when_dft_decayed(tol=decay_tol, minimum_run_time=minimum_run_time)`,
+  with `maximum_run_time` never set. Two properties of that criterion
+  matter here: it requires **every** field component and frequency on
+  **every** registered DFT monitor to individually decay (confirmed via
+  the code's own comment: "watches the whole field, not any one
+  monitor"), and it has **no built-in ceiling** — a single anomalously
+  slow-decaying component has nothing to stop it early, consistent with
+  the observed stall (no error, just running with no exit).
+
+  Added `decay_method: str = "dft"` (default, byte-identical behavior —
+  every existing device/golden unaffected) and `energy_decay_dt: float =
+  20.0` to `FDTDSolver.__init__`, plus a `_stop_condition()` helper every
+  `sim.run()` call site now goes through. `decay_method="energy"` switches
+  to `mp.stop_when_energy_decayed(dt=energy_decay_dt, decay_by=decay_tol)`
+  — one bulk-energy-over-the-whole-cell check instead of a per-component
+  requirement. Targeted test suite (`-k "fdtd or beta"`, 117 passed/2
+  skipped) confirms no regression from the new default.
+
+  **Sanity check (res=15, decay_tol=1e-9, mode 1): energy method gives
+  t=100.2 (3005 steps) vs. the dft method's own t=108.0 (3241 steps) for
+  the identical setup** — consistent, sensible agreement, confirms the
+  new option itself is implemented correctly before trusting it at the
+  resolution that actually matters.
+
+  **✅ Real test (res=40, decay_tol=1e-11, mode 1) — CONVERGED, decisively.**
+  The exact configuration that stalled past 660,000+ timesteps under
+  `stop_when_dft_decayed` (never converging) reached decay at **t=140.1
+  (11,207 timesteps)** under `decay_method="energy"` — a completely
+  normal decay time, in line with the lower-resolution results (res=15:
+  t=108.0, res=25: t=99.0), not an outlier. **This directly confirms the
+  diagnosis**: the DFT criterion's requirement that *every* individual
+  field component/frequency on *every* monitor decay was getting stuck on
+  something specific to res=40, while the bulk energy -- the physically
+  meaningful quantity -- was decaying completely normally the whole time.
+  `stop_when_energy_decayed` sidesteps that per-component requirement
+  entirely.
+
+  **Not yet done, before trusting this for a real reported calibration
+  number**: verify the beta/phase extracted under the energy criterion is
+  actually as accurate as a fully-DFT-converged run would give -- stopping
+  on bulk energy rather than per-component DFT decay is a different
+  (looser) criterion, and this single-mode test only confirms it
+  *terminates*, not that the extracted phase is fully settled. The
+  natural next check: run all 16 modes with `decay_method="energy"` at
+  production settings and see whether the result changes the CMRR/
+  phase-error picture in a way consistent with everything already known
+  about this design point, or compare mode 1's own extracted beta against
+  a loosened-decay_tol DFT run (if one can be found that terminates) as a
+  cross-check.
+
+  **Full 16-mode production calibration submitted, 2026-08-18.** Script
+  updated (`mmi_4x4_90hybrid_calibrated_baseline.py`): `make_solvers()`
+  now returns a SEPARATE `calibration_solver` (`decay_method="energy"`)
+  distinct from `input_solver` (left at the "dft" default) — setting
+  `decay_method="energy"` on `input_solver` directly would also change
+  the fingerprint for the already-cached (job 11778128) baseline
+  input-matrix fetches, turning free cache hits back into wasted
+  re-solves, the exact bug hit twice already. Verified directly before
+  submitting: default-`"dft"` solvers still cache-hit all 4 baseline
+  input matrices (0.17s), and an `"energy"` solver produces a genuinely
+  different cache config (`beef/cache/config.py` updated the same way
+  `minimum_run_time` was — `decay_method`/`energy_decay_dt` added to
+  `_METHOD_ATTRS`'s three FDTD allowlists AND to `_DEFAULT_OMITTED_ATTRS`,
+  so a default-valued run's fingerprint is untouched but a non-default
+  one is never silently served by/serves a `"dft"` entry). Targeted
+  suite (`-k "fdtd or beta or cache or config"`) re-run clean: 237
+  passed, 4 skipped. **Submitted as job 12052383 → hit
+  `AssocGrpBillingMinutes` again → cancelled, resubmitted under
+  `gts-sr108` as job 12052385** (now `ReqNodeNotAvail`, a normal resource
+  wait, not a block).
+
+  **❌ TIMED OUT AGAIN at the full 6h — but this time a real, different,
+  and much more encouraging failure.** Modes 1-15 of 16 completed
+  CLEANLY under `decay_method="energy"`, with sensible, gently-climbing
+  decay times (160.1 -> 260.2 meep-time-units across the 15 completions)
+  — the energy fix is confirmed working broadly, not a fluke on mode 1
+  alone. **Mode 16 (the last, weakest-confined/highest-order of the 16
+  requested — closest to the cladding cutoff) is a NEW stuck case**: its
+  own energy-decay ratio sat at exactly `1.0` at two separate checkpoints
+  (t=1260.8 and t=1280.8, log: `energy decay(t=...): X/X = 1.0`) — no
+  decay progress at all, not even slow. Ran to its own t≈1280+ (5-8× the
+  other modes' own ~160-260 range) before the wall hit. **All 15
+  completed modes' work is lost again** — `solve_section_multi_length()`
+  only writes to cache after the FULL 16-mode loop finishes, no partial
+  credit. Physically plausible explanation, not yet confirmed: the
+  weakest-guided mode near cutoff genuinely radiates/couples to the
+  continuum differently than the other 15, and may need its own
+  treatment (a real `maximum_run_time`-style ceiling — which
+  `stop_when_energy_decayed()` does not natively support, unlike
+  `stop_when_dft_decayed()` — or a custom combined stop condition) rather
+  than assuming energy-decay alone fixes every mode uniformly.
+
+  **Checked directly, not assumed: mode 16 is NOT near cutoff.** Real
+  n_eff/margin data for all 16 modes at res=40: mode 16's margin above
+  n_clad is 0.883 (vs. mode 1's 1.516) — the weakest-confined of the 16
+  requested, but still solidly guided, not a marginal/near-cutoff case.
+  This rules out "near-cutoff weak guiding" as the explanation.
+
+  **Testing mode 16 in TRUE isolation** (a runtime-patched copy of
+  `solve_section_multi_length()` exciting ONLY band 16, first and only
+  simulation in a fresh process — `mmi_4x4_90hybrid_mode16_isolated.py`)
+  to distinguish an intrinsic mode-16 property from a "16th-in-a-long-
+  sequence" resource-accumulation artifact. First attempt on the login
+  node showed anomalous per-step cost (0.3-1.0 s/step, 10-30× every other
+  run at this resolution) — traced to genuine contention on a shared
+  login node (load avg ~10-13, 37 other users), not the simulation
+  itself; killed and moved to batch. **Submitted as job 12066640 → hit
+  `AssocGrpBillingMinutes` → resubmitted under `gts-sr108` as job
+  12066668** (`-t 240`, normal queue wait).
+
+  **✅ DECISIVE RESULT — mode 16 converges completely normally in
+  isolation, ruling out an intrinsic mode-16 problem.** Job 12066668
+  COMPLETED in 23m28s: mode 16 alone decayed at t=220.1 (17,611
+  timesteps), right in line with modes 1-15's own 160-260 range. The
+  energy-decay log shows genuine, clean, monotonic decay — ratio=1.0 only
+  at the earliest two checkpoints (t=20, t=40, the normal pulse-buildup
+  transient, not a stall), then dropping smoothly (8.3e-4 → 3.6e-7 → ...
+  → 7.5e-12) well past `decay_tol`. This is qualitatively different from
+  the failing production run, where the ratio stayed stuck at exactly
+  `1.0` at LATE times (t=1260.8, t=1280.8) with no transient excuse.
+
+  **Conclusion: mode 16 has no intrinsic problem — the bug is specific to
+  running it as the 16th simulation in one long sequential loop within a
+  single process**, some form of resource accumulation across 15 prior
+  `mp.Simulation` builds/`reset_meep()` calls, not a property of the mode
+  itself. **Dropping mode 16 (N_MODES=15) is NOT the right fix** — it
+  would lose real accuracy (the extended body convergence check already
+  showed the basis isn't fully flat even at N=16-36) to work around a
+  sequence-position bug, not a genuine mode-16 limitation. The better fix
+  is isolating each excited mode's own simulation (e.g. one process/job
+  per mode, matching how this isolation test itself was structured).
+
+  **Built and submitted, 2026-08-20.** Two new scripts implement the
+  one-process-per-mode architecture:
+  - `mmi_4x4_90hybrid_calibration_mode_worker.py` — takes a mode index
+    (1-16) via CLI arg, computes the SAME seed/lengths `section_mode_beta_
+    details()` would (unpatched — `section_mode_neff()` is cheap/cached,
+    not the stalling part), then calls a runtime-patched
+    `solve_section_multi_length` that excites ONLY that one band (same
+    technique as the mode-16 isolation test), and saves that mode's own
+    phase-vs-length data + seed β to a per-mode `.npz` file.
+  - `mmi_4x4_90hybrid_calibration_aggregate.py` — combines all 16
+    per-mode files by calling the SAME imported `beta_fit_from_phases()`
+    and the SAME guard thresholds (`_BETA_FIT_RESIDUAL_MAX`,
+    `_BETA_BRANCH_MARGIN_RAISE`) the library itself uses, so a mode that
+    would fail those guards in a single-process run fails them here too.
+
+  **Correctness, not just architecture, checked directly against the
+  library's own code**: `section_mode_beta_details()`'s post-fit step
+  calls `beta_fit_from_phases(lengths, phases[:,i,m], seed_beta[i,m])`
+  once per (wavelength, mode) cell, using ONLY that mode's own data — no
+  cross-mode mixing. Splitting modes across processes and merging
+  afterward is therefore mathematically identical to a single-process
+  run, not an approximation.
+
+  **Verified before spending any real cluster time** (all free,
+  cache-only): the worker's own seed computation hits job 12052385's
+  already-cached `section_mode_neff()` result exactly (`cache_only=True`
+  succeeded), and its derived `lengths` (`[0.842, 1.683, 2.525]` µm, using
+  all 3 production wavelengths' own β_max — slightly different from the
+  earlier single-λ diagnostic tests' `[0.885, 1.77, 2.655]` for exactly
+  the expected reason) match the library's own formula exactly.
+
+  **Submitted as a 16-task SLURM array, job 12069540** (`-t 90`/1.5h per
+  task, real margin over the ~20-25 min the mode-16 isolation test itself
+  took), all 16 modes running in PARALLEL rather than the previous
+  sequential 6h-timeout approach. Results pending.
+  **Tasks 2-16 hit `AssocGrpBillingMinutes` on `gts-sr108-ece`** (task 1
+  started before the account's balance was exhausted and kept running);
+  cancelled just the pending 15 (`scancel 12069540_[2-16]`, left task 1
+  alone) and resubmitted them as **job 12069773** (`--account=gts-sr108
+  --array=2-16`, same batch file). All 16 tasks (`12069540_1` +
+  `12069773_[2-16]`) reached RUNNING by 2026-08-20. Results pending —
+  run `mmi_4x4_90hybrid_calibration_aggregate.py` once all 16
+  `mode_XX.npz` files exist.
+
+  **Cross-device relevance checked, 2026-08-20**: is either the
+  `decay_method="energy"` fix or the sequence-position stall relevant to
+  any OTHER device's own calibration? Every device in this repo currently
+  running `calibrate_body_neff=True` was checked for its own body
+  `N_MODES` — MMI 2×2 (14, the highest), 1×4 (12), 1×2 (8), directional
+  coupler (5, SOI160 variant 2), HCG Fabry-Perot's coupler body (2) + arm
+  (1), ring resonator's coupled-pair body (2). None are close to 16, and
+  none have been observed to stall — but the trigger condition for the
+  sequence-position bug is confirmed only at "16th of 16 on this specific
+  device," not tied to a known numeric threshold, so this isn't proof
+  those devices are safe by construction, just that nothing needs to
+  change on them today. Full note, with the file:line table, added to
+  `resolved/section_mode_beta_multi_monitor_validation.md` (the central
+  cross-device calibration doc) and to the
+  [[beta-calibration-cost-model-step9]] memory, so future work on any
+  calibrating device sees this before assuming a bigger `-t` fixes an
+  unexpectedly long calibration run.
+
+  **Correction, same day — running the full production array reopens this,
+  it isn't closed.** Modes 1-15 (jobs `12069540_1` + `12069773_[2-15]`) all
+  completed cleanly. **Mode 16 (`12069773_16`) did NOT converge in
+  isolation either — it hit `TIMEOUT` at the full 90-min budget**, and its
+  own log shows why: not a stall, **exponential energy growth** (ratio
+  bottoms at 1.95e-11 near t≈260 — just above `decay_tol=1e-11`, so the
+  criterion correctly never fires — then climbs monotonically to 1.7e53 by
+  t≈2081, still climbing at timeout). Re-reading job 12066668's own energy
+  trace with this in mind: it was *also* still falling with no turnaround
+  visible through its last checkpoint, and crossed below `decay_tol` only
+  because its domain (`max(lengths)=2.655µm`, single-λ diagnostic lengths)
+  was slightly longer than production's (`2.525µm`) — a near-miss, not
+  evidence of stability. **The "mode 16 has no intrinsic problem, only a
+  sequence-position bug" conclusion is retracted** — isolating the mode
+  changes nothing about whether it converges; the instability is intrinsic
+  to mode 16's own configuration.
+
+  **Root cause, from the repo's own code**: `beef/materials/stack.py`
+  builds Si's dispersion as `mp.LorentzianSusceptibility(..., gamma=0,
+  ...)` — an undamped pole (same convention as meep's own `materials.Si`),
+  a known marginal-stability risk over long FDTD integration times.
+  Calibration's ~2000+ time-unit runs at `decay_tol=1e-11` are far more
+  demanding than any ordinary S-parameter solve in this repo, which is
+  plausibly why this has never surfaced before. Full account, including why
+  this also changes the "which other devices are at risk" answer (mode
+  count was never the right proxy — integration time and decay_tol are),
+  in `resolved/section_mode_beta_multi_monitor_validation.md`'s own
+  same-day correction section. **Not pursued further without direction —
+  a materially different, more open question than what was believed a few
+  hours earlier today.**
+
+  **Decision, 2026-08-20 (user's call, option 3 of 3 offered): drop mode 16,
+  proceed on N_MODES=15.** The alternatives offered and not taken were (1) a
+  small nonzero `gamma` on the dispersion model to damp the unstable pole,
+  and (2) retrying mode 16 under `decay_method="dft"`. Chosen over both
+  because the instability is a real numerical property of this
+  configuration, not a stopping-criterion artifact — neither alternative is
+  known to fix it, and both cost more cluster time to find out.
+
+  **Aggregation of the 15 modes that exist PASSES every library guard**
+  (`MMI4X4_CAL_MODES=15`, free, login-node): worst fit residual 5.617e-03
+  rad (guard `_BETA_FIT_RESIDUAL_MAX`=0.1), worst branch margin 0.161
+  (guard `_BETA_BRANCH_MARGIN_RAISE`=0.9), worst seed excess +5.65% at
+  λ=1.36 µm mode 15 (warn threshold 10%). That last number is worth
+  noting: the earlier reduced-settings (res=15) test flagged **+13.69%**
+  at this same highest mode, and at real production settings it comes in
+  at less than half that — so that anomaly was substantially a
+  reduced-settings artifact, though +5.65% is still above the ~2%/mode
+  discretization gap this calibration exists to measure. Calibrated
+  n_eff at λ=1.26 µm: 3.0403 (mode 1) monotonically down to 2.5982
+  (mode 15). Saved as `aggregated_beta_n15.npz`.
+
+  **The 4 input FDTD matrices are NOT re-solved at 15 modes.** They are
+  fetched from job 11778128's cache at 16 modes (verified free before
+  submitting: all 4 HIT in 1.42 s, shape `(3, 16, 1)`) and **truncated** to
+  the first 15 (`M[:, :15, :]`). This rests on the same per-band
+  independence the repo already relies on for `measure_diagonal_only` and
+  for the per-mode calibration split — meep decomposes each band
+  separately, so bands 1-15 do not depend on whether band 16 was also
+  requested. Re-solving at `n_modes_out=15` would be a genuine cache miss
+  costing ~10 h of FDTD for a result expected to be bit-comparable; not
+  spent. **Noted as a deliberate assumption, not a measured equivalence** —
+  it has not been checked directly at production scale here.
+
+  **Submitted as job 12078959** (`-t 360`,
+  `run_mmi_4x4_90hybrid_calibrated_baseline_n15.batch`,
+  `mmi_4x4_90hybrid_calibrated_baseline_n15.py`), running two fresh
+  81-length EME body sweeps at 15 modes — uncalibrated AND calibrated —
+  **deliberately both**, because an N=15 calibrated result differs from the
+  published baseline in two ways at once:
+  - **[A] calibrated-15 vs uncalibrated-15** — identical basis both sides,
+    so this isolates the *calibration* effect. This is the number that
+    answers the original question this whole thread exists to answer.
+  - **[B] calibrated-15 vs the published uncalibrated-16** (job 11778128:
+    max|Δφ|=12.3°) — confounds calibration with the dropped mode, reported
+    as context only, NOT as the calibration effect. The script also prints
+    **[B'] uncal-16 → uncal-15**, isolating the dropped mode's own cost, so
+    the two effects can be read apart rather than guessed at.
+
+  **✅ RESULT, job 12078959 COMPLETED — and it ANSWERS this whole thread's
+  motivating question: no, calibration does NOT rescue this device.**
+
+  | metric | uncal n=16 (published) | uncal n=15 | **cal n=15** | requirement |
+  |---|---|---|---|---|
+  | max\|Δφ\| | 12.320° | 12.322° | **12.472°** | ≤ 5° |
+  | min CMRR | 1.531 dBe | 1.532 dBe | **4.078 dBe** | ≥ 20 dBe |
+  | max excess loss | — | 8.366 dB | **7.556 dB** | (not a cited bar) |
+  | max imbalance | — | 14.615 dB | **9.053 dB** | (not a cited bar) |
+
+  **[A] the calibration effect, isolated** (identical 15-mode basis both
+  sides): max|Δφ| **12.322 → 12.472°** (+0.150, slightly *worse*), min CMRR
+  **1.532 → 4.078 dBe** (+2.547), excess loss −0.810 dB, imbalance
+  **−5.562 dB** (the largest single move). So the FDTD-consistent β is a
+  real, measurable effect — it substantially improves imbalance and lifts
+  the CMRR floor — but it leaves the headline phase error **unchanged**, and
+  **both cited requirements still fail by a wide margin** (CMRR 4.1 vs 20
+  dBe needed; |Δφ| 12.5 vs 5° needed).
+
+  **This closes the hypothesis that motivated the entire calibration
+  thread.** The premise (script docstring, and open-decisions item 5) was
+  that because Δφ_j is driven by Δβ over the body length, an uncalibrated
+  ~2.3%/mode β error could be inflating the phase error — i.e. that this
+  device's failure might be substantially a *modeling artifact* rather than
+  a real limitation. Measured: it is not. Phase error moves by +0.15° when
+  the β's are corrected, against a 7.3° shortfall. **The device's CMRR/phase
+  failure is real physics of this design point, not a calibration artifact.**
+
+  **[B'] dropping mode 16 costs essentially nothing**: uncal 16 → uncal 15
+  moves max|Δφ| by **+0.002°** and min CMRR by +0.0002 dBe. This
+  retroactively validates the decision to drop it — the mode that could not
+  be simulated turns out to be the one that barely matters. (Consistent
+  with the earlier N_MODES_TAPER finding: fundamental-mode launch couples
+  very weakly into the highest-order modes of this geometry.)
+
+  **Calibration does not shift the optimum length either** — scanning the
+  full 81-point ΔL grid on the calibrated body returns **ΔL = −2.75**, the
+  same optimum as uncalibrated, at the same metrics. So there is no
+  "re-tune ΔL for the calibrated β" recovery available.
+
+  **Cost note, and a real mechanism worth knowing**: the job finished in
+  **22 s**, not the ~3 h budgeted for two fresh 81-length sweeps. The
+  calibrated sweep was genuinely computed fresh (its own new cache entry,
+  `neff_override` in the key) but takes `neff_override`'s documented
+  diagonal fast path; the *uncalibrated* n=15 sweep was served by
+  `lookup_superset()` (`beef/cache/store.py:348`) — a **designed** cache
+  tier that answers an n-mode request from a stored ≥n-mode result by
+  slicing its trailing axes down. Verified this was that tier and not a
+  wrong-key hit: returned shape is `(81, 3, 15, 15)`, and the only n=15
+  `length_sweep` entry on disk is the calibrated one written by this job.
+  **This makes comparison [A] cleaner than the script was designed for** —
+  both sides share the *same* 16-mode-solved mode shapes sliced to 15, so
+  the only thing differing between them is the propagation constants,
+  which is exactly the quantity being tested.
 - **2026-08-14, Step 6b (full-device FDTD reference) RE-QUEUED at the
   user's direction, job 11847078** — see Step 6b's own updated section
   below for the full account (stale-geometry fix + budget raised to 3
@@ -1660,6 +2006,323 @@ future resubmission. Check 4 (Step 8) remains formally open — this
 device's full-device FDTD cross-check has now failed to complete at 6h,
 then at 3 days, and whether it is tractable at all within a reasonable
 budget is itself an open question, not just "needs more time.
+
+**2026-08-21 — the "still converging" reading was never MEASURED, and
+today's instability finding says it may be wrong. Diagnostic submitted,
+job 12079104.**
+
+Both 3-day runs were recorded above as "genuinely still converging toward
+`decay_tol`." That was an *inference* from a steady ~0.286 s/step and no
+NaNs — not a measurement. Checked directly today: `grep -c "decay("` on
+both logs returns **0**. `stop_when_dft_decayed` prints no decay
+diagnostic at all, so **those two runs burned 144 CPU-days each and
+produced zero information about how far from convergence they were.**
+That is why "how much more budget?" has never been answerable.
+
+Meanwhile the body calibration on this same device found a real late-time
+**instability** (see this doc's own correction section): mode 16's energy
+bottomed just above `decay_tol` near t≈260 and then *grew* monotonically
+to 1.7e53 by t≈2081, traced to the undamped (`gamma=0`) Lorentzian poles
+every material in this repo is built from (`beef/materials/stack.py:284`).
+**The 6b logs carry that same pole on their own face** —
+`lorentzian susceptibility: frequency=0.639386, gamma=0`. With no energy
+readout, a diverging run and a slowly-converging one are
+**indistinguishable**: both step steadily, neither NaNs, neither stops.
+So the recorded "still converging" and "no NaNs" observations do not
+actually discriminate between the two.
+
+*Counter-evidence, stated so this is not overclaimed*: both runs reached
+t≈11000 without NaN/Inf. Unbounded exponential growth would plausibly
+have overflowed float64 (~1e308) by then, which argues against divergence
+as fast as mode 16's. The point is that nobody knows, and the previous
+spend could not have found out.
+
+**Job 12079104** (`run_mmi_4x4_90hybrid_fdtd_DECAYDIAG.batch`) settles it
+cheaply: `decay_method="energy"` prints the ratio every 20 time units.
+Deliberately a *measurement*, not an attempt to finish check 4 — **one
+port** (port 1) not two, **`-t 720` (12 h)** not 3 days, but otherwise
+**production physics** (res=40, `decay_tol=1e-11`, 3 λ, same ΔL=−2.75
+geometry), since the instability is itself resolution-dependent and a
+reduced-resolution probe would not answer the question. At the previously
+measured ~153 meep-time-units/hour this reaches t≈1800 — well past where
+mode 16's divergence was unmistakable (t≈580). Three outcomes, all
+actionable, none of which the prior 6 h + 3 d + 3 d could produce:
+  - **ratio falling steadily** → genuinely a budget problem, *and* the
+    printed sequence finally gives a real extrapolation to completion;
+  - **ratio plateaued or rising** → the instability; check 4 is not
+    fixable by a bigger budget and that question closes for good;
+  - **ratio oscillating above `decay_tol`** → mode 16's own near-miss
+    case, i.e. wants a looser tol rather than more time.
+
+`decay_method` is part of the cache fingerprint by design, so this run
+neither hits nor pollutes the existing default-`"dft"` entries. The
+user's standing no-auto-resubmit policy for Step 6b still applies to it.
+
+#### ✅ RESULT — job 12079104, and it answers a question open since 2026-08-08
+
+**TIMEOUT at 12 h, exactly as designed** (this was scoped as a
+measurement, not an attempt to finish check 4). Reached **t=1801, ratio
+1.441e-3, still falling monotonically, no divergence.** Outcome **(a)**:
+Step 6b is a genuine budget problem — and for the first time there is a
+real extrapolation instead of a guess.
+
+**The decay curve, 70 ringdown checkpoints.** Energy peaked at 29.06
+(t≈60-80), stayed flat while the pulse crossed the 84 µm device (one-way
+transit ≈340 time units — a flat plateau there is correct for a lossless
+structure, not a stall), then dumped ~93% into the PML at t≈340-420. What
+remains is a **long-lived trapped component**, ~5.7% of peak at t=420,
+decaying steadily since:
+
+| window | k |
+|---|---|
+| t=420→821 | 3.24e-3 |
+| t=821→1221 | 2.94e-3 |
+| t=1221→1621 | 2.32e-3 |
+| t=1621→1801 | 2.54e-3 |
+
+k decelerates mildly then **stabilizes around 2.3-2.5e-3** — it does not
+collapse toward a floor. One earlier feature is worth recording because it
+nearly caused a wrong call in real time: the ratio **plateaued at ≈0.0566
+from t≈520-660** (k dropped to 6.9e-5), which looked exactly like an
+asymptote; decay then resumed and *accelerated*. Consistent with beating
+between trapped modes. **Do not call a floor from a plateau on this
+device** — this is the second time today that pattern appeared (mode 16's
+own near-miss was the first).
+
+**Extrapolation to `decay_tol=1e-11`:**
+
+| basis | k | converges at | wall time |
+|---|---|---|---|
+| average since ringdown | 2.794e-3 | t≈8,524 | **56 h** |
+| recent ~300 t-units (conservative) | 2.063e-3 | t≈10,907 | **72 h** |
+
+**The finding that matters.** The two 3-day DFT runs reached **t≈11,007**
+— *at or past where energy convergence lands on either estimate* — and
+**still did not stop.** So the physics converges; what never converged is
+`stop_when_dft_decayed`, which requires every DFT component at every
+monitor to individually reach tol. That is the same over-strict criterion
+that stalled mode 1 in the calibration. **This one stopping criterion has
+now blocked this device three separate times** (mode 1, mode 16, Step 6b),
+and in 6b's case it burned 288 CPU-days behind a diagnostic that printed
+nothing at all.
+
+**Recommended, NOT submitted** (standing no-auto-resubmit policy): re-run
+Step 6b with `decay_method="energy"`, **`-N 4 --ntasks-per-node=24`
+(96 ranks)** and **`-t 2880` (48 h)**. Both ports, as the original array did.
+
+#### MPI scaling — measured 2026-08-22, jobs 12217184 / 12217185
+
+Prompted by the user asking whether the re-run could be parallelized. It
+can, and **no 6b attempt has ever tried**: the 6 h attempt, both 3-day
+runs and the 12 h diagnostic all used the identical `-N 2
+--ntasks-per-node=24` = 48 ranks. The domain is 82.95 × 10 × 3 µm at
+res=40 ≈ **159 M voxels**, i.e. 3.3 M voxels/rank at 48 — far above the
+~1e5-1e6 where meep's scaling normally rolls off.
+
+| ranks | nodes | s/step | speedup | efficiency |
+|---|---|---|---|---|
+| 48 | 2 | 0.287 | 1.00× | — |
+| **96** | **4** | **0.1469** | **1.95×** | **98%** |
+| 192 | 8 | never reached time-stepping in 30 min | — | — |
+
+**96 ranks is the operating point.** 192 did not merely scale poorly — it
+never printed `set_epsilon` (21.8 s at 48 ranks) in a full 30 minutes, so
+it hung in collective-heavy structure setup. SLURM had scattered those 8
+nodes over four racks (`02-002`, `02-003`, `02-004`, `03-004`); inter-rack
+latency is the likely cause. Retrying 192 with `--switches=1` and a longer
+budget might work, but 96 already halves the runtime at 98% efficiency and
+is not worth risking a multi-day job on.
+
+**Only one axis was actually available**, checked rather than assumed:
+- *ports* — already parallel, the original 6b was a 2-task array;
+- *wavelengths* — already optimal, and this was VERIFIED, not reasoned:
+  the 12 h diagnostic log contains exactly **one** `Initializing
+  structure` and one time-stepping loop for all 3 wavelengths (single
+  broadband pulse + DFT monitors). Splitting λ would triple the work;
+- *time* — impossible, FDTD is sequential in time and `FDTDSolver` has no
+  checkpoint/restart (which is also why all three timeouts were total
+  losses);
+- *MPI ranks* — the one real lever, and it was sitting unused.
+
+**Revised estimate at 96 ranks: 29 h (average-k) to 37 h (conservative
+recent-k)**, from 56-72 h at 48. `-t 2880` covers the conservative case
+with ~30% margin.
+
+**✅ CONFIRMED IN PRODUCTION — job 12227584.** The probe number transferred
+essentially exactly: port 1 steady **0.1468 s/step**, port 3 **0.1466**,
+against the probe's 0.1469 and the 48-rank baseline's 0.2865 — a measured
+**1.95×** on the real both-ports run, not just on a 30-minute probe.
+Completion estimate at that rate: **27.8 h** (average-k target t≈8,524 =
+681,920 steps) to **35.6 h** (conservative-k t≈10,907 = 872,560 steps),
+inside the 48 h budget with ~12 h margin in the worst case.
+
+**Billing note.** The first submission (job 12218117) was blocked
+`AssocGrpBillingMinutes` on `gts-sr108` — the fallback account this
+project has leaned on all session — after the day's probe work drew it
+down. Checked all three rather than guessing (see
+[[slurm-account-gts-sr108-ece]]): `gts-sr108-ece` billing cap 354,561,109
+and `gts-sr108` 174,062,774 both exhausted, while
+**`gts-sr108-gedc_main` has no `GrpTRESMins` cap set at all** and was
+already running work. Resubmitted there as 12227584 (precedent: the 1×4
+sin300 doc's own 64 h job used the same account). Worth remembering that
+the cheap diagnostic probes are what exhausted the fallback — individually
+minor, collectively enough to block a headline job.
+
+**Caveat to settle before trusting the S-matrix it produces**: energy-decay
+and DFT-decay are *different* convergence criteria. Stopping when bulk
+energy is 1e-11 of peak means the residual field is negligible, so the DFT
+monitors should have accumulated essentially the full result — that is the
+argument, and it is the one already implicitly accepted for every
+calibration run on this device, but it is an assumption to verify against a
+converged reference, not to assert.
+
+
+### EME script staleness — Step 6a was never re-run after the body-mode redo (found 2026-08-21)
+
+**Prompted by the user asking a plain question: "are the EME field plots
+up-to-date?"** They are not, and the cause was not stale images — it was
+two stale *scripts*.
+
+`mmi_4x4_90hybrid_eme.py` (mtime 2026-08-08 10:44, untouched since) and
+`verification/python/plot_mmi4x4_90hybrid_eme_fields.py` both still
+carried `DELTA_L=-1.50`, `MM_LENGTH=80.1896`, `N_MODES_BODY=8` — the point
+superseded on 2026-08-09 when the body basis went 8→16 and moved the
+optimum to `ΔL=-2.75`/`mm_length=78.9396`. `mmi_4x4_90hybrid_hybrid.py`
+(mtime 2026-08-10 02:13) and `body_sweep.py` did get the change.
+
+**Every EME artifact on disk therefore shows a rejected design point at a
+50-64% under-converged basis:**
+
+| artifact | mtime | reflects |
+|---|---|---|
+| `mmi_4x4_90hybrid_eme/geometry.png` | 2026-08-08 10:45 | ΔL=−1.50 geometry |
+| `mmi_4x4_90hybrid_eme/eme_results.png` | 2026-08-08 13:11 | N_MODES_BODY=8 |
+| `fields/eme_{Ex,Ey,Ez,Hx,Hy,Hz}_out5_in0_1.310um.png` | 2026-08-08 17:01 | N_MODES_BODY=8 |
+| (hybrid's own outputs, for contrast) | 2026-08-10 02:26–12:36 | correctly regenerated |
+
+**How it hid for 12 days**: the doc's own CURRENT STATUS header asserted
+"Step 6 (all 3 example scripts) done and RE-RUN at a properly-converged
+body mode basis," while the line immediately below it scoped the fix to
+"(body_sweep.py/hybrid.py)". The summary and its own supporting detail
+contradicted each other on adjacent lines. Nothing anywhere recorded
+leaving the EME script behind deliberately, so this was an oversight, not
+a decision. Header now corrected in place.
+
+**Also a real contributing cause, worth fixing properly later**: the
+field-plot script *duplicates* the design-point constants rather than
+importing them from `mmi_4x4_90hybrid_eme.py`, which is exactly how the
+two drifted apart silently. Noted in both files; not refactored today.
+
+**Corrected 2026-08-21**: both scripts moved to `DELTA_L=-2.75` /
+`N_MODES_BODY=16`, each with a comment recording why. All EME artifacts
+need regeneration, plus `notebooks/mmi_4x4_90hybrid_eme.ipynb` (which this
+repo generates mechanically from the `.py`, never hand-copied).
+
+**✅ FIELD PLOTS REGENERATED — job 12212996, 8m26s, 2026-08-22.** All six
+`eme_{Ex,Ey,Ez,Hx,Hy,Hz}_out5_in0_1.310um.png` now at the settled
+`ΔL=-2.75` / `N_MODES_BODY=16` / `N_MODES_TAPER=12` point. Verified by
+LOOKING at the output, not by exit code: source at x≈-2.2 µm (port 1),
+beam diverging into the body, rich self-imaging interference consistent
+with a 16-mode basis, and total length ≈81 µm matching the corrected
+`total_length=80.9396` (the superseded ΔL=-1.50 geometry was 82.19 µm).
+Prior plots preserved in `fields_backup_nbody8_dL150_nmt12_20260822_084608/`.
+
+**It took two attempts, and the first one is the more instructive.** Job
+12212950 ran to COMPLETED in 4m33s and produced six plausible-looking
+plots — with **`N_MODES_TAPER=4`**. That is a THIRD stale constant in
+`plot_mmi4x4_90hybrid_eme_fields.py`, missed on 2026-08-21 when `DELTA_L`
+and `N_MODES_BODY` were corrected there. The 4→12 bump landed in
+`mmi_4x4_90hybrid_eme.py` on 2026-08-08 (job 11745928 rendered the
+comparison; at 4 the taper's 0.8 µm end is missing 2 of its 6 real guided
+modes) and this file never received it. **Caught only because the script
+prints its own config and the log said `N_MODES_TAPER=4`** — and because
+the pre-existing `fields_backup_nmt4_20260808_102153/` directory is named
+for precisely that value, i.e. the run had silently regressed to the plots
+the 2026-08-08 bump existed to supersede. A green exit code and a
+reasonable-looking image were both worthless as verification here.
+
+**Root cause is now three-for-three, and the obvious fix does NOT work.**
+`plot_mmi4x4_90hybrid_eme_fields.py` duplicates `mmi_4x4_90hybrid_eme.py`'s
+design-point constants (`DELTA_L`, `MM_LENGTH`, `N_MODES_BODY`,
+`N_MODES_TAPER`) instead of sharing them, and all four drifted. The
+tempting fix — have the plot script `import` them from `eme.py` — is
+**unsafe**: `eme.py` has no `def main()` and no `__main__` guard, and
+carries 6 module-level statements that call `solve()`/`savefig()`, so
+importing it would execute the entire >96 h 8-call sweep at import time
+(checked via `ast`, not assumed). A correct fix needs a shared
+constants/params module both scripts import, which means editing a shipped
+example whose notebook is generated mechanically from it — a real refactor
+deserving its own decision, not a drive-by. **Left as a documented wart** in the sense
+that no shared module was created -- but the drift is now CHECKED rather
+than merely noted; see below.
+
+#### The drift is now gated, and gating it found a stale published notebook (2026-08-22)
+
+The obvious fix -- one params module every script imports -- was scoped and
+**rejected on evidence**, not on effort:
+- `mmi_4x4_90hybrid_eme.py` has no `main()` and no `__main__` guard and runs
+  8 EME `solve()` calls at module level (>96 h at the current basis), so
+  nothing can import it and making it importable means restructuring a
+  shipped example (verified via `ast`, not assumed);
+- the three notebooks carry their **own** copies of these constants, so a
+  `.py`-only refactor leaves them drifted and forces regenerating all three.
+
+**What already existed, with a gap.** `scripts/check_notebook_sync.py` is
+built for exactly this, and its own docstring records the same failure in
+July -- *"2026-07-31: four mismatched constants, one of them reproducing a
+known-bad mode basis in a published tutorial."* It missed this drift only
+because `DELTA_L`/`N_MODES_BODY`/`N_MODES_TAPER` were absent from its
+`CONSTANTS` list. **Added.** Unlike the 2026-08-18 addition (which was pure
+coverage, 0 drift found), this one immediately surfaced a real one:
+
+> **`mmi_4x4_90hybrid_eme.ipynb` was still at `DELTA_L=-1.50` /
+> `N_MODES_BODY=8`.** The `.py` was corrected 2026-08-21 but the hand-mirrored
+> notebook was not — a *published tutorial* teaching the rejected design point
+> at the 50-64% under-converged basis. Exactly the failure that checker exists
+> to prevent, recurring because its constant list did not reach this device.
+
+Fixed, along with a stale derived comment (`# = 80.1896` → `78.9396`).
+
+**Plus `tests/test_mmi_4x4_90hybrid_design_point.py`**, covering the axis the
+notebook checker does not: `.py`↔`.py` agreement across all 9 scripts that
+hardcode this device's design point. `mode_convergence.py` and
+`taper_sweep.py` are explicitly EXEMPT (their recorded results genuinely are
+at `ΔL=-1.50`; rewriting them would misrepresent what ran) and pinned as such,
+so re-using either -- `taper_sweep.py` being the natural base for a
+`taper_width` sweep -- forces a conscious decision instead of silently
+inheriting stale geometry.
+
+**Two bugs in that test, both caught by running it, both worth recording**
+because each produced a confident false report of drift on files that were
+correct: (1) a line-anchored regex over raw text matched this device's own
+*prose* (`"At the converged N_MODES_BODY=16 design point"`,
+`"N_MODES_BODY=4 proxy"`); (2) after switching to AST, regexing the
+assignment's source segment pulled the `4` out of the env-var **name**
+`MMI4X4_EME_NMODES_TAPER` instead of its default `12`. Now reads real AST
+literal nodes. A checker that cries wolf is worse than none, and both
+failures looked exactly like genuine drift.
+
+**Verified**: `check_notebook_sync.py` clean for this device (18 pairs), new
+test 11 passed, full suite **777 passed / 21 skipped**.
+
+**Pre-existing drift deliberately NOT touched**: `directional_coupler_hybrid`
+and `mmi_2x2_hybrid` notebooks are both missing a `calibrate_body_neff()`
+call. Different devices, concurrent work by another agent -- reported, not
+fixed.
+
+**Budget being MEASURED, not extrapolated — probe job 12130641.** Job
+11736983 did all 8 `solve()` calls in 1:13:27 at `N_MODES_BODY=8`;
+doubling the basis scales by no factor this repo has measured, and this
+device has already been burned twice by guessed EME costs (the
+`num_cells` 0.3-0.6 dB extrapolation that measured 0.08-0.10 dB, and the
+isolated-`solve()` 8× reading that was mostly one-time JAX JIT).
+`mmi_4x4_90hybrid_eme_timing_probe.py` therefore times **two** calls —
+call 1 carries the JIT, call 2 is steady state, estimate = `call1 +
+7*call2`. Two deliberate safety properties: it writes **nothing** to the
+EME script's hardcoded `output_dir` (two coarse smoke runs overwrote job
+11726819's official results that exact way on 2026-08-07), and it shares
+`save_dir` at the real config so its 2 completed solves become cache hits
+for the full re-run rather than throwaway work.
 
 ### Step 7 — metrics helper (A8) — ✅ math primitives landed 2026-08-05; the plot/report itself still pending Step 6
 

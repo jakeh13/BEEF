@@ -1,0 +1,38 @@
+---------------------------------------
+Begin Slurm Prolog: Aug-21-2026 12:57:04
+Job ID:    12120999
+User ID:   jhiesener3
+Account:   gts-sr108-gedc_main
+Job name:  beef_mmi1x4_fields_cmp
+Partition: cpu-small
+QOS:       inferno
+---------------------------------------
+=== SMOKE PASS ===
+res=15.0  N_BODY=4  N_TAPER=3  C_TAPER=3  BODY_CELLS=6
+taper profile: start_width=6.0 -> mm_width=12.0 over Lt=8.0 um (output face left at mm_width)
+
+[straight] body width: in-face=12.000  mid=12.000  out-face=12.000 um
+[straight] building 14 cells (output branch 0)...
+[straight] solving modes at 1.55 um for 14 cells (44 mode-solves total)...
+[straight] done in 42.8s -> /storage/scratch1/8/jhiesener3/duty/example_output/mmi_1x4/mmi_1x4_straight_vs_tapered_eme/fields/eme_*_straight_out0_1.550um.png
+
+[tapered] body width: in-face=6.000  mid=12.000  out-face=12.000 um
+[tapered] building 14 cells (output branch 0)...
+[tapered] solving modes at 1.55 um for 14 cells (44 mode-solves total)...
+[tapered] done in 30.2s -> /storage/scratch1/8/jhiesener3/duty/example_output/mmi_1x4/mmi_1x4_straight_vs_tapered_eme/fields/eme_*_tapered_out0_1.550um.png
+
+Both cases written under /storage/scratch1/8/jhiesener3/duty/example_output/mmi_1x4/mmi_1x4_straight_vs_tapered_eme/fields/
+Compare eme_Ey_straight_*.png against eme_Ey_tapered_*.png (Ey is the dominant TE component for this device).
+=== smoke exit: 0 ===
+---------------------------------------
+Begin Slurm Epilog: Aug-21-2026 12:58:48
+Job ID:        12120999
+User ID:       jhiesener3
+Account:       gts-sr108-gedc_main
+Job name:      beef_mmi1x4_fields_cmp
+Resources:     cpu=8,mem=64G,node=1
+Rsrc Used:     cput=00:13:52,vmem=0,walltime=00:01:44,mem=1535104K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-003-16-2
+---------------------------------------

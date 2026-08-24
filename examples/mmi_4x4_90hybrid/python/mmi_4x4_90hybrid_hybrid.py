@@ -182,8 +182,28 @@ output_solver = make_section_solver(OUTPUT_METHOD)   # never run -- labels the s
 # ---------------------------------------------------------------------------
 # 3. HybridSolver -- for the geometry/section-map plot only. Section 5 below
 #    hand-rolls the einsum cascade (4 excitations x 4 outputs), the same
-#    reason mmi_2x2_hybrid.py/directional_coupler_hybrid.py do: HybridSolver's
-#    one-call contract can't express a mirror-reused N-port cascade like this.
+#    reason mmi_2x2_hybrid.py/directional_coupler_hybrid.py did: this device's
+#    N-port cascade does not fit HybridSolver's one-call contract.
+#    NOTE 2026-08-24: `beef.MirrorSpec` now lets a mirror-reused matrix be
+#    expressed through the supported API, so the old blanket wording here
+#    ("can't express a mirror-reused N-port cascade") was imprecise. Checked
+#    against THIS device rather than assumed, and the conclusion is unchanged
+#    for a reason worth recording:
+#      * the ±1 restriction is NOT the blocker here. MirrorSpec requires
+#        strictly ±1 mode_signs and raises otherwise, which was flagged as
+#        likely fatal for a 90-degree hybrid -- but this device's mirror
+#        relations were measured on 2026-08-13 (circular statistics, all
+#        16/16 body modes, both pairs) at R≈1.0000 with angular deviation
+#        from an exact 0/180 sign ≤0.15 deg. The 90-degree relationship is
+#        between OUTPUT ports for a given input, not between mirror-partner
+#        INPUT excitations, so the parity really is real-valued.
+#      * the blocker is the N-PORT shape. `HybridSolver.solve()` returns ONE
+#        SMatrix under ONE `port` label -- a single input->output cascade.
+#        This device needs EIGHT port pairs (2 driven inputs x 4 outputs)
+#        built from 4 input matrices, a body, and 4 output matrices.
+#        MirrorSpec removes the mirroring obstacle, not the N-port one.
+#    So: still hand-rolled, but now for a narrower and better-understood
+#    reason. Revisit if HybridSolver ever grows multi-excitation output.
 # ---------------------------------------------------------------------------
 half_body = mmi.mm_length / 2
 half_total = mmi.total_length / 2

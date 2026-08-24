@@ -99,10 +99,24 @@ WAVEGUIDE_OFFSET = MM_WIDTH / 4.0
 TAPER_WIDTH = 0.8
 TAPER_LENGTH = 1.0
 L_PI = 108.9195
-DELTA_L = -1.50
-MM_LENGTH = 0.75 * L_PI + DELTA_L   # = 80.1896 -- same settled point as the hybrid script
+DELTA_L = -2.75
+MM_LENGTH = 0.75 * L_PI + DELTA_L   # = 78.9396 -- same settled point as the hybrid script
+# DELTA_L/N_MODES_BODY CORRECTED 2026-08-21, and this was a real staleness
+# bug, not a tidy-up. The 2026-08-09 body-mode redo (N_MODES_BODY 8->16,
+# which shifted the optimum to DELTA_L=-2.75/mm_length=78.9396) was applied
+# to body_sweep.py and hybrid.py but NOT to this script or to
+# verification/python/plot_mmi4x4_90hybrid_eme_fields.py. Both sat at the
+# superseded 8-mode/-1.50 point for 12 days while the doc's own CURRENT
+# STATUS header claimed "all 3 example scripts done and RE-RUN at a
+# properly-converged body mode basis" -- its very next line scoped the fix
+# to "(body_sweep.py/hybrid.py)", which is exactly the two that got it.
+# Nothing recorded leaving this script behind deliberately. Every EME
+# artifact on disk (eme_results.png, geometry.png, the six eme_E*/H* field
+# plots) therefore showed a design point the project had already rejected,
+# at a basis the convergence check measured as 50-64% under-converged.
 
-N_MODES_BODY = 8   # job 11707935/11707835 -- see mmi_4x4_90hybrid_hybrid.py's own comment
+N_MODES_BODY = 16   # was 8 (job 11707935/11707835) -- see the note above and
+                    # mmi_4x4_90hybrid_hybrid.py's own comment
 
 mmi = MMI(
     n_inputs=4, n_outputs=4,

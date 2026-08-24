@@ -13,6 +13,79 @@ def _oxide_box(x_start: float, total_x: float, oxide_width: float) -> List[Tuple
     ]
 
 
+def assert_uniform_cross_section(
+    geometry,
+    x0: float,
+    x1: float,
+    *,
+    what: str,
+    why: str,
+    geometry_kwargs: Optional[Dict] = None,
+    samples: int = 25,
+    tol: float = 1e-3,
+) -> None:
+    """Raise if `geometry`'s cross-section varies anywhere across [x0, x1].
+
+    THE one implementation of "is this span uniform?", deliberately shared
+    rather than re-derived per call site — the same reasoning
+    `section_fdtd_layout()` is shared with `beef/plot/geometry.py`'s own
+    marker drawing: this repo has already been bitten by duplicated geometry
+    logic drifting apart.
+
+    Exists because several code paths are only physical over a constant
+    cross-section and produce a *plausible wrong answer*, not an error, when
+    handed a varying one:
+
+      - `EMESolver.solve_section(neff_override=...)` writes a diagonal
+        ``T[i,i] = exp(2j*pi*neff/wl*L)`` outright, skipping the mode solve.
+        That diagonal form follows from left/right ports sharing ONE
+        cross-section's mode basis (single cell, `Ls=[length]`) — true for a
+        uniform span, false for a tapered one, where the transfer matrix
+        depends on the mode *fields* at every internal interface and is not
+        diagonal at all.
+      - `EMESolver.solve_section_length_sweep()` / `HybridSolver.
+        solve_length_sweep()` extrapolate an analytic propagation phase
+        across swept lengths, which means the same thing.
+
+    Sampling `width_at`/`center_at` is the same test
+    `HybridSolver._validate_uniform_sweep_section` has always used; both
+    are needed, since a section can hold its width while its centre walks
+    (an S-bend) or vice versa.
+
+    Args:
+        geometry: any `DeviceGeometry` — only `width_at`/`center_at` are used.
+        x0, x1: device-frame span to check, inclusive of both endpoints.
+        what: who is asking, for the message's leading clause (e.g.
+            ``"sweep_section=1"``, ``"section 2/3 (EMESolver)"``).
+        why: what breaks on a non-uniform span, for the trailing clause —
+            state the requirement, not just the refusal.
+        geometry_kwargs: forwarded to `width_at`/`center_at` (e.g.
+            ``output_idx``), since those are per-branch on a multi-port device.
+        samples: how many points across the span to test.
+        tol: µm tolerance; a span varying by less than this counts as uniform.
+
+    Raises:
+        ValueError: naming the first offending x, so the caller can see
+            *where* the span stops being uniform rather than only that it does.
+    """
+    kwargs = geometry_kwargs or {}
+    n = max(int(samples), 2)
+    # Plain arithmetic rather than np.linspace: this module is stdlib-only
+    # today and there is no reason for a geometry predicate to change that.
+    span = x1 - x0
+    xs = [x0 + span * i / (n - 1) for i in range(n)]
+    w0 = geometry.width_at(xs[0], **kwargs)
+    c0 = geometry.center_at(xs[0], **kwargs)
+    for x in xs[1:]:
+        if (abs(geometry.width_at(x, **kwargs) - w0) > tol
+                or abs(geometry.center_at(x, **kwargs) - c0) > tol):
+            raise ValueError(
+                f"{what}: cross-section is not uniform over "
+                f"[{x0:.4g}, {x1:.4g}] (width_at/center_at varies at "
+                f"x={x:.4g}); {why}."
+            )
+
+
 def polygons_to_prisms(vertex_lists, si_medium, wg_height: Optional[float] = None):
     """meep Prisms from raw (x, y) vertex lists — the one place the 2-D/3-D
     extrusion convention lives.

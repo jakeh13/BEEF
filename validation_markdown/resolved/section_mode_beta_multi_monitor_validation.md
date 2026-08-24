@@ -1821,3 +1821,231 @@ plus the `False == 0` / `0 == 0.0` type-exactness the default check needs. Full
 suite 670 passed / 19 skipped. Measured, not argued: the same read-only
 `cache_only=True` probe that found the miss was re-run after the fix and the
 mirror, both S-bends, the coupler body calibration and the EME body all hit.
+
+
+---
+
+# `decay_method` and a sequence-position stall — found on the 4×4 hybrid, checked against every other calibrating device (2026-08-20)
+
+Calibrating the (not yet shipped) 4×4 90° hybrid's body — the first device to
+exercise `section_mode_beta()` at as many as 16 modes — turned up **two
+separate problems**, only one of which this doc's existing machinery already
+covered. Recorded here because the fix for the first is now a general
+`FDTDSolver` option any device can reach for, and the second is an unresolved
+risk this doc's own "is it safe" audits (step 10 above) should be able to
+check against going forward.
+
+## Problem 1 — mode 1 stalled under `stop_when_dft_decayed()`, fixed
+
+`stop_when_dft_decayed()` (meep's default, and until now this library's only,
+early-stop criterion) requires *every* tracked DFT component to have decayed
+to `decay_tol` before it will end a run — with a floor from `minimum_run_time`
+but no ceiling. Mode 1's own body-calibration run hit a component that would
+not decay to tol in any reasonable time (job 12052383/12052385's stall).
+
+**Fix**: `FDTDSolver` now takes `decay_method: str = "dft"` and
+`energy_decay_dt: float = 20.0` (`beef/solvers/fdtd.py`, `__init__`), with
+`decay_method="energy"` switching every `sim.run()` call in the solver to
+`mp.stop_when_energy_decayed(energy_decay_dt, decay_tol)` via a new
+`_stop_condition()` helper. Both new attributes are in `_METHOD_ATTRS` for
+`solve`/`solve_section`/`solve_section_multi_length`, and in
+`_DEFAULT_OMITTED_ATTRS` (`beef/cache/config.py`) — same two-part pattern as
+`minimum_run_time` above, checked the same way (default-valued solver still
+hits the pre-existing cache; a `decay_method="energy"` solver's config key
+differs and misses correctly). Mode 1 decays cleanly under this criterion.
+
+## Problem 2 — the 16th sequential mode stalled too, NOT fixed by the above, root cause NOT found
+
+With problem 1 fixed, the same 16-mode run reached mode 16 — last in
+`solve_section_multi_length()`'s own `for k in range(1, n_excite + 1):` loop,
+i.e. the 16th `mp.Simulation` build + run + `reset_meep()` in one long-lived
+process — and **stalled again**, under `decay_method="energy"` too. Isolating
+mode 16 alone in a fresh process (patching the loop to `for k in [16]:` via
+`inspect.getsource`/`exec`, job 12066668) converged normally: t=220.1375,
+17,611 timesteps, energy ratio 1.0 → 7.5e-12. Mode 16 has no intrinsic
+problem — margin from cutoff is 0.883, nothing near the guard thresholds.
+Something accumulates across repeated `mp.Simulation`/`reset_meep()` cycles
+within one process and eventually stalls the last one; **what, specifically,
+is not identified**, only worked around.
+
+**Workaround, not a fix**: one process per excited mode.
+`examples/verification/python/mmi_4x4_90hybrid_calibration_mode_worker.py`
+(one mode per SLURM array task, each a fresh process) +
+`_calibration_aggregate.py` (combines the 16 `mode_XX.npz` files exactly as
+`section_mode_beta_details()` would in one process — `beta_fit_from_phases()`
+depends only on that mode's own phase-vs-length data and `seed_beta`, so
+per-mode isolation changes nothing about what gets computed, applying the same
+`_BETA_FIT_RESIDUAL_MAX`/`_BETA_BRANCH_MARGIN_RAISE` guards on the far side).
+Reusable as a pattern if another device hits the same wall.
+
+## Checked: is any other calibrating device close enough to be at risk?
+
+Every device currently calibrating its own body (`calibrate_body_neff=True`,
+same call path this doc covers) was checked for its own sequential mode count
+— the dimension that matters, since the stall only appears deep into one
+process's own sequence of excited-mode simulations:
+
+| device | own-body N_MODES | where set |
+|---|---|---|
+| MMI 2×2 | 14 | `examples/mmi_2x2/python/mmi_2x2_hybrid.py:126` |
+| MMI 1×4 | 12 | `examples/mmi_1x4/python/mmi_1x4_hybrid.py:249` |
+| MMI 1×2 | 8 | `examples/mmi_1x2/python/mmi_1x2_hybrid.py:148` |
+| directional coupler | 5 | `examples/directional_coupler/python/directional_coupler_hybrid.py:249` |
+| directional coupler, SOI160 | 2 | `examples/directional_coupler/python/directional_coupler_soi160_hybrid.py:211` |
+| HCG Fabry-Perot, coupler body | 2 | `examples/high_contrast_grating_fabry_perot/python/hcg_fabry_perot_hybrid.py:210` |
+| HCG Fabry-Perot, arm | 1 | `hcg_fabry_perot_hybrid.py:493` |
+| ring resonator (cascaded), coupled-pair body | 2 | `examples/ring_resonator/python/ring_resonator_hybrid_cascaded.py:296` |
+| ring resonator, bare strip (both scripts) | 1 | `ring_resonator_hybrid.py:936`, `ring_resonator_hybrid_cascaded.py:1863` |
+
+None of these have been observed to stall, and 14 (the highest, MMI 2×2,
+step 10's own re-run — jobs 11981703/11982196) is not close to 16. **That is
+not the same as "safe below some known threshold"** — the trigger condition
+for problem 2 is confirmed only at position 16 of 16, on this one device's
+geometry and resolution, and nothing here pins down whether it depends on
+mode count, process lifetime, resolution, or something else entirely. Nothing
+above needs to change today. If any future device's own `N_MODES` grows past
+~14, or any script runs many sequential `mp.Simulation`+`reset_meep()` cycles
+in one process for a different reason (a length sweep, a wavelength sweep),
+and that job runs far longer than its own per-mode/per-length cost model
+predicts, treat that as this same failure mode rather than a slow machine —
+`decay_method="energy"` and the one-process-per-mode pattern above are both
+now available as the first two things to try, in that order.
+
+## Correction, same day — mode 16's own isolated run diverges too; this is not a sequence-position bug
+
+The paragraphs above were written right after job 12066668 (mode 16 alone,
+in its own process) appeared to converge cleanly (t=220.1, ratio 7.5e-12).
+Running the full one-process-per-mode production array to actually get a
+usable β for all 16 modes (job 12069540_1 + 12069773_[2-16], all at the
+real 3-wavelength production seed/lengths) falsifies that conclusion.
+
+**Modes 1-15 completed cleanly** (12-30 min each). **Mode 16
+(`12069773_16`) did not converge — it hit `TIMEOUT` at the full 90 min
+budget, exit `0:15` (SIGTERM, not a crash)**, still running at meep-time
+~2100 when killed. Its own energy trace, read directly from the job's log
+rather than assumed, is not a stall — it is **exponential growth**: the
+ratio bottoms out around t≈260 at 1.95e-11 (just *above* `decay_tol=1e-11`,
+so `stop_when_energy_decayed()` correctly did not fire), then climbs
+monotonically — 1.0 again by t≈580, 1.7e53 by t≈2081, still climbing at
+the last checkpoint before timeout. This is a genuine numerical
+instability developing at late simulated time, not a criterion that is
+merely slow to satisfy.
+
+**That reframes job 12066668's own "clean" result as a near-miss, not a
+resolution.** Its own energy trace (checked directly, same log) was *also*
+still monotonically falling with no turnaround visible through its own
+last checkpoint (t=220, ratio 7.5e-12) — it happened to cross below
+`decay_tol` on a very slightly longer domain (`max(lengths)=2.655 µm`, the
+single-wavelength diagnostic lengths) than the real production run
+(`2.525 µm`, this device's 3-wavelength β_max), which was enough to change
+exactly when the noise floor bottoms out relative to when this instability
+overtakes it. **Isolating mode 16 into its own process changes nothing
+about whether it converges — the earlier "no intrinsic problem, only a
+sequence-position bug" conclusion is retracted.** The one-process-per-mode
+architecture itself is still sound and was not wasted: it correctly
+isolated mode 16's own data from any cross-mode interaction, and that
+isolation is precisely what proves the instability is intrinsic to mode
+16's own configuration, not an artifact of running 16th in a sequence.
+
+**Root cause, grounded in the repo's own code, not guessed**:
+`beef/materials/stack.py:284/337` builds every Sellmeier resonance term as
+`mp.LorentzianSusceptibility(frequency=1/lam_i, gamma=0, sigma=...)` — a
+**lossless (zero-damping) pole**, the same convention meep's own
+`materials.Si` uses. Undamped Lorentzian susceptibilities are a
+documented marginal-stability risk in FDTD over long integration times —
+accumulated discretization noise can resonantly grow on an undamped pole
+given enough timesteps. This has apparently never surfaced elsewhere in
+this repo because nothing else runs this long at this tight a
+`decay_tol`: ordinary S-parameter solves neither integrate for ~2000+
+time units nor demand 1e-11 decay. Calibration's own demands are what
+expose it.
+
+**This changes the "which other devices should worry" answer from the
+section above.** That section reasoned about risk in terms of sequential
+mode count (N_MODES), because the believed mechanism was resource
+accumulation across repeated `mp.Simulation` calls. The real mechanism —
+an undamped dispersive pole slowly resonating over long simulated time —
+has nothing to do with mode count or process lifetime; it depends on how
+long a run has to integrate and how tight its decay tolerance is, which
+calibration's own extreme requirements make far more likely to trigger
+than a mode-count comparison alone would suggest. No other device's
+calibration is known to have hit it, but "N_MODES well under 14" is not
+a reason to assume it's safe.
+
+**Open, not resolved**: whether a small nonzero `gamma` on the dispersion
+model suppresses this without a material accuracy cost; whether
+`decay_method="dft"` behaves differently for mode 16 specifically (the
+original all-in-one-process run under `dft` stalled on mode 1 before ever
+reaching mode 16, so this is untested); whether a shorter calibration
+domain or looser `decay_tol` sidesteps it at an acceptable accuracy cost.
+**Not pursued further without direction** — this is a materially
+different, more open question than "isolate each mode and it'll work,"
+and deserves a decision on how far to chase it before more cluster time
+goes into it.
+
+
+
+---
+
+# Rank count: calibration and full-device FDTD want OPPOSITE resourcing (measured 2026-08-22)
+
+Prompted by the user asking whether all cores are actually used at every
+stage of a simulation. They are not, and the answer differs so sharply by
+job type that using one rule for both wastes either time or allocation.
+
+## Phase breakdown, from this repo's own logs
+
+Wall time split into time-stepping (parallel, domain-decomposed) vs
+everything else (structure setup, the MPB source solve, eigenmode
+decomposition, IO):
+
+| job | non-stepping | parallel fraction | Amdahl ceiling |
+|---|---|---|---|
+| 4×4 hybrid full-device FDTD (12079104) | **4.2%** | 95.8% | ~24× |
+| calibration worker, mode 2 (12069773_2) | 47.3% | 52.7% | 2.1× |
+| calibration worker, mode 8 | 65.1% | 34.9% | 1.5× |
+| calibration worker, mode 14 | 68.3% | 31.7% | 1.5× |
+| mode-16 isolation (12066668) | 77.6% | 22.4% | 1.3× |
+
+This independently reproduces step 9's "MPB eigenmode decomposition is
+~89% of calibration cost" from a different measurement. Note the trend:
+the non-stepping share **rises with mode index**, consistent with
+higher-order modes needing more MPB iterations in a dense near-degenerate
+spectrum.
+
+## The MPB phase does not scale AT ALL — measured, jobs 12218118 / 12218119
+
+`section_mode_neff()` (pure MPB, no time-stepping) on the 4×4 body
+cross-section at production `n_modes`, deliberately with **no `save_dir`**
+so it could not return a cache hit and measure nothing:
+
+| ranks | wall |
+|---|---|
+| 8 | 3110.7 s |
+| 24 | 3055.2 s |
+
+**3× the cores, 1.8% difference.** meep solves the MPB eigenproblem
+redundantly on every rank; N−1 of N cores duplicate work rather than
+contribute.
+
+## What follows
+
+- **Full-device FDTD: add ranks.** 96 ranks measured 1.95× over 48 at 98%
+  efficiency on the 4×4 (job 12217184). 192 across scattered racks never
+  reached time-stepping in 30 min (12217185) — 96 is the sweet spot.
+- **Calibration: do NOT add ranks.** The 16-task array used 24 ranks/task
+  (384 cores) and could never have exceeded ~1.67× regardless. At 8
+  ranks/task, mode 8 would run ~1.7× slower in wall time but consume
+  ~1.8× fewer core-seconds (33.4k → 18.9k). Given how often this account
+  hits `AssocGrpBillingMinutes`, that trade is usually worth taking.
+- **Optimize calibration by reducing MPB work, not by adding cores** —
+  which is exactly what the two fixes that worked did
+  (`measure_diagonal_only` ~4×, `seed_anchors=3` ~10× on the seed step).
+
+## A load-bearing comment that is wrong when uncached
+
+`mmi_4x4_90hybrid_calibration_mode_worker.py` calls `section_mode_neff()`
+"unpatched -- cheap and already cache-safe" / "cheap/cached, not the
+stalling part". Uncached it took **51 minutes** here. The claim is true
+only *because* it is normally a cache hit; it is not cheap in itself, and
+nothing in that comment says so.

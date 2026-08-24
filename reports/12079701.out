@@ -1,0 +1,72 @@
+---------------------------------------
+Begin Slurm Prolog: Aug-21-2026 10:10:24
+Job ID:    12079701
+User ID:   jhiesener3
+Account:   gts-sr108-gedc_main
+Job name:  beef_test_step2_geometry
+Partition: cpu-small
+QOS:       inferno
+---------------------------------------
+=== TestMMIBodyTaper only ===
+============================= test session starts ==============================
+platform linux -- Python 3.13.14, pytest-9.1.1, pluggy-1.6.0 -- /storage/home/hcoda1/8/jhiesener3/.conda/envs/jmh/bin/python
+cachedir: .pytest_cache
+rootdir: /storage/scratch1/8/jhiesener3/duty/BEEF
+configfile: pyproject.toml
+plugins: jaxtyping-0.3.11, anyio-4.13.0
+collecting ... collected 91 items / 68 deselected / 23 selected
+
+tests/test_geometry.py::TestMMIBodyTaper::test_default_is_not_body_tapered PASSED [  4%]
+tests/test_geometry.py::TestMMIBodyTaper::test_default_body_end_width_is_mm_width PASSED [  8%]
+tests/test_geometry.py::TestMMIBodyTaper::test_default_body_start_width_is_mm_width PASSED [ 13%]
+tests/test_geometry.py::TestMMIBodyTaper::test_zero_length_taper_is_not_body_tapered_even_with_end_width_set PASSED [ 17%]
+tests/test_geometry.py::TestMMIBodyTaper::test_both_faces_at_mm_width_is_not_body_tapered PASSED [ 21%]
+tests/test_geometry.py::TestMMIBodyTaper::test_untapered_body_polys_is_single_rectangle PASSED [ 26%]
+tests/test_geometry.py::TestMMIBodyTaper::test_untapered_polygons_unchanged_by_new_kwargs PASSED [ 30%]
+tests/test_geometry.py::TestMMIBodyTaper::test_negative_body_taper_length_raises PASSED [ 34%]
+tests/test_geometry.py::TestMMIBodyTaper::test_oversized_body_taper_length_raises PASSED [ 39%]
+tests/test_geometry.py::TestMMIBodyTaper::test_nonpositive_body_end_width_raises PASSED [ 43%]
+tests/test_geometry.py::TestMMIBodyTaper::test_is_body_tapered_true PASSED [ 47%]
+tests/test_geometry.py::TestMMIBodyTaper::test_width_at_body_faces_is_end_width PASSED [ 52%]
+tests/test_geometry.py::TestMMIBodyTaper::test_width_at_uniform_middle_is_mm_width PASSED [ 56%]
+tests/test_geometry.py::TestMMIBodyTaper::test_width_at_taper_band_midpoint_is_linear_average PASSED [ 60%]
+tests/test_geometry.py::TestMMIBodyTaper::test_center_at_unaffected_by_body_taper PASSED [ 65%]
+tests/test_geometry.py::TestMMIBodyTaper::test_body_polys_is_three_trapezoids PASSED [ 69%]
+tests/test_geometry.py::TestMMIBodyTaper::test_polygons_has_two_extra_trapezoids_vs_untapered PASSED [ 73%]
+tests/test_geometry.py::TestMMIBodyTaper::test_section_gds_cut_inside_body_taper_band_raises PASSED [ 78%]
+tests/test_geometry.py::TestMMIBodyTaper::test_section_gds_cut_at_body_taper_band_boundary_ok PASSED [ 82%]
+tests/test_geometry.py::TestMMIBodyTaper::test_asymmetric_faces_are_independent PASSED [ 86%]
+tests/test_geometry.py::TestMMIBodyTaper::test_asymmetric_ramps_only_on_the_varying_side PASSED [ 91%]
+tests/test_geometry.py::TestMMIBodyTaper::test_a_face_at_mm_width_does_not_block_cuts PASSED [ 95%]
+tests/test_geometry.py::TestMMIBodyTaper::test_the_real_1x4_asymmetric_profile PASSED [100%]
+
+====================== 23 passed, 68 deselected in 6.82s =======================
+=== exit: 0 ===
+=== full fast suite (regression) ===
+........................................................................ [  9%]
+........................................................................ [ 18%]
+........................................................................ [ 28%]
+........................................................................ [ 37%]
+........................................................................ [ 47%]
+........................................................................ [ 56%]
+........................................................................ [ 66%]
+........................................................................ [ 75%]
+........................................................................ [ 84%]
+........................................................................ [ 94%]
+...........................................                              [100%]
+763 passed, 21 deselected in 34.52s
+
+Elapsed run time = 27.9400 s
+=== exit: 0 ===
+---------------------------------------
+Begin Slurm Epilog: Aug-21-2026 10:11:17
+Job ID:        12079701
+User ID:       jhiesener3
+Account:       gts-sr108-gedc_main
+Job name:      beef_test_step2_geometry
+Resources:     cpu=8,mem=64G,node=1
+Rsrc Used:     cput=00:07:04,vmem=0,walltime=00:00:53,mem=1168124K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-006-21-2
+---------------------------------------

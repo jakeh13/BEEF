@@ -15,7 +15,21 @@ goes through `HybridSolver._solve_sections()` at all -- HybridSolver is
 only ever instantiated for the geometry plot -- so this calibration path
 has structurally never been reached here, at any point (confirmed by grep:
 zero hits for "calibrate_body_neff"/"CALIBRATE" across every 4x4-hybrid
-script). Given this device's headline failure IS phase error (Δφ_j), the
+script).
+
+Still true as of 2026-08-24, though the REASON narrowed. `beef.MirrorSpec`
+(landed that day) lets a mirror-reused matrix be expressed through the
+supported API, so "HybridSolver can't express this" is no longer right as a
+blanket statement. Checked against this device specifically: the ±1
+restriction is not what blocks it -- MirrorSpec requires strictly ±1
+mode_signs, and this device's mirror relations measured R≈1.0000 with ≤0.15
+deg deviation from an exact 0/180 sign (2026-08-13, circular statistics,
+16/16 modes, both pairs), because the 90-degree relationship is between
+output ports for a given input, not between mirror-partner input
+excitations. What blocks it is the N-PORT shape: `HybridSolver.solve()`
+returns one SMatrix under one `port` label, while this device needs eight
+port pairs (2 driven inputs x 4 outputs). So the hand-rolled cascade stays,
+and with it this script's hand-rolled calibration. Given this device's headline failure IS phase error (Δφ_j), the
 exact quantity most directly driven by Δβ over the body length, this is a
 real, previously-unexamined candidate explanation -- possibly a modeling
 artifact, not (only) a real device limitation.
@@ -84,12 +98,26 @@ def make_solvers():
     )
     from beef import FDTDSolver, EMESolver
     input_solver = FDTDSolver(**fdtd_common)
+    # SEPARATE solver, decay_method="energy" -- validation doc 2026-08-18:
+    # stop_when_dft_decayed() (input_solver's default) stalls indefinitely
+    # on this body cross-section's mode 1 at production res=40 (past
+    # 660,000+ timesteps, never converging -- confirmed not a mode-identity
+    # issue, see the doc's own mode-1 investigation). stop_when_energy_
+    # decayed() converges normally (t=140.1) at the identical settings.
+    # MUST be a separate instance from input_solver: decay_method is now
+    # part of the cache fingerprint (beef/cache/config.py, added the same
+    # day) specifically so an "energy" run never silently reuses/pollutes
+    # a "dft" cache entry -- setting it on input_solver directly would also
+    # change the fingerprint for the already-cached (job 11778128) baseline
+    # input-matrix fetches below, turning free cache hits into wasted
+    # re-solves, the exact bug job 11938100/11981048 already hit once.
+    calibration_solver = FDTDSolver(**{**fdtd_common, "decay_method": "energy", "energy_decay_dt": 20.0})
     body_solver = EMESolver(
         num_modes=[base.N_MODES], num_cells=[1], lengths=[1.0],
         oxide_width=fdtd_common["sim_width"], oxide_height=fdtd_common["sim_height"],
         res=RESOLUTION, material_stack=base.SOI_220, mode_solver="meep",
     )
-    return input_solver, body_solver
+    return input_solver, calibration_solver, body_solver
 
 
 def metrics_for(M_in, M_body_one, wavelengths):
@@ -128,7 +156,7 @@ def metrics_for(M_in, M_body_one, wavelengths):
 
 
 def main():
-    input_solver, body_solver = make_solvers()
+    input_solver, calibration_solver, body_solver = make_solvers()
     mmi = base.make_mmi(base.BASELINE_OFFSET)
     boundaries, body_stub = base.boundaries_for(mmi)
 
@@ -146,12 +174,15 @@ def main():
         M_in = [base.solve_input(input_solver, mmi, boundaries, k, cache_only=False) for k in range(4)]
 
     # 2. Calibration: FDTD-measured beta for the BODY's own cross-section,
-    # via the input FDTD solver (same settings), following
-    # HybridSolver._calibrated_neff() exactly.
+    # via the DEDICATED calibration_solver (decay_method="energy" -- see
+    # make_solvers()'s own comment for why this must be a separate
+    # instance from input_solver), following HybridSolver._calibrated_neff()
+    # in every other respect.
     x0, x1 = boundaries[1], boundaries[2]
     print(f"  measuring FDTD-consistent beta for the body cross-section "
-          f"x=[{x0:.4f},{x1:.4f}] (N_MODES={base.N_MODES}) ...")
-    beta = input_solver.section_mode_beta(
+          f"x=[{x0:.4f},{x1:.4f}] (N_MODES={base.N_MODES}, "
+          f"decay_method={calibration_solver.decay_method!r}) ...")
+    beta = calibration_solver.section_mode_beta(
         mmi, wavelengths, x0, x1, base.N_MODES,
         lengths=None, save_dir=base.save_dir,
     )

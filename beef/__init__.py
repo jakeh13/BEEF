@@ -110,7 +110,7 @@ from .network import (
 )
 from .spectral import interp_complex, unwrap_is_safe
 from .results import SMatrix
-from .solvers import EMESolver, FDTDSolver, PortSpec, HybridSolver
+from .solvers import EMESolver, FDTDSolver, PortSpec, HybridSolver, MirrorSpec
 from .sweep import ParallelSweep
 from .plot import (
     plot_beta_calibration, plot_beta_calibration_fits,
@@ -146,7 +146,7 @@ __all__ = [
     # results
     "SMatrix",
     # solvers
-    "EMESolver", "FDTDSolver", "PortSpec", "HybridSolver",
+    "EMESolver", "FDTDSolver", "PortSpec", "HybridSolver", "MirrorSpec",
     # utilities
     "extrude_polygons", "atomic_replace_write",
     # sweep

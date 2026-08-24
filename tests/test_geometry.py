@@ -159,6 +159,186 @@ class TestMMI:
 
 
 # ---------------------------------------------------------------------------
+# MMI body taper (mmi_1x4_tapered_body_validation.md, Step 2)
+# ---------------------------------------------------------------------------
+
+
+class TestMMIBodyTaper:
+    def _mmi_1x2(self, **kw):
+        return MMI(n_inputs=1, n_outputs=2, mm_length=6.0, mm_width=2.5,
+                   waveguide_width=0.35, taper_length=1.0, taper_width=0.8,
+                   waveguide_offset=1.0, **kw)
+
+    # -- untapered limit: the default must reproduce the pre-taper device
+    # exactly, since every existing production body is uniform. --
+
+    def test_default_is_not_body_tapered(self):
+        assert not self._mmi_1x2().is_body_tapered
+
+    def test_default_body_end_width_is_mm_width(self):
+        assert self._mmi_1x2().body_end_width == pytest.approx(2.5)
+
+    def test_default_body_start_width_is_mm_width(self):
+        assert self._mmi_1x2().body_start_width == pytest.approx(2.5)
+
+    def test_zero_length_taper_is_not_body_tapered_even_with_end_width_set(self):
+        # body_taper_length=0.0 (the default) means "no taper band exists",
+        # regardless of body_end_width -- is_body_tapered requires both a
+        # positive length AND a genuinely different face width.
+        m = self._mmi_1x2(body_end_width=1.0)
+        assert not m.is_body_tapered
+        assert m.width_at(0.0) == pytest.approx(2.5)
+        assert m.width_at(-3.0) == pytest.approx(2.5)
+
+    def test_both_faces_at_mm_width_is_not_body_tapered(self):
+        # A positive length but neither face differing is still a STRAIGHT
+        # body -- the untapered fast path must stay reachable.
+        m = self._mmi_1x2(body_taper_length=1.0,
+                          body_start_width=2.5, body_end_width=2.5)
+        assert not m.is_body_tapered
+
+    def test_untapered_body_polys_is_single_rectangle(self):
+        m = self._mmi_1x2()
+        half = m.mm_length / 2
+        polys = m._body_polys(-half, half)
+        assert polys == [[(-half, -1.25), (half, -1.25), (half, 1.25), (-half, 1.25)]]
+
+    def test_untapered_polygons_unchanged_by_new_kwargs(self):
+        # byte-identical to a plain MMI() built with no body-taper kwargs
+        baseline = self._mmi_1x2().polygons()
+        m = self._mmi_1x2(body_taper_length=0.0, body_end_width=2.5)
+        assert m.polygons() == baseline
+
+    # -- validation --
+
+    def test_negative_body_taper_length_raises(self):
+        with pytest.raises(ValueError, match="body_taper_length must be >= 0"):
+            self._mmi_1x2(body_taper_length=-1.0)
+
+    def test_oversized_body_taper_length_raises(self):
+        # 2 x 3.5 > mm_length=6.0 -- the two bands would overlap
+        with pytest.raises(ValueError, match="exceeds mm_length"):
+            self._mmi_1x2(body_taper_length=3.5)
+
+    def test_nonpositive_body_end_width_raises(self):
+        with pytest.raises(ValueError, match="body_end_width must be > 0"):
+            self._mmi_1x2(body_taper_length=1.0, body_end_width=0.0)
+
+    # -- tapered profile --
+
+    def test_is_body_tapered_true(self):
+        m = self._mmi_1x2(body_taper_length=1.0, body_start_width=1.5, body_end_width=1.5)
+        assert m.is_body_tapered
+
+    def test_width_at_body_faces_is_end_width(self):
+        m = self._mmi_1x2(body_taper_length=1.0, body_start_width=1.5, body_end_width=1.5)
+        half = m.mm_length / 2
+        assert m.width_at(-half) == pytest.approx(1.5)
+        assert m.width_at(half) == pytest.approx(1.5)
+
+    def test_width_at_uniform_middle_is_mm_width(self):
+        m = self._mmi_1x2(body_taper_length=1.0, body_start_width=1.5, body_end_width=1.5)
+        half = m.mm_length / 2
+        # taper band is [-half, -half+1.0] and [half-1.0, half]; the middle
+        # is uniform at mm_width right up to the band boundary.
+        assert m.width_at(0.0) == pytest.approx(2.5)
+        assert m.width_at(-half + 1.0) == pytest.approx(2.5)
+        assert m.width_at(half - 1.0) == pytest.approx(2.5)
+
+    def test_width_at_taper_band_midpoint_is_linear_average(self):
+        m = self._mmi_1x2(body_taper_length=1.0, body_start_width=1.5, body_end_width=1.5)
+        half = m.mm_length / 2
+        mid = -half + 0.5
+        assert m.width_at(mid) == pytest.approx((1.5 + 2.5) / 2)
+
+    def test_center_at_unaffected_by_body_taper(self):
+        # the body taper only varies width -- centre stays on y=0 throughout,
+        # same as an untapered body.
+        m = self._mmi_1x2(body_taper_length=1.0, body_start_width=1.5, body_end_width=1.5)
+        half = m.mm_length / 2
+        for x in (-half, -half + 0.5, 0.0, half - 0.5, half):
+            assert m.center_at(x) == pytest.approx(0.0)
+
+    def test_body_polys_is_three_trapezoids(self):
+        m = self._mmi_1x2(body_taper_length=1.0, body_start_width=1.5, body_end_width=1.5)
+        half = m.mm_length / 2
+        polys = m._body_polys(-half, half)
+        assert len(polys) == 3
+
+    def test_polygons_has_two_extra_trapezoids_vs_untapered(self):
+        n_straight = len(self._mmi_1x2().polygons()[
+            next(iter(self._mmi_1x2().polygons()))])
+        m = self._mmi_1x2(body_taper_length=1.0, body_start_width=1.5, body_end_width=1.5)
+        layer = next(iter(m.polygons()))
+        assert len(m.polygons()[layer]) == n_straight + 2
+
+    # -- _check_cut must refuse a cut inside a body taper band --
+
+    def test_section_gds_cut_inside_body_taper_band_raises(self):
+        m = self._mmi_1x2(body_taper_length=1.0, body_start_width=1.5, body_end_width=1.5)
+        half = m.mm_length / 2
+        with pytest.raises(ValueError, match="falls strictly inside a BODY taper band"):
+            m.section_gds(-half, -half + 0.5, oxide_width=6.0)
+
+    def test_section_gds_cut_at_body_taper_band_boundary_ok(self):
+        m = self._mmi_1x2(body_taper_length=1.0, body_start_width=1.5, body_end_width=1.5)
+        half = m.mm_length / 2
+        d = m.section_gds(-half, -half + 1.0, oxide_width=6.0)
+        assert (2, 0) in d
+
+    # -- asymmetric profile (2026-08-21): the two faces are independent.
+    # The 1x4 needs this -- its output fan-out pins that face at mm_width
+    # while its single on-axis input port leaves 81.7% of room. --
+
+    def test_asymmetric_faces_are_independent(self):
+        m = self._mmi_1x2(body_taper_length=1.0,
+                          body_start_width=1.5)  # end face defaults to mm_width
+        half = m.mm_length / 2
+        assert m.is_body_tapered
+        assert m.width_at(-half) == pytest.approx(1.5)   # narrowed input face
+        assert m.width_at(half) == pytest.approx(2.5)    # output face at mm_width
+        assert m.width_at(0.0) == pytest.approx(2.5)
+
+    def test_asymmetric_ramps_only_on_the_varying_side(self):
+        m = self._mmi_1x2(body_taper_length=1.0, body_start_width=1.5)
+        half = m.mm_length / 2
+        # input band ramps 1.5 -> 2.5
+        assert m.width_at(-half + 0.5) == pytest.approx(2.0)
+        # output band is a plain rectangle at mm_width, no ramp
+        assert m.width_at(half - 0.5) == pytest.approx(2.5)
+
+    def test_a_face_at_mm_width_does_not_block_cuts(self):
+        """The output band is geometrically a rectangle when that face sits at
+        mm_width, so a cut inside it lands on a genuinely uniform
+        cross-section and must be ALLOWED -- refusing it would forbid a valid
+        section boundary, the opposite of the guard's purpose."""
+        m = self._mmi_1x2(body_taper_length=1.0, body_start_width=1.5)
+        half = m.mm_length / 2
+        d = m.section_gds(half - 0.5, half, oxide_width=6.0)
+        assert (2, 0) in d
+        # ...while the genuinely varying input band still refuses.
+        with pytest.raises(ValueError, match="falls strictly inside a BODY taper band"):
+            m.section_gds(-half, -half + 0.5, oxide_width=6.0)
+
+    def test_the_real_1x4_asymmetric_profile(self):
+        """The actual device this parameterisation was added for: narrow the
+        input face, leave the output face at mm_width for the fan-out.
+        Constants are the production 1x4's (mmi_1x4_hybrid.py)."""
+        m = MMI(n_inputs=1, n_outputs=4, mm_length=39.90, mm_width=12.0,
+                waveguide_width=1.1, taper_length=5.0, taper_width=2.2,
+                waveguide_offset=3.1, waveguide_height=0.30,
+                body_taper_length=8.0, body_start_width=6.0)
+        half = m.mm_length / 2
+        assert m.is_body_tapered
+        assert m.width_at(-half) == pytest.approx(6.0)
+        assert m.width_at(half) == pytest.approx(12.0)
+        # The output face must still clear the outermost output taper:
+        # |y|=4.65 + taper_width/2 = 5.75 -> needs >= 11.5 um.
+        needed = 2 * (max(abs(y) for y in m.output_ys) + 2.2 / 2)
+        assert m.width_at(half) >= needed
+
+
+# ---------------------------------------------------------------------------
 # DirectionalCoupler
 # ---------------------------------------------------------------------------
 

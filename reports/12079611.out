@@ -1,0 +1,68 @@
+---------------------------------------
+Begin Slurm Prolog: Aug-21-2026 09:58:44
+Job ID:    12079611
+User ID:   jhiesener3
+Account:   gts-sr108-gedc_main
+Job name:  beef_test_step3_eme_multicell
+Partition: cpu-small
+QOS:       inferno
+---------------------------------------
+=== step 3 tests, including --runslow real multi-cell solves ===
+============================= test session starts ==============================
+platform linux -- Python 3.13.14, pytest-9.1.1, pluggy-1.6.0 -- /storage/home/hcoda1/8/jhiesener3/.conda/envs/jmh/bin/python
+cachedir: .pytest_cache
+rootdir: /storage/scratch1/8/jhiesener3/duty/BEEF
+configfile: pyproject.toml
+plugins: jaxtyping-0.3.11, anyio-4.13.0
+collecting ... collected 4 items
+
+tests/test_eme_multicell_section.py::test_solve_section_rejects_multi_region_solver PASSED [ 25%]
+tests/test_eme_multicell_section.py::test_solve_section_does_not_read_num_modes PASSED [ 50%]
+tests/test_eme_multicell_section.py::test_multicell_matches_single_cell_on_a_uniform_span PASSED [ 75%]
+tests/test_eme_multicell_section.py::test_multicell_body_taper_changes_the_transfer_matrix PASSED [100%]
+
+============================== 4 passed in 21.35s ==============================
+=== exit: 0 ===
+=== cache-config allowlist tests (num_modes NOT read, num_cells IS) ===
+============================= test session starts ==============================
+platform linux -- Python 3.13.14, pytest-9.1.1, pluggy-1.6.0 -- /storage/home/hcoda1/8/jhiesener3/.conda/envs/jmh/bin/python
+cachedir: .pytest_cache
+rootdir: /storage/scratch1/8/jhiesener3/duty/BEEF
+configfile: pyproject.toml
+plugins: jaxtyping-0.3.11, anyio-4.13.0
+collecting ... collected 63 items / 60 deselected / 3 selected
+
+tests/test_cache_config.py::TestRealSolverAllowlists::test_eme_solve_section_still_ignores_num_modes PASSED [ 33%]
+tests/test_cache_config.py::TestRealSolverAllowlists::test_eme_solve_section_is_sensitive_to_num_cells PASSED [ 66%]
+tests/test_cache_config.py::TestRealSolverAllowlists::test_eme_solve_section_is_sensitive_to_oxide_width PASSED [100%]
+
+======================= 3 passed, 60 deselected in 1.18s =======================
+=== exit: 0 ===
+=== full fast suite (regression, includes the fixed test_cache_config.py case) ===
+........................................................................ [  9%]
+........................................................................ [ 19%]
+........................................................................ [ 28%]
+........................................................................ [ 38%]
+........................................................................ [ 47%]
+........................................................................ [ 57%]
+........................................................................ [ 66%]
+........................................................................ [ 76%]
+........................................................................ [ 85%]
+........................................................................ [ 95%]
+.....................................                                    [100%]
+757 passed, 21 deselected in 15.96s
+
+Elapsed run time = 12.2153 s
+=== exit: 0 ===
+---------------------------------------
+Begin Slurm Epilog: Aug-21-2026 09:59:35
+Job ID:        12079611
+User ID:       jhiesener3
+Account:       gts-sr108-gedc_main
+Job name:      beef_test_step3_eme_multicell
+Resources:     cpu=8,mem=64G,node=1
+Rsrc Used:     cput=00:06:48,vmem=0,walltime=00:00:51,mem=1177788K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-005-15-1
+---------------------------------------

@@ -32,9 +32,9 @@ body can be propagated correctly through a hybrid cascade at all.**
 | Nitride material model, `SIN_300`, cross-section design | ✅ inherited from `mmi_1x4_sin300_validation.md` steps 1–5 |
 | 1×4 port plumbing (N-ary monitors, port lists) | ✅ already supported |
 | A *uniform*-body MMI in a hybrid cascade | ✅ already supported — the straight 1×4 and the 2×2 both do it |
-| A **tapered-width body** in the `MMI` geometry | ❌ **does not exist** — `MMI`'s body is a single constant `mm_width` (`geometry/mmi.py:_section_polygons`, `_rect(max(lo, in1), min(hi, out0), W / 2)` with `W = self.mm_width`) |
-| **Multi-cell EME inside a cascade section** | ❌ **does not exist** — `solve_section()` builds one cell, both branches |
-| `calibrate_body_neff` semantics for a non-uniform body | ❌ **undefined**, and currently unguarded |
+| A **tapered-width body** in the `MMI` geometry | ✅ **done 2026-08-20** — `body_taper_length`/`body_end_width` on `MMI`; `width_at`/`_body_polys`/`_check_cut` all updated, untapered limit byte-identical to the pre-2026-08-20 straight body |
+| **Multi-cell EME inside a cascade section** | ✅ **done 2026-08-20** — `solve_section()`'s real-solve branch now builds `self.num_cells[0]` cells via the existing `_flat_cell_lengths()`/region-list machinery; per-cell mode count and the `neff_override` diagonal path (step 1) both unchanged |
+| `calibrate_body_neff` semantics for a non-uniform body | ✅ **decided 2026-08-21** — option (a) **refuse**, recorded in step 4 and pinned by a test on the real `MMI(body_taper_length=...)`; per-cell (b) / middle-only (c) deliberately deferred. Cost: this device's body carries the ~2.3%/mode MPB gap uncorrected |
 
 Ordered work: **guard the silent-wrong-answer path (step 1) → tapered-body
 geometry (step 2) → real multi-cell `solve_section` (step 3) → decide calibration
@@ -43,6 +43,14 @@ its four checks (steps 6–7).**
 
 Step 1 is small and lands first on purpose: until it does, anyone pointing a
 calibrated hybrid at a tapered body gets a plausible wrong answer with no warning.
+
+> **Progress, 2026-08-21.** Steps **1–4 are done** — the library can now build
+> and propagate a tapered body, and refuses to mis-calibrate one. Everything
+> remaining is device-and-measurement work, not library work: **step 5**
+> (convergence: cell count, per-cell `num_modes`, untapered limit), **step 6**
+> (the two device scripts + `Makefile` target), **step 7** (the four checks).
+> The *Length payoff* section below is still **ARGUED** and is what step 6
+> finally measures.
 
 ---
 
@@ -87,7 +95,7 @@ lacks `section_mode_beta()` — i.e. every EME body — with no cross-section te
 
 ---
 
-## Step 1 — Refuse a non-uniform span instead of silently diagonalising it
+## Step 1 — Refuse a non-uniform span instead of silently diagonalising it ✅ **DONE 2026-08-20**
 
 **Smallest change that removes a wrong-answer path.** Reuse the existing checker
 rather than writing a second one: `_validate_uniform_sweep_section`
@@ -118,9 +126,60 @@ offending x named, and the straight 1×4 / 2×2 / coupler all still pass
 `pytest tests/ -m "not slow"` bit-identically (their bodies are uniform, so the
 guard must be inert for them — a cache-hit run is the cheap evidence).
 
+### What landed
+
+Plan followed as recommended — shared helper first, then **both** placements.
+Every source claim in *Why this does not work today* was re-verified against the
+freshly-pulled tree before building on it, and all held exactly (both
+`solve_section` branches really do build `Ls=[length]`; the fast-path gate really
+is `if neff_override is not None`, not a uniformity test).
+
+- **`assert_uniform_cross_section()`** — new shared helper in
+  `beef/geometry/base.py`, the single implementation. Takes `what`/`why` clauses
+  so each caller states its own requirement while the sampling logic stays in one
+  place. Kept the module **stdlib-only** (plain arithmetic instead of
+  `np.linspace`) rather than adding a numpy import to a geometry predicate.
+- **`HybridSolver._validate_uniform_sweep_section`** — refactored to a thin
+  wrapper. Same test, same message, no behaviour change.
+- **(a) `HybridSolver._calibrated_neff`** — guards before calibrating, naming the
+  section (`"Section 2/3 (calibrate_body_neff=True)"`).
+- **(b) `EMESolver.solve_section`**, `neff_override` branch — the real guard,
+  catching direct callers `HybridSolver` cannot see. Checks
+  `[x0 - stub_left, x1 + stub_right]`, not `[x0, x1]`: `length` includes both
+  stubs, so both must be uniform too.
+
+**Evidence.** Full fast suite **674 passed, 0 failed** (job 12066434). Guard
+inertness was additionally confirmed by sampling the **real** production
+geometries directly — 1×4 (both the 39.90/3.1 and old 206/2.4 geometries), 2×2,
+1×2, and the directional coupler all pass over their actual EME body spans —
+and by confirming it *fires* on a span crossing the 1×4's input taper band and
+on the coupler's own S-bend.
+
+New tests: `TestCalibrationRefusesANonUniformBody` — parametrized over a
+width-varying body **and** a constant-width/walking-centre (S-bend-shaped) body,
+plus an inertness case. The second parametrization earns its place: a
+width-only check would wrongly pass it, which is exactly why the helper tests
+`center_at` as well as `width_at`.
+
+> ⚠ **One deviation, and the reasoning, since it is the kind of choice that
+> looks settled and is not.** The first run came back **5 failed** — all in
+> `tests/test_beta_calibration.py`, all passing `geometry=None` and so hitting
+> `AttributeError` inside the new guard. (Same failure shape
+> `resolved/section_mode_beta_multi_monitor_validation.md` step 7 already
+> recorded for that same file.) There were two candidate fixes: soften the guard
+> to skip when a geometry lacks `width_at`/`center_at` — there is precedent, as
+> `check_mode_correspondence` is explicitly documented as best-effort — or fix
+> the tests. **Chose the tests.** `DeviceGeometry.width_at()`'s own
+> `NotImplementedError` says it is *"required for use with HybridSolver"*, so
+> only stubs and `None` can lack it, never a real geometry; and a silent-skip
+> path inside a guard whose entire purpose is to prevent a silent wrong answer
+> would be self-defeating. Added a `UniformStubGeometry` and used it **only** in
+> the two call sites that reach this path, leaving the other four `geometry=None`
+> uses untouched so no passing test was disturbed.
+
 ---
 
-## Step 2 — Tapered-body geometry
+## Step 2 — Tapered-body geometry ✅ **DONE 2026-08-20**
 
 **Design decision to make first.** Three routes:
 
@@ -155,9 +214,66 @@ device correctly, and the untapered limit (body taper length → 0) reproduces t
 straight `MMI` polygons exactly. Geometry-only, so it belongs in
 `tests/test_geometry.py` (67 tests, imports neither meep nor meow).
 
+### What landed
+
+Route 1 as recommended — `MMI` extended in place, nothing new duplicated.
+
+- **`MMI.__init__`** — two new keyword args, `body_taper_length: float = 0.0` and
+  `body_end_width: Optional[float] = None` (defaults to `mm_width`, so an
+  unspecified end width is a no-op, not an error). Validated: negative length
+  rejected; `2 * body_taper_length > mm_length` rejected (the two bands would
+  overlap, leaving no uniform middle — message names both numbers and the max
+  allowed value); non-positive end width rejected.
+- **`is_body_tapered`** — `True` only when *both* `body_taper_length > 0` and
+  `body_end_width != mm_width`; a zero-length taper with a end-width set is still
+  untapered by construction (there is no band for it to apply over), so the
+  untapered fast path stays reachable from either default.
+- **`_body_taper_bounds()`/`body_width_at()`/`_body_polys()`** — the single shared
+  implementation, called from both `polygons()` (whole device) and
+  `_section_polygons()` (a cascade section), same reasoning as
+  `assert_uniform_cross_section()` in step 1: one place that can disagree with
+  itself is one place, not two. `_body_polys` returns the untapered case as
+  **one** rectangle, byte-identical to the pre-2026-08-20 code path, and the
+  tapered case as three trapezoids (taper-in, uniform middle, taper-out) — all
+  three all-or-nothing per `_check_cut`, matching the port-taper convention.
+- **`width_at`** — the body branch (`-half <= x <= half`) now calls
+  `body_width_at(x)` instead of returning `mm_width` unconditionally.
+- **`center_at`** — confirmed to need **no change**: the body taper is
+  width-only and symmetric about y=0, so its existing unconditional `return 0.0`
+  inside the body span already covers it. Checked explicitly rather than assumed,
+  since step 1's own `TestCalibrationRefusesANonUniformBody` precedent is exactly
+  that a width-only check can miss a centre-only problem — here it's the
+  reverse (a width-only *change* with no centre effect), confirmed by direct
+  sampling, not by symmetry argument alone.
+- **`_check_cut`** — new block rejecting a cut strictly inside either body taper
+  band, same message shape as the existing port-taper-band rejection, naming
+  both band bounds.
+- Two now-dead `W = self.mm_width` locals removed (`polygons()`, then found and
+  removed a second one in `_section_polygons()` on the same pass) once both
+  methods' body-drawing lines were replaced by the shared `_body_polys()` call —
+  caught by grepping `\bW\b` after each edit rather than assuming the first
+  removal was the only one.
+
+**Evidence.** New `TestMMIBodyTaper` class in `tests/test_geometry.py`, 17 tests:
+untapered-limit regression (`polygons()` byte-identical to a plain `MMI()` with
+no body-taper kwargs), validation errors, tapered profile correctness (band
+endpoints, uniform-middle interior, linear-ramp midpoint), `center_at`
+invariance, `_body_polys` trapezoid count, and `_check_cut` firing inside a body
+taper band while still passing at its boundary. **17 passed**, and the full fast
+suite regressed clean at **725 passed, 0 failed** (job 12066598) — same
+zero-failure bar as step 1, now against a tree that also carries some tests
+added by other concurrent work on this shared repo (674 → 725 baseline shift is
+not this step's tests alone; the 17 new ones are a strict subset).
+`plot_hybrid_geometry()` was confirmed by direct render (`to_gds_eme()` →
+`polygons()` → `_body_polys()` is the same call chain the plot function already
+used, so no plot-code change was needed) — a 1×4 with `body_taper_length=6.0`,
+`body_end_width=8.0` against `mm_width=12.0` draws the expected shape: narrow at
+the port-taper interface, widening to the full body width over 6 µm, holding
+uniform, then symmetrically narrowing before the output fan-out.
+
 ---
 
-## Step 3 — Real multi-cell EME inside a cascade section
+## Step 3 — Real multi-cell EME inside a cascade section ✅ **DONE 2026-08-20**
 
 The substantive library change. `solve_section` must be able to subdivide
 `[x0, x1]` into cells, solve modes per cell, and let
@@ -196,9 +312,156 @@ section); and the duplicate-mode guards still run — `compute_modes()`'s
 `guard_duplicate_modes` per cell, plus `warn_on_transfer_duplicate` on the
 assembled `T` (`eme.py:583-592`).
 
+### Recommendation (resolving the three points above)
+
+> **Superseded in part — read the ⚠ correction at the end of *What landed*
+> before acting on this paragraph.** Its conclusion for `num_cells` holds; its
+> conclusion for `num_modes` was wrong, and the grep it rests on is the reason
+> why.
+
+**Cell count and per-cell mode count: reuse `num_modes`/`num_cells` exactly as
+constructed today, not a new argument.** Every existing `*_hybrid.py` script
+already builds its body `EMESolver` with single-element lists —
+`num_modes=[N_MODES], num_cells=[1], lengths=[1.0]` — and the `num_modes=[N_MODES]`
+value already, if accidentally, equals both `n_modes_in` and `n_modes_out` at
+every call site (checked by grep across every `*_hybrid.py`/`*_hybrid_*.py`
+device script and every test that calls `.solve_section()` — none passes a
+multi-region list there; the multi-region examples, e.g.
+`mmi_4x4_90hybrid_eme.py`'s `num_modes=[1, N_MODES_TAPER, N_MODES_BODY,
+N_MODES_TAPER, 1]`, only ever feed the whole-device `solve()`/`solve_length_sweep()`
+methods, never `solve_section()`). So `solve_section()` can validate
+`len(self.num_modes) == len(self.num_cells) == 1` (a HybridSolver cascade
+already carries one dedicated `EMESolver` per section — a multi-region instance
+reaching this path is a caller error, not a case to silently half-honor) and
+then read `self.num_cells[0]` as this section's cell count and
+`self.num_modes[0]` as every cell's mode count, via the exact
+`_flat_cell_lengths()`/`_modes_per_cell()` helpers the whole-device path already
+uses — **zero new arguments, zero new duplicated region→cell logic**, and
+`num_cells[0]=1` (today's value everywhere) reproduces today's single cell
+exactly, `Ls=[length]` included (stubs folded into the one length, unchanged).
+A caller that wants the body to carry more internal resolution than its
+FDTD-facing interfaces expose (e.g. `num_modes=[20]` internally against
+`n_modes_in=n_modes_out=12`) gets it for free via the same over-request-then-slice
+`port_map` read-out `solve_section()` already does — validated by requiring
+`self.num_modes[0] >= max(n_modes_in, n_modes_out)`.
+
+**Port-map mechanics need no new code.** Read meow's own netlist assembly
+(`meow/eme/cascade.py:_get_netlist`, in the `meow_MEEP` checkout this repo's
+editable install points at): external ports are built *only* from the first
+cell's `left@i` faces and the last cell's `right@i` faces — every interior
+cell-to-cell interface is wired internally and never exposed. So
+`solve_section()`'s existing `port_map[f"right@{i}"]`/`port_map[f"left@{j}"]`
+read-out loop is already correct for N cells, not just one; the only things
+that actually change are the `cells`/`modes` lists fed into
+`mw.compute_s_matrix()`.
+
+**Cache fingerprint.** `num_modes`/`num_cells` move from unread (today) to read
+by `solve_section()`'s real-solve branch, so both must join
+`_METHOD_ATTRS[("EMESolver", "solve_section")]`. Every existing cache entry
+predates these keys entirely and so will not match post-change — a full,
+one-time miss-and-resimulate for that method, same acceptable cost this file
+already accepts for a tracked-field addition (`cache/config.py`'s own
+`minimum_run_time` precedent), not a silent false-positive risk.
+`solve_section_length_sweep()` is untouched — it stays single-cell/diagonal by
+construction (this step doesn't reach it) — so its allowlist entry does not
+change.
+
+### What landed
+
+Implemented exactly as recommended above — no design deviation this time.
+
+- **`EMESolver.solve_section()`**, real-solve (`neff_override is None`) branch:
+  validates `len(self.num_cells) == 1` (raises otherwise), then builds
+  `cell_lengths = self._flat_cell_lengths(region_lengths=[length])` and
+  `modes_per_cell = [n_modes] * len(cell_lengths)` — reusing the existing
+  helper exactly, not a parallel copy — and calls `mw.compute_s_matrix()` over
+  the full per-cell `cells`/`modes` lists. The `port_map` read-out loop
+  (`right@i`/`left@j`) is untouched: confirmed against meow's own
+  `_get_netlist()` (`meow_MEEP/src/meow/eme/cascade.py`, the editable-install
+  checkout this repo's `meow` points at) that external ports come only from
+  the first/last cell's faces regardless of cell count, so the existing
+  lookup was already correct for N cells. `num_cells[0]=1` (every existing
+  device script's value, unchanged) reproduces the old `Ls=[length]` call
+  exactly. The `neff_override` branch (diagonal fast path, guarded by step
+  1) is untouched.
+- **`beef/cache/config.py`** — `num_cells` added to
+  `_METHOD_ATTRS[("EMESolver", "solve_section")]`. `num_modes` deliberately
+  **not** added (see the correction below).
+  `solve_section_length_sweep()`'s entry is unchanged.
+
+> ⚠ **Correction, made 2026-08-21 before step 5 — the recommendation above was
+> wrong on one point, and only checking the real callers caught it.** The plan
+> said to read *both* `num_modes[0]` (per-cell mode count) and `num_cells[0]`,
+> justified by "every call site already has `num_modes[0]` equal to both
+> interface counts" — which was verified by grepping the `EMESolver(...)`
+> constructor lines, and **that grep was the wrong check**. It confirmed the
+> two numbers match where a script defines them *together*, but not that they
+> match at every *call*. `modal_multiplexer_hybrid.py` fills **three** EME
+> slots with **one** `body_solver(num_modes=[15])`, and one of those slots is a
+> connector section whose interfaces carry `CONN_MODES=6`. Reading
+> `num_modes[0]` there silently solves **15 modes where 6 were solved before**:
+> a behaviour change (the top-6 slice of a 15-mode solve is not guaranteed
+> identical to a direct 6-mode solve — the same caveat `solve_section()`'s own
+> superset-cache comment already records) *and* a cost increase, on a device
+> nobody was touching. The script even says so in its own comment: *"solve_section()
+> takes n_modes from interface_modes above, not from body_solver's own
+> constructor num_modes, so no new EMESolver is needed for the connector
+> section."*
+>
+> **Fixed by reading only `num_cells`.** The per-cell mode count stays
+> `max(n_modes_in, n_modes_out)`, exactly as before this step. Step 3's actual
+> goal — a real multi-cell body — is unaffected, since that is what `num_cells`
+> delivers; `num_modes` was never needed for it. A caller wanting a richer
+> internal body basis than its interfaces expose should raise
+> `n_modes_in`/`n_modes_out`, which it controls directly. This also removes the
+> `num_modes[0] >= max(...)` validation (nothing to validate now) and keeps
+> `num_modes` out of the cache key, so existing entries are not stranded on an
+> attribute the method does not read. Pinned by
+> `test_solve_section_does_not_read_num_modes` (two solvers differing only in
+> `num_modes` must return a bit-identical `T`, `atol=0`) and by
+> `test_cache_config.py::...::test_eme_solve_section_still_ignores_num_modes`.
+>
+> The lesson worth keeping: *"every call site already does X"* is a claim about
+> **calls**, and a grep over **constructors** cannot establish it — one shared
+> instance reused across several sections breaks the correspondence silently.
+
+**Evidence.** New `tests/test_eme_multicell_section.py`, real meow (`--runslow`):
+- `test_multicell_matches_single_cell_on_a_uniform_span` — **the untapered-limit
+  regression this step's own "done when" requires.** `num_cells=[1]` vs
+  `num_cells=[3]` over the *same* uniform span agree to `atol=5e-3` on `|T|`:
+  measured cross-solve noise between independent eigensolves of an identical
+  cross-section, not a body-taper effect (this span has none). **Passed.**
+- `test_multicell_body_taper_changes_the_transfer_matrix` — the same
+  multi-cell machinery, tapered body vs. straight body (step 2's
+  `body_taper_length=1.0, body_end_width=1.5` vs. the default). Measured:
+  `|T|` diagonal is exactly 1.0 for the straight body (a uniform body is
+  lossless per mode, as expected) vs. **0.9802/0.9884 for the tapered one** —
+  a real, mode-dependent ~1–2% amplitude effect an order of magnitude past the
+  ~5e-3 noise floor the previous test establishes, i.e. the taper genuinely
+  reaches the eigensolve rather than every cell silently sampling the same
+  cross-section. **First deviation, caught and fixed by the numbers, not
+  argued around them:** the test's original `atol=0.02` sat right at the
+  0.0198 measured difference (a guess made before running, not derived from
+  it) and so returned a false "indistinguishable" failure on the first run
+  (job 12069743); tightened to `atol=5e-3` — between the noise floor and the
+  measured effect — against the real numbers, then re-run clean (job
+  12069809).
+- Two fast (no real eigensolve reached) validation tests for the new guards.
+- **Regression caught in the existing suite, not just added tests:**
+  `test_cache_config.py::TestRealSolverAllowlists::test_eme_solve_section_ignores_num_modes_and_num_cells`
+  encoded the pre-step-3 invariant this step deliberately reverses. Renamed to
+  `..._is_sensitive_to_num_modes_and_num_cells` and its assertion flipped
+  (`!=` in place of `==`), rather than left failing or the allowlist change
+  reverted — the test was asserting the *old*, now-intentionally-wrong
+  behaviour, the same category of update step 1 made to
+  `test_beta_calibration.py` for a guard's own new failure mode.
+- Full fast suite: **727 passed, 0 failed** (job 12069809) — up from step 2's
+  725 baseline by exactly the 2 new fast tests in this step's own file, net of
+  the fixed pre-existing one.
+
 ---
 
-## Step 4 — What `calibrate_body_neff` means for a multi-cell body
+## Step 4 — What `calibrate_body_neff` means for a multi-cell body ✅ **DECIDED 2026-08-21**
 
 **The crux, and the reason step 1 exists.** For a uniform single-cell body, one
 per-mode β fully determines `T` — that is the whole basis of the fast path. For a
@@ -228,6 +491,199 @@ exercises multi-cell EME with real mode fields, which is orthogonal.
 
 Whichever is chosen, record it explicitly: this is the kind of question that
 looks settled and is not.
+
+### Decision: **(a) refuse**, recorded explicitly
+
+**A tapered body gets no β calibration.** It propagates on the mode solver's own
+n_eff and inherits the ~2.3%/mode MPB-vs-time-stepper gap
+(`resolved/directional_coupler_validation.md` item 6). Options (b) per-cell and
+(c) middle-only are **deferred**, each needing its own measurement — see *What
+this costs* below for why deferring is defensible rather than merely convenient.
+
+No new library code: step 1's guard already implements exactly this, in both
+placements. What step 4 adds is the **decision, recorded**, plus the test that
+pins it to the real geometry.
+
+**What landed.** `TestCalibrationRefusesARealTaperedMMIBody` in
+`tests/test_beta_calibration.py`, two tests:
+
+- `test_it_refuses_a_real_tapered_mmi_body` — a real
+  `MMI(body_taper_length=4.0, body_end_width=8.0)`, body section spanning the
+  whole body with both taper bands included (exactly what the tapered 1×4's own
+  cascade will ask for), raises through `HybridSolver._calibrated_neff()`.
+- `test_it_still_calibrates_the_straight_mmi_body` — the untapered default
+  still calibrates and returns the right shape. This is the existing straight
+  1×4's own production path, and step 2's whole premise is that it is
+  undisturbed.
+
+**Why this test exists on top of step 1's.** Step 1's own guard tests
+(`TestCalibrationRefusesANonUniformBody`) predate step 2, so they could only use
+hand-written stub geometries (`TaperedStubGeometry`, `WalkingCentreStubGeometry`).
+Those prove the *guard* works; they cannot prove the guard can *see a real
+`MMI`'s taper*, because no such geometry existed when they were written. A
+future change to `MMI.width_at`/`body_width_at` that hid the taper from the
+guard would leave every stub test green while silently restoring the
+wrong-answer path. This closes that loop on the actual class the device will be
+built from. **5 passed** (3 stub + 2 real, job 12078941); full fast suite
+**746 passed, 0 failed**. Note the suite total moved 727 → 746 while this step
+added only 2 tests — the other +17 are another concurrent session's work on this
+shared tree, so the absolute count is not a per-step signal here; the
+zero-failure result is.
+
+**What this costs, stated plainly.** The tapered 1×4 is the one device in this
+repo whose body cannot be calibrated, so it is also the one whose EME body
+carries the MPB-vs-time-stepper gap uncorrected. That is a real accuracy
+concession, not a free choice — worth re-reading before comparing this device's
+absolute numbers against the straight 1×4's calibrated ones. It is defensible
+because the device's value in the manuscript is that it exercises multi-cell EME
+with real mode fields (step 3), which is orthogonal to calibration; and because
+(b) would multiply the already-dominant calibration cost by the cell count (89%
+MPB modal decomposition, `resolved/section_mode_beta_multi_monitor_validation.md`
+step 9) for an accuracy gain nobody has measured yet on this geometry. Revisit
+if step 5's convergence or step 7's check 1 shows the uncalibrated body is the
+binding error term.
+
+---
+
+## ⛔ Blocker found 2026-08-21, before step 5 — the symmetric taper has almost no room
+
+**MEASURED (pure geometry, no solver).** The 1×4's own output fan-out consumes
+essentially the entire body face, so a **symmetric** body taper — which is what
+`MMI.body_end_width` implements (step 2) — can narrow this device by at most
+**4.2%**:
+
+| face | ports there | required face width | headroom vs `mm_width=12.0` |
+|---|---|---|---|
+| **output** (`x=+L/2`) | 4 tapers at y = ±1.55, ±4.65, each `taper_width=2.2` wide | 2×(4.65 + 1.1) = **11.50 µm** | **0.50 µm total (4.2%)** |
+| **input** (`x=−L/2`) | 1 taper on axis, `taper_width=2.2` | **2.20 µm** | **9.80 µm (81.7%)** |
+
+The outermost output port sits at |y| = 4.65 and is 2.2 µm wide at the body
+face, so it reaches |y| = 5.75 against the body's own 6.0 half-width. **A
+symmetric taper is capped by the output face**, and 4.2% of width will not
+produce a length saving worth reporting — `L_π ∝ W²`, so 4.2% off the *faces
+only* (the uniform middle is unchanged) is a fraction of a percent of device
+length.
+
+The input face, by contrast, is 81.7% free.
+
+**This was not anticipated by step 2**, which added a single `body_end_width`
+applying to both faces without checking whether the port layout left room for
+it. The geometry code is correct; the *design* it enables is the constrained
+one. Verified against the real production constants
+(`MM_WIDTH=12.0`, `WAVEGUIDE_OFFSET=3.1`, `TAPER_WIDTH=2.2`) — and note
+`WAVEGUIDE_OFFSET=3.1` was itself only just optimised in
+`mmi_1x4_sin300_validation.md` step 9c, so moving the ports to free up room
+re-opens a settled question rather than being free.
+
+Options, none yet chosen — **this changes the device and the manuscript's
+footprint claim, so it is not mine to settle**:
+
+- **(a) Asymmetric taper** — narrow at the input face, full width at the
+  output face. Uses the 81.7% headroom that actually exists. Costs a step 2
+  revision: `body_end_width` splits into a start/end pair (the geometry
+  helpers `_body_taper_bounds`/`body_width_at`/`_body_polys` already handle
+  two independent bands, so this is a parameter change, not a rewrite).
+- **(b) Move the ports inward** to make room for a symmetric taper — re-opens
+  step 9c's optimised `WAVEGUIDE_OFFSET`.
+- **(c) Accept the 4.2% cap** and report the payoff as negligible. The doc's
+  own *Length payoff* section pre-authorises exactly this: *"If the saving is
+  not material, the device is still worth building — it is what makes the
+  manuscript's tapered-body claim real — but say so plainly rather than
+  overselling the footprint."*
+
+**Step 5's convergence sweeps are deliberately not started until this is
+settled** — cell-count and per-cell-mode convergence are properties *of a
+specific taper profile*, so running them against a profile that may be
+replaced would be measuring the wrong device.
+
+### Resolved 2026-08-21 — option (a), asymmetric taper
+
+**Chosen by the user: narrow the input face, leave the output face at
+`mm_width`.** Step 2's geometry was revised accordingly, same day.
+
+- `MMI.body_end_width` split into **`body_start_width`** (input face) and
+  **`body_end_width`** (output face), each defaulting to `None` → `mm_width`.
+  The two bands were already independent inside
+  `_body_taper_bounds()`/`body_width_at()`/`_body_polys()`, so this was a
+  parameter change, as predicted — no restructuring.
+- `is_body_tapered` now fires when **either** face differs from the middle
+  (previously it tested one shared value), so the asymmetric profile is
+  correctly recognised as tapered while both-faces-equal stays straight.
+- **`_check_cut` was the one non-obvious consequence.** With an asymmetric
+  profile the untapered side's band is geometrically a plain *rectangle*, so
+  the original guard would have refused cuts on a genuinely uniform
+  cross-section — forbidding valid section boundaries, the opposite of its
+  purpose. It now skips any band whose face width equals `mm_width`, and only
+  refuses bands where the width actually varies. Pinned by
+  `test_a_face_at_mm_width_does_not_block_cuts`, which asserts both halves:
+  the flat band allows a cut, the varying band still refuses.
+
+Verified on the real production constants — `body_taper_length=8.0,
+body_start_width=6.0` against `mm_width=12.0` gives 6.0 µm at the input face,
+ramping to 12.0 over 8 µm, then flat through the output face (which clears the
+11.5 µm the fan-out needs). Rendered and visually confirmed. New tests:
+`test_asymmetric_faces_are_independent`,
+`test_asymmetric_ramps_only_on_the_varying_side`,
+`test_a_face_at_mm_width_does_not_block_cuts`,
+`test_the_real_1x4_asymmetric_profile` (which re-derives the 11.5 µm fan-out
+requirement from `output_ys` rather than hardcoding it, so a future port-layout
+change fails the test instead of silently invalidating the profile), plus
+`test_both_faces_at_mm_width_is_not_body_tapered` and
+`test_default_body_start_width_is_mm_width`. The nine pre-existing symmetric
+cases were made *explicitly* symmetric (`body_start_width=` and
+`body_end_width=` both passed) rather than deleted — the symmetric profile is
+still supported and still worth covering.
+
+**Still to pick, in step 6:** the actual `body_taper_length` /
+`body_start_width` values. The 6.0/8.0 pair above is a **placeholder used for
+verification only**, not an optimised design — no sweep has been run.
+
+### EME field plots, both geometries ✅ **MEASURED 2026-08-21** (job 12121984)
+
+`examples/verification/python/plot_mmi1x4_straight_vs_tapered_eme_fields.py` —
+new, and it renders **both** geometries from one config so the only difference
+between the two runs is the body taper itself. Output under
+`example_output/mmi_1x4/mmi_1x4_straight_vs_tapered_eme/fields/`.
+
+**Why a new script.** The existing `plot_mmi1x4_eme_fields.py` (2026-08-07) is
+pinned to the **superseded** geometry — `MM_LENGTH=206.0`,
+`WAVEGUIDE_OFFSET=2.4`, `res=40`, all three replaced by step 9c (2026-08-14)
+and the res 40→30 change (2026-08-18) — and had **no saved output anywhere**,
+so there was no straight-body field plot of the *current* device to compare
+against either. Two separately-pinned scripts also could not guarantee that the
+only difference is the taper, which is the entire point of the comparison.
+
+**Result.** Both geometries reach clean 4-lobe self-imaging at the output, with
+the lobes landing on the real port positions (x ≈ ±1.55, ±4.65 — matching
+`output_ys`). The straight body steps to full 12.0 µm at the body face
+(z ≈ 5.5 µm); the tapered body flares gradually across its 8 µm taper band
+(z ≈ 5.5 → 13.5 µm) before reaching full width. This is the visual counterpart
+to step 3's numeric evidence that a tapered body genuinely propagates
+differently.
+
+**Cost, measured:** 559 s (straight) + 557 s (tapered) at res=30, 12 body
+modes, 24 body cells = 450 mode-solves per geometry. A smoke pass at res=15 /
+4 modes / 6 body cells ran both in **73 s** total and is what the real pass was
+scaled from — the script keeps the env-var overrides for it
+(`MMI1X4_FIELD_RES` etc.).
+
+> **Component naming — worth knowing before reading these plots.** The
+> filenames use **meow's** component names, not the device frame's. meow's
+> `Ex` is the device's transverse-horizontal field, i.e. the dominant TE
+> component: **measured |Ex| ≈ 34 vs |Ey| ≈ 0.63**, a factor of 54. So
+> `eme_Ex_*.png` is the propagating field; `eme_Ey_*.png` is the
+> sidewall-discontinuity component, which is not the field of interest but
+> *does* trace the body **outline** — a genuinely useful independent check
+> that the taper band sits where intended (the width step at z ≈ 12 µm is
+> plainly visible in it). The script's own closing message originally pointed
+> readers at `Ey`; corrected, with the measured magnitudes recorded in it.
+
+**Two caveats, since these images are manuscript-adjacent.** The taper profile
+is the placeholder above, *not* a designed device — step 6 picks the real
+values. And `BODY_CELLS=24` was chosen for a legible picture, **not** from a
+convergence study; step 5 is what establishes the converged count, and this
+script deliberately does not pre-empt it. Both geometries use the *same* cell
+count so the comparison isolates geometry rather than discretisation.
 
 ---
 

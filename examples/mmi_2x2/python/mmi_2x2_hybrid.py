@@ -37,10 +37,20 @@ uniform mm_width slab, so EMESolver.solve_section_length_sweep() solves its
 modes once per wavelength and applies each swept length as an analytic
 propagation phase.
 
-The cross path pairs M_in0's transpose with the M_in1 excitation in one
-cascade, which HybridSolver.solve_length_sweep()'s one-call contract can't
-express — this example hand-rolls the einsum cascade instead. See notes.md
-Solver recommendation #7 ("still open").
+Both savings are now DECLARED to HybridSolver rather than hand-rolled. The
+bar path is an ordinary `mirror_pairs={2: 0}`. The cross path — which pairs
+one arm's transposed matrix with the other arm's excitation, and which
+solve()'s one-call contract genuinely could not express — is a `MirrorSpec`
+carrying the parity vector:
+
+    mirror_pairs={2: MirrorSpec(section=0,
+                                partner_kwargs={"input_idx": 0},
+                                mode_signs=MODE_SIGNS)}
+
+so the whole two-excitation response still comes from ONE FDTD simulation,
+now through the supported API. Both declarations are re-validated
+geometrically on every call, which the hand-rolled einsum never was. See
+validation_markdown/resolved/multi_excitation_cascade_validation.md steps 2-4.
 
 Run:
     python /path/to/examples/mmi_2x2/python/mmi_2x2_hybrid.py
@@ -53,7 +63,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from beef import (
-    MMI, EMESolver, FDTDSolver, HybridSolver, SMatrix, SOI_220,
+    MMI, EMESolver, FDTDSolver, HybridSolver, MirrorSpec, SMatrix, SOI_220,
     plot_beta_calibration, plot_hybrid_geometry,
 )
 
@@ -169,8 +179,9 @@ def make_section_solver(method: str, half_domain_aperture: bool = False):
 # sections need the narrower half-domain aperture (unlike the 1×2, whose lone
 # input keeps the full sim_width). output_solver is never actually run — the
 # output section's transfer matrices are mirror-derived from the input
-# section's (see module docstring) — it exists only so the HybridSolver
-# below labels the section map correctly in the geometry plot.
+# section's (see module docstring). It is a real member of the declared chain
+# (it sets section 2's mode counts and labels the section map), it just never
+# reaches its solve_section(): mirror_pairs short-circuits it on every call.
 input_solver = make_section_solver(INPUT_METHOD, half_domain_aperture=True)
 body_solver = make_section_solver(BODY_METHOD)
 output_solver = make_section_solver(OUTPUT_METHOD, half_domain_aperture=True)
@@ -201,15 +212,50 @@ interface_modes = [N_MODES, N_MODES]
 mm_lengths = np.linspace(16.0, 40.0, 201)   # µm; nominal 28.0 lands exactly on index 100
 body_lengths = mm_lengths - 2 * body_stub   # EME body section's physical length
 
-# Used for the geometry/section-map plot only — step 5 composes the section
-# matrices manually (the cross path mixes two excitations' matrices in one
-# cascade, which HybridSolver's one-call contract can't express; see module
-# docstring).
-hybrid = HybridSolver(
-    solvers=[input_solver, body_solver, output_solver],
-    boundaries=boundaries,
-    interface_modes=interface_modes,
-)
+# One HybridSolver per excitation configuration. Each call has a single
+# excitation, which satisfies solve()'s one-call contract — so
+# calibrate_body_neff works here, where the hand-rolled cascade this replaces
+# could never use it (the flag only fires inside _solve_sections()).
+#
+# The two differ ONLY in how section 2 is declared:
+#
+#   bar   — section 2 measures the top output, the x-mirror of the top input
+#           that section 0 was excited on. An ordinary mirror pair.
+#   cross — section 2 measures the BOTTOM output. That is the x-mirror of the
+#           bottom INPUT, which section 0 was not excited on. MirrorSpec says
+#           so explicitly: reuse section 0, but reinterpreted as the other arm
+#           (partner_kwargs) via the measured parity vector (mode_signs).
+#
+# Both are re-validated against the geometry on every call. The cross
+# declaration is checked twice over: that section 2 is the x-mirror of
+# section 0 under partner_kwargs, AND that section 0's two arms really are
+# transverse mirror images — without the second check partner_kwargs would be
+# an unchecked way to pair any two unrelated branches.
+_shared = dict(solvers=[input_solver, body_solver, output_solver],
+               boundaries=boundaries,
+               interface_modes=interface_modes,
+               calibrate_body_neff=CALIBRATE_BODY)
+
+if SYMMETRIC_MODE_REUSE:
+    cross_mirror = {2: MirrorSpec(section=0,
+                                  partner_kwargs={"input_idx": 0},
+                                  mode_signs=MODE_SIGNS)}
+    cross_kwargs = {0: {"input_idx": 1}, 2: {"output_idx": 0}}
+else:
+    # Fall back to simulating the bottom arm for real: section 0 is excited
+    # on input_idx=0, and section 2 is then its plain x-mirror. This is the
+    # 2-FDTD-run configuration, and it is what re-derives MODE_SIGNS below.
+    cross_mirror = {2: 0}
+    cross_kwargs = {0: {"input_idx": 0}, 2: {"output_idx": 0}}
+
+hybrid_bar = HybridSolver(mirror_pairs={2: 0}, **_shared)
+hybrid_cross = HybridSolver(mirror_pairs=cross_mirror, **_shared)
+
+# Kept under the old name for the geometry plot below, which only reads
+# boundaries/solvers/mirror_pairs off it.
+hybrid = hybrid_bar
+
+bar_kwargs = {0: {"input_idx": 1}, 2: {"output_idx": 1}}
 
 # ---------------------------------------------------------------------------
 # 4. Geometry plot — shows which solver covers which section
@@ -246,41 +292,37 @@ print(f"\nHybrid sweep: {wavelengths[0]:.3f} – {wavelengths[-1]:.3f} µm "
       f"mm_length {mm_lengths[0]:.1f} – {mm_lengths[-1]:.1f} µm "
       f"({len(mm_lengths)} pts)\n")
 
-M_in1 = input_solver.solve_section(
-    mmi, wavelengths, boundaries[0], boundaries[1],
-    n_modes_in=1, n_modes_out=N_MODES,
-    stub_left=input_solver.waveguide_length, stub_right=0.0,
-    input_idx=1, save_dir=save_dir,
-)  # [n_wl, N_MODES, 1] — excited (top) arm -> body modes
+# ONE shared cache across both excitations. Section 0's geometry_kwargs are
+# identical between the bar and cross calls (both excite the top arm), so it
+# is simulated exactly once; the body likewise. Section 2 is never simulated
+# in either call — mirror_pairs short-circuits it. Total: 1 FDTD input solve
+# + 1 EME body solve, the same count the hand-rolled cascade achieved, now
+# with the symmetry arguments declared and geometrically checked instead of
+# implied by the shape of an einsum.
+#
+# calibrate_body_neff=True on both solvers propagates the body on the FDTD's
+# own measured beta (see EMESolver._override_neff / dc_validation.md item 6).
+# It is the same quantity the hand-rolled path computed by calling
+# section_mode_beta_details() itself, over the same span with the same
+# n_modes -- so this switch is an API change, not a physics one, and the
+# numbers must not move. See the validation doc's "The finding" section.
+section_cache = {}
 
-if SYMMETRIC_MODE_REUSE:
-    M_in0 = M_in1 * MODE_SIGNS[None, :, None]  # bottom arm, derived — no 2nd FDTD run
-else:
-    M_in0 = input_solver.solve_section(
-        mmi, wavelengths, boundaries[0], boundaries[1],
-        n_modes_in=1, n_modes_out=N_MODES,
-        stub_left=input_solver.waveguide_length, stub_right=0.0,
-        input_idx=0, save_dir=save_dir,
-    )  # [n_wl, N_MODES, 1] — bottom arm -> body modes
+coeffs_bar = hybrid_bar.solve_length_sweep(
+    mmi, wavelengths, body_lengths, sweep_section=1,
+    geometry_kwargs=bar_kwargs, cache=section_cache, save_dir=save_dir,
+)    # [n_L, n_wl, 1, 1]
+coeffs_cross = hybrid_cross.solve_length_sweep(
+    mmi, wavelengths, body_lengths, sweep_section=1,
+    geometry_kwargs=cross_kwargs, cache=section_cache, save_dir=save_dir,
+)    # [n_L, n_wl, 1, 1]
 
-M_out_bar = M_in1.transpose(0, 2, 1)    # [n_wl, 1, N_MODES] — mirror-symmetry reuse, not a new simulation
-M_out_cross = M_in0.transpose(0, 2, 1)  # [n_wl, 1, N_MODES]
-
-# calibrate_body_neff: propagate the body on the FDTD's own measured beta
-# rather than MPB's mode index (see EMESolver._override_neff / dc_validation.md
-# item 6). One beta solve per mode/wavelength on the body's own span — the
-# same span the length sweep below propagates through.
-body_neff = None
 if CALIBRATE_BODY:
-    # _details() rather than section_mode_beta(): same call, same cost, same
-    # guards — it just also hands back the measurement behind the answer
-    # (fit lengths, per-length phases, per-cell fits) so the calibration can
-    # be plotted below. `.beta` is exactly what section_mode_beta() returns.
-    calibration = input_solver.section_mode_beta_details(
-        mmi, wavelengths, boundaries[1], boundaries[2], N_MODES, save_dir=save_dir,
-    )
-    beta = calibration.beta  # [n_wl, N_MODES] rad/µm
-    body_neff = beta * wavelengths[:, None] / (2 * np.pi)
+    # The measurement behind the body's propagation constants. Only the bar
+    # solver holds it: the cross call's body section came from the shared
+    # cache, so its own calibration never re-ran (by design — a cache hit
+    # means the matrix this pass used IS the one that calibration produced).
+    calibration = hybrid_bar.last_calibrations[1]
 
     # What the calibration actually simulated, and whether each cell's phase
     # is really linear in length. The residual guard reduces that to one
@@ -295,15 +337,22 @@ if CALIBRATE_BODY:
     print(f"Calibration plots saved → {output_dir}/calibration/"
           f" (geometry/ + fits/)")
 
-M_body = body_solver.solve_section_length_sweep(
-    mmi, wavelengths, boundaries[1], boundaries[2], body_lengths,
-    n_modes_in=N_MODES, n_modes_out=N_MODES, save_dir=save_dir,
-    neff_override=body_neff,
-)  # [n_L, n_wl, N_MODES, N_MODES]
-
-tmp = np.einsum("Lwij,wjk->Lwik", M_body, M_in1)               # [n_L, n_wl, N_MODES, 1]
-coeffs_bar = np.einsum("wij,Lwjk->Lwik", M_out_bar, tmp)       # [n_L, n_wl, 1, 1]
-coeffs_cross = np.einsum("wij,Lwjk->Lwik", M_out_cross, tmp)   # [n_L, n_wl, 1, 1]
+if not SYMMETRIC_MODE_REUSE:
+    # Re-derive MODE_SIGNS. Both arms were really simulated in this
+    # configuration, so the implied parity vector can be read straight off
+    # the two input-section matrices the two passes used -- no third solve,
+    # and no reconstructing the calls by hand (which could silently diagnose
+    # a different call than the one that ran).
+    _m_top = hybrid_bar.last_section_matrices[0][:, :, 0]      # [n_wl, N_MODES]
+    _m_bot = hybrid_cross.last_section_matrices[0][:, :, 0]
+    _ratio = _m_bot / np.where(np.abs(_m_top) > 0, _m_top, np.nan)
+    _implied = np.sign(np.real(np.nanmean(_ratio, axis=0))).astype(int)
+    print("\nMODE_SIGNS re-derivation (SYMMETRIC_MODE_REUSE=False):")
+    print(f"  hard-coded : {list(MODE_SIGNS)}")
+    print(f"  implied    : {list(_implied)}")
+    print(f"  agree      : {bool(np.array_equal(_implied, MODE_SIGNS))}")
+    print(f"  |Im/Re| of the ratio (should be ~0 for a real parity): "
+          f"{np.nanmax(np.abs(np.imag(_ratio) / np.real(_ratio))):.3e}")
 
 T_bar_grid   = np.abs(coeffs_bar[:, :, 0, 0]) ** 2    # [n_L, n_wl]
 T_cross_grid = np.abs(coeffs_cross[:, :, 0, 0]) ** 2

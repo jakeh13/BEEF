@@ -77,10 +77,22 @@ class TestRealSolverAllowlists:
         b = FDTDSolver(num_output_modes=4)  # solve() reads this, solve_section() doesn't
         assert _solver_config(a, "solve") != _solver_config(b, "solve")
 
-    def test_eme_solve_section_ignores_num_modes_and_num_cells(self):
+    def test_eme_solve_section_still_ignores_num_modes(self):
+        """solve_section() takes its mode count from n_modes_in/n_modes_out
+        (call kwargs), never from self.num_modes -- unchanged by step 3, and
+        relied on by modal_multiplexer_hybrid.py, which fills three EME slots
+        with one num_modes=[15] solver including a CONN_MODES=6 connector."""
         a = EMESolver(num_modes=[2], num_cells=[1], lengths=[1.0])
-        b = EMESolver(num_modes=[12], num_cells=[3], lengths=[1.0])  # only solve() reads these
+        b = EMESolver(num_modes=[12], num_cells=[1], lengths=[1.0])
         assert _solver_config(a, "solve_section") == _solver_config(b, "solve_section")
+
+    def test_eme_solve_section_is_sensitive_to_num_cells(self):
+        """mmi_1x4_tapered_body_validation.md step 3: num_cells IS read now
+        (it sets the real cell count), so a 1-cell and a 3-cell solver must
+        never share a cache entry."""
+        a = EMESolver(num_modes=[2], num_cells=[1], lengths=[1.0])
+        b = EMESolver(num_modes=[2], num_cells=[3], lengths=[1.0])
+        assert _solver_config(a, "solve_section") != _solver_config(b, "solve_section")
 
     def test_eme_solve_section_is_sensitive_to_oxide_width(self):
         a = EMESolver(num_modes=[2], num_cells=[1], lengths=[1.0], oxide_width=5.0)

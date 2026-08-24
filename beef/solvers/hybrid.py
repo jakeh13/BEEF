@@ -56,10 +56,12 @@ from __future__ import annotations
 
 import inspect
 import logging
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
+from ..geometry.base import assert_uniform_cross_section
 from ..mode_identity import (
     best_correspondence, field_overlap_matrix, mesh_cell_centers, overlap_diagnostics,
     self_overlap_diagnostics, stack_meow_mode_fields,
@@ -103,6 +105,99 @@ def _supports_pad(method) -> bool:
     return "pad" in inspect.signature(method).parameters
 
 
+@dataclass(frozen=True)
+class MirrorSpec:
+    """A `mirror_pairs` value richer than a bare partner index.
+
+    `mirror_pairs={2: 0}` says "section 2's matrix is section 0's transpose"
+    and validates that against section 2's and section 0's OWN kwargs for
+    this call. That covers the case where both ends of the device select the
+    same physical branch — the bar path of a 2x2, say.
+
+    It cannot express the CROSS path, where the two ends select DIFFERENT
+    branches: section 0 excited on the top arm, section 2 measured on the
+    bottom. There the reused matrix is not section 0 as this call solved it,
+    but section 0 as it WOULD have been solved on the other arm — which, for
+    a transversely mirror-symmetric device, is the solved matrix times a
+    per-mode parity vector. This class declares both halves of that:
+
+        mirror_pairs={2: MirrorSpec(section=0,
+                                    partner_kwargs={"input_idx": 0},
+                                    mode_signs=MODE_SIGNS)}
+
+    yielding  M_2 = ((M_0 * mode_signs) ** T)  where M_0 is the matrix
+    section 0 was actually solved for.
+
+    This is what keeps the whole two-excitation response coming from ONE
+    FDTD simulation through the supported API, rather than only through a
+    hand-rolled einsum -- see
+    validation_markdown/resolved/multi_excitation_cascade_validation.md step 3.
+
+    Attributes:
+        section: index of the section whose matrix is reused. Must be < the
+            key it is declared under, and must not itself be mirrored
+            (no chained mirroring), exactly as a bare int partner.
+        partner_kwargs: the geometry kwargs the reused matrix is being
+            REINTERPRETED as having been solved under. None (default) means
+            "the partner's own kwargs for this call", which reproduces the
+            bare-int behaviour exactly. When set, two things are checked
+            instead of one -- see HybridSolver._validate_mirror_pair().
+        mode_signs: optional [n] parity vector applied to the partner's
+            matrix along its OUTPUT mode axis before transposing. Entries
+            must be +/-1. None means all +1 (a pure transpose).
+        transverse_axis: the y coordinate the two branches are mirror images
+            about, used only when partner_kwargs is set, to check that the
+            parity relation is even applicable. Defaults to 0.0, which is
+            every centred BEEF device.
+    """
+
+    section: int
+    partner_kwargs: Optional[Dict[str, Any]] = None
+    mode_signs: Optional[Any] = None
+    transverse_axis: float = 0.0
+
+    def __post_init__(self):
+        if self.mode_signs is not None:
+            signs = np.asarray(self.mode_signs)
+            if signs.ndim != 1:
+                raise ValueError(
+                    f"MirrorSpec.mode_signs must be a 1-D vector, got shape "
+                    f"{signs.shape}."
+                )
+            if not np.all(np.isin(signs, (-1, 1))):
+                bad = sorted({v for v in np.unique(signs) if v not in (-1, 1)})
+                raise ValueError(
+                    f"MirrorSpec.mode_signs entries must all be +1 or -1, got "
+                    f"{bad} as well. This is a mode PARITY vector — a value "
+                    f"other than +/-1 would silently rescale the reused "
+                    f"matrix rather than reinterpret which arm it belongs to."
+                )
+        if self.partner_kwargs is None and self.mode_signs is not None:
+            raise ValueError(
+                "MirrorSpec: mode_signs was given without partner_kwargs. A "
+                "parity vector only means something when the reused matrix is "
+                "being reinterpreted as a DIFFERENT excitation; with the "
+                "partner's own kwargs the relation is a plain transpose. Pass "
+                "partner_kwargs naming the other branch, or drop mode_signs."
+            )
+
+    @property
+    def signs_array(self) -> Optional[np.ndarray]:
+        return None if self.mode_signs is None else np.asarray(self.mode_signs, dtype=float)
+
+
+def _mirror_spec(value: Union[int, MirrorSpec]) -> MirrorSpec:
+    """Normalize a mirror_pairs value; a bare int is the historical form."""
+    if isinstance(value, MirrorSpec):
+        return value
+    if isinstance(value, (int, np.integer)):
+        return MirrorSpec(section=int(value))
+    raise ValueError(
+        f"mirror_pairs values must be an int section index or a MirrorSpec, "
+        f"got {type(value).__name__}."
+    )
+
+
 class HybridSolver:
     """Chains an arbitrary sequence of solvers across contiguous device sections.
 
@@ -121,6 +216,22 @@ class HybridSolver:
             (see module docstring). j must be < k (the partner must already
             be solved earlier in the left-to-right loop) and must not itself
             be a mirrored section (no chained/transitive mirroring).
+
+            A value may also be a `MirrorSpec` instead of a bare int, which
+            additionally expresses a CROSS-EXCITATION reuse: section k
+            measures a branch the partner's own excitation never touched, so
+            the partner's matrix is reinterpreted as the other arm's (via a
+            `mode_signs` parity vector) before being transposed. This is what
+            lets a device whose two excitations are transverse mirror images
+            — the 2x2 MMI's bar and cross paths — get its whole response from
+            a single FDTD simulation through solve()/solve_length_sweep()
+            rather than a hand-rolled einsum. See `MirrorSpec` and
+            validation_markdown/resolved/multi_excitation_cascade_validation.md.
+
+            Both forms are re-validated geometrically on every solve() call;
+            the MirrorSpec form adds a second check (the partner's two
+            excitations really are transverse mirror images) so that
+            partner_kwargs cannot become an unchecked escape hatch.
         mirror_axis: x-position sections are reflected about, for the
             geometric guardrail. Defaults to the device midpoint,
             (boundaries[0] + boundaries[-1]) / 2.
@@ -176,6 +287,24 @@ class HybridSolver:
             the spacing risks the 2π branch ambiguity
             `FDTDSolver.section_mode_beta()` guards against; it will raise
             rather than guess.
+        calibrate_kwargs: extra keyword arguments passed **only** to the
+            calibration source's `section_mode_beta()` call, never to the
+            section's own solver. None (default) preserves the historical
+            behaviour exactly: the calibration receives just the
+            `monitor_center`/`monitor_size` auto-extracted from the calibrated
+            section's own `geometry_kwargs`.
+
+            This exists because one `geometry_kwargs` dict per section serves
+            two different consumers — the section solver and the calibration
+            source — and a device can legitimately need a setting on one but
+            not the other. `directional_coupler_hybrid.py` is the case: it
+            pins an interface monitor on the calibration but deliberately not
+            on the EME body sweep. Forcing them to agree is not harmless,
+            because `EMESolver.solve_section_length_sweep()` funnels unknown
+            `**kwargs` into `geometry_kwargs`, which is part of the cache
+            fingerprint — so adding a monitor key purely for the calibration's
+            benefit silently invalidates the body's cached result. Entries here
+            take precedence over the auto-extracted ones per key.
         check_mode_correspondence: verify, at each interior interface, that
             the adjoining solvers' mode bases actually name the same modes in
             the same order — the assumption solve()'s matrix-chain
@@ -270,6 +399,7 @@ class HybridSolver:
         material_consistency_action: Literal["warn", "raise", "ignore"] = "warn",
         calibrate_body_neff: bool = False,
         calibrate_lengths: Optional[List[float]] = None,
+        calibrate_kwargs: Optional[Dict[str, Any]] = None,
         check_mode_correspondence: bool = False,
         mode_correspondence_action: Literal["raise", "warn"] = "raise",
         mode_correspondence_min_overlap: float = 0.9,
@@ -292,7 +422,19 @@ class HybridSolver:
         self.solvers = solvers
         self.boundaries = boundaries
         self.interface_modes = interface_modes
-        self.mirror_pairs = dict(mirror_pairs) if mirror_pairs else {}
+        # Two views of the same declaration, deliberately:
+        #   mirror_specs — the full MirrorSpec, used by everything in here
+        #                  that needs partner_kwargs/mode_signs.
+        #   mirror_pairs — the plain {section: partner} int map this attribute
+        #                  has always been. plot/geometry.py reads it
+        #                  (:569) and existing tests assert on it, and neither
+        #                  cares about the cross-excitation extras, so the
+        #                  historical shape is preserved rather than migrated.
+        self.mirror_specs: Dict[int, MirrorSpec] = (
+            {int(k): _mirror_spec(v) for k, v in mirror_pairs.items()}
+            if mirror_pairs else {}
+        )
+        self.mirror_pairs = {k: spec.section for k, spec in self.mirror_specs.items()}
         self.mirror_axis = (
             mirror_axis if mirror_axis is not None else (boundaries[0] + boundaries[-1]) / 2.0
         )
@@ -311,9 +453,13 @@ class HybridSolver:
         # where it shows. Empty until solve()/solve_sweep() runs; replaced, not
         # appended to, on each solve.
         self.last_calibrations: dict = {}
+        # [K] per-section transfer matrices from the most recent solve — see
+        # the note where _solve_sections() sets it. Empty until a solve runs.
+        self.last_section_matrices: List[np.ndarray] = []
         self.calibrate_lengths = (
             None if calibrate_lengths is None else [float(L) for L in calibrate_lengths]
         )
+        self.calibrate_kwargs = dict(calibrate_kwargs) if calibrate_kwargs else {}
         if mode_correspondence_action not in ("raise", "warn"):
             raise ValueError(
                 f"mode_correspondence_action must be 'raise' or 'warn', got "
@@ -361,6 +507,25 @@ class HybridSolver:
                     f"n_in[{k}]==n_out[{j}] and n_out[{k}]==n_in[{j}]."
                 )
 
+        # mode_signs indexes the partner's OUTPUT mode axis, which is the axis
+        # the transpose turns into section k's INPUT axis. Sized wrong, it
+        # would broadcast silently (a length-1 vector) or blow up deep inside
+        # _solve_sections with a shape error naming neither section -- so pin
+        # it here, where the message can name the declaration.
+        for k, spec in self.mirror_specs.items():
+            signs = spec.signs_array
+            if signs is None:
+                continue
+            if signs.shape[0] != n_out_list[spec.section]:
+                raise ValueError(
+                    f"mirror_pairs[{k}]=MirrorSpec(section={spec.section}, "
+                    f"mode_signs=...): mode_signs has {signs.shape[0]} entries "
+                    f"but section {spec.section} produces "
+                    f"{n_out_list[spec.section]} output modes. The parity "
+                    f"vector must carry one entry per mode of the interface "
+                    f"the reused matrix feeds."
+                )
+
     def _mode_lists(self, in_modes: int, out_modes: int) -> Tuple[List[int], List[int]]:
         n_in_list = [in_modes] + list(self.interface_modes)
         n_out_list = list(self.interface_modes) + [out_modes]
@@ -373,7 +538,57 @@ class HybridSolver:
         stub_right = solver.waveguide_length if (k == K - 1 and hasattr(solver, "waveguide_length")) else 0.0
         return stub_left, stub_right
 
-    def _validate_mirror_pair(self, geometry, k: int, j: int, kwargs_k: dict, kwargs_j: dict) -> None:
+    def _validate_two_arm_symmetry(self, geometry, j: int, kwargs_j: dict,
+                                   spec: "MirrorSpec", k: int) -> None:
+        """Check that the partner's two excitations really are transverse
+        mirror images — the precondition for reusing one arm's matrix as the
+        other's, with or without a parity vector.
+
+        This is the check that makes MirrorSpec.partner_kwargs safe. Without
+        it, `partner_kwargs` would be a way to silently pair any two
+        unrelated branches: the x-mirror check below compares section k
+        against section j UNDER partner_kwargs, so it never looks at the
+        kwargs section j was actually solved with, and a nonsense
+        reinterpretation would sail through.
+
+        The relation checked is: at every sampled x in section j's span, the
+        two kwargs select branches of the same width, positioned
+        symmetrically about `spec.transverse_axis`.
+        """
+        x0_j, x1_j = self.boundaries[j], self.boundaries[j + 1]
+        a = spec.transverse_axis
+        for x in np.linspace(x0_j, x1_j, self.mirror_check_samples):
+            w_solved = geometry.width_at(x, **kwargs_j)
+            w_reused = geometry.width_at(x, **spec.partner_kwargs)
+            if abs(w_solved - w_reused) > self.mirror_check_tol:
+                raise ValueError(
+                    f"mirror_pairs[{k}]=MirrorSpec(section={j}, "
+                    f"partner_kwargs={spec.partner_kwargs}): the two "
+                    f"excitations of section {j} are not transverse mirror "
+                    f"images — width_at at x={x:.4g} is {w_solved:.6g} µm "
+                    f"under the solved kwargs {kwargs_j} but "
+                    f"{w_reused:.6g} µm under partner_kwargs "
+                    f"(tol={self.mirror_check_tol:.2g}). Reusing one arm's "
+                    f"matrix for the other is only valid between "
+                    f"geometrically identical arms."
+                )
+            c_solved = geometry.center_at(x, **kwargs_j)
+            c_reused = geometry.center_at(x, **spec.partner_kwargs)
+            if abs((c_solved - a) + (c_reused - a)) > self.mirror_check_tol:
+                raise ValueError(
+                    f"mirror_pairs[{k}]=MirrorSpec(section={j}, "
+                    f"partner_kwargs={spec.partner_kwargs}, "
+                    f"transverse_axis={a:.6g}): the two excitations of "
+                    f"section {j} are not reflections of each other about "
+                    f"y={a:.6g} — center_at at x={x:.4g} is {c_solved:.6g} µm "
+                    f"under the solved kwargs {kwargs_j} and {c_reused:.6g} µm "
+                    f"under partner_kwargs, which should sum to "
+                    f"2*{a:.6g}={2*a:.6g} but sum to {c_solved + c_reused:.6g} "
+                    f"(tol={self.mirror_check_tol:.2g})."
+                )
+
+    def _validate_mirror_pair(self, geometry, k: int, j: int, kwargs_k: dict, kwargs_j: dict,
+                              spec: Optional["MirrorSpec"] = None) -> None:
         """Guard against a wrong/stale mirror_pairs entry before trusting it.
 
         A wrong pairing silently produces wrong physics (transpose of a
@@ -381,7 +596,19 @@ class HybridSolver:
         the two sections' geometry actually IS mirror-symmetric for the
         kwargs in play this solve() call, not just that the pairing was
         declared.
+
+        When `spec` carries `partner_kwargs`, the x-mirror comparison below
+        runs against THOSE kwargs rather than the partner's own — that is the
+        whole point of a cross-excitation pair, where section k measures a
+        branch the partner's own excitation never touched. Two checks then
+        replace one: the x-mirror against partner_kwargs here, plus
+        _validate_two_arm_symmetry() above, which is what stops
+        partner_kwargs from being an unchecked escape hatch.
         """
+        if spec is not None and spec.partner_kwargs is not None:
+            self._validate_two_arm_symmetry(geometry, j, kwargs_j, spec, k)
+            kwargs_j = spec.partner_kwargs
+
         x0_k, x1_k = self.boundaries[k], self.boundaries[k + 1]
         x0_j, x1_j = self.boundaries[j], self.boundaries[j + 1]
         struct_tol = 1e-6
@@ -1237,20 +1464,20 @@ class HybridSolver:
     def _validate_uniform_sweep_section(self, geometry, k: int, kwargs: dict) -> None:
         """solve_section_length_sweep() extrapolates an analytic propagation
         phase, which is only physical over a constant cross-section — a
-        taper in the swept span would silently produce wrong results."""
-        x0, x1 = self.boundaries[k], self.boundaries[k + 1]
-        xs = np.linspace(x0, x1, self.mirror_check_samples)
-        w0 = geometry.width_at(xs[0], **kwargs)
-        c0 = geometry.center_at(xs[0], **kwargs)
-        for x in xs[1:]:
-            if (abs(geometry.width_at(x, **kwargs) - w0) > self.mirror_check_tol
-                    or abs(geometry.center_at(x, **kwargs) - c0) > self.mirror_check_tol):
-                raise ValueError(
-                    f"sweep_section={k}: cross-section is not uniform over "
-                    f"[{x0:.4g}, {x1:.4g}] (width_at/center_at varies at "
-                    f"x={x:.4g}); solve_section_length_sweep() requires a "
-                    f"uniform region."
-                )
+        taper in the swept span would silently produce wrong results.
+
+        Thin wrapper over the shared `assert_uniform_cross_section()` since
+        2026-08-20 (mmi_1x4_tapered_body_validation.md step 1) — same test,
+        same message, one implementation now shared with the calibration
+        guard below and `EMESolver.solve_section()`'s own."""
+        assert_uniform_cross_section(
+            geometry, self.boundaries[k], self.boundaries[k + 1],
+            what=f"sweep_section={k}",
+            why="solve_section_length_sweep() requires a uniform region",
+            geometry_kwargs=kwargs,
+            samples=self.mirror_check_samples,
+            tol=self.mirror_check_tol,
+        )
 
     def _calibration_source(self, k: int):
         """The FDTD solver whose β section `k`'s body should be propagated on,
@@ -1292,11 +1519,43 @@ class HybridSolver:
         if source is None:
             return None
         x0, x1 = self.boundaries[k], self.boundaries[k + 1]
+        # A calibrated body is propagated as a DIAGONAL exp(2j*pi*neff/wl*L)
+        # (EMESolver.solve_section()'s neff_override fast path), which is only
+        # the right transfer matrix when one cross-section's mode basis serves
+        # both ports -- i.e. a uniform span. Refuse a tapered one here rather
+        # than return a plausible wrong answer: a single per-mode beta cannot
+        # describe a body whose transfer matrix depends on the mode FIELDS at
+        # every internal interface. mmi_1x4_tapered_body_validation.md step 1
+        # (option (a)) -- the same guard also sits inside solve_section()
+        # itself (option (b)) for callers that bypass HybridSolver, but this
+        # one fires earlier and can name the section.
+        assert_uniform_cross_section(
+            geometry, x0, x1,
+            what=f"Section {k + 1}/{len(self.solvers)} (calibrate_body_neff=True)",
+            why="a calibrated body propagates on one per-mode beta, which only "
+                "describes a uniform cross-section; a tapered body needs a real "
+                "multi-cell EME solve instead (calibrate_body_neff=False)",
+            geometry_kwargs=kwargs,
+            samples=self.mirror_check_samples,
+            tol=self.mirror_check_tol,
+        )
         # Only the parameters section_mode_beta() actually reads — passing the
         # EME section's full kwargs would hand it monitor/aperture settings
         # meant for a different solver.
         passthrough = {key: kwargs[key] for key in ("monitor_center", "monitor_size")
                        if key in kwargs}
+        # ...and explicit calibrate_kwargs on top, for the case the auto-extract
+        # cannot express: a device that needs monitor settings on the
+        # CALIBRATION but not on the section solver itself. One kwargs dict per
+        # section serves both consumers, so without this the two are forced to
+        # agree — and for a solver whose solve_section_length_sweep() funnels
+        # **kwargs into geometry_kwargs (EMESolver does), adding a monitor key
+        # for the calibration's sake silently changes the section's own cache
+        # fingerprint. Measured on directional_coupler_hybrid.py: the EME body
+        # sweep hashes 0c243abea80cb883 without and 76f7367470c61021 with, i.e.
+        # a guaranteed cache miss and a re-solve. See
+        # resolved/multi_excitation_cascade_validation.md step 4.
+        passthrough.update(self.calibrate_kwargs)
         logger.info(
             "Section %d/%d: calibrating body n_eff from %s's own propagation "
             "phase (dc_validation.md item 6)",
@@ -1376,6 +1635,7 @@ class HybridSolver:
                 self._validate_mirror_pair(
                     geometry, k, self.mirror_pairs[k], kwargs,
                     kwargs_per_section[self.mirror_pairs[k]],
+                    spec=self.mirror_specs[k],
                 )
 
             cache_key = None
@@ -1397,9 +1657,25 @@ class HybridSolver:
                     continue
 
             if k in self.mirror_pairs:
-                j = self.mirror_pairs[k]
-                mat = mats[j].transpose(0, 2, 1).copy()
-                logger.info("Section %d/%d: %s (mirror of section %d)", k + 1, K, type(solver).__name__, j + 1)
+                spec = self.mirror_specs[k]
+                j = spec.section
+                signs = spec.signs_array
+                source = mats[j]
+                if signs is not None:
+                    # Reinterpret the partner's matrix as the OTHER arm's
+                    # before transposing: each mode of the partner's output
+                    # interface picks up its own parity under the transverse
+                    # reflection. Axis 1 is that output-mode axis (the matrix
+                    # is [M, n_out, n_in]), which the transpose then turns
+                    # into section k's input axis.
+                    source = source * signs[None, :, None]
+                mat = source.transpose(0, 2, 1).copy()
+                logger.info(
+                    "Section %d/%d: %s (mirror of section %d%s)",
+                    k + 1, K, type(solver).__name__, j + 1,
+                    "" if signs is None else
+                    f", reinterpreted as {spec.partner_kwargs} via a parity vector",
+                )
             elif is_swept:
                 logger.info(
                     "Section %d/%d: %s x=[%.3f, %.3f]  modes %s->%s (length sweep, %d lengths)",
@@ -1450,4 +1726,12 @@ class HybridSolver:
             if cache is not None:
                 cache[cache_key] = mat
             mats.append(mat)
+        # The per-section matrices behind the cascade this pass returned.
+        # Without this the only way to inspect them is to re-issue the
+        # solve_section() calls by hand, which is precisely the hand-rolled
+        # pattern solve() exists to replace -- and a diagnostic that has to
+        # reconstruct the call it is diagnosing can silently diagnose a
+        # DIFFERENT call. Replaced, not appended to, on every solve, the same
+        # lifecycle as last_calibrations.
+        self.last_section_matrices = list(mats)
         return mats

@@ -88,6 +88,34 @@ WL_MIN = 1.50
 WL_MAX = 1.60
 N_WL = 11
 
+# DC160_WL_MIN/DC160_WL_MAX/DC160_N_WL override the full-band window above --
+# same env-var family, same all-or-nothing guard, and the same
+# "the guard is the env var, not the value" rule as
+# directional_coupler_soi160_hybrid.py's own block, so the hybrid and
+# full-FDTD methods can be pointed at one band with one pair of exports and
+# compared apples-to-apples. Unset (the default) reproduces job 11785063's
+# original full-band behavior exactly, output_dir unchanged; any override
+# redirects to L<len>/windows/<tag>/ so the existing per-length
+# coupling_result.npz/smatrix_fdtd.pkl cannot be overwritten.
+#
+# There is no cache reuse to be had either way here: the wavelength array is
+# hashed into the FDTD fingerprint, AND (per the module docstring) a
+# whole-device solve() at a different coupling_length is a different domain
+# end to end. Every window x length combination is a genuinely new solve.
+_win_env = (os.environ.get("DC160_WL_MIN"), os.environ.get("DC160_WL_MAX"), os.environ.get("DC160_N_WL"))
+if any(v is not None for v in _win_env):
+    if not all(v is not None for v in _win_env):
+        raise SystemExit(
+            "DC160_WL_MIN/DC160_WL_MAX/DC160_N_WL must be set together (or "
+            "not at all) -- got a partial override, which would silently "
+            "mix a custom window with the default WL_MIN/WL_MAX/N_WL above."
+        )
+    WL_MIN, WL_MAX, N_WL = float(_win_env[0]), float(_win_env[1]), int(_win_env[2])
+    output_dir = os.path.join(output_dir, "windows", f"{WL_MIN:.4f}-{WL_MAX:.4f}_n{N_WL}")
+    print(f"DC160 wavelength window override: WL_MIN={WL_MIN} WL_MAX={WL_MAX} "
+          f"N_WL={N_WL} -> output_dir={output_dir}")
+    os.makedirs(output_dir, exist_ok=True)
+
 # ---------------------------------------------------------------------------
 # 1. Geometry -- same real duty/dc.gds dimensions as the hybrid dc_test script.
 # ---------------------------------------------------------------------------

@@ -201,7 +201,17 @@ class TestConnect:
         """Reproduces mmi_2x2_hybrid.py's hand-rolled 3-block cascade
         (M_in1 -> M_body -> M_out_bar, where M_out_bar is M_in1's mirror
         transpose) via connect(), and checks it matches the example's own
-        manual np.einsum composition bit-for-bit (to floating-point noise)."""
+        manual np.einsum composition.
+
+        NOT bit-for-bit, despite what this docstring used to claim: connect()
+        contracts with BLAS `@` and the example with np.einsum, so the two
+        differ by a few ulp on real data (measured 2026-08-20: ~2.6 eps
+        relative at the shipped n_wl=11/N_MODES=14). atol=1e-12 below is the
+        real bar. tests/test_multi_excitation_cascade.py pins the stronger
+        claim properly -- bit-identical under exact arithmetic, a few eps on
+        floats -- and also covers the CROSS path, which this test cannot:
+        the bar path is a quadratic form and returns the identical scalar for
+        a transposed body matrix."""
         rng = np.random.default_rng(12)
         M, N_MODES = len(WAVELENGTHS), 4
         M_in1 = rng.normal(size=(M, N_MODES, 1)) + 1j * rng.normal(size=(M, N_MODES, 1))

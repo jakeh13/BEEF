@@ -31,7 +31,7 @@ The 1×4 geometry is nearly free. **The material model is the whole job.**
 | A non-Si core in `MaterialStack` | ✅ **DONE 2026-08-03 (step 2)** — `core_kind`/`clad_kind`, `SIN_300` singleton |
 | 300 nm core height | ✅ **DONE 2026-08-03 (step 4)** — `SIN_300 = MaterialStack(wg_height=0.30, sz=5.0, core_kind="si3n4")`, `sz` measured-converged at the design width |
 | Device dimensions for a 1×4 on nitride | ✅ **DONE 2026-08-04 (steps 4-5)** — `waveguide_width=1.1`, `taper_width=2.2`, `taper_length=5.0`, `waveguide_offset=2.4`, `mm_width=12.0`, `mm_length=206.0` (user-selected — a genuine footprint/throughput/balance tradeoff, not the pure argmin) |
-| Example scripts | ⚠ **drafted, structurally validated, not yet solved for real (step 6)** — `mmi_1x4_eme.py`, `mmi_1x4_hybrid.py`. `mmi_1x4_fdtd.py` dropped: `mm_length=206` makes whole-device single-domain FDTD impractical |
+| Example scripts | ✅ `mmi_1x4_eme.py` (job 11887395) and `mmi_1x4_hybrid.py` (job 12227591, calibrated) both **solved for real**. `mmi_1x4_fdtd.py` was dropped 2026-08-04 because `mm_length=206` made whole-device FDTD impractical — **that reason expired** with step 9c (216 µm → 49.90 µm, 4.3×); script revived 2026-08-19, and the whole-device reference is now **MEASURED at band centre** (job 12029541, 41 hrs, production `decay_tol`). Full-band run still pending. See "CHECK 4" under step 9. |
 
 So the ordered work is: **material model → stack generalization → cache
 fingerprint → cross-section design → body design → two scripts (not three)
@@ -1632,7 +1632,10 @@ four and cannot be skipped:
 Both found while reviewing the 6d split-shape discrepancy (EME favors inner
 ports 1,2; hybrid favors outer ports 0,3 — still unexplained, step 6d/check 1).
 
-**9a. `calibrate_body_neff` — code landed, NOT YET RUN.** `mmi_1x4_hybrid.py`
+**9a. `calibrate_body_neff` — ✅ DONE 2026-08-23. Ran to completion, and the
+hypothesis it was testing is REFUTED — see "9a RESULT" below. The narrative
+between here and there is the three-attempt history, kept because each
+cancellation was for a real reason.** `mmi_1x4_hybrid.py`
 carried the body on tidy3d's own mode index the whole way through the
 11734486 run recorded in step 6d; `calibrate_body_neff=True` (HybridSolver's
 built-in β-calibration, `dc_validation.md` item 6) was flagged in the
@@ -1759,8 +1762,226 @@ similar to input, same geometry class, itself unmeasured) ≈ **64h**.
 margin over the 64h projection), account `gts-sr108-gedc_main`. No fresh
 smoke test — the two timing probes themselves already exercised this exact
 config (real res=30, real `decay_tol=1e-11`) to clean completion, a more
-rigorous check than a reduced-scale smoke test would have been. **In
-flight, not yet complete.**
+rigorous check than a reduced-scale smoke test would have been.
+
+**Cancelled AGAIN at ~8h in, 2026-08-19 — not a failure, a real further
+optimization found while it ran.** User asked directly whether the
+transverse (y) and vertical (z) sim domain could shrink — `sim_width =
+MM_WIDTH + 8.0 = 20.0` and `sim_height = SIN_300.sz = 5.0` were both
+inherited conventions (shared with every other FDTD section on this
+device), never validated for necessity. Checked cheaply (mode-solve only,
+no FDTD): `mmi_1x4_sin_body_domain_size_convergence.py` (job **12029224**,
+4m20s) swept both on the body cross-section, tracking the same modes
+`mmi_1x4_sin_body_res_convergence.py` already used. Key realization: modes
+19/22 in that tracked set never converge within the swept range, but they
+are **irrelevant** — production only keeps `N_MODES=12` (indices 0–11), and
+mode 10 (the second-to-last kept mode) converges cleanly by
+`mesh_width=13–14` and `sz=4.0`. `sim_width` dropped to `MM_WIDTH+4.0=16.0`
+(mode 19's own convergence point, real margin over what mode 10/11 need)
+and `sim_height` to `4.0`, decoupled from `SIN_300.sz` (a shared
+`MaterialStack` constant other solvers/devices also read — not itself
+changed). ~36% fewer grid cells (`16/20 × 4/5 = 0.64×`) on top of the
+res=40→30 change, applied to `mmi_1x4_hybrid.py`'s `_fdtd_common` AND its
+EME `body_solver`'s own `oxide_width`/`oxide_height` (same tidy3d mesh the
+convergence check directly measured), and to `_prewarm_mmi_1x4_hybrid.py`
+(must match exactly for the cache). Re-smoke-tested (job **12029535**)
+before resubmitting the real array. Only ~8h of the ~64h projection was
+sunk at cancellation — a worthwhile trade against a further ~36%+ cut to
+the remaining ~56h.
+
+**9a, the run that is actually going: job 12031838 (4-task array),
+submitted 2026-08-19. ✅ ALL 12 CALIBRATION MODES COMPLETE on all four
+branches as of 2026-08-22 08:26** (2d 14h elapsed, 2d 9h walltime left).
+This is the first time this device's β calibration has run to completion —
+the two earlier attempts were cancelled at 3d and ~8h for the reasons above,
+neither a failure.
+
+Progress was read from the logs' **domain-size fingerprints** rather than
+extrapolated from step counts, because the per-mode cost varies too much for
+extrapolation to be trustworthy (see the spread below):
+
+| domain (`Computational cell is …`) | count | what it is |
+|---|---|---|
+| `6.36667 x 17 x 5` | **12 / 12** | the calibration body-section domains, one per excited band — all built and time-stepped |
+| `6.76667 x 17 x 5` | 2 | input / output sections (vertices name y = 5.2 µm = the outer output port at 4.65 + 1.1/2) |
+| `3 x 17 x 5` | 1 | short section |
+
+Task 0's completed FDTD run lengths, in order: **23387** (input section —
+matching the 23,388 measured independently for this section) then
+11465 / 11464 / 11461 / 11466 / 25932 / 9555 / 10099 / 24201 / 15832 /
+24751 / 10553 for the calibration modes. **That is a 2.4× spread (9.5k–25.9k
+steps) across modes of the same device at the same config** — worth
+recording, because it is exactly why the walltime projections for this step
+kept missing: an average taken over the first few modes does not predict the
+rest. A mid-run estimate of "15–20 h of calibration remaining", made from 7
+completed runs averaging 3.4 h, came in pessimistic — the remainder finished
+inside ~17 h.
+
+**✅ PREWARM COMPLETE 2026-08-22.** All four tasks `COMPLETED`, exit `0:0`,
+elapsed 2d23h49m – 3d02h54m. `Branch {0,1,2,3} done -- cache warmed`.
+
+**✅ REAL RUN 2026-08-23, job 12227591 — 49.8 s against the warm cache**
+(3 days of prewarm → a 50-second production run, mirroring
+`mmi_1x4_eme.py`'s own 38 s). Config was verified field-by-field against
+`_prewarm_mmi_1x4_hybrid.py` before submission (res=30, decay_tol=1e-11,
+dpml=0.5, sim 16×4, N_MODES=12, CALIBRATE_BODY=True, body_stub=0.25,
+identical geometry) — a mismatch on any cache-relevant field would have
+silently turned this into a multi-day run instead of a cache hit.
+
+> ⏱ **14 h lost to an account problem, not a technical one.**
+> `batch/run_mmi1x4_hybrid_real.batch` hardcoded `--account=gts-sr108-ece`,
+> which is **99.94% through its `GrpTRESMins` billing cap** (203,719 left of
+> 354,561,109), so Slurm parked the job on `AssocGrpBillingMinutes` overnight.
+> **`sshare` does not show this** — it reports fairshare (`EffectvUsage`),
+> a different mechanism; `gedc_main` reads 0.064 there and *is* the right
+> answer, but for an unrelated reason. The billing cap is only visible via
+> `scontrol show assoc_mgr flags=assoc account=<acct>`. Batch file switched to
+> `gts-sr108-gedc_main` (no billing cap) with the numbers recorded inline.
+
+### 9a RESULT — calibration is NOT the split-shape explanation ❌ hypothesis refuted
+
+At λ=1.55 µm, all three at the **same current geometry** (39.90 / 3.1):
+
+| run | outer (0,3) | inner (1,2) | favours | spread | total T |
+|---|---|---|---|---|---|
+| EME, job 11887395 | 0.2431 | 0.2423 | **outer** | 0.0008 | 0.9707 |
+| Hybrid **uncalibrated**, job 12227682 | 0.2287 | 0.2460 | **inner** | 0.0173 | 0.9495 |
+| Hybrid **calibrated**, job 12227591 | 0.2280 | 0.2447 | **inner** | 0.0167 | 0.9454 |
+
+**Calibration moves essentially nothing**: per-port ΔT ≈ 0.0007–0.0013
+(0.3–0.5%), total T 0.9495 → 0.9454, and the inner-favouring split shape is
+**already there with calibration off**. So the step-6d hypothesis — that
+calibration explains the EME-vs-hybrid split-shape disagreement — is
+**refuted**, not confirmed.
+
+**Why this needed a deliberate A/B rather than reading it off the calibrated
+run.** Calibration was enabled 2026-08-13 and the geometry replaced
+2026-08-14, one day apart, so **no uncalibrated hybrid run existed at the
+current geometry** (verified: only two runs at this geometry exist at all).
+Comparing the new calibrated result against step 6d's old-geometry numbers
+would have confounded the two changes, and would have made calibration look
+like it flipped the split shape when it does not. The isolating run was cheap
+— **9 minutes** — because the FDTD input/output section cache does not depend
+on calibration at all (only the EME body's `neff_override` does), so it reused
+the 3-day prewarm. `CALIBRATE_BODY` is now env-overridable
+(`MMI1X4_CALIBRATE_BODY=0`), **default unchanged**.
+
+**What remains unexplained, and is now the real open item:** EME and the
+hybrid still disagree, and not subtly — EME favours the OUTER pair by 0.0008
+while the hybrid favours the INNER pair by ~0.017, a **20× larger spread of
+the opposite sign**. Separately, **total T differs by 2.5 points**
+(0.9707 vs 0.9454), which is larger than either engine's own split asymmetry
+and is a check-1 engine-agreement finding in its own right. Neither is
+attributable to β calibration any more.
+
+**A second, unexpected calibration effect worth keeping.** Calibration barely
+moves the answer *at* MM_LENGTH=39.9 but substantially changes the
+**length-sweep landscape**: the best-balance optimum reads 246.9 µm
+(spread 0.0001) uncalibrated vs 129.4 µm (spread 0.0000) calibrated. So
+calibration is not inert in general — it is inert *at this short body*. A
+plausible (NOT verified) reading is that accumulated β error scales with body
+length, so the 39.90 µm body simply has too little length for the correction
+to matter, where the superseded 206.0 µm body would have had ~5×
+more. That would also predict calibration mattering much more for the old
+geometry than the new one — testable, not tested.
+
+**Artifacts.** Both result sets are preserved side by side rather than
+overwritten (the two runs share an output directory):
+`example_output/mmi_1x4/mmi_1x4_hybrid_CALIBRATED_12227591/` and
+`..._UNCALIBRATED_12227682/`; the canonical
+`example_output/mmi_1x4/mmi_1x4_hybrid/` holds the calibrated set.
+
+### 9d — the engine gap is a MODE-COUNT mismatch, and sweeping it is NOT cheap
+
+**The two engines are not being asked the same question.**
+`mmi_1x4_eme.py` carries `N_BODY=20` body modes; `mmi_1x4_hybrid.py`
+truncates every interface to `interface_modes=12` (cut 20→12 for
+tractability, with this doc's own N_MODES comment already conceding it
+"genuinely trades some self-imaging accuracy"). The hybrid — the truncated
+one — reports the LOWER total T (0.9454 vs 0.9707), which is the direction
+truncation predicts. So the check-1 disagreement is very likely a check-3
+interface-completeness question, not an engine bug.
+
+**Cost probe, MEASURED 2026-08-23 (job 12260083): a mode-count sweep is
+NOT free.** `FDTDSolver.solve_section()` does implement superset cache reuse
+(a cached 12-mode solve slicing down to serve a smaller request), so a
+DOWNWARD sweep looked like it might cost nothing. It does not apply here:
+run at `N_MODES=10` against the warm 12-mode cache, the job **started
+time-stepping within minutes** (57 timestep lines at 5m39s) rather than
+hitting the cache. Killed at that point — the probe was deliberately capped
+at `-t 12` so a miss cost nothing.
+
+The likely reason is the documented precondition (`fdtd.py`'s own
+family_config comment): superset reuse requires a **pinned `monitor_size`**,
+because the default monitor width depends on whether `n_measure > 1` — so
+without pinning, the *simulated monitor geometry* changes with mode count,
+not merely the number of bands decoded from it, and the two runs are not
+physically the same simulation. This chain does not pin it. **Not
+root-caused further** — the probe answered the cost question, which is what
+it was for.
+
+**Consequence: each mode count needs its own ~3-day prewarm.** An
+`interface_modes` convergence sweep — the thing
+`beef/interface_modes_convergence.py` exists for, and the only way to
+establish basis completeness (layer 2) — is therefore a multi-week
+commitment at this device's FDTD cost, not an afternoon. That is a
+scheduling decision, not a technical one.
+
+`N_MODES` is now env-overridable (`MMI1X4_N_MODES`), **default unchanged**,
+so the sweep can be driven without editing the script when it is run.
+
+### ✅ CHECK 4 — whole-device FDTD reference, MEASURED at band centre (job 12029541)
+
+**The check-4 reference exists and has since 2026-08-21.** Job 12029541
+(`beef_inv_wholedevice_fdtd`, `investigate_mmi1x4_res30_fdtd_wholedevice_timing.py`)
+COMPLETED, exit 0, **41.03 hrs / 40,420 timesteps**, and it ran at
+**`decay_tol=1e-11` — the PRODUCTION decay tolerance**, res=30, the real
+whole-device geometry. The only reduction from production is `N_WL=1`
+(band centre only), which the script's own docstring notes does **not**
+reduce decay cost. So these numbers are production-quality at λ=1.55 µm.
+
+**This settles the check-1 engine disagreement.** All four runs, same
+geometry, λ=1.55 µm:
+
+| run | outer (0,3) | inner (1,2) | favours | spread | total T |
+|---|---|---|---|---|---|
+| EME, 11887395 | 0.2431 | 0.2423 | **outer** | 0.0008 | 0.9707 |
+| Hybrid uncal, 12227682 | 0.2287 | 0.2460 | inner | 0.0173 | 0.9495 |
+| Hybrid cal, 12227591 | 0.2280 | 0.2447 | inner | 0.0167 | 0.9454 |
+| **FDTD whole-device, 12029541** | **0.23998** | **0.24245** | **inner** | **0.0025** | **0.9648** |
+
+Three findings, none of them what the earlier framing assumed:
+
+1. **The HYBRID has the split-shape sign RIGHT; EME has it WRONG.** FDTD
+   favours the INNER pair, as both hybrid runs do. Step 6d's long-standing
+   framing — that the hybrid's outer-favouring was the anomaly needing
+   explanation — had it backwards for the current geometry: EME is the
+   outlier here.
+2. **But the hybrid badly overstates the asymmetry**: spread 0.0167 vs the
+   reference's 0.0025, a **6.7× inflation**. Right sign, wrong magnitude.
+3. **Total T**: reference 0.9648. EME overestimates by +0.6%; the hybrid
+   **underestimates by −2.0%** — the direction and rough size mode
+   truncation predicts (N_BODY=20 vs interface_modes=12, item 9d), and the
+   best evidence yet that 12 modes is costing real accuracy.
+
+**Cost question from `mmi_1x4_fdtd.py`'s docstring is also resolved.** It
+projected 52 hrs if timesteps stayed near the input probe's 23,388, or
+~390 hrs if they scaled with the ~7.5× longer propagation path, and refused
+to commit blind. Measured: **40,420 steps — only 1.73× the input section**,
+not 7.5×. The optimistic branch was right; whole-device FDTD on this device
+is firmly tractable.
+
+**What remains for check 4:** the full 11-wavelength band. Because meep runs
+ONE time-stepping simulation with DFT monitors at all frequencies, adding the
+other 10 wavelengths should cost roughly the same ~41 hrs, not 11×.
+`mmi_1x4_fdtd.py` is already revived and pinned to the current geometry
+(mtime 2026-08-19); it has never been run.
+
+> ⚠ **Doc-hygiene:** the summary table at the top of this file still reads
+> "`mmi_1x4_fdtd.py` dropped: `mm_length=206` makes whole-device single-domain
+> FDTD impractical". That justification expired with step 9c's geometry change
+> (216 µm → 49.90 µm, 4.3×), the script was revived 2026-08-19, and the
+> reference has now been measured. Fixed in the table.
 
 **9b. Symmetric mode reuse on the OUTPUT side — proposed, not implemented,
 no code written.** `mmi_2x2_hybrid.py`/`directional_coupler_hybrid.py` each
@@ -1768,8 +1989,15 @@ cut their large-FDTD count in half by noticing their two *input* arms are
 mirror images of each other (`SYMMETRIC_MODE_REUSE`: solve one arm, derive
 the other via a measured per-mode sign vector, `MODE_SIGNS`). This device has
 one input port (nothing to mirror there) but its **four output branches**
-carry the same symmetry: `output_ys = [-3.6, -1.2, +1.2, +3.6]` µm is
-centered on the same y=0 axis the single input sits on (`MMI._port_ys()`),
+carry the same symmetry: `output_ys` is centered on the same y=0 axis the
+single input sits on (`MMI._port_ys()`),
+[⚠ this paragraph originally read `output_ys = [-3.6, -1.2, +1.2, +3.6]` µm,
+which is the **superseded** `WAVEGUIDE_OFFSET=2.4` geometry; at the current
+`WAVEGUIDE_OFFSET=3.1` it is `[-4.65, -1.55, +1.55, +4.65]` µm, verified
+directly from `MMI.output_ys` 2026-08-22. The mirror-symmetry argument below
+is unaffected — it depends only on the ports being centred on y=0, which
+holds for both — but the numbers were wrong and are the kind of thing that
+gets quoted.]
 so output_idx=0 is the y-mirror of output_idx=3, and output_idx=1 of
 output_idx=2 — structurally the same trick, just on the other side of the
 device.

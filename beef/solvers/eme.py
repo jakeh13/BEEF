@@ -12,7 +12,7 @@ from ..cache import (
     CacheMissError, build_run_config, build_whole_device_config, load_result, lookup,
     lookup_superset, save_run, update_family_pointer,
 )
-from ..geometry.base import DeviceGeometry
+from ..geometry.base import DeviceGeometry, assert_uniform_cross_section
 from ..materials.stack import MaterialStack, resolved_material_config, SOI_160
 from ..results.smatrix import SMatrix
 from .._log import get_logger
@@ -102,9 +102,18 @@ class EMESolver:
     Args:
         num_modes: modes per EME region, left to right.
                    e.g. [1, 7, 15, 7, 1] for (wg, taper, MMI, taper, wg).
+                   Read by the whole-device methods (solve/solve_length_sweep)
+                   ONLY — solve_section() takes its mode count from its own
+                   n_modes_in/n_modes_out arguments instead, which is why
+                   several hybrid scripts pass a single-element placeholder
+                   here and why one shared solver can serve sections with
+                   different interface mode counts.
         num_cells: cells per region (same length as num_modes).
                    e.g. [1, 12, 1, 12, 1].  Regions with num_cells > 1 are
-                   subdivided equally — use this for tapers.
+                   subdivided equally — use this for tapers. Unlike num_modes,
+                   this IS read by solve_section() (as num_cells[0]), which is
+                   how a tapered body gets real multi-cell propagation inside a
+                   hybrid cascade.
         oxide_width: y-span of the cross-section mesh (µm).
         oxide_height: z-span of the cross-section mesh (µm).
         res: mesh resolution in pts/µm.
@@ -451,9 +460,23 @@ class EMESolver:
     ) -> np.ndarray:
         """Modal transfer matrix for the device section [x0, x1] (device frame).
 
-        Single-cell EME over the section — mode expansion naturally gives the
-        full n_modes_out x n_modes_in block in one solve (no per-mode source
-        runs needed), unlike FDTD.
+        EME over the section — mode expansion naturally gives the full
+        n_modes_out x n_modes_in block in one solve (no per-mode source runs
+        needed), unlike FDTD.
+
+        The section is subdivided into ``self.num_cells[0]`` cells, so a
+        **non-uniform** span (e.g. a tapered MMI body) is propagated through
+        real interface overlaps between successive cross-sections rather than
+        collapsed onto one. ``num_cells=[1]`` — the value every device script
+        in this repo uses — is a single cell spanning the whole section,
+        exactly what this method always did. The per-cell mode count is
+        ``max(n_modes_in, n_modes_out)``; ``self.num_modes`` is **not** read
+        here (see the real-solve branch's own comment on why, and
+        ``modal_multiplexer_hybrid.py``, which relies on that).
+
+        Note the `neff_override` path below is single-cell by construction and
+        guarded to uniform spans — the two are different propagation models,
+        not two settings of one.
 
         Args:
             neff_override: optional array ``[len(wavelengths), n_modes]``
@@ -549,6 +572,25 @@ class EMESolver:
         # validation_markdown/calibrate_body_neff_mode_solve_skip_validation.md
         # step 2 (gated on that doc's step 1/5 before this is the default).
         if neff_override is not None:
+            # The diagonal form above is a CONSEQUENCE of the single-cell
+            # build, not a property of neff_override -- so the gate has to be
+            # "is this span uniform?", not "was an override passed?". A
+            # tapered span collapsed onto one cross-section's basis returns a
+            # confidently wrong, non-diagonal-in-reality answer with no
+            # warning. mmi_1x4_tapered_body_validation.md step 1 (option (b));
+            # HybridSolver._calibrated_neff() also checks, earlier and with
+            # the section index, but this catches direct callers it cannot
+            # see (e.g. mmi_2x2_hybrid.py's own hand-rolled cascade).
+            # [x0 - stub_left, x1 + stub_right] is the real drawn span --
+            # `length` above includes both stubs, so both must be uniform too.
+            assert_uniform_cross_section(
+                geometry, x0 - stub_left, x1 + stub_right,
+                what="EMESolver.solve_section(neff_override=...)",
+                why="an overridden-neff section is propagated as a diagonal "
+                    "exp(2j*pi*neff/wl*L), which only describes a uniform "
+                    "cross-section; a varying one needs a real multi-cell solve",
+                geometry_kwargs=geometry_kwargs,
+            )
             T = np.zeros((len(wavelengths), n_modes_out, n_modes_in), dtype=complex)
             for wl_idx, wl in enumerate(wavelengths):
                 for k in range(min(n_modes_out, n_modes_in)):
@@ -556,24 +598,63 @@ class EMESolver:
                         2j * np.pi * neff_override[wl_idx][k] / wl * length
                     )
         else:
+            # Real multi-cell EME (mmi_1x4_tapered_body_validation.md step 3).
+            # solve_section() assumes ONE EME region per solver instance -- a
+            # HybridSolver cascade already carries one dedicated EMESolver per
+            # section, so a multi-region instance reaching here is a caller
+            # error (build a separate EMESolver for this section), not a case
+            # to silently half-honor by reading only its first region.
+            if len(self.num_cells) != 1:
+                raise ValueError(
+                    f"solve_section() assumes a single-region EMESolver "
+                    f"(one EME region per hybrid-cascade section) -- got "
+                    f"num_cells={self.num_cells}. Build a dedicated EMESolver "
+                    "for this section instead of reusing a whole-device, "
+                    "multi-region instance."
+                )
+
             gds_polys = geometry.section_gds(
                 x0, x1, self.oxide_width,
                 stub_left=stub_left, stub_right=stub_right, **geometry_kwargs
             )
             structs = extrude_polygons(gds_polys, self._extrusion_rules(wavelengths))
             mesh = self._build_mesh()
-            cells = mw.create_cells(structures=structs, mesh=mesh, Ls=[length])
+            # num_cells[0]=1 (every existing device script's value) reproduces
+            # today's single cell of Ls=[length] exactly -- stubs folded into
+            # the one cell length, unchanged.
+            #
+            # Per-cell mode count stays `n_modes` (= max(n_modes_in,
+            # n_modes_out)), NOT self.num_modes[0], deliberately: `num_modes`
+            # is documented as an unused placeholder on this path by several
+            # callers, and modal_multiplexer_hybrid.py actively RELIES on that
+            # -- it fills three EME slots with ONE body_solver(num_modes=[15]),
+            # including a connector section whose interfaces carry CONN_MODES=6,
+            # and says so in its own comment. Reading num_modes[0] here would
+            # silently solve 15 modes where 6 were solved before: a behaviour
+            # change (the top-6 slice of a 15-mode solve is not guaranteed
+            # identical to a direct 6-mode solve -- the same caveat this
+            # method's own superset-cache comment above already records) and a
+            # cost increase, on a device nobody was changing. A caller wanting
+            # a richer internal body basis than its interfaces expose should
+            # raise n_modes_in/n_modes_out, which it controls directly.
+            cell_lengths = self._flat_cell_lengths(region_lengths=[length])
+            modes_per_cell = [n_modes] * len(cell_lengths)
+            cells = mw.create_cells(structures=structs, mesh=mesh, Ls=cell_lengths)
 
             T = np.zeros((len(wavelengths), n_modes_out, n_modes_in), dtype=complex)
 
             for wl_idx, wl in enumerate(wavelengths):
                 env = mw.Environment(wl=float(wl), T=self.temperature)
                 css = [mw.CrossSection.from_cell(cell=cell, env=env) for cell in cells]
-                modes = [self.compute_modes(cs, n_modes) for cs in css]
+                modes = [self.compute_modes(cs, nm) for cs, nm in zip(css, modes_per_cell)]
                 S, port_map = mw.compute_s_matrix(modes, cells=cells)
                 # S is a flat dense matrix keyed by string port labels ("left@n",
                 # "right@n"), not an NxN block per port pair — look up indices
                 # explicitly rather than assuming S[0,1] is the transmission block.
+                # These labels come only from the FIRST cell's left faces and
+                # the LAST cell's right faces regardless of how many cells sit
+                # in between (meow/eme/cascade.py:_get_netlist) -- correct for
+                # N cells unchanged from the single-cell case.
                 for i in range(n_modes_out):
                     for j in range(n_modes_in):
                         i_out = port_map[f"right@{i}"]

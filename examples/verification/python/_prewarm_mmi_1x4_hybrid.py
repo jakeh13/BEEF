@@ -55,15 +55,22 @@ mmi = MMI(
     waveguide_height=0.30, use_neighbor_aperture=True,
 )
 
+# FDTD_SIM_WIDTH/HEIGHT, CHANGED 2026-08-19 from MM_WIDTH+8.0/SIN_300.sz --
+# see mmi_1x4_hybrid.py's own _fdtd_common comment for the full measurement
+# (mmi_1x4_sin_body_domain_size_convergence.py, job 12029224). Must match
+# mmi_1x4_hybrid.py's own values exactly -- this prewarms ITS cache.
+FDTD_SIM_WIDTH = MM_WIDTH + 4.0
+FDTD_SIM_HEIGHT = 4.0
+
 _fdtd_common = dict(
-    res=RESOLUTION, sim_width=MM_WIDTH + 8.0, sim_height=SIN_300.sz,
+    res=RESOLUTION, sim_width=FDTD_SIM_WIDTH, sim_height=FDTD_SIM_HEIGHT,
     dpml=0.5, source_margin=0.0, monitor_margin=0.25, three_d=True,
     material_stack=SIN_300, decay_tol=DECAY_TOL,
 )
 input_solver = FDTDSolver(**_fdtd_common)
 body_solver = EMESolver(
     num_modes=[N_MODES], num_cells=[1], lengths=[1.0],
-    oxide_width=MM_WIDTH + 8.0, oxide_height=SIN_300.sz,
+    oxide_width=FDTD_SIM_WIDTH, oxide_height=FDTD_SIM_HEIGHT,
     res=RESOLUTION, material_stack=SIN_300, mode_solver="tidy3d",
 )
 output_solver = FDTDSolver(**_fdtd_common)

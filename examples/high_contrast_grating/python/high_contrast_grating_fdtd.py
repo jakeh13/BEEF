@@ -100,6 +100,50 @@ WL_MAX = 1.60                      # IEEE PTL 36(9), 597-600, 2024) reports "pea
                                     # repo's own C-band convention (directional_coupler, mmi_2x2).
 N_WL = 5 if TEST_MODE else 21      # one broadband pulse captures all of these in a single run
 
+# ---------------------------------------------------------------------------
+# Output redirects for the two override axes above. Both follow the rule
+# directional_coupler_soi160_hybrid.py's own env-var family established:
+# "the guard is the env var, not the value" -- an UNSET var reproduces the
+# production behavior byte-for-byte and writes to the original output_dir; a
+# SET var redirects to its own subfolder, so no override run can overwrite a
+# completed production result.
+#
+# HCG_FDTD_RES had no redirect before this (2026-08-21). It scaled the
+# resolution but still wrote to the top-level output_dir, so any sweep point
+# silently overwrote job 11673560's res=60 full-band production smatrix.pkl /
+# reflection.png. That is the bug this block fixes, not a new feature.
+# TEST_MODE is deliberately NOT part of the guard: it already prints its own
+# "not a physical result" warning, and adding it here would move the smoke
+# test's output out from under the path everything else expects.
+if os.environ.get("HCG_FDTD_RES") is not None:
+    output_dir = os.path.join(output_dir, "res_sweep", f"res{RESOLUTION:g}")
+    print(f"HCG resolution override: RESOLUTION={RESOLUTION} -> output_dir={output_dir}")
+    os.makedirs(output_dir, exist_ok=True)
+
+# HCG_WL_MIN/HCG_WL_MAX/HCG_N_WL override the C-band production window above,
+# all-or-nothing (a partial set would silently mix a custom window with the
+# defaults). Nests INSIDE any res_sweep/ redirect, so a combined override
+# lands at res_sweep/res<R>/windows/<tag>/ and each axis stays readable.
+#
+# Cost note, since a narrower window reads like a cheaper run and is not:
+# source_fwidth() scales with the FREQUENCY SPAN 1/wl_min - 1/wl_max, so a
+# narrower band means a narrower Gaussian and therefore a LONGER pulse in
+# time. Narrowing 1.50-1.60 to 1.530-1.565 cuts the span 2.86x, i.e. ~2.86x
+# more source time-stepping before the decay_tol ringdown even begins.
+_win_env = (os.environ.get("HCG_WL_MIN"), os.environ.get("HCG_WL_MAX"), os.environ.get("HCG_N_WL"))
+if any(v is not None for v in _win_env):
+    if not all(v is not None for v in _win_env):
+        raise SystemExit(
+            "HCG_WL_MIN/HCG_WL_MAX/HCG_N_WL must be set together (or not at "
+            "all) -- got a partial override, which would silently mix a "
+            "custom window with the default WL_MIN/WL_MAX/N_WL above."
+        )
+    WL_MIN, WL_MAX, N_WL = float(_win_env[0]), float(_win_env[1]), int(_win_env[2])
+    output_dir = os.path.join(output_dir, "windows", f"{WL_MIN:.4f}-{WL_MAX:.4f}_n{N_WL}")
+    print(f"HCG wavelength window override: WL_MIN={WL_MIN} WL_MAX={WL_MAX} "
+          f"N_WL={N_WL} -> output_dir={output_dir}")
+    os.makedirs(output_dir, exist_ok=True)
+
 DPML = 0.5              # PML thickness, all sides
 EDGE_CLEARANCE = 0.3    # plain-oxide gap between the GDS's own bounding box and PML, both sides
 SOURCE_MARGIN = 0.45    # measured inward from the PML inner edge — must land inside the

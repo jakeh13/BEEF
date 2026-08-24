@@ -7,9 +7,11 @@ anywhere in examples/tests before that script. Same pattern here, pinned
 EXACTLY to mmi_4x4_90hybrid/python/mmi_4x4_90hybrid_eme.py's own construction
 (geometry, EMESolver config, wavelength grid) -- see that script for the full
 provenance of every constant below, including the still-open A9/A11 first-
-pass-design caveats it documents (N_MODES_BODY=8, taper params not
-independently optimized, etc.) -- unchanged here, this script only adds a
-field snapshot on top of an existing config, it does not re-derive it.
+pass-design caveats it documents (taper params not independently optimized,
+etc.) -- unchanged here, this script only adds a field snapshot on top of an
+existing config, it does not re-derive it. (That docstring said
+"N_MODES_BODY=8" until 2026-08-21; both scripts are now at the settled
+N_MODES_BODY=16/DELTA_L=-2.75 point -- see the constants block below.)
 
 **Cost warning, inherited directly from mmi_4x4_90hybrid_eme.py's own
 docstring**: that script measured ~416 s/mode for this device's OWN body
@@ -61,7 +63,17 @@ os.makedirs(output_dir, exist_ok=True)
 RESOLUTION = float(os.environ.get("MMI4X4_EME_RES", 40.0))
 WL_MIN, WL_MAX = 1.26, 1.36
 N_WL = int(os.environ.get("MMI4X4_EME_NWL", 3))
-N_MODES_TAPER = int(os.environ.get("MMI4X4_EME_NMODES_TAPER", 4))
+N_MODES_TAPER = int(os.environ.get("MMI4X4_EME_NMODES_TAPER", 12))
+# was 4 -- CORRECTED 2026-08-22, a SECOND stale constant in this file,
+# missed on 2026-08-21 when DELTA_L/N_MODES_BODY were fixed here. The
+# 4->12 bump landed in mmi_4x4_90hybrid_eme.py on 2026-08-08 (job 11745928
+# rendered the comparison; at N_MODES_TAPER=4 the taper's 0.8 um end is
+# missing 2 of its 6 real guided modes) and this file never got it. Caught
+# only because job 12212950's own log printed "N_MODES_TAPER=4" -- the
+# pre-existing fields_backup_nmt4_20260808_102153/ directory is named for
+# exactly this value, i.e. the plots this file produced were the ones that
+# bump was meant to supersede. Same duplicate-constants failure as
+# DELTA_L/N_MODES_BODY; see the note on those below.
 N_CELLS_TAPER = int(os.environ.get("MMI4X4_EME_NCELLS_TAPER", 30))
 
 WAVEGUIDE_WIDTH = 0.35
@@ -70,9 +82,15 @@ WAVEGUIDE_OFFSET = MM_WIDTH / 4.0
 TAPER_WIDTH = 0.8
 TAPER_LENGTH = 1.0
 L_PI = 108.9195
-DELTA_L = -1.50
-MM_LENGTH = 0.75 * L_PI + DELTA_L   # = 80.1896
-N_MODES_BODY = 8
+DELTA_L = -2.75
+MM_LENGTH = 0.75 * L_PI + DELTA_L   # = 78.9396
+N_MODES_BODY = 16
+# CORRECTED 2026-08-21 together with mmi_4x4_90hybrid_eme.py's own copy of
+# these three constants -- both were missed by the 2026-08-09 body-mode redo
+# (8->16 modes, which moved the optimum to DELTA_L=-2.75) that body_sweep.py
+# and hybrid.py did get. See that script's note. These constants are
+# DUPLICATED here rather than imported, which is exactly why the two drifted
+# apart silently; keep them in step by hand until that is refactored.
 
 # What THIS script adds on top of mmi_4x4_90hybrid_eme.py's own config.
 WL_PLOT = 1.31       # O-band centre -- the field snapshot wavelength

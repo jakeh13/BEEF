@@ -1,5 +1,363 @@
 # Active SLURM jobs — snapshot
 
+**★ TWENTY-NINTH SNAPSHOT — 2026-08-21, verified against
+`squeue -u jhiesener3` immediately after submitting. This is the current one.
+Everything below the next rule is the twenty-eighth snapshot (2026-08-18),
+not reverified this pass.**
+
+## C-band measurement-grid re-runs — 4 jobs, all SUBMITTED, none landed
+
+Re-simulating the two 4C10-die "DC_test" couplers (0.5 µm = 1921/1922,
+3.0 µm = 1911/1912) and the HCG reflector on the **measurement grid
+1530–1565 nm, 1 nm steps, 36 pts**, replacing the 1.50–1.60 µm / 11-pt
+(DC) and 21-pt (HCG) production windows. `CALIBRATE_BODY` is on for both
+hybrid jobs — that is the point of the re-run, not incidental.
+
+All four on **`gts-sr108-gedc_main`** (unlimited). `pace-quota` at submit
+time: `gts-sr108-ece` **$0.31**, `gts-sr108` $6.29, `-gedc_main` Infinity.
+The two existing dc_test batch files hardcode `-ece` and would have been
+near-unfundable — the new batch files do not reuse them.
+
+| job | state | what |
+|---|---|---|
+| **12093321** | 🏃 RUNNING (started immediately, 1 node/24) | `beef_dc160_hyb_cband36` — `directional_coupler_soi160_hybrid.py` at the new window. The **3.0 µm calibrated hybrid**, plus its β-calibration plots. `-t 1440`. → `directional_coupler_soi160_hybrid/windows/1.5300-1.5650_n36/` |
+| **12093324** | ⏸ PENDING (**Dependency**, `afterok:12093321`) | `beef_dc160_lsweep_cband36` — `..._hybrid_length_sweep.py`. **The 0.5 µm hybrid result.** Held deliberately: it solves the same 2 FDTD sections + β calibration as 12093321, so running it concurrently would duplicate the cold work and put two writers on one set of cache keys. `-t 720`. → `..._length_sweep/windows/1.5300-1.5650_n36/` |
+| **12093328_0/_1** | 🏃 RUNNING (both, 2 nodes/24 each) | `beef_dc160_fdtd_cband36` — `..._fdtd_dc_test.py` array over `(0.5, 3.0)`. Single-domain full-FDTD control on both lengths. `-t 720`. → `..._fdtd_dc_test/L{0.500,3.000}/windows/1.5300-1.5650_n36/` |
+| **12093330** | ⏸ PENDING (Resources, 2 nodes/24) | `beef_hcg_res80_cband36` — `high_contrast_grating_fdtd.py` at **res=80** on the new window. `-t 1440`. → `high_contrast_grating_fdtd/res_sweep/res80/windows/1.5300-1.5650_n36/` |
+
+**Why 0.5 µm needed the length-sweep script.**
+`directional_coupler_soi160_hybrid_dc_test.py` **cannot** produce a 0.5 µm
+hybrid result and no parameter tweak fixes it — re-confirmed 2026-08-21 by
+executing it, which raises its `_body_stub_cap` assertion. That assert is only
+the first wall; the real blocker is the neff calibration. `section_mode_beta()`
+needs `body_span - 2·dpml > 0` and then fits β over three sub-lengths spaced
+`usable_span/3` apart (`fdtd.py:2320`, `:2410`). At `coupling_length=0.5` the
+body is ≤ 0.5 µm total, so even at an unusably thin `dpml=0.15` the fit lever
+arm collapses to ~0.07 µm against β ≈ 9.5 rad/µm — the calibration would be
+measuring monitor artifacts. **Structural, not a margin.**
+`..._hybrid_length_sweep.py` reaches it legitimately: reference geometry at
+`L_REF=3.0` (where sections and β are well-conditioned), EME body swept
+analytically, floor `SWEEP_MIN = 2·BODY_STUB = 0.5` with the device lengths
+injected onto the grid. **Open question for when it lands**: at 0.5 µm the two
+S-bends are only 0.5 µm apart, so the independent-scatterer + 2-mode-interface
+assumption degrades. 12093328_0 is the direct check. Agreement at 3.0 with
+disagreement at 0.5 is the *expected* signature, not a bug.
+
+**Cost note — a narrower band is a LONGER run.** `source_fwidth` scales with
+the frequency span `1/λ_min − 1/λ_max`, which drops **2.85×**
+(0.041667 → 0.014617), so the Gaussian pulse is ~2.85× longer in time. Every
+`-t` above accounts for this. Budgets are margins, not measured bounds; the
+precedents for erring generous are job **11726827** (N_WL=601, TIMED OUT at
+12 h inside its MPB loop) and `dc_soi160_hybrid` (timed out at 5 h and 4 h
+before 12 h worked).
+
+**Cache**: all four are genuinely cold. The wavelength array is hashed into
+every FDTD fingerprint (`_resolved_spectral_config`), so nothing in
+`example_sim_cache/` is reusable at this window. 12093324 is the one
+exception *by construction* — it should be near-all hits off 12093321.
+
+### Landed — 12093328_0, full-FDTD @ 0.5 µm ✅ COMPLETED 00:54:06
+
+First of the four. `-t 720` budget, used **7.5 %** of it — the ~2.85× pulse-
+length penalty from the narrower band was real but far smaller than the 2–3 h
+estimate (job 11785063_1 was 00:40:42 at 11 pts, so this is ×1.33, not ×2.85;
+the ringdown, not the source, dominates this geometry). **Re-budget the
+remaining full-FDTD work down** rather than repeating the 12 h ask.
+
+Clean run: no passivity warning, no `check_source_coverage` starvation warning.
+`T_total` 0.99864–0.99912 across the band.
+
+**Band-overlap regression — the run is verified, not just finished.** The old
+11-pt 1.50–1.60 µm result interpolated onto the new 36-pt grid agrees to:
+
+| | max abs diff | mean abs diff |
+|---|---|---|
+| `T_through` | 1.2e-04 | 5e-05 |
+| `T_cross` | 6e-05 | 2e-05 |
+| `T_total` | 1.2e-04 | 6e-05 |
+
+So the narrower source did **not** move the physics — the change is sampling
+density only, which is exactly what had to be true before any of these four
+runs could be read. This also validates the `windows/` override mechanism
+end to end.
+
+**Against measurement**: simulated AIN0/AIN1 split at 1.550 µm = **14.31 dB**
+vs the **~14.6 dB** measured for device 1921/1922. Independent corroboration
+of the measurement-based id→length assignment in
+`directional_coupler_soi160_hybrid_dc_test.py`'s docstring, which had been
+flagged there as "a good working hypothesis, not a verified GDS number".
+Still not a GDS re-derivation — but the hypothesis now survives a real check.
+
+Values at λ = 1.548 µm: through `T` 0.9637 (−0.16 dB), cross `T` 0.0350
+(−14.56 dB), total 0.9987. → `..._fdtd_dc_test/L0.500/windows/1.5300-1.5650_n36/`
+
+**No overwrites**: all six at-risk production files re-checked against their
+pre-submit mtimes after this landed — all UNCHANGED.
+
+### Landed — 12093328_1, full-FDTD @ 3.0 µm ✅ COMPLETED 01:00:45
+
+Job C complete (both array tasks). Clean: no passivity or source-coverage
+warning, `T_total` 0.9984–0.9988. Band-overlap regression against the old
+11-pt run: max abs diff **1.66e-04** (`T_total`), 1.1e-04 (`T_through`),
+1.3e-04 (`T_cross`) — same verdict as `_0`, the narrower source did not move
+the physics.
+
+Values at λ = 1.548 µm: through 0.9022 (−0.45 dB), cross 0.0962 (−10.17 dB),
+total 0.9984, coupling ratio 0.096.
+
+**Against measurement**: split at 1.550 µm = **9.62 dB** vs **~10.0 dB**
+measured for 1911/1912. Both dc_test devices now corroborate their
+measurement-based length assignment (0.5 µm: 14.31 vs ~14.6 dB).
+→ `..._fdtd_dc_test/L3.000/windows/1.5300-1.5650_n36/`
+
+**Full-FDTD re-budget, now on two measured points**: 00:54:06 and 01:00:45
+against a `-t 720` ask. Future full-FDTD points on this band are ~1 h jobs.
+
+### 2026-08-22 — ER finding CORRECTED, and an overwrite bug fixed
+
+**Correction to the design finding recorded below.** The earlier claim of a
+"peak 33.28 dB at Lc = 26.2 µm" was **over-read**: it was the argmax of a
+coarse 40-point Lc axis, and a 400-point rescan shows that structure is
+metric ripple, not physics.
+
+**Mechanism, measured**: ER is a MEDIAN over whichever resonances fall inside
+the fixed 35 nm band. As coupling_length shifts the comb, dips enter and
+leave that window — over the 400-point scan the in-band count moved between
+16.2 and 23.6 and **changed 392 times**. The resulting ER jitter is **std
+0.223 dB, peak-to-peak 2.561 dB** about a smoothed envelope. The apparent
+"global optimum" (32.30 dB at Lc = 26.60) sits only **+1.39 dB above the
+envelope** — inside the ripple. It is not a resolvable design point.
+
+**What is actually true** (smoothed envelope, window ≫ the 0.62 µm ripple):
+
+| | |
+|---|---|
+| envelope peak | **~31.3 dB near Lc ≈ 21.7 µm** |
+| within 1 dB | Lc ∈ [17.8, 36.6] µm — **18.8 µm wide** |
+| within 2 dB | Lc ∈ [16.2, 38.8] µm |
+| within 3 dB | Lc ∈ [14.7, 40.3] µm |
+| fabricated Lc = 3.0 µm | 12.35 dB |
+| gain from reaching the plateau | **~18.9 dB** |
+
+The ~19 dB headline headroom **survives** the correction — it was never
+sensitive to the ripple. What changes is the guidance: this is a **broad,
+flat plateau, not a sharp optimum**, so coupling-length fabrication tolerance
+is generous (tens of µm within 1 dB), not the ±447 nm the naive peak-width
+read suggested. That is better design news, not worse.
+
+Read the ENVELOPE of the ER map, never its argmax. Documented in the script.
+
+**Overwrite bug, found by hitting it.** The sweep's output path encoded band
+and all three resolutions — everything that changes what was *simulated* —
+but NOT the sweep axes, which change only what was *evaluated*. So the
+400×5 rescan silently clobbered the 40×40 production heatmaps at the same
+path. Fixed with the same rule used everywhere else in this repo (**the guard
+is the env var, not the value**): unset reproduces the documented production
+path exactly; setting any sweep-axis knob redirects to
+`grids/Lc<..>_n<..>__La<..>_n<..>/`. Both planes now coexist, verified. The
+production deliverable was regenerated and is identical to the original
+(ER 12.380 / FSR 2.2355 / FWHM 0.0938).
+
+### Landed — 12093330 (HCG res 80) ✅ 03:46:33 and 12117825 (arm β res 80) ✅ 02:32:12
+
+**ALL FIVE JOBS COMPLETE.** Both clean (only meep's grid-rounding notices).
+12093330 used 16 % of its 24 h budget, 12117825 21 % of its 12 h — the ~1.3×
+narrow-band pulse factor held, confirming the 2.85× projection was wrong in
+the safe direction.
+
+**HCG mirror, res 60 → 80 in the overlap band**: R rises from [0.9524, 0.9693]
+to [0.9615, 0.9777], mean shift **+0.0088**. A RISE is the expected direction
+— `high_contrast_grating_validation.md`'s own sweep climbs monotonically
+0.4468 → 0.9697 over res 10 → 60 and is explicitly not converged there. This
+adds one point above that; **still not a convergence claim**.
+
+**Arm n_eff, res 60 → 80**: FDTD 2.169312 → 2.172613 (+0.15 %), and the
+MPB-to-FDTD excess *shrinks* 1.4627 % → **1.3547 %**. The excess narrowing
+with resolution is what you would expect if it is a discretization artifact
+rather than a fixed engine offset — a useful datum for the arm-resolution
+convergence question that `HCGFP_ARM_RES` exists to answer.
+
+### ★ DELIVERABLE — `hcg_fabry_perot_length_sweep.py` at res 80 on the C band
+
+Run with `HCGFP_CACHE_ONLY=1`, so all four pieces had to hit cache or raise:
+**1600 cells in 6 s, zero simulation.** →
+`hcg_fabry_perot_length_sweep/1.5300-1.5650_n36/res80_dc40_arm80/`
+
+The 1 nm assembly grid pays off exactly as predicted: per-factor unwrap
+margins are **0.026–0.116 rad/step** against the 0.5 rad limit (they were
+0.26–1.20 on the old 10 nm grid), and fit residuals ~15× smaller. The
+dense-grid adequacy guard clears at **32.6 samples** across the narrowest
+resonance in the plane. All 1600 cells carry ≥2 resonances — no NaN holes.
+
+**Fabricated device** (Lc 3.0, L_arm 53.08), res60/old-band → res80/C-band:
+
+| | res 60, 1.50–1.60 | res 80, 1.530–1.565 |
+|---|---|---|
+| ER | 10.9023 dB | **12.3795 dB** |
+| FSR | 2.2455 nm | **2.2355 nm** |
+| FWHM | 0.1008 nm | **0.0938 nm** |
+
+All three move coherently with the mirror's R going 0.9693 → 0.9777: higher
+R → higher finesse → deeper ER, narrower FWHM, slightly smaller FSR. That
+internal consistency is the check that the res-80 rebuild is sound.
+
+**Design findings**
+- ER is **essentially 1-D in coupling length**: max std across the whole arm
+  axis at fixed Lc is **0.673 dB**. FSR carries the arm dependence (4.11×
+  across the arm range). The two design knobs are near-orthogonal — set FSR
+  with the arms, ER with the coupler.
+- The fabricated coupling length is far off the ER optimum: **11.82 dB**
+  (arm-averaged) at Lc = 3.0 vs **31.33 dB** at Lc ≈ 27.0 µm — **+19.5 dB of
+  headroom from coupling length alone**. Peak single cell 33.28 dB at
+  Lc = 26.2, L_arm = 16.9 µm.
+- Caveat on that: the coupler's own S-bend FDTD is res 40, ASSUMED and never
+  converged on this platform. The ER optimum sits at Lc ≈ 27 µm, an order of
+  magnitude from the 3.0 µm the coupler pieces were validated around. Confirm
+  before designing to it.
+
+### Landed — 12093321 (hybrid @ 3.0) ✅ 02:01:32 and 12093324 (length sweep) ✅ 00:00:50
+
+**The DC half of the 2026-08-21 request is COMPLETE**: both requested lengths
+(0.5 and 3.0 µm), by both methods, on 1530–1565 nm / 1 nm steps, with the
+neff calibration on for both hybrid runs.
+
+12093324 finishing in **50 seconds** is the dependency chain working exactly
+as designed — every expensive piece was a cache hit off 12093321, and only
+the analytic EME body sweep was new. Had the two run concurrently they would
+each have paid the full cold cost.
+
+Job A clean (only meep's benign grid-rounding notices). Band-overlap
+regression vs the old 11-pt run: max abs diff **1.67e-04**. Body β
+calibration at 1.548 µm: MPB 2.129795/2.101037 → FDTD 2.181470/2.156059,
+Δn_eff 0.028758 → 0.025410 — consistent with the pre-existing cached run.
+Job B measured the 50:50 length at **12.2316 µm**.
+
+#### ★ METHOD CROSS-CHECK — and a prediction that was WRONG
+
+The expectation recorded above was: *"agreement at 3.0 with disagreement at
+0.5 is the expected signature"*, on the grounds that at 0.5 µm the two
+S-bends sit only 0.5 µm apart and the independent-scatterer + N_MODES=2
+interface assumption should degrade. **That did not happen.** Hybrid vs
+single-domain full-FDTD, at λ = 1.5475 µm:
+
+| | L = 0.5 µm | | L = 3.0 µm | |
+|---|---|---|---|---|
+| | hybrid / full-FDTD | abs diff | hybrid / full-FDTD | abs diff |
+| `T_through` | 0.9621 / 0.9637 | 0.0017 | 0.9009 / 0.9022 | 0.0013 |
+| `T_cross` | 0.0349 / 0.0350 | 0.0001 | 0.0961 / 0.0962 | 0.0002 |
+| coupling ratio | 0.0350 / 0.0350 | **0.0000** | 0.0964 / 0.0964 | **0.0000** |
+
+Band-wide max abs diff: through 0.0018 / cross 0.0001 at 0.5 µm, and
+0.0014 / 0.0002 at 3.0 µm. **The 0.5 µm agreement is as good as the 3.0 µm
+agreement**, on two independent methods sharing no cache entries.
+
+The residual is a small `T_total` deficit in the hybrid, and it is
+**length-INDEPENDENT**, which is what identifies its cause:
+
+| coupling length | band-mean `T_total` deficit (full-FDTD − hybrid) |
+|---|---|
+| 0.5 µm | **+0.00170** |
+| 3.0 µm | **+0.00145** |
+
+The bends are 6× closer at 0.5 µm, yet the deficit grows only 17 %. A
+bend-proximity failure would scale strongly with that separation; this does
+not. It is consistent with a fixed cost at the two modal interfaces — the
+N_MODES=2 basis truncation, paid once per interface regardless of what sits
+between them.
+
+**Consequence**: the left edge of the coupling-length axis is no longer
+provisional. `directional_coupler_soi160_hybrid_length_sweep.py`'s
+shared-FDTD construction is validated down to its 0.5 µm floor against
+independent full-FDTD, which also removes the caveat carried in
+`hcg_fabry_perot_length_sweep.py`'s docstring for the same reason. Update
+that docstring when the queue is clear.
+
+**No overwrites**: all six at-risk production files re-checked — UNCHANGED.
+
+### New — 12117825, HCG-FP connecting-waveguide β @ res 80 🏃 RUNNING
+
+Submitted 2026-08-21 alongside the four above, on `gts-sr108-gedc_main`,
+`-N 1 --ntasks-per-node=24`, `-t 720`. Started immediately.
+
+The one piece `hcg_fabry_perot_length_sweep.py` (new, see below) needs that
+is neither cached nor already queued. **Confirmed a real cache MISS before
+submitting** — a `cache_only=True` probe raised `CacheMissError` from
+`section_mode_neff()` — so this is not redundant work.
+
+Run through `examples/verification/python/_prewarm_hcgfp_arm_beta.py`, not
+through the sweep script, *specifically* so it cannot touch 12093321's or
+12093330's cache keys: the sweep script with `cache_only=0` would not WAIT
+for those two jobs, it would re-simulate them. The arm is a bare 0.5 µm strip
+and shares no key with either, so it is safe in parallel.
+
+Budget basis: job 11995681's own arm calibration was 47,604 steps / 48.4 min
+at res 60 on the 11-pt 1.50–1.60 µm grid. res 60→80 is (80/60)⁴ = 3.16×; the
+band change adds ~1.3× (**measured** on today's two full-FDTD landings, not
+the naive 2.85× — ringdown dominates these geometries). Estimate 3–4 h.
+
+## New script — `hcg_fabry_perot_length_sweep.py`
+
+2-D design sweep of the HCG Fabry-Perot over the coupler's **coupling length**
+and the connecting waveguide's **arm length** → extinction-ratio / FSR / FWHM
+heatmaps, plus a dip-count diagnostic panel.
+
+**The whole plane is analytic.** In `hcg_fabry_perot_hybrid.py`'s closed form,
+`L_ARM` enters ONLY through `phase = exp(2j·π·n_eff_arm/λ·L_ARM)` and
+`coupling_length` ONLY through the EME body's diagonal phase
+`exp(1j·β_body·(L_c − 2·BODY_STUB))`. The two FDTD S-bend solves and both β
+calibrations are properties of the bend and the cross-section, not of how much
+straight coupler sits between them. So a 40×40 plane is **4 cached
+simulations + ~9 s of numpy** — the same construction
+`directional_coupler_soi160_hybrid_length_sweep.py` uses, extended one axis.
+
+**Validated end-to-end 2026-08-21 against the OLD cached band** (1.50–1.60 µm,
+res 60/40/60), `HCGFP_CACHE_ONLY=1`, so all four lookups had to hit or raise:
+
+| check | result |
+|---|---|
+| mean FSR at the fabricated point | **2.2455 nm** vs job 11995681's **2.245 nm** |
+| resonance count | **45** vs job 11995681's **45** |
+| arm n_eff | **2.138038 → 2.169312 (+1.4627 %)** vs 11995681's +1.463 % |
+| 40×40 wall time | **9 s**, zero simulation |
+
+Two defects that validation exposed, both fixed:
+1. **FWHM was grid-quantised** — `_find_dips` read half-power crossings at
+   sample positions, a 2–3 cell staircase at coarse density. Now interpolated
+   sub-grid (`_cross`).
+2. **Dip detection was O(N_dense) Python per cell** — 32 M iterations for a
+   40×40 map, dominating the sweep. Vectorised; the anchor values are
+   bit-identical before and after.
+
+And one real finding from the adequacy guard added alongside: at the original
+default of 20001 dense points the **narrowest cell in the plane** (0.035 nm)
+got only 7 samples, which **under-reports extinction ratio** (ER samples the
+dip bottom; measured 8.35 → 10.90 → 10.88 dB over 2001 → 8001 → 20001 while
+FSR held at 2.2455 throughout). Default raised to **40001**, and the script
+now prints samples-per-narrowest-resonance and warns below 20.
+
+**Design finding, provisional pending the res-80 run**: the fabricated device
+(L_c = 3.0, L_arm = 53.08) sits at ER ≈ 10.9 dB, while the plane peaks near
+**29.6 dB around L_c ≈ 24 µm**. ER is banded almost purely in coupling length
+(critical-coupling driven, near-independent of arm length); FSR carries the
+1/L_arm dependence. The two axes are close to orthogonal.
+
+**Carried-forward caveat**: short coupling lengths reuse the L_REF=3.0 S-bend
+solves. Exact for the bend's own scattering, but as L_c → 2·BODY_STUB the two
+bends sit ~0.5 µm apart and the independent-scatterer + N_MODES=2 interface
+assumption degrades — the same issue 12093324 carries. Treat the left edge of
+the coupling-length axis as provisional until the hybrid/full-FDTD comparison
+at 0.5 µm is done.
+
+**Library fix shipped with 12093330**: `HCG_FDTD_RES` scaled the resolution
+but did **not** redirect `output_dir`, so any res-sweep point silently
+overwrote job 11673560's res=60 production `smatrix.pkl`/`reflection.png`.
+`high_contrast_grating_fdtd.py` now redirects to `res_sweep/res<R>/` whenever
+that var is set. Pre-existing outputs were mtime-baselined before submission
+and must be re-checked when these land.
+
+---
+
+
 **★ TWENTY-EIGHTH SNAPSHOT — 2026-08-18, verified against
 `squeue -u jhiesener3`. This is the current one. Everything below the next
 rule is the twenty-seventh snapshot (2026-08-10), not reverified this pass.**
@@ -10,8 +368,8 @@ result yet.
 
 | job | state | what |
 |---|---|---|
-| **11995441** | 🏃 RUNNING (launched 17:50, `-t 3-00:00:00`, 1 node/4 cores) | `beef_mmi2x2_bodystub_sweep_alt_2nm_res30` — `mmi_2x2_body_stub_sweep_alt.py` at **res=30**, a replica of the manuscript's dense 2 nm grid (51 monitors, 0–0.10 µm past the taper end, `x1_fixed=-13.85`, 11 wl pts, 14 interface modes, top-arm excitation) with ONLY `self.res` changed. Log confirms `res=30`, 51 positions, `Computational cell is 5.66667 x 6 x 2.5 with resolution 30`. Budget extrapolated from the res=40 run's measured split (see below): ~15h worst case, so 72h is ~4.8x. → `data/mode_coeffs_body_stub_alt_dense_res30_2nm_0-100nm.npz` |
-| **11995442** | 🏃 RUNNING (launched 17:50, `-t 7-00:00:00`, 1 node/4 cores) | `beef_mmi2x2_bodystub_sweep_alt_2nm_res50` — same replica at **res=50**, the expensive leg. Log confirms `res=50`, 51 positions, `Computational cell is 5.66 x 6 x 2.5 with resolution 50`. Budget ~46h (res² decomp scaling) to ~56h (res³), so 7 days is ~3.0–3.6x. → `data/mode_coeffs_body_stub_alt_dense_res50_2nm_0-100nm.npz` |
+| **11995441** | ✅ **COMPLETED** 19:06:00 (2026-08-18 17:50 → 2026-08-19 12:58), exit 0:0 — **26.5% of its 72h budget** | `beef_mmi2x2_bodystub_sweep_alt_2nm_res30` — `mmi_2x2_body_stub_sweep_alt.py` at **res=30**, a replica of the manuscript's dense 2 nm grid (51 monitors, 0–0.10 µm past the taper end, `x1_fixed=-13.85`, 11 wl pts, 14 interface modes, top-arm excitation) with ONLY `self.res` changed. **Verified against the `.npz` itself, not the job-log print**: `M_in1` (11, 51, 14, 1) complex128, all finite, no zeros, `RESOLUTION=30.0` stored, and `body_stubs`/`wavelengths`/`x1_fixed` all bit-identical to the res=40 file — so the two datasets are directly differenceable. Result in the section below. → `data/mode_coeffs_body_stub_alt_dense_res30_2nm_0-100nm.npz` |
+| **11995442** | ✅ **COMPLETED** 2-09:30:58 (57.5 h), exit 0:0 — **34% of its 7-day budget**; npz written 2026-08-21 03:23 | `beef_mmi2x2_bodystub_sweep_alt_2nm_res50` — same replica at **res=50**. `Elapsed run time = 207,049 s`. Steady-state rate held at ~3,550 s/position for the whole run; the pre-submission estimate was ~56 h at res³ scaling, actual 57.5 h — **the res³ decomposition scaling was correct**. → `data/mode_coeffs_body_stub_alt_dense_res50_2nm_0-100nm.npz` |
 | **11982320** | 🏃 RUNNING (6h58m elapsed at snapshot time) | `beef_inv_res30_input` — another session's work, not independently verified this snapshot |
 
 ### Landed this pass — job 11995681, `beef_hcgfp_selfcontained` ✅ COMPLETED
@@ -41,6 +399,430 @@ production run among them) while simultaneously being invisible to
 `solve`/`solve_section`/`solve_section_multi_length`, where the modal
 multiplexer actually sets it non-zero. See
 `resolved/section_mode_beta_multi_monitor_validation.md` step 11.
+
+### Landed — job 12260555, `beef_migrated_cascade_examples` — ✅ COMPLETED 2026-08-24, **2:23**, exit 0:0
+
+End-to-end re-run of the two examples migrated off the hand-rolled einsum
+(`mmi_2x2_hybrid.py`, `directional_coupler_hybrid.py`) via
+`batch/run_migrated_cascade_examples.batch`.
+
+**Why it existed, given the numbers were already verified:** the `cache_only`
+harness that proved the migration bit-identical *replicated* each script's
+composition rather than importing it, so it never exercised the scripts
+themselves. Specifically untested by it: `plot_beta_calibration()` fed from the
+new `hybrid.last_calibrations[1]` (previously the examples held the
+`BetaCalibration` object directly), `plot_hybrid_geometry()` against a solver
+that now carries `mirror_pairs`, the SMatrix save/`check_passive()` path, and
+the DC's `section_mode_neff()` log line.
+
+**Result: all four grids bit-identical to the pre-migration backups**
+(`T_bar`/`T_cross` for the 2×2, `T_through`/`T_cross` for the DC), every plot
+regenerated (calibration `fits/` + `geometry/` file mtimes confirmed current —
+the *directory* mtimes stay old because files are overwritten, not created), no
+warnings or tracebacks. **2:23** total: both configurations were cache-resident,
+as expected.
+
+The migration is now verified at the script level, not just the composition
+level. The `*.pre_migration_bak` copies of both reference `.npz` files are kept
+beside them.
+
+### Archive snapshot — 2026-08-24
+
+`archive/example_output_20260824/` and `archive/example_sim_cache_20260824/`
+(`cp -a`, matching the existing `*_YYYYMMDD` convention — the archives carry no
+manifest file, so none was added). Taken **after** job 12260555, so this is the
+first snapshot holding the post-migration state of both cascade examples.
+
+Verified rather than assumed, because seven other sessions' jobs were running at
+the time: regular-file bytes identical (243,198,070 for the cache; 382,762,112
+for the outputs), 2,093 cache files and 789 output files on both sides, `find`
+trees `diff`-clean, and **nothing written to either source tree during the 91 s
+copy** — so no torn writes despite the concurrent jobs. (`du -sh` reports
+240M vs 238M for the cache; that is directory-inode block allocation on a fresh
+copy, not missing data — regular-file bytes match exactly.)
+
+### Landed — job 12159086, `beef_mmi2x2_cascade_golden` (**`CAPTURE_REAL_M_IN0=1`**) — ✅ COMPLETED 2026-08-21 17:14:55, **45:01**, exit 0:0
+
+**Well under budget** (45 min vs. the ~1.5-2.5 h estimated) — the second
+input-side FDTD arm was the only thing that had to time-step; everything else
+was cache-resident.
+
+**Result: the hard-coded `MODE_SIGNS` is correct on all 14 modes.** Implied by
+the measured pair == hard-coded ==
+`[1,-1,1,-1,1,-1,1,-1,-1,-1,-1,1,-1,1]`, `agree: True`, and a per-mode
+re-derivation from the `.npz` confirms every sign, not just the dominant ones.
+
+The log's `max rel = 9.576e-01` is **not** a failure: the parity relation
+constrains *signs*, and its amplitude half degrades only on noise-floor modes.
+Modes 0-2 agree to 1.7e-05; modes 3-6/10/13 to ≤1.8e-03; modes 7/9/11/12
+(|M| ~1e-05) to 0.1-0.25; mode 8 (|M| = **1.3e-06**, i.e. 5e5 below the
+dominant mode) to 2.8. **Cost of the whole assumption, end to end: 1.585e-05
+on `T_cross`**, with `T_bar`/`coeffs_bar`/`M_in1`/`M_body` bit-identical
+(the bar path never touches `M_in0`). That saves a 45-minute 3-D run.
+
+**Two goldens now, on purpose.** The script rewrites `cascade_golden.npz` in
+place and its cross columns become a *different quantity* (measured rather than
+derived `M_in0`). Kept apart rather than letting one filename mean two
+configurations: **`cascade_golden_real_m_in0.npz`** is this run;
+`cascade_golden.npz` was restored to the `SYMMETRIC_MODE_REUSE=True` capture
+that steps 2-4 regress against, and the migration was **re-verified
+bit-identical against the restored file** on all four arrays. The pre-submit
+backup is what made that separation possible — take it.
+
+**Step 3(b) is unblocked but de-prioritised**, and the reason is a finding: its
+motivating hazard (a stale vector silently corrupting the cross path) is now
+covered by `MirrorSpec`'s per-call geometric precondition check, and the vector
+itself is measured correct. Full write-up in
+`resolved/multi_excitation_cascade_validation.md` step 3(b).
+
+<details>
+<summary>Submission entry (2026-08-21) — kept for the sizing record</summary>
+
+The one job `resolved/multi_excitation_cascade_validation.md` leaves outstanding after
+steps 2-4 closed. It adds the **second input-side FDTD arm** that
+`SYMMETRIC_MODE_REUSE` exists to avoid (~1.5-2.5 h of real 3-D solve; the rest
+of the capture is cache-resident and cost 38 s in job 12070199). That measured
+`M_in0` is the regression target **step 3(b)** needs before `MODE_SIGNS` can be
+*derived* from mode parity instead of declared — today `MirrorSpec` takes it as
+a hard-coded argument, geometrically precondition-checked but not derived.
+
+Submitted as `sbatch --export=ALL,CAPTURE_REAL_M_IN0=1
+batch/verification/run_capture_mmi_2x2_cascade_golden.batch` (the batch file
+already reads the variable through, defaulting to 0). Verified with `scontrol
+show job` that `CAPTURE_REAL_M_IN0=1` actually reached the job environment —
+the whole point of the run is that one flag, and a silently-defaulted 0 would
+produce a second 38 s cache-hit that looks like success. `gts-sr108-gedc_main`
+(`sshare` at submit time: **0.071** `-gedc_main` / 0.733 `gts-sr108` / 0.977
+`-ece` — re-checked per [[slurm-account-gts-sr108-ece]], not assumed).
+`PENDING (Resources)`, 2 nodes × 24 ranks, `-t 420`.
+
+**The script rewrites `cascade_golden.npz` in place**, which is the same file
+this session's steps 2-4 verified against. Backed up first to
+`cascade_golden_preM_IN0_20260821.npz.bak`. The rewrite should be a strict
+superset (everything else recomputes from cache, measured bit-identical
+already) — if it is not, that is itself a finding, and the backup is what makes
+it visible instead of silently overwritten.
+
+**What to do when it lands:** read the printed `signs implied by the measured
+pair` against the hard-coded `MODE_SIGNS` (the script already prints both plus
+`max |measured - derived|`), record it in the validation doc's step 3(b), and
+only then implement field-parity derivation with the measured `M_in0` as its
+regression target.
+
+</details>
+
+### Landed — job 12069544, `beef_mmi_2x2_hybrid_gds` — ✅ COMPLETED 2026-08-21 00:06:32, **4:31:02**, exit 0:0
+
+**Result** (read from the two `.npz` files, not the job log; `mm_lengths` and
+`wavelengths` bit-identical between runs, so the grids are directly
+differenceable):
+
+| 201 × 11 grid | max abs Δ | max rel Δ | RMS Δ | signed mean Δ |
+|---|---|---|---|---|
+| `T_bar` | 6.556e-04 | **1.603e-03** | 2.684e-04 | +1.872e-04 |
+| `T_cross` | 5.218e-04 | **1.346e-03** | 1.973e-04 | +5.252e-05 |
+
+Looser than step 5's "solver noise" bar, smooth in λ and positively biased —
+a systematic offset, not stochastic noise. **Localized rather than accepted**,
+in three cache-only measurements:
+
+1. **`beta`/`body_neff` bit-identical (0.000e+00)** — and computed *fresh* on
+   the GDS side, so this is the independent re-verification of the meep/FDTD
+   layer that this job's cache-served sibling 12070199 could not give. The
+   seven uncommitted library edits move nothing there either.
+2. **`M_in1` carries 100 % of it** — swapping `neff` alone moves the grids by
+   exactly 0.000e+00.
+3. **Cause: prism ORDER.** Both backends emit the *same five polygons* for the
+   input section (same areas, canonicalized vertex-for-vertex identical) in a
+   different order, and meep's subpixel averaging is order-sensitive where
+   prisms share an edge. Rebuilding the ε grid with GDS's polygons **reordered
+   to `MMI`'s** gives a **bit-identical** structure (0 of 2.52 M voxels differ,
+   vs. 872 differing natively, all at the two seams).
+
+**Verdict: acceptance PASS, no code change** (user's call 2026-08-21). The GDS
+path is proven correct by the reordered-ε test; the residual is a meep property,
+not a GDS defect. Full write-up in
+`resolved/gds_geometry_hybrid_cascade_validation.md` step 5 — **that plan is now CLOSED**.
+
+**Spun out of it — a library-wide question, not GDS business.** Merging the
+input section's five abutting polygons into the one 14-vertex polygon they
+geometrically are moves **41,677** ε voxels — **48× the ordering effect**. meep
+infers an interface normal at every seam between geometry objects even when both
+carry the identical medium, so *every* BEEF device drawn as abutting prisms
+carries this artifact. Deliberately **not** fixed here (would move all six
+devices' numbers, invalidate the 566-entry FDTD cache, and change the
+manuscript's published 2×2 results); wants its own plan.
+
+<details>
+<summary>Original submission entry (2026-08-20) — kept for the sizing record</summary>
+
+`resolved/gds_geometry_hybrid_cascade_validation.md` step 5's full production-scale
+run: `mmi_2x2_hybrid_gds.py` at `RESOLUTION=40`, `N_WL=11`, the 201-point
+`mm_length` sweep — identical settings to `mmi_2x2_hybrid.py`'s (job
+11585844_2, which took 4:11:55 on this same 2-node/24-rank shape), with
+`GdsGeometry` reading `mmi_2x2_twin.gds` in place of the parametric `MMI`.
+This is the run steps 1-4 and step 5's cheap-first half (both already
+MEASURED) were building toward; the doc's transfer-matrix agreement number
+stays ARGUED until this lands.
+
+New batch script `batch/run_mmi_2x2_hybrid_gds.batch` (+ Makefile target
+`mmi_2x2_hybrid_gds`), same 2-node/24-rank/`-t 420` shape as the parametric
+run's array task, `-o reports/%j.out`. No `--dependency` needed — the
+comparison in the script's own step 7 reads
+`example_output/mmi_2x2/mmi_2x2_hybrid/mm_length_sweep.npz`, which already
+exists on disk (2026-08-18, same 201×11 grid, confirmed via `np.load` before
+submitting) rather than a sibling array task's fresh output.
+
+Submitted under `gts-sr108-gedc_main` (`sshare -U -u jhiesener3` at submit
+time: EffectvUsage 0.979 `-ece` / 0.720 `gts-sr108` / **0.067**
+`-gedc_main` — re-checked per [[slurm-account-gts-sr108-ece]], not assumed
+from a prior snapshot). `squeue` initially showed `PENDING
+(ReqNodeNotAvail, May be reserved for other job)`; the only active
+reservation (`md-26-10`) doesn't start until 2026-10-05, so this is
+ordinary queueing for 2 free nodes, not a real block. Not yet landed —
+update this entry and the validation doc's step 5 with the real
+`T_bar`/`T_cross` max-|Δ| numbers once it completes.
+
+The earlier login-node smoke run (RES=12/N_MODES=4/N_WL=2/3-pt sweep,
+mentioned in the validation doc as "in flight") is no longer running on this
+node and left only a partial `example_output/mmi_2x2/mmi_2x2_hybrid_gds/`
+(geometry plot + section plots, no `mm_length_sweep.npz`/SMatrix) — it ended
+without the doc being updated with an outcome. Its cache entries (RES=12)
+don't collide with this RES=40 production submission's fingerprints, so no
+cleanup was needed before submitting.
+
+</details>
+
+### Landed this pass — job 12070199, `beef_mmi2x2_cascade_golden` — ✅ COMPLETED 20:00:17, **38 s**, exit 0:0
+
+`resolved/multi_excitation_cascade_validation.md` step 1's device-capture half:
+`examples/verification/python/capture_mmi_2x2_cascade_golden.py` via
+`batch/verification/run_capture_mmi_2x2_cascade_golden.batch`. Captures the
+2×2's hand-rolled `M_in1`/`M_in0`/`M_body` plus the composed bar/cross grids
+as the bit-level regression target for steps 2–4, and measures the
+einsum-vs-`Circuit` agreement on the **real** device matrices rather than only
+the synthetic ones the new unit tests use.
+
+Writes to `example_output/verification/mmi_2x2_cascade_golden/` **only** — it
+deliberately does not touch `example_output/mmi_2x2/mmi_2x2_hybrid/`, which
+job 12069544 (running) reads at its step 7.
+
+**Cost: 38 s** — the supersets hit, no meep time-stepping in the log at all.
+Worth recording why the estimate was open-ended: a plain `lookup()` probe of
+the three shipped calls missed on all three, but `solve_section()` also falls
+back to a full-matrix `lookup()` and `lookup_superset()`
+(`fdtd.py:2924-2943`), which a hand-built probe cannot safely reproduce, so
+the job was sized for the miss case (2 nodes × 24 ranks, `-t 420`, cf.
+11585844_2's 4:11:55 on the same shape). **Do not size a job off a hand-built
+`lookup()` probe.** `gts-sr108-gedc_main` (EffectvUsage 0.067 at submit time).
+
+**Result**, read from `cascade_golden.npz` rather than the log: einsum vs
+`Circuit` agrees to **4.0 eps** on both the bar and cross paths over the full
+201 × 11 grid, reproducing on real device matrices what
+`tests/test_multi_excitation_cascade.py` establishes synthetically. Full
+write-up in `resolved/multi_excitation_cascade_validation.md` step 1.
+
+**Follow-on, 2026-08-21 — the plan this golden served is now CLOSED, with no
+further job needed.** `resolved/multi_excitation_cascade_validation.md` steps 2-4 landed
+against this capture: the 2×2's hand-rolled einsum cascade is retired in favour
+of two `HybridSolver.solve_length_sweep()` calls plus the new `beef.MirrorSpec`
+cross-excitation mirror declaration. Verified `cache_only=True` against this
+`.npz` — **bit-identical** (0.000e+00) on `T_bar`, `T_cross` *and* the complex
+coefficients, at **1** `solve_section()` call across both excitations (the
+hand-rolled path's own count; step 2 without `MirrorSpec` would have cost 2).
+`Circuit` turned out not to be needed at all. 757 tests green.
+
+**The one job this leaves outstanding — now SUBMITTED, see below.**
+
+**Bonus result — it closed an open issue in the GDS validation.** It also
+recomputed the parametric 2×2's `T_bar`/`T_cross` on the current library, which
+`resolved/gds_geometry_hybrid_cascade_validation.md` step 5 needed to separate a
+geometry-backend difference from the seven uncommitted library edits behind its
+2026-08-18 reference. Both 201 × 11 grids came back **bit-identical**
+(max |Δ| 0.000e+00) — the library edits moved nothing on this device, and the
+08-18 reference is a valid comparison target after all. Caveat recorded in that
+doc: the capture was cache-served, so it re-verifies everything downstream of
+the cached section matrices but not the meep/FDTD layer, which did not re-run.
+
+### ⛔ FINAL VERDICT — the transition region is NOT mesh-converged at ANY of res 30/40/50
+
+All three resolutions have landed. Adding res=50 settles the question the
+res=30 run could only pose, and the answer is the unfavourable one.
+
+| region | max \|Δ\|c\|\| 30→40 | max \|Δ\|c\|\| 40→50 | ratio | verdict |
+|---|---|---|---|---|
+| `body_stub` ≥ 0.030 µm (plateau) | 0.0283 | **0.0014** | **0.16** | ✅ **converged** — refinement shrinks the difference ~6× |
+| `body_stub` < 0.028 µm (transition) | 0.0817 | **0.0877** | **1.07** | ⛔ **NOT converged** — refinement does not shrink the difference at all |
+
+**Going from res 40 to res 50 changes the transition region by MORE than going
+from 30 to 40 did.** A converging sequence would give a ratio well under 1;
+this gives 1.07. The apparent order of convergence there is ~0.
+
+The mechanism is a monotone transfer of power from mode 0 into mode 2 that has
+not saturated by res 50. At `body_stub` = 0.010 µm (the 40→50 worst case):
+
+| mode | res 30 | res 40 | res 50 |
+|---|---|---|---|
+| 0 | 0.700 | 0.688 | 0.663 |
+| 1 | 0.705 | 0.704 | 0.705 |
+| **2** | **0.074** | **0.143** | **0.231** |
+
+Mode 1 (the symmetric mode) is completely insensitive to resolution. Mode 2
+roughly triples across the range and its increments are still *growing*
+(+0.069 then +0.088), so it is not approaching a limit from either side.
+
+**This is NOT the known mode-identity/correspondence artifact.** Tested
+explicitly: if the 14-mode basis were permuting between resolutions, sorting
+each position's \|c\| spectrum would collapse the difference. It does not —
+at `body_stub` = 0.010 µm the per-index max difference is 0.0877 and the
+**sorted** max difference is also 0.0877. The power really is moving between
+physically distinct modes, not being relabelled. (Two minor exceptions worth
+knowing: at `body_stub` = 0 and 0.004 µm the sorted difference IS smaller than
+the per-index one — 0.0416 vs 0.0501 and 0.0122 vs 0.0290 — so there is some
+partial reordering right at the taper face; and modes 10/11 do swap a tiny
+amount of amplitude at res 50, but both sit at \|c\| ≲ 0.016, i.e. \|c\|² ≲
+3e-4, far below the 0.05 dominance threshold and irrelevant to the verdict.)
+
+Power conservation is healthy and itself converged at every resolution
+(Σ\|c\|² = 0.9988 / 0.9992 / 0.9992), which is what makes the redistribution
+interpretation sound rather than a leak.
+
+**What the manuscript may and may not say.**
+- ✅ Plateau values at `body_stub` ≳ 0.03 µm are mesh-converged to ~0.0014 in
+  \|c\|, demonstrated with a proper three-point sequence rather than two runs
+  agreeing. Quote them.
+- ⛔ **Nothing about the shape, slope, or onset of the transition below
+  ~0.028 µm is supportable from res 30/40/50 data.** In particular mode 2's
+  amplitude anywhere in 0–0.024 µm is not a converged number at res 40, and
+  the res=40 dense sweep alone would have given no hint of that.
+- ⛔ The `body_stub` = 0 point (monitor sitting exactly on the taper
+  discontinuity) is the worst-behaved of all: non-monotone in resolution
+  (0.0409 → 0.0856 → 0.0356 for mode 2) and partially reordered. Treat it as
+  unusable, not merely uncertain.
+
+**Recommended follow-up if the transition shape actually matters.** Do NOT
+re-run the full 51-position grid at higher resolution — the measured res³
+decomposition scaling makes that punishing (a res=60 51-position job projects
+to ~100 h, res=80 to ~250 h). Instead run a *narrow* grid of ~11 monitors over
+0–0.020 µm only, where the non-convergence lives. Time-stepping is a
+whole-domain cost paid once regardless of monitor count, so at res=60 that is
+~12.5 h time-stepping + 11 × ~6,100 s decomposition + ~1.5 h setup ≈ **33 h**
+(fits a 72 h budget); res=80 lands near ~85 h and needs the 7-day budget. Two
+such jobs would establish whether the mode-0 → mode-2 transfer saturates at
+all, which is the actual open physics question.
+
+### RESULT (superseded by the three-resolution verdict above) — res=30 vs res=40
+
+First actual answer this convergence study produced. Comparing
+`|mode coefficient|` between the two 51-position grids (identical monitor
+positions, so this is a straight difference, no interpolation), at the
+sweep's centre λ = 1.5475 µm and also across all 11 wavelengths:
+
+| region | max \|Δ\|c\|\| (dominant modes) | verdict |
+|---|---|---|
+| `body_stub` ≥ 0.040 µm | **≤ 0.005** (flat floor at 0.0024, in weak mode 5) | mesh-converged |
+| `body_stub` ≥ 0.020 µm | 0.078 | not converged |
+| `body_stub` 0.012–0.024 µm | **0.074–0.082** (peak 0.0817 at 0.018 µm) | **not converged** |
+| `body_stub` = 0 | 0.045 | not converged |
+
+The disagreement is almost entirely **mode 2**, and it is large in relative
+terms, not just absolute: at `body_stub` = 0, mode 2's `|c|` is **0.0409 at
+res 30 vs 0.0856 at res 40 — a factor of ~2**. Modes 0 and 1 agree to
+≤ 0.005 and ≤ 0.003 respectively everywhere. Total captured power is
+essentially identical and healthy on both (Σ\|c\|² = 0.9988 res 30 vs
+0.9992 res 40, spread < 0.0005 across all 51 positions), so this is NOT a
+basis-completeness or power-conservation problem — it is specifically the
+*distribution* of power among the low-order modes in the near-taper region.
+
+Physically consistent: `body_stub` = 0 puts the monitor exactly at the taper
+end, on the geometric discontinuity, where the field has the most rapidly
+varying / evanescent content and is therefore the most mesh-sensitive. As
+the monitor retreats into uniform `mm_width` material that content decays
+and the two resolutions converge. Notably the crossover (~0.04 µm) coincides
+with the point `mmi_2x2_body_stub_sweep.py`'s own 10-point sweep already
+identified as where modes 0/2 stop changing physically (0.03–0.05 µm) — so
+the physical settling and the mesh settling happen at the same place.
+
+**What this licenses and forbids.** Any quantity read off the dense sweep at
+`body_stub` ≳ 0.04 µm is mesh-converged at the 0.005 level and safe to
+quote. Any claim about the *shape of the transition* below ~0.024 µm is NOT
+resolution-independent between res 30 and res 40 and must not be quoted from
+a single resolution.
+
+**res=50 (11995442) is the tiebreaker** and has not landed. If res 50 agrees
+with res 40 in the sub-0.024 µm window, res 40 is converged there and res 30
+is simply too coarse. If res 50 keeps moving, none of the three is converged
+in that window and the transition region needs a finer mesh than 50 before
+anything about its shape can be claimed.
+
+### Corrected cost model — there is a ~1h fixed setup offset, so don't use (elapsed − time-stepping)/N
+
+The res=30 run's own numbers close cleanly and give the right way to size
+these jobs:
+
+| term | res=30 measured |
+|---|---|
+| time-stepping | ~3,500 s (0.97 h) — 26,589 steps; mean 0.1355 s/step over 828 progress lines, 0.1258 s/step steady-state (the 7.76 s/step max is the first line, i.e. startup) |
+| one-time setup | **~3,500 s (0.97 h)** — structure init, input-side source mode solve, DFT monitor allocation |
+| decomposition | 51 × **1,210 s/position** = 61,710 s (17.14 h), slope fitted from a 10-min-cadence sample series (R² = 0.9984) |
+| **total** | **68,750 s (19.10 h)**, vs `Elapsed 19:06:00` from `sacct` |
+
+The naive `(elapsed − time-stepping)/N` estimate gives 1,278 s/position —
+**68 s/position too high**, and that gap is exactly the ~3,500 s fixed setup
+cost smeared over 51 positions. This matters when N is small: an in-flight
+job only a few positions in will look far more expensive per position than
+it really is. **Fit the slope; don't divide the total.**
+
+**Decomposition cost ACCELERATES with resolution — it is not a single power
+law.** Measured per-position slopes, now all from fitted series or
+well-diluted totals:
+
+| resolution | s/position | exponent vs. previous |
+|---|---|---|
+| 30 | **1,210** (fitted, R² = 0.9984, 51 positions) | — |
+| 40 | 1,790 (total ÷ 51; setup-inflated by ≲ 5%, so true slope ~1,720–1,790) | res^1.36 |
+| 50 | **3,550** (fitted, R² = 0.9995, 73 samples over 12 h) | **res^3.07** |
+
+End-to-end 30 → 50 is res^2.11, but that average hides the shape: the step
+from 40 to 50 costs roughly res³ while 30 to 40 costs roughly res^1.4. **Any
+res ≥ 60 run sized from a res² assumption will be badly under-budgeted.**
+Likely mechanism is the cross-section working set outgrowing a cache level
+between res 40 and 50 (res 50's cell is 282 × 300 × 125 = 10.6M pixels), but
+that was inferred from the timing curve, not measured with counters.
+
+Hardware is NOT the explanation: all four nodes involved are Intel Gold 6226
+Cascade Lake / avx512, and the only difference is that res=40's node ran at
+2900 MHz vs 2700 MHz for res=30/res=50 — a ~7% effect, and in the direction
+that makes res=40 look *cheaper*, i.e. it slightly *understates* the 40 → 50
+jump rather than creating it.
+
+**Corrections to earlier versions of this snapshot** (both were wrong, and
+both were wrong in the direction of under-stating res-50 cost):
+
+- An earlier revision called the `res^3.01` exponent "overstated, computed
+  the naive way" and replaced it with ~res^1.36 overall. That was wrong. The
+  setup offset is real (see the table above) but it is only ~5% of res=40's
+  per-position figure and does not touch res=50's *fitted* slope at all.
+  res=50's fitted slope (3,550 s/pos) is within 2% of the naive average
+  computed when it was only 9 positions in (3,465 s/pos), so the naive
+  estimate happened to be fine there. **~res^3 for 40 → 50 stands.**
+- An earlier revision claimed res=50's timing was "contaminated as a scaling
+  datum" by node contention from a 4,280-CPU co-tenant (job 12013145), citing
+  a deceleration from +31 to +15 lines per 10-minute tick and a settled rate
+  of 5,775 s/position. **That does not hold.** Those were sub-hour windows
+  covering well under one position each — sampling noise aliased against the
+  ~1 h position cycle. Over 73 samples spanning 12 h the rate is
+  3,550 s/position with R² = 0.9995, and every sub-window (first half, second
+  half, last 6 h, last 2 h) agrees to within 2%. That span brackets the
+  4,280-CPU job's departure from the node with no detectable change in
+  throughput, which is direct evidence against the contention hypothesis.
+  **res=50's timing is usable as a scaling datum; no `--exclusive` re-run is
+  needed.**
+
+Methodological lesson worth keeping: a per-position rate for these jobs needs
+a sample window covering **several positions** (≳ 3–4 h at res 50), not
+minutes. Short windows produced three mutually inconsistent rate estimates
+here (2,552 / 4,615 / 5,775 s/pos) before the long series settled at 3,550.
 
 ### Where the res=30/res=50 time budgets came from (measured, not guessed)
 
@@ -95,10 +877,20 @@ res=40 and the untagged legacy filename, and a sub-minute real-meep smoke
 `measure_port`/`measure_margins` end to end and wrote a correctly
 `res10_`-tagged `.npz`.
 
-**Still open when these land:** `mmi_2x2_body_stub_dense_analysis.py` reads
-exactly two hardcoded files (the res=40 2 nm and 5 nm grids) and has no
-resolution axis. Overlaying 30/40/50 needs a new/extended analysis script;
-that has NOT been written yet.
+**Analysis script — WRITTEN 2026-08-20.**
+`beef_manuscript_figures/2x2_MMI_figures/mmi_2x2_body_stub_res_convergence.py`
+(new; `mmi_2x2_body_stub_dense_analysis.py` is untouched and still does the
+2 nm-vs-5 nm *sampling* comparison at res=40). It reads the 2 nm grid at
+every resolution that has landed, hard-errors if `(body_stubs, wavelengths,
+x1_fixed, N_MODES)` don't match across files rather than silently
+resampling, and runs fine on a subset — res=50 slots in automatically when
+11995442 finishes, no edit needed. Emits three figure pairs (png+svg) into
+`plots_stub_sweep/`: mode amplitude per resolution, **max \|Δ\|c\|\| vs
+`body_stub` per adjacent resolution pair** (the actual convergence plot), and
+total captured power per resolution. Re-derives the res30-vs-res40 numbers
+above through an independent code path — 0.0817 worst at `body_stub` = 0.018
+µm in mode 2, converged below 0.005 from 0.040 µm — which is a real
+cross-check, not a restatement.
 
 ---
 

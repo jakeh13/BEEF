@@ -41,6 +41,19 @@ CONSTANTS = [
     # sync), so this is coverage, not a new backlog.
     "CALIBRATE_ARM", "ARM_RESOLUTION",
     "FDTD_RESOLUTION", "EME_RESOLUTION", "N_WL_HCG", "N_WL_DENSE",
+    # Added 2026-08-22, and this one DID surface pre-existing drift rather
+    # than being pure coverage. These three are the 4x4 90-degree hybrid's
+    # own design point. The 2026-08-09 body-mode redo (N_MODES_BODY 8->16,
+    # moving the optimum to DELTA_L=-2.75) reached body_sweep.py and
+    # hybrid.py but missed mmi_4x4_90hybrid_eme.py, its field-plot companion,
+    # AND mmi_4x4_90hybrid_eme.ipynb. The scripts were fixed 2026-08-21/22;
+    # the NOTEBOOK was still at DELTA_L=-1.50/N_MODES_BODY=8 and nothing
+    # flagged it -- precisely the "known-bad mode basis in a published
+    # tutorial" failure this checker's own docstring says it exists to stop,
+    # recurring because the constant list did not cover it. MM_LENGTH was
+    # already listed but is DERIVED here (0.75*L_PI + DELTA_L), so it only
+    # catches this drift where a script hardcodes it.
+    "DELTA_L", "N_MODES_BODY", "N_MODES_TAPER",
 ]
 # calls whose absence from a notebook means the tutorial is teaching an older
 # version of the workflow, not merely a cosmetic difference
