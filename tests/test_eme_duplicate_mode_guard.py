@@ -139,3 +139,60 @@ class TestGuardIsSwitchable:
         monkeypatch.setattr(EMESolver, "_solve_modes_raw", raw)
         _solver(guard_duplicate_modes=False).compute_modes(cross_section=None, num_modes=4)
         assert seen["n"] == 4
+
+
+class TestLazyEscalation:
+    """The guard must not PAY for `_DUP_MODE_MAX_EXTRA` unless it needs it.
+
+    Until 2026-08-25 compute_modes() solved `num_modes + _DUP_MODE_MAX_EXTRA`
+    unconditionally on every cross-section, so a 2-mode request always ran 10
+    eigensolves. On the HCG Fabry-Perot's uncalibrated EME body that turned a
+    ~1.9 h solve into >12 h and timed a job out.
+
+    These assert the CALL COUNT, not just the returned basis, because the
+    returned basis is identical either way (job 11586098: the over-request is a
+    pure filter, max |delta n_eff| = 0.000e+00 across 16 low bands) -- so a
+    revert to eager over-requesting would pass every other test in this file
+    silently.
+    """
+
+    def _counting_raw(self, orders, calls):
+        def raw(self, cross_section, num_modes):
+            calls.append(num_modes)
+            return [_mode(o, neff=2.0 - 0.01 * i)
+                    for i, o in enumerate(orders[:num_modes])]
+        return raw
+
+    def test_no_duplicates_solves_exactly_num_modes(self, monkeypatch):
+        calls = []
+        s = _solver()
+        monkeypatch.setattr(EMESolver, "_solve_modes_raw",
+                            self._counting_raw([0, 1, 2, 3, 4, 5], calls))
+        assert len(s.compute_modes(cross_section=None, num_modes=4)) == 4
+        assert calls == [4], (
+            f"expected one solve of exactly 4 modes, got {calls} -- the guard "
+            "is over-requesting again"
+        )
+
+    def test_duplicate_escalates_once_to_the_full_count(self, monkeypatch):
+        from beef.solvers.eme import _DUP_MODE_MAX_EXTRA
+        calls = []
+        s = _solver()
+        monkeypatch.setattr(EMESolver, "_solve_modes_raw",
+                            self._counting_raw([0, 1, 0, 2, 3, 4, 5, 6, 7, 8,
+                                                9, 10], calls))
+        assert len(s.compute_modes(cross_section=None, num_modes=4)) == 4
+        # First the cheap attempt, then straight to the old unconditional count
+        # -- a ladder of re-solves would cost more than the eager path it
+        # replaces, since each _solve_modes_raw(n) redoes bands 1..n.
+        assert calls == [4, 4 + _DUP_MODE_MAX_EXTRA], (
+            f"expected [4, {4 + _DUP_MODE_MAX_EXTRA}], got {calls}"
+        )
+
+    def test_guard_off_still_solves_exactly_num_modes(self, monkeypatch):
+        calls = []
+        s = _solver(guard_duplicate_modes=False)
+        monkeypatch.setattr(EMESolver, "_solve_modes_raw",
+                            self._counting_raw([0, 1, 2, 3], calls))
+        s.compute_modes(cross_section=None, num_modes=2)
+        assert calls == [2]

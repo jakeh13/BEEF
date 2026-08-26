@@ -2110,6 +2110,333 @@ nothing at all.
 Step 6b with `decay_method="energy"`, **`-N 4 --ntasks-per-node=24`
 (96 ranks)** and **`-t 2880` (48 h)**. Both ports, as the original array did.
 
+> ⚠ **SUPERSEDED 2026-08-24 — that re-run was tried (job 12227584, both
+> ports, 96 ranks) and cancelled at t≈6,200 after 21.5 h, because the
+> premise was wrong. `decay_tol=1e-11` is not merely expensive on this
+> device, it is UNREACHABLE. See "decay_tol has a floor" below.**
+
+#### `decay_tol` has a hard floor, and 1e-11 is below it (2026-08-24)
+
+Prompted by the user asking whether `decay_tol=1e-11` is necessary at all,
+and whether a shorter or lower-resolution run could settle it. A ladder of
+tolerances was run at res=20 (jobs 12260633, 12262138-141) on the reasoning
+that the question is RELATIVE -- at what tolerance do the S-parameters stop
+moving -- so the repo's "reduced resolution sits below the noise floor"
+caveat does not bind. The ladder answered a different and more important
+question instead.
+
+**Every rung below ~1e-4 diverges.** Absolute energy from the 1e-5 rung:
+
+| t | energy | ratio |
+|---|---|---|
+| 260 | 29.58 | 1.00 (peak, source done) |
+| 3,624 | 5.16e-3 | 1.74e-4 |
+| **3,705** | — | **1.682e-4 ← FLOOR** |
+| 5,787 | 51.9 | 1.00 (already growing) |
+| 8,030 | 2.14e8 | 1.00 (runaway) |
+
+The 1e-7, 1e-9 and 1e-11 rungs bottom at **exactly 1.682e-4 at exactly
+t=3,705** -- bit-identical across three independent jobs, i.e. deterministic
+numerics, not noise. Energy decays normally, floors, then grows
+exponentially: the `gamma=0` undamped-Lorentzian instability
+(`beef/materials/stack.py:284`). **Third independent observation** after
+calibration mode 16 (bottomed 1.95e-11, grew to 1.7e53) and its isolated
+re-run -- and the first on a completely different configuration (res=20,
+full device, no calibration), which is what makes the root cause solid
+rather than inferred.
+
+**The consequence is not "expensive", it is "impossible".** `decay_tol`
+below the instability floor can never be satisfied, because the field
+starts growing before the energy gets there. **This explains all five 6b
+failures at once** -- job 11733865 (6 h), 11847078 + 11859047 (3 days
+each), and 12227584 (two ports, 48 h) -- none were under-budgeted; all were
+chasing a target the simulation cannot reach. Every extrapolation in the
+sections above, including my own 28-37 h and 56-72 h estimates, assumed a
+single exponential continuing indefinitely and was therefore wrong in
+principle, not just in magnitude.
+
+**The floor is resolution-dependent**, which is itself the signature of a
+numerical rather than physical effect: 1.68e-4 at res=20, versus res=40
+reaching 5.27e-6 by t=6,224 with no turnaround yet observed. res=40's floor
+is lower but unmeasured, and there is no reason to think it is below 1e-11.
+
+**Open, and now the load-bearing question**: (a) measure res=40's actual
+floor by running until it turns around, then set `decay_tol` above it with
+margin; or (b) fix the instability at source by giving the Lorentzian poles
+a small nonzero `gamma`, which would remove the floor and unblock BOTH 6b
+and the mode-16 calibration. (b) touches shared material code used by every
+device; (a) is cheap and device-local. Neither started.
+
+#### The slow tail is PHYSICAL — `dpml` ruled out (job 12260446, 2026-08-24)
+
+Two effects had been tangled together all day and needed separating. The
+first was whether the long tail exists at all for a legitimate reason.
+
+`dpml=0.5` µm is only ~0.4 wavelengths at 1.31 µm, and **`dpml` has never
+been convergence-tested anywhere in this repo** (audited: the PML-adjacent
+sweeps all vary domain *clearance*, and `dpml` is only ever raised 0.5→1.0
+to preserve pixel count at low resolution). A too-thin PML reflects
+low-angle and evanescent components, and reflected energy rattling between
+domain walls mimics a trapped mode exactly. Worth testing before accepting
+the tail as real.
+
+Re-ran the identical configuration at **`dpml=1.5`** (cell 12.0 × 5.0 µm vs
+the baseline's 10.0 × 3.0, ~2× the voxels) and compared at matched meep
+time:
+
+| t | dpml=1.5 | dpml=0.5 baseline | ratio |
+|---|---|---|---|
+| 440 | 6.533e-2 | 6.519e-2 | 1.002 |
+| 540 | 5.673e-2 | 5.673e-2 | **1.000** |
+
+**Agreement to four significant figures.** Tripling the PML changes the
+trapped fraction by nothing measurable. **The ~5.7% trapped component is
+real device physics — genuinely long-lived resonant modes in the MMI body —
+not a boundary artifact.** `dpml=0.5` is vindicated for this device; the
+untested-`dpml` gap is real but is not what causes slow decay here.
+
+**This separates the two phenomena, which is why "more budget" failed five
+times — it addressed neither:**
+
+| | cause | consequence | fix |
+|---|---|---|---|
+| slow tail | **physical** trapped modes (confirmed above) | decay takes t~19,000+ to reach 1e-11 | pick a tolerance the physics justifies |
+| floor + reversal | numerical (hypothesis: `gamma=0` poles) | tolerances below the floor are UNREACHABLE | damping, or a reachable target |
+
+Job 12273630 (Courant halved, res=20, everything else identical) is the
+cheap discriminator for the second: it changes only the timestep, so a floor
+that moves down/later confirms a numerical instability and justifies editing
+shared material code, while an unchanged floor would remove most of the
+support for the `gamma=0` hypothesis. Deliberately run BEFORE touching
+`beef/materials/stack.py`, which every device draws on.
+
+#### ❌ RESULT — the `gamma=0` timestep-stability hypothesis is FALSIFIED (job 12273630)
+
+| | floor ratio | floor time |
+|---|---|---|
+| Courant=0.5 (reference) | 1.6824e-04 | t=3,705 |
+| Courant=0.25 | 1.6826e-04 | t=3,742 |
+| change | **0.01%** | +1.0% |
+
+**Halving the timestep did not move the floor.** The proposed mechanism —
+undamped Lorentzian poles sitting on the imaginary axis, with time
+discretization nudging them into exponential growth — predicts a
+substantially lower and later floor at half the timestep. It did not happen,
+so that mechanism is not what is occurring, and **the `gamma` fix is NOT
+justified on this evidence.** A shared edit to `beef/materials/stack.py`,
+which every device in the repo draws on, was one step away from being
+recommended on a diagnosis that then failed its own test. The ~1 h
+discriminator was worth it.
+
+**Control value**: the two runs agreed to 0.1-0.5% at every matched time
+BEFORE the floor (t=500/900/1300/1700), confirming that halving the timestep
+did not perturb the physics — so the null result is a real null, not a
+botched comparison.
+
+**What is now established about the floor, all measured:**
+
+| property | result | implication |
+|---|---|---|
+| resolution | 1.68e-4 @ res=20, ~5e-6 @ res=40 | **spatial** discretization matters |
+| timestep | invariant (0.01%) | **not** temporal / not Courant |
+| PML thickness | invariant (0.05%, job 12260446) | not a boundary artifact |
+| repeatability | bit-identical across 3 jobs | deterministic, not noise |
+
+Resolution-dependent but timestep-independent points to a **spatial**
+discretization effect. One candidate worth recording, NOT a conclusion:
+`resolved/gds_geometry_hybrid_cascade_validation.md` documents that meep's
+subpixel averaging treats abutting same-material prisms as having an
+internal interface, moving 41,677 epsilon voxels at res=40 — a spatial
+discretization error of the right character and the right resolution
+scaling. Untested against this floor.
+
+**The practical answer is unchanged**: the floor is real, `decay_tol=1e-11`
+remains unreachable, and picking a reachable tolerance (option 1, jobs
+12272571/12272573) is still the path. Only the mechanism reopens.
+
+---
+
+## ✅ STEP 6b COMPLETED — first time ever, job 12272571 (2026-08-25)
+
+**Port 1 finished: COMPLETED in 20:56:44, 107 curve points, reached
+`decay_tol=1e-5` (final ratio 1.020e-05 at t=5,350).** Every previous attempt
+failed — 11733865 (6 h), 11847078 + 11859047 (3 days each), 12227584 (two
+ports, 48 h). None were under-budgeted; all were chasing `decay_tol=1e-11`,
+which this device's own numerical floor makes unreachable.
+
+**Final |T|² at the reachable tolerance** (rows = wavelength, cols = out0..3):
+
+| λ | out0 | out1 | out2 | out3 |
+|---|---|---|---|---|
+| 1.26 µm | 0.088976 | 0.098147 | 0.064560 | 0.042439 |
+| 1.31 µm | 0.141433 | 0.163326 | 0.185942 | 0.200832 |
+| 1.36 µm | 0.230228 | 0.187837 | 0.062458 | 0.131395 |
+
+### What `decay_tol` this device actually needs — measured against the TRUE endpoint
+
+The run snapshotted its S-matrix every 50 time units (`solve(snapshot_every=)`,
+added the same day), each sample tagged with the energy ratio that would have
+stopped the run there. So the cost of any tolerance is read directly off ONE
+simulation rather than inferred from a ladder of runs:
+
+| `decay_tol` | t | max ΔT | ≈dB | verdict |
+|---|---|---|---|---|
+| 1e-2 | 1,000 | 2.078e-2 | 0.564 | too loose |
+| 5e-3 | 1,300 | 4.859e-3 | 0.138 | too loose |
+| 1e-3 | 2,000 | 2.466e-3 | 0.071 | marginal |
+| 5e-4 | 2,450 | 1.837e-3 | 0.053 | marginal |
+| **1e-4** | **3,500** | **5.334e-4** | **0.015** | **recommended** |
+| 5e-5 | 4,050 | 3.153e-4 | 0.009 | OK |
+
+**`decay_tol=1e-4` is the setting for this device**: 0.015 dB against the
+0.1 dB the conclusions rest on, at t=3,500 ≈ **11.4 h** on 96 ranks — versus
+the 63.6 h that `1e-11` would have needed had it been reachable at all.
+Provisional until port 3 (job 12272573) confirms independently.
+
+**The worst wavelength is 1.36 µm at EVERY tolerance — never band centre.**
+This matters methodologically: an earlier reading of this same data at 1.31 µm
+alone produced a confident "converged by ratio 5.7e-2" claim that was wrong by
+two orders of magnitude, because band centre converges fastest while the band
+EDGES are both slowest AND where this device's CMRR/phase failures concentrate.
+Always evaluate convergence at the worst wavelength.
+
+**Two retractions this measurement settles**, recorded because both were stated
+confidently before being checked:
+- "10⁻²–10⁻³ is ample" — WRONG. 1e-2 costs 0.564 dB, ~6x the budget.
+- "converged by ratio 5.7e-2, 0.002 dB" — WRONG, an artifact of comparing
+  against a moving reference (the then-latest sample at t=800, with 4,500 time
+  units still to come) and of reading band centre only.
+
+### ⚠ CHECK 4 — FIRST EVER RESULT, and the two methods DISAGREE (port 1, preliminary)
+
+The full-device FDTD S-matrix above compared against the hybrid result (job
+11778128, 2026-08-10, same corrected design point, **identical 3-wavelength
+grid so no interpolation is involved**). Port labels map in order
+(`out5..out8` = `out_0..out_3`).
+
+| port | hybrid 1.26 / 1.31 / 1.36 | FDTD 1.26 / 1.31 / 1.36 | max abs | max rel |
+|---|---|---|---|---|
+| out5 | 0.081456 / 0.131037 / 0.233193 | 0.088976 / 0.141433 / 0.230228 | 0.0104 | 9.2% |
+| out6 | 0.074165 / 0.154555 / 0.194348 | 0.098147 / 0.163326 / 0.187837 | 0.0240 | 32.3% |
+| out7 | 0.039811 / 0.174411 / 0.060343 | 0.064560 / 0.185942 / 0.062458 | 0.0247 | 62.2% |
+| out8 | 0.030496 / 0.204279 / 0.125779 | 0.042439 / 0.200832 / 0.131395 | 0.0119 | 39.2% |
+
+**Totals per wavelength** — the disagreement is strongly wavelength-dependent:
+
+| | 1.26 µm | 1.31 µm | 1.36 µm |
+|---|---|---|---|
+| hybrid | 0.225929 | 0.664282 | 0.613663 |
+| full-device FDTD | 0.294121 | 0.691534 | 0.611918 |
+| difference | **+30%** | +4% | −0.3% |
+
+Agreement is essentially exact at 1.36 µm and degrades toward the SHORT
+wavelength edge, where the FDTD finds 30% more transmitted power.
+
+**This is not convergence error.** The FDTD side carries ~0.015 dB
+(5.3e-4 in |T|²) of tolerance error at `decay_tol=1e-5`; the disagreements are
+~0.024 in |T|², roughly 50x larger. The large *relative* figures on out7/out8
+are partly small-denominator artifacts at 1.26 µm, but out6/out7's absolute
+0.024 is real.
+
+**Candidate causes, none tested:**
+1. **The hybrid's port-isolation approximation.** Each `solve()` draws only ONE
+   input and ONE output branch, treating the other 6 ports as physically absent
+   — no crosstalk modelled at all. This device's port clearance is 0.7 µm
+   (offset=1.5, taper_width=0.8), and `mmi_4x4_90hybrid_eme.py`'s own docstring
+   already flags this as a stronger approximation than the 2×2's 1.05 µm gap.
+   Crosstalk growing toward the band edge would match the observed pattern.
+2. **Interface-basis truncation at N_MODES=16.** The hybrid contracts an FDTD
+   interface basis against an EME body basis; the full-device FDTD has no such
+   contraction. The extended convergence sweep (job 11936081) already showed the
+   basis is not fully flat even at N=16-36.
+3. **Subpixel averaging** (`resolved/gds_geometry_hybrid_cascade_validation.md`)
+   — affects both methods but not necessarily equally.
+
+### ✅ CONFIRMED BY BOTH PORTS — job 12272573 COMPLETED 1-03:39:25, 127 points
+
+Port 3 finished (final ratio 1.03e-05 at t=6,350) and reproduces the pattern
+independently:
+
+| λ | port 1 driven | port 3 driven |
+|---|---|---|
+| 1.26 µm | **+30.2%** | **+49.6%** |
+| 1.31 µm | +4.1% | +3.9% |
+| 1.36 µm | −0.3% | −0.3% |
+
+Two independent simulations, different driven ports, agreeing to 0.2% at
+1.36 and 1.31 µm while both showing a large POSITIVE discrepancy at 1.26 µm.
+Max |T|² difference over all ports/wavelengths/inputs: **0.0255**, versus a
+convergence error of 0.0005 at `decay_tol=1e-5` — **48×**. This is a real
+systematic effect, not noise and not under-convergence.
+
+**The sign is diagnostic.** The full-device FDTD finds MORE transmitted power
+than the hybrid, and the gap grows toward SHORT wavelength. That is precisely
+what the hybrid's port-isolation approximation predicts: each `solve()` draws
+only ONE input and ONE output branch and treats the other six ports as
+physically absent, so power coupling into an undrawn port is never collected.
+As λ shortens the beat length shifts and self-imaging degrades, sending more
+power to the "wrong" outputs — lost by the hybrid, captured by the full-device
+FDTD. At 1.36 µm self-imaging is well formed and the methods agree essentially
+exactly.
+
+**Implication, stated carefully.** The device's headline failures (CMRR, Δφ)
+are worst at the band edges, and the hybrid-vs-FDTD disagreement is ALSO worst
+at a band edge, in the same direction. Every design conclusion for this device
+— the `waveguide_offset` sweep, the `mm_width` scoping, the CMRR/phase
+assessment — was computed through the hybrid method. If the hybrid
+systematically under-collects at short wavelength, those conclusions inherit
+that error. CMRR and Δφ are ratios, so a UNIFORM loss would cancel; this loss
+is wavelength- and port-dependent, so it does not obviously cancel.
+
+**NOT established**: that the port-isolation approximation IS the cause
+(three candidates were listed; only the sign and wavelength-trend favour it).
+
+### ✅ CHECK 4 CLOSED — the device metrics, both methods (2026-08-25)
+
+`verification/python/mmi_4x4_90hybrid_check4_metrics.py` recomputes the paper's
+metrics from BOTH S-matrices using the same `SMatrix` methods and the same
+construction `mmi_4x4_90hybrid_hybrid.py` uses (including A11's corrected
+self/other order on `cross_excitation_phase_diff_deg`). No new simulation —
+the FDTD side comes back from cache via `cache_only=True`, the hybrid side
+from its published pickles.
+
+| | hybrid | full-device FDTD | spec |
+|---|---|---|---|
+| max \|Δφ\| | 12.32° | **20.46°** | ≤ 5° |
+| min CMRR | 1.53 dBe | 5.96 dBe | ≥ 20 dBe |
+| max excess loss | 8.37 dB | 6.62 dB | — |
+| max imbalance | 14.62 dB | 8.03 dB | — |
+
+**THE DEVICE'S VERDICT IS CONFIRMED, NOT OVERTURNED.** Both methods fail both
+cited specs by large margins — phase error 2.5-4x over budget, CMRR 3-13x
+under. The sectioning error does not rescue the device. **For the first time
+the design conclusion rests on two independent methods.**
+
+**But the raw-|T|² disagreement DID carry into the metrics — it did not
+cancel**, which was the open question (ratios cancel a *uniform* loss; this one
+is wavelength- and port-dependent). The damage is concentrated at 1.26 µm:
+
+| metric @ 1.26 µm | hybrid | FDTD | diff |
+|---|---|---|---|
+| dphi_7 | 10.45° | 20.46° | **+10.0°** |
+| imbalance_port3 | 14.62 dB | 8.03 dB | **−6.6 dB** |
+| cmrr_Q_port3 | 1.53 dBe | 7.07 dBe | +5.5 dBe |
+
+At 1.31 and 1.36 µm the two methods agree within ~1-2 units on almost every
+metric.
+
+**The hybrid was OPTIMISTIC on the headline metric.** Full-device FDTD puts
+max|Δφ| at 20.46° against the hybrid's 12.32° — the device is FURTHER from
+spec than the sectioned method reported, not closer.
+
+**Do the earlier design conclusions survive? Argued, not re-run.** The
+`waveguide_offset` sweep found best-achievable max|Δφ| of 125.6/64.8/47.6/75.1°
+at alternative offsets against 12.3° at baseline, and the `mm_width` scoping
+was similarly lopsided. Those gaps are an order of magnitude larger than this
+~10° systematic discrepancy, so a band-edge error of this size cannot reverse
+them. That is an argument from magnitude, not a re-run through the FDTD path —
+which would be prohibitive (each offset point is a full-device FDTD run).
+
 #### MPI scaling — measured 2026-08-22, jobs 12217184 / 12217185
 
 Prompted by the user asking whether the re-run could be parallelized. It
@@ -2849,3 +3176,68 @@ Two papers it cites that matter directly to this plan's decisions (A3, A9):
 > MMI-based 90º optical hybrid for InP integrated coherent receivers,"
 > *IEEE Photon. J.*, vol. 5, no. 2, pp. 7900512, Apr. 2013. — the second
 > source (with Halir above) for the CMRR/phase-error system requirements.
+
+
+---
+
+## Toward a (mm_width, y_gap) Bayesian optimization — the bias study first (2026-08-25)
+
+User's plan: treat the device as unoptimized in length, multimode width and
+taper geometry, and run a **2D Bayesian optimization over (mm_width, y_gap)**
+in EME with tidy3d modes, using `solve_length_sweep()` to find the best
+`mm_length` at each candidate. Objective: a weighted combination of phase
+error and CMRR, at 1.31 ± 0.02 µm.
+
+### The parameterization
+
+Port centres are at `waveguide_offset * (i - 1.5)`, so adjacent port spacing IS
+`waveguide_offset` and the tip-to-tip gap between neighbouring tapers is
+`y_gap = waveguide_offset - taper_width`. Holding the paper's Eq. 8 relation:
+
+    waveguide_offset = mm_width / 4
+    taper_width      = mm_width / 4 - y_gap
+
+Two free parameters fix the whole geometry. **Sanity check: the current design
+(mm_width=6.0, taper_width=0.8) is exactly y_gap=0.70**, matching the 0.7 µm
+port clearance `mmi_4x4_90hybrid_eme.py`'s own docstring already quotes.
+Validity: `0 < y_gap < mm_width/4 - 0.35`.
+
+### Why a bias study has to come first
+
+`EMESolver.solve()` draws ONE input and ONE output branch per call and treats
+the other six ports as physically absent — no crosstalk modelled at all. That
+restriction is deliberate, not an oversight: `mmi_1x2_eme.py`'s own comment
+explains it gives "the isolated waveguide mode rather than a supermode of both
+outputs". Removing it means drawing all ports, raising end-cell `num_modes`
+from 1 to ≥4, and projecting supermodes back onto per-port modes — squarely in
+this repo's most fragile area (`MODE_SIGNS`, `check_mode_correspondence`, the
+modal-mux basis gap).
+
+Normally a systematic approximation is tolerable in a BO, because a constant
+bias cancels in a *relative* ranking. **That argument fails here**: `y_gap` IS
+the tip-to-tip separation that sets the neglected crosstalk, and coupling is
+roughly exponential in gap. A bias that varies with the optimized parameter
+does not cancel — it steers the optimizer. Check 4 already measured this
+approximation costing up to 10° of phase and 6.6 dB of imbalance at y_gap=0.70.
+
+### The study — 7 jobs, submitted 2026-08-25
+
+EME (`mmi_4x4_90hybrid_ygap_eme.py`, jobs 12352460/61/62) and full-device FDTD
+(`mmi_4x4_90hybrid_ygap_fdtd.py`, jobs 12352475-78) at **y_gap = 0.40 / 0.70 /
+1.00**, `mm_width=6.0`, `mm_length` FIXED at 78.9396 so the two methods are
+compared on identical geometry. y_gap=0.70's FDTD is REUSED from jobs
+12272571/12272573 rather than re-run, saving two ~14 h jobs. Wavelengths
+1.26-1.36 to match that reference — measuring the bias on the WIDER band is
+conservative, since band-edge error is the worst case.
+
+FDTD settings come from this session's own measurements: `decay_tol=1e-4`
+(measured sufficient at 0.015 dB), `decay_method="energy"`, 96 ranks. At the
+inherited `1e-11` these four runs would have been impossible.
+
+**Verdict rule, fixed in advance:**
+- error roughly FLAT in y_gap → largely cancels → the 2D BO on plain EME is sound
+- error VARIES strongly → the BO would be biased → fix the solver, narrow the
+  y_gap range, or optimize mm_width alone
+
+The EME script IS the BO's evaluation function, so this validates exactly what
+the optimizer will call, objective included.

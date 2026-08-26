@@ -72,9 +72,12 @@ args = parser.parse_args()
 COUPLING_LENGTH = args.coupling_length
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+_out_root = "directional_coupler_soi160_fdtd_dc_test"
+if os.environ.get("DC160_RES") is not None:
+    _out_root += f"_res_{float(os.environ['DC160_RES']):g}"
 output_dir = os.path.abspath(os.path.join(
     _HERE, "..", "..", "..", "..", "example_output", "directional_coupler",
-    "directional_coupler_soi160_fdtd_dc_test", f"L{COUPLING_LENGTH:.3f}"))
+    _out_root, f"L{COUPLING_LENGTH:.3f}"))
 os.makedirs(output_dir, exist_ok=True)
 save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
@@ -83,7 +86,20 @@ save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_
 # hybrid_dc_test.py's production values (itself ASSUMED from the SOI_220
 # convergence study, not re-measured on this platform; see that script's docstring).
 # ---------------------------------------------------------------------------
-RESOLUTION = 40.0
+# DC160_RES overrides the resolution, and redirects output to its own
+# `..._res_<N>` folder so a convergence run can never overwrite the res-40
+# production result (job 11785063). Same "the guard is the env var, not the
+# value" rule as the wavelength-window block below.
+#
+# COST WARNING, measured not estimated. This is a SINGLE-DOMAIN, whole-device,
+# three-dimensional solve, so res -> 2*res is 8x the cells AND 2x the timesteps
+# = ~16x the work. Job 11785063 took 41-57 min per length on 48 ranks at res 40;
+# res 80 is therefore ~11-15 h per length on the SAME 48 ranks, and the biggest
+# domain (L=11.634) grows to 2690 x 640 x 200 = 344 Mcells, ~34-52 GB of field
+# storage before DFT monitors. Resource it WIDE: FDTD time-stepping scales ~98%
+# with rank count on this device, so fewer ranks is proportionally slower AND
+# risks running out of memory, not cheaper.
+RESOLUTION = float(os.environ.get("DC160_RES", 40.0))
 WL_MIN = 1.50
 WL_MAX = 1.60
 N_WL = 11

@@ -73,15 +73,27 @@ the difference between the two curves a statement about the two ENGINES
 rather than about two meshes. The archived original is at
 archive/example_output_20260818/.
 
-ARM_RESOLUTION = 60, matching the HCG MIRROR's res rather than the coupler's
-res 40 -- the user's explicit call. There is no single device resolution to
+HCGFP_CALIBRATE_BODY=0 does the same for the coupler BODY, and the two
+compose: with both off the round trip carries no FDTD-measured beta at all,
+which is the pre-calibration baseline this device's whole rewrite was
+measured against. Note the asymmetry in what that costs. Turning the ARM
+calibration off makes the run CHEAPER (one MPB sweep replaces an FDTD fit).
+Turning the BODY calibration off makes it DEARER: `neff_override=None` gives
+EMESolver nothing to propagate on, so the diagonal fast path documented in
+validation_markdown/calibrate_body_neff_mode_solve_skip_validation.md is
+gone and the real eigenmode solve runs.
+
+ARM_RESOLUTION defaults to 80, matching the HCG MIRROR's res rather than the
+coupler's res 40 -- the user's explicit call. There is no single device resolution to
 inherit here (the mirror runs at 60, the coupler at 40), and a bare strip is
 cheap enough at 60 that the arm's beta -- the dominant lever on the comb --
 is measured on the finer of the two meshes this device already uses. The
 stated cost: the arm's discretization is then NOT identical to the coupler
 body's, so a milder version of the inconsistency above survives, over 23 um
-of coupler instead of 106 um of arm. HCGFP_ARM_RES redirects output to its
-own folder so a real convergence sweep can be run without touching this.
+of coupler instead of 106 um of arm. HCGFP_RES / HCGFP_DC_RES /
+HCGFP_ARM_RES override the three and redirect output to a res-stamped folder
+("res80_dc40_arm80", named the way hcg_fabry_perot_length_sweep.py names its
+own), so a real convergence sweep can be run without touching this.
 
 Symmetric-coupler assumption, VERIFIED not just assumed (2026-08-07): a
 real reciprocal, physically symmetric 4-port coupler has t'==t, k'==k
@@ -116,6 +128,11 @@ KNOWN OPEN GAPS, not fixed by this script (see the validation doc):
     model does not capture, per Step 1's own framing).
   - The arm beta is measured at ONE resolution per run; nothing here
     converges it. HCGFP_ARM_RES is the hook for that sweep.
+  - The resolution knobs do NOT move the wavelength grid. Pinning res to the
+    2026-08-21 C-band re-runs (80/40/80) does not by itself make those runs'
+    cache entries hit: they were measured on 1.530-1.565 um / 36 pts and this
+    script asks for 1.50-1.60 um / 11 (21 for the mirror). Probe with
+    HCGFP_CACHE_ONLY=1 before spending an allocation.
 
 DENSE RESONANCE CHARACTERIZATION (section 8)
 
@@ -149,6 +166,9 @@ Run:
     python /path/to/examples/high_contrast_grating_fabry_perot/python/hcg_fabry_perot_hybrid.py
     HCGFP_CALIBRATE_ARM=0 python .../hcg_fabry_perot_hybrid.py   # MPB-index arms, own folder
     HCGFP_ARM_RES=40 python .../hcg_fabry_perot_hybrid.py        # arm-beta res sweep, own folder
+    HCGFP_CALIBRATE_BODY=0 python .../hcg_fabry_perot_hybrid.py  # MPB-index body, own folder
+    HCGFP_RES=80 HCGFP_DC_RES=40 HCGFP_ARM_RES=80 \
+        python .../hcg_fabry_perot_hybrid.py                     # -> .../res80_dc40_arm80/
 """
 
 import os
@@ -194,24 +214,84 @@ CACHE_ONLY = bool(int(os.environ.get("HCGFP_CACHE_ONLY", "0")))
 # ---------------------------------------------------------------------------
 # Global parameters
 # ---------------------------------------------------------------------------
-WL_MIN = 1.50       # C-band. The HCG mirror is a resonant reflector seeded for
-WL_MAX = 1.60       # this band (Hiesener/Pesch/Ralph, IEEE PTL 36(9), 2024) --
-                    # NOT the O-band the rest of this repo's SOI_160 examples use.
-N_WL = 11           # the COUPLER's grid, and so the assembly grid (the limiting one)
-N_WL_HCG = 21       # the MIRROR's own finer grid; an exact superset of the above
+# BAND, 2026-08-24: the real C-band operating window, 1.530-1.565 um / 36 pts,
+# replacing the earlier 1.500-1.600 um / 11+21. The HCG mirror is a resonant
+# reflector seeded for the C band (Hiesener/Pesch/Ralph, IEEE PTL 36(9), 2024) --
+# NOT the O-band the rest of this repo's SOI_160 examples use.
+#
+# This is the SAME grid the 2026-08-21 measurement re-runs used, so the mirror and
+# the calibrated arm are cache HITS out of the box rather than 4 h of re-simulation.
+#
+# STATED COST of the narrower window, so it is not discovered later: the mirror's
+# own reflectivity PEAK sits at 1.580 um (|r|^2 = 0.9714), OUTSIDE this band. On
+# 1.530-1.565 um the mirror is on the shoulder of its resonance, not the top of it.
+# That is the correct choice for a device specified over the C band, but it means
+# the cavity finesse reported here is NOT the best this mirror can do.
+WL_MIN = 1.530
+WL_MAX = 1.565
+N_WL = 36           # ONE grid for every section now -- mirror, coupler and arm alike
+N_WL_HCG = N_WL     # the mirror no longer runs a finer grid of its own
 N_WL_DENSE = 20001  # dense post-processing grid (section 8) -- costs no simulation
 
-RESOLUTION = 60.0        # pts/um -- HCG mirror FDTD; high_contrast_grating_fdtd.py's own
-FDTD_RESOLUTION = 40.0   # pts/um -- coupler S-bend FDTD; ASSUMED (see docstring)
-EME_RESOLUTION = 80.0    # pts/um -- coupler EME body; ASSUMED
-ARM_RESOLUTION = float(os.environ.get("HCGFP_ARM_RES", 60.0))  # arm beta calibration
+# Every resolution is an env knob, same shape as hcg_fabry_perot_length_sweep.py's
+# (HCGFP_RES / HCGFP_DC_RES / HCGFP_ARM_RES) so the two scripts can be pinned to the
+# same grid and share cache entries.
+#
+# Defaults raised 60 -> 80 on the mirror and the arm (2026-08-24), so that an un-set
+# environment now means "the current production resolutions" rather than "the
+# 2026-08-18 ones". This makes the DEFAULTS match hcg_fabry_perot_length_sweep.py's
+# own defaults exactly. The superseded res-60 outputs are archived under
+# archive/example_output_20260824/.
+RESOLUTION = float(os.environ.get("HCGFP_RES", 80.0))          # HCG mirror FDTD
+FDTD_RESOLUTION = float(os.environ.get("HCGFP_DC_RES", 80.0))  # coupler S-bend FDTD
+EME_RESOLUTION = float(os.environ.get("HCGFP_EME_RES", 80.0))  # coupler EME body
+ARM_RESOLUTION = float(os.environ.get("HCGFP_ARM_RES", 80.0))  # arm beta calibration
 
 N_MODES = 2   # coupler body: fundamental even/odd supermode pair ONLY. MEASURED
               # simplification (<0.01% of launched power reaches the 2nd-order
               # pair) -- see directional_coupler_soi160_hybrid.py's docstring.
 
-CALIBRATE_BODY = True   # coupler EME body propagates on the FDTD's own beta
+# coupler EME body propagates on the FDTD's own beta. HCGFP_CALIBRATE_BODY=0 puts it
+# back on the EME's own eigenmode solve -- and that is NOT free: with no neff_override
+# the diagonal fast path is gone and EMESolver runs the real mode solve.
+CALIBRATE_BODY = bool(int(os.environ.get("HCGFP_CALIBRATE_BODY", "1")))
 CALIBRATE_ARM = bool(int(os.environ.get("HCGFP_CALIBRATE_ARM", "1")))
+
+# Derive the "isolated"-arm excitation from the "in"-arm one instead of running
+# a second FDTD solve, exactly as directional_coupler_hybrid.py does (that
+# script's SYMMETRIC_MODE_REUSE; it is NOT an MMI feature). Launching "in" vs
+# "isolated" is itself a mirror operation on a cross-section that is mirror-
+# symmetric about y=0, so each body mode's coefficient can only keep or flip
+# sign: M_in1[m] = MODE_SIGNS[m] * M_in0[m].
+#
+# MEASURED ON THIS DEVICE, 2026-08-25, against the real two-arm FDTD pair
+# already cached at res 80 on 1.530-1.565 um / 36 pts -- not inherited from the
+# SOI_220 script and not assumed:
+#
+#     mode 0 (even)  ratio +0.999963 - 0.000008j   reuse error 5.4e-05
+#     mode 1 (odd)   ratio -1.000000 + 0.000001j   reuse error 1.1e-06
+#
+# with the ratio's argument spread ~1e-05 rad, i.e. a clean pure sign.
+#
+# WHY IT IS SAFER HERE THAN ON THE SOI_220 COUPLER: parity constrains the SIGN,
+# never the amplitude, so a near-cutoff mode of ~1e-6 magnitude can disagree
+# wildly while contributing nothing -- which is why that script's three
+# higher-order modes are ~1% noisy. This device carries N_MODES=2 and BOTH are
+# dominant (|M| ~ 0.707 each, the 50/50 split a symmetric coupler must give),
+# so that failure mode is not in play at all.
+#
+# WHAT IT SAVES: one of the coupler's TWO S-bend solves. It does NOT touch the
+# body beta calibration's three runs (a slope fit over three different
+# propagation lengths, which no cross-section symmetry collapses), so the
+# coupler goes 5 FDTD runs -> 4. In wall clock it is worth more than that ratio
+# suggests: at res 80 each S-bend took 335 min against 228 min for all three
+# body runs together, so this removes ~37% of the coupler's total.
+#
+# HCGFP_SYMMETRIC_MODE_REUSE=0 runs the second arm for real and re-derives the
+# signs, which is how the numbers above were produced and how to re-derive them
+# if the geometry ever changes.
+SYMMETRIC_MODE_REUSE = bool(int(os.environ.get("HCGFP_SYMMETRIC_MODE_REUSE", "1")))
+MODE_SIGNS = np.array([1, -1])
 
 COUPLING_LENGTH = 3.0   # um -- duty/dc.gds's real straight coupled-pair length
 BODY_STUB = 0.25        # um of that length folded into each FDTD section
@@ -250,8 +330,16 @@ output_dir = os.path.join(_ROOT, "example_output", "high_contrast_grating_fabry_
 # overwrite the production spectrum.
 if not CALIBRATE_ARM:
     output_dir += "_uncalibrated_arm"
-if os.environ.get("HCGFP_ARM_RES") is not None:
-    output_dir = os.path.join(output_dir, "arm_res_sweep", f"res{ARM_RESOLUTION:g}")
+if not CALIBRATE_BODY:
+    output_dir += "_uncalibrated_body"
+# Any resolution knob set at all -> its own res-stamped subfolder, named exactly the
+# way hcg_fabry_perot_length_sweep.py names its own ("res80_dc40_arm80"). The guard is
+# the env var, not the value, so a run pinned to the defaults still lands somewhere it
+# cannot overwrite the production spectrum.
+if any(os.environ.get(_v) is not None
+       for _v in ("HCGFP_RES", "HCGFP_DC_RES", "HCGFP_EME_RES", "HCGFP_ARM_RES")):
+    output_dir = os.path.join(
+        output_dir, f"res{RESOLUTION:g}_dc{FDTD_RESOLUTION:g}_arm{ARM_RESOLUTION:g}")
 if MASTER:
     os.makedirs(output_dir, exist_ok=True)
 
@@ -260,8 +348,13 @@ wl = np.linspace(WL_MIN, WL_MAX, N_WL)          # the assembly grid
 M = len(wl)
 
 print(f"HCG Fabry-Perot resonator -- self-contained rebuild")
-print(f"  CALIBRATE_BODY = {CALIBRATE_BODY} (coupler EME body)")
+print(f"  CALIBRATE_BODY = {CALIBRATE_BODY} (coupler EME body, res {EME_RESOLUTION:g})")
+print(f"  resolutions    : mirror {RESOLUTION:g}, coupler S-bend {FDTD_RESOLUTION:g}, "
+      f"coupler body {EME_RESOLUTION:g}, arm {ARM_RESOLUTION:g}")
 print(f"  CALIBRATE_ARM  = {CALIBRATE_ARM} (connecting waveguide, res {ARM_RESOLUTION:g})")
+print(f"  SYMMETRIC_MODE_REUSE = {SYMMETRIC_MODE_REUSE} "
+      f"({'1' if SYMMETRIC_MODE_REUSE else '2'} coupler S-bend FDTD solve"
+      f"{'' if SYMMETRIC_MODE_REUSE else 's'})")
 print(f"  CACHE_ONLY     = {CACHE_ONLY}")
 print(f"  output -> {output_dir}")
 
@@ -393,13 +486,40 @@ M_in0 = dc_fdtd.solve_section(
     stub_left=dc_fdtd.waveguide_length, stub_right=0.0,
     input_idx=0, save_dir=save_dir, cache_only=CACHE_ONLY, **_iface_mon,
 )  # [n_wl, N_MODES, 1] -- "in" arm -> body modes
-M_in1 = dc_fdtd.solve_section(
-    dc, wl, boundaries[0], boundaries[1],
-    n_modes_in=1, n_modes_out=N_MODES,
-    stub_left=dc_fdtd.waveguide_length, stub_right=0.0,
-    input_idx=1, save_dir=save_dir, cache_only=CACHE_ONLY, **_iface_mon,
-)  # [n_wl, N_MODES, 1] -- "isolated" arm -> body modes
-print(f"Coupler S-bend excitations: {(time.time()-_t0)/60:.1f} min")
+if SYMMETRIC_MODE_REUSE:
+    # The sign vector is a property of THIS mode count on THIS mirror-symmetric
+    # cross-section. Raising N_MODES without re-deriving it would silently apply
+    # a two-entry parity to modes nobody measured, so refuse rather than guess.
+    if MODE_SIGNS.shape != (N_MODES,):
+        raise ValueError(
+            f"MODE_SIGNS has {MODE_SIGNS.shape[0]} entries but N_MODES={N_MODES} "
+            f"-- re-derive it with HCGFP_SYMMETRIC_MODE_REUSE=0 before reusing."
+        )
+    M_in1 = M_in0 * MODE_SIGNS[None, :, None]
+    print(f"Coupler S-bend excitations: {(time.time()-_t0)/60:.1f} min "
+          f"(1 FDTD solve; the isolated arm reused via MODE_SIGNS="
+          f"{MODE_SIGNS.tolist()})")
+else:
+    M_in1 = dc_fdtd.solve_section(
+        dc, wl, boundaries[0], boundaries[1],
+        n_modes_in=1, n_modes_out=N_MODES,
+        stub_left=dc_fdtd.waveguide_length, stub_right=0.0,
+        input_idx=1, save_dir=save_dir, cache_only=CACHE_ONLY, **_iface_mon,
+    )  # [n_wl, N_MODES, 1] -- "isolated" arm -> body modes
+    print(f"Coupler S-bend excitations: {(time.time()-_t0)/60:.1f} min "
+          f"(2 FDTD solves, both arms simulated)")
+    # Re-derivation, printed so the constant above can be checked (or updated)
+    # against a real two-arm run rather than trusted.
+    _ratio = (M_in1[:, :, 0] / M_in0[:, :, 0])
+    _signs = np.sign(_ratio.real.mean(axis=0)).astype(int)
+    _err = np.abs(M_in0[:, :, 0] * _signs - M_in1[:, :, 0]) / np.abs(M_in1[:, :, 0])
+    print(f"MODE_SIGNS re-derivation (HCGFP_SYMMETRIC_MODE_REUSE=0):")
+    for _m in range(N_MODES):
+        print(f"    mode {_m}: ratio {_ratio[:, _m].mean():+.6f}  "
+              f"reuse error max {_err[:, _m].max():.2e}  "
+              f"|M| {np.abs(M_in0[M//2, _m, 0]):.4f}")
+    print(f"    implied MODE_SIGNS = {_signs.tolist()}  "
+          f"(file has {MODE_SIGNS.tolist()})")
 
 # The body's own beta. _details() rather than section_mode_beta(): same call,
 # same cost, same guards -- it just also hands back the measurement behind the
@@ -545,8 +665,10 @@ else:
 #    than via from_transfer_matrix() -- see the module docstring for the real
 #    bug that caused.
 # ---------------------------------------------------------------------------
-# The HCG's 21-point grid must be an exact superset of the coupler's 11, or
-# slicing would silently compare the wrong points.
+# The mirror's grid must be an exact superset of the assembly grid, or slicing
+# would silently compare the wrong points. Since 2026-08-24 the two ARE the same
+# 36-point grid, so this reduces to an identity check -- kept because it is the
+# guard that makes re-splitting them later safe rather than silently wrong.
 idx = [int(np.argmin(np.abs(wl_hcg - w))) for w in wl]
 if not np.allclose(wl_hcg[idx], wl, atol=1e-9):
     raise ValueError(
@@ -682,6 +804,83 @@ print("\nThis grid (10 nm spacing) is far coarser than this cavity's own "
       "estimated ~0.41 nm resonance FWHM -- see the dense reconstruction "
       "below (section 8) for the actual resolved lineshape.")
 
+def _body_beta_from_diagonal(diag, wl_arr, length, neff_anchor, min_margin=5.0):
+    """The body's beta recovered from the EME transfer matrix's own diagonal.
+
+    WHY THIS EXISTS: with CALIBRATE_BODY=0 there is no `cal_body`, so until
+    2026-08-25 this script saved `beta_body` as ZEROS -- the same key name, the
+    same shape and dtype as the calibrated run's real measurement, so a reader
+    could not tell the placeholder from data. The beta was never lost (the run
+    computed and propagated it), it was just never written down. This recovers
+    it from what WAS propagated.
+
+    M_body is diagonal and single-cell, so M[m, m] = exp(1j*beta_m*length) and
+    beta follows from the phase -- except that beta*length is ~22 rad here, so
+    the phase has wrapped ~3.5 times and angle() alone is 2*pi*k short of the
+    answer. Unwrapping across wavelength fixes the SHAPE (measured: adjacent
+    steps are <= 0.03 rad, far inside pi, so the unwrap is unambiguous) but not
+    the offset: the guided window 1.4441 < n_eff < 3.4779 admits four candidate
+    k, and all four have normal dispersion, so neither bound nor slope picks one.
+
+    `neff_anchor` breaks the tie on physics this device already measured for
+    free: the coupled pair's even/odd supermodes STRADDLE the isolated strip's
+    own index, within ~0.05 of it, so the arm's MPB n_eff -- already solved in
+    the CALIBRATE_ARM=0 branch -- identifies k with a wide margin (measured
+    2026-08-25: the correct k sits 0.013 away, the runners-up 0.61 and 0.63, a
+    factor of ~45). The margin is CHECKED, not assumed: if the best k is not
+    `min_margin` times closer than the next, this returns NaN rather than a
+    confidently wrong beta.
+
+    Returns (beta [n_wl, n_modes], k per mode, source string).
+    """
+    n_wl, n_modes = diag.shape
+    beta = np.full((n_wl, n_modes), np.nan)
+    ks = []
+    anchor = float(np.mean(neff_anchor))
+    for m in range(n_modes):
+        unwrapped = np.unwrap(np.angle(diag[:, m]))
+        scored = []
+        for k in range(0, 12):
+            n_eff = (unwrapped + 2 * np.pi * k) * wl_arr / (2 * np.pi * length)
+            if n_eff.min() <= 1.4441 or n_eff.max() >= 3.4779:
+                continue          # not a guided mode of this Si/SiO2 stack
+            scored.append((abs(float(np.mean(n_eff)) - anchor), k, n_eff))
+        scored.sort()
+        if not scored:
+            print(f"    WARNING: mode {m} -- no candidate branch lands in the "
+                  f"guided window; beta_body left as NaN")
+            ks.append(-1)
+            continue
+        best = scored[0]
+        if len(scored) > 1 and best[0] * min_margin > scored[1][0]:
+            print(f"    WARNING: mode {m} -- branch ambiguous (best k={best[1]} at "
+                  f"d={best[0]:.4f}, next k={scored[1][1]} at d={scored[1][0]:.4f}, "
+                  f"margin < {min_margin:g}x); beta_body left as NaN")
+            ks.append(-1)
+            continue
+        beta[:, m] = 2 * np.pi * best[2] / wl_arr
+        ks.append(best[1])
+    return beta, ks, "EME diagonal phase, 2pi branch anchored on the arm MPB index"
+
+
+# beta_body is now written for BOTH branches -- measured directly when the body
+# is calibrated, recovered from the propagated diagonal when it is not.
+_M_body_diag = np.diagonal(M_body, axis1=1, axis2=2).copy()   # [n_wl, N_MODES]
+if cal_body is not None:
+    beta_body_saved = cal_body.beta
+    beta_body_source = "FDTDSolver.section_mode_beta_details (calibrated)"
+    beta_body_k = []
+else:
+    print("Recovering the uncalibrated body's beta from the EME diagonal "
+          "(CALIBRATE_BODY=0, so there is no calibration object to read):")
+    beta_body_saved, beta_body_k, beta_body_source = _body_beta_from_diagonal(
+        _M_body_diag, wl, body_length, neff_arm_mpb)
+    if np.all(np.isfinite(beta_body_saved)):
+        _nb = beta_body_saved * wl[:, None] / (2 * np.pi)
+        print(f"    branch k per mode: {beta_body_k}")
+        print(f"    n_eff at {wl[M//2]:.4f} um: {_nb[M//2, 0]:.6f} {_nb[M//2, 1]:.6f}"
+              f"   delta_n_eff {_nb[M//2, 0] - _nb[M//2, 1]:.6f}")
+
 if MASTER:
     smat = SMatrix(wavelengths=wl)
     smat.set(self_reflection, port="input_reflection")
@@ -694,10 +893,20 @@ if MASTER:
         os.path.join(output_dir, "cavity_pieces.npz"),
         wavelengths=wl, wavelengths_hcg=wl_hcg,
         r_hcg=r_hcg, M_in0=M_in0, M_in1=M_in1,
-        beta_body=(cal_body.beta if cal_body is not None else np.zeros((M, N_MODES))),
+        beta_body=beta_body_saved,
+        # The exact complex diagonal that was PROPAGATED, saved unconditionally
+        # and losslessly: beta_body above is derived from it in the uncalibrated
+        # branch, and this is the primitive that derivation cannot corrupt.
+        M_body_diag=_M_body_diag,
         body_length=body_length, coupling_length=COUPLING_LENGTH,
         neff_arm=neff_arm, neff_arm_mpb=neff_arm_mpb, L_arm=L_ARM,
         calibrate_arm=int(CALIBRATE_ARM), arm_resolution=ARM_RESOLUTION,
+        # Self-describing provenance: without these, three folders hold a
+        # `beta_body` of identical shape and dtype meaning different things, and
+        # only the folder NAME distinguishes them -- which is not in the data.
+        calibrate_body=int(CALIBRATE_BODY),
+        beta_body_source=str(beta_body_source),
+        eme_resolution=EME_RESOLUTION,
     )
 
     fig, ax = plt.subplots(figsize=(7, 4.5))

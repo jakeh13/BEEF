@@ -54,6 +54,13 @@ from beef import MMI, FDTDSolver, SOI_220
 TOL = float(os.environ.get("MMI4X4_TOL", 1e-4))
 RES = float(os.environ.get("MMI4X4_TOL_RES", 40.0))
 PORT = os.environ.get("MMI4X4_TOL_PORT", "bot")
+# Port 3 (the paper's second driven input) is an INTERIOR port that "top"/"bot"
+# cannot reach -- the production 6b batch excites it as `input_idx=2`, not via
+# a `port` string (see batch/run_mmi_4x4_90hybrid_fdtd.batch:108). Passing
+# port="idx2" would silently excite the wrong thing, so accept an explicit
+# index and route it to the right kwarg.
+INPUT_IDX = os.environ.get("MMI4X4_TOL_INPUT_IDX")
+INPUT_IDX = int(INPUT_IDX) if INPUT_IDX not in (None, "") else None
 
 WAVEGUIDE_WIDTH = 0.35
 MM_WIDTH = 6.0
@@ -86,11 +93,42 @@ solver = FDTDSolver(
     decay_method="energy", energy_decay_dt=20.0,
 )
 
-print(f"TOLCONV: decay_tol={TOL:.0e} port={PORT} res={RES} dpml=0.5", flush=True)
+_exc = f"input_idx={INPUT_IDX}" if INPUT_IDX is not None else f"port={PORT!r}"
+print(f"TOLCONV: decay_tol={TOL:.0e} {_exc} res={RES} dpml=0.5", flush=True)
 
 wavelengths = np.linspace(1.26, 1.36, 3)
-smat = solver.solve(mmi, wavelengths, port=PORT, input_mode=1,
-                    save_dir=save_dir)
+# One run, sampled densely, instead of one run per tolerance -- see
+# FDTDSolver.solve()'s `snapshot_every`. Each sample carries the energy ratio
+# that would have stopped the run there, so the resulting curve IS
+# transmission-vs-decay_tol, read off a single simulation.
+SNAP_EVERY = float(os.environ.get("MMI4X4_TOL_SNAP_EVERY", 50.0))
+_outdir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..",
+                                       "example_output", "mmi_4x4_90hybrid"))
+os.makedirs(_outdir, exist_ok=True)
+_tag = ("idx%d" % INPUT_IDX) if INPUT_IDX is not None else PORT
+snap_path = os.path.join(_outdir, f"tolcurve_res{int(RES)}_{_tag}.csv")
+print(f"TOLCONV: snapshots every {SNAP_EVERY} t-units -> {snap_path}", flush=True)
+
+_common = dict(input_mode=1, save_dir=save_dir,
+               snapshot_every=SNAP_EVERY, snapshot_path=snap_path)
+if INPUT_IDX is not None:
+    smat = solver.solve(mmi, wavelengths, input_idx=INPUT_IDX, **_common)
+else:
+    smat = solver.solve(mmi, wavelengths, port=PORT, **_common)
+
+_n = 0
+if os.path.exists(snap_path):
+    with open(snap_path) as _fh:
+        _n = max(0, sum(1 for _ in _fh) - 1)
+if _n:
+    print(f"TOLCONV: {_n} snapshots written to {snap_path}", flush=True)
+else:
+    # A cache hit returns without time-stepping, so no curve is produced.
+    # That is correct, not a failure -- the S-matrix below is still the real
+    # cached result. Delete the cache entry (or vary a tracked attr) to force
+    # a fresh run if the curve itself is what you need.
+    print("TOLCONV: no snapshots -- solve() returned from cache without "
+          "running; S-matrix below is the cached result", flush=True)
 smat.check_passive()
 
 out = {}
@@ -102,7 +140,8 @@ for j in range(4):
           f"{np.array2string(T, precision=8)}", flush=True)
 
 np.savez(os.path.join(save_dir, "..", "example_output", "mmi_4x4_90hybrid",
-                      f"decaytol_{TOL:.0e}_res{int(RES)}_{PORT}.npz"),
+                      f"decaytol_{TOL:.0e}_res{int(RES)}_"
+                      f"{('idx%d' % INPUT_IDX) if INPUT_IDX is not None else PORT}.npz"),
          tol=TOL, res=RES, wavelengths=wavelengths,
          **{k: v for k, v in out.items()})
 print(f"TOLCONV: done tol={TOL:.0e}", flush=True)

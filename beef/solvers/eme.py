@@ -355,38 +355,87 @@ class EMESolver:
 
         from ..mode_identity import field_overlap_matrix, stack_meow_mode_fields
 
-        # Over-request, then keep the first `num_modes` DISTINCT ones. Same
-        # policy as the meep-side guard: a duplicate means the solver
-        # converged onto an already-found eigenvector, so reach further up the
-        # spectrum rather than accepting a rank-deficient basis. dy/dz cancel
-        # exactly in the normalized ratio, so 1.0/1.0 is not an approximation.
-        raw = self._solve_modes_raw(
-            cross_section, num_modes + _DUP_MODE_MAX_EXTRA)
-        fields = stack_meow_mode_fields(raw)
-        eta = field_overlap_matrix(fields, fields, dy=1.0, dz=1.0)
+        # Keep the first `num_modes` DISTINCT modes. Same policy as the
+        # meep-side guard: a duplicate means the solver converged onto an
+        # already-found eigenvector, so reach further up the spectrum rather
+        # than accepting a rank-deficient basis. dy/dz cancel exactly in the
+        # normalized ratio, so 1.0/1.0 is not an approximation.
+        #
+        # LAZY, as of 2026-08-25 -- this used to solve `num_modes +
+        # _DUP_MODE_MAX_EXTRA` unconditionally, on every cross-section, whether
+        # or not a duplicate was ever found. That is what the comment above the
+        # constants means by "mirrors fdtd.py": the CONSTANT matched, but the
+        # cost model did not. `_iter_distinct_bands()` treats its own
+        # `n_modes + _DUP_BAND_MAX_EXTRA` as a CAP on a generator and stops as
+        # soon as it has enough distinct bands; this path paid the cap up front
+        # every time, so requesting 2 modes always solved 10.
+        #
+        # Escalating rather than over-requesting is safe because the
+        # over-request is a PURE FILTER and never perturbs the low bands --
+        # measured, not assumed: job 11586098 arm C vs arm A gave
+        # max |delta n_eff| = 0.000e+00 across all 16 low bands, and recorded
+        # the over-request as a 3.2x pure cost (running_jobs.md item 13, folded
+        # into resolved/fdtd_vs_EME_mode_validation.md). So the top-k of a
+        # k-mode solve and the top-k of a (k+8)-mode solve agree, and solving
+        # k first costs nothing in accuracy.
+        #
+        # Two attempts, not a ladder: duplicates are rare, so the common case
+        # must be exactly `num_modes` solves, and the rare case should not pay
+        # for a long staircase of re-solves (each `_solve_modes_raw(n)` redoes
+        # bands 1..n from scratch). Attempt 2 jumps straight to the old
+        # unconditional count, so the fallback behaviour is bit-identical to
+        # what this method did before.
+        #
+        # Cache note: neither `guard_duplicate_modes` nor _DUP_MODE_MAX_EXTRA
+        # is part of any EME cache key (see beef/cache/config.py -- the EME
+        # entries key on oxide_width/oxide_height/res/material_stack/
+        # temperature/mode_solver/num_cells and the call's own arguments), so
+        # this change re-keys nothing and every existing entry stays valid.
+        attempts = [num_modes]
+        if _DUP_MODE_MAX_EXTRA > 0:
+            attempts.append(num_modes + _DUP_MODE_MAX_EXTRA)
 
         kept: List[int] = []
-        for j in range(len(raw)):
+        raw: list = []
+        for attempt, n_solve in enumerate(attempts):
+            raw = self._solve_modes_raw(cross_section, n_solve)
+            fields = stack_meow_mode_fields(raw)
+            eta = field_overlap_matrix(fields, fields, dy=1.0, dz=1.0)
+
+            kept = []
+            for j in range(len(raw)):
+                if len(kept) == num_modes:
+                    break
+                dup_of = next(
+                    (i for i in kept if eta[i, j] > _DUP_MODE_OVERLAP_THRESHOLD), None)
+                if dup_of is not None:
+                    logger.warning(
+                        "EMESolver.compute_modes: meow mode %d duplicates already-"
+                        "accepted mode %d (self-overlap %.6f > %.2f) -- skipping it "
+                        "and reaching further up the spectrum. A rank-deficient "
+                        "basis would silently drop one channel of the %d requested. "
+                        "See validation_markdown/fdtd_vs_EME_mode_validation.md "
+                        "item 0.",
+                        j, dup_of, eta[dup_of, j], _DUP_MODE_OVERLAP_THRESHOLD,
+                        num_modes,
+                    )
+                    continue
+                kept.append(j)
+
             if len(kept) == num_modes:
                 break
-            dup_of = next((i for i in kept if eta[i, j] > _DUP_MODE_OVERLAP_THRESHOLD), None)
-            if dup_of is not None:
+            if attempt + 1 < len(attempts):
                 logger.warning(
-                    "EMESolver.compute_modes: meow mode %d duplicates already-"
-                    "accepted mode %d (self-overlap %.6f > %.2f) -- skipping it "
-                    "and reaching further up the spectrum. A rank-deficient "
-                    "basis would silently drop one channel of the %d requested. "
-                    "See validation_markdown/fdtd_vs_EME_mode_validation.md "
-                    "item 0.",
-                    j, dup_of, eta[dup_of, j], _DUP_MODE_OVERLAP_THRESHOLD, num_modes,
+                    "EMESolver.compute_modes: only %d of %d requested modes were "
+                    "distinct among %d solved -- re-solving with %d to reach "
+                    "further up the spectrum.",
+                    len(kept), num_modes, n_solve, attempts[attempt + 1],
                 )
-                continue
-            kept.append(j)
 
         if len(kept) < num_modes:
             raise RuntimeError(
                 f"EMESolver.compute_modes: could not find {num_modes} distinct "
-                f"modes within {num_modes + _DUP_MODE_MAX_EXTRA} solved modes at "
+                f"modes within {attempts[-1]} solved modes at "
                 f"this cross-section -- meow returned more duplicates than this "
                 f"guard tolerates (kept {len(kept)}). See validation_markdown/"
                 f"fdtd_vs_EME_mode_validation.md item 0."

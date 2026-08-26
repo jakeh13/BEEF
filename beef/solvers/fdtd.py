@@ -1126,6 +1126,59 @@ class FDTDSolver:
         si_med, sio2_med = self._media(wavelengths)
         return Sx, Sy, wl_center, si_med, sio2_med
 
+    def _extract_solve_smatrix(self, sim, in_flux, out_fluxes, input_mode,
+                               wavelengths, wl_order):
+        """Decompose solve()'s monitors into an SMatrix.
+
+        Split out of solve() 2026-08-24 so that MID-RUN snapshots and the
+        final result are produced by the SAME code. meep's DFT monitors
+        accumulate continuously, so calling this at time t returns exactly
+        the S-matrix solve() would have returned had it stopped at t --
+        which is what makes a transmission-vs-decay-time curve obtainable
+        from ONE simulation instead of one run per tolerance.
+
+        Duplicating this logic in a caller would be a real hazard rather
+        than a style problem: the flux cross-check below exists because
+        get_eigenmode_coefficients() can silently undercount launched power
+        for an ill-conditioned decomposition, which produced the single
+        check_passive() violation in the modal multiplexer's otherwise
+        "closed" run. A snapshot path that skipped it would report subtly
+        wrong transmission at every sample.
+
+        Reads only; does not advance or perturb the simulation.
+        """
+        import meep as mp
+
+        in_coeff = sim.get_eigenmode_coefficients(
+            in_flux, [input_mode], eig_parity=mp.NO_PARITY
+        )
+        in_alpha_raw = in_coeff.alpha[0, :, 0]  # [nfreq] forward amplitude, monitor order
+        in_flux_mag = np.abs(np.asarray(mp.get_fluxes(in_flux)))
+        in_mismatch = np.abs(np.sqrt(in_flux_mag) - np.abs(in_alpha_raw)) / np.maximum(np.sqrt(in_flux_mag), 1e-30)
+        if np.any(in_mismatch > _EXCITE_NORM_MISMATCH_TOL):
+            logger.warning(
+                "solve: input mode %d normalization mismatch between "
+                "get_eigenmode_coefficients() and get_fluxes() (max %.1f%% at freq "
+                "index %d) — falling back to flux-calibrated normalization.",
+                input_mode, 100 * float(in_mismatch.max()), int(in_mismatch.argmax()),
+            )
+            src_alpha = np.sqrt(in_flux_mag) * np.exp(1j * np.angle(in_alpha_raw))
+        else:
+            src_alpha = in_alpha_raw
+
+        smat = SMatrix(wavelengths=wavelengths)
+        for i, flux_mon in enumerate(out_fluxes):
+            out_port = f"out_{i}"
+            for mode_n in range(1, self.num_output_modes + 1):
+                coeff = sim.get_eigenmode_coefficients(
+                    flux_mon, [mode_n], eig_parity=mp.NO_PARITY
+                )
+                # [wl_order] lifts the ratio out of meep's ascending-frequency
+                # monitor order back onto `wavelengths` as the caller gave it.
+                alpha = (coeff.alpha[0, :, 0] / src_alpha)[wl_order]
+                smat.set(alpha, port=out_port, in_mode=input_mode, out_mode=mode_n)
+        return smat
+
     def solve(
         self,
         geometry: DeviceGeometry,
@@ -1135,6 +1188,8 @@ class FDTDSolver:
         save_dir: Optional[str] = None,
         cache_only: bool = False,
         input_idx: Optional[int] = None,
+        snapshot_every: Optional[float] = None,
+        snapshot_path: Optional[str] = None,
         **kwargs,
     ) -> SMatrix:
         """Run a broadband FDTD simulation for one input port.
@@ -1159,6 +1214,21 @@ class FDTDSolver:
             cache_only: if True, never run the simulation — return the
                 cached result or raise CacheMissError. See solve_section()'s
                 cache_only docstring for the full semantics (identical here).
+            snapshot_every: if set, decompose the monitors every this many
+                meep time units DURING the run and record
+                {t, energy, energy_ratio, T} to ``snapshot_path``. Because
+                DFT monitors accumulate, sample t equals what a run stopped
+                at t would have returned, so one run yields a whole
+                transmission-vs-decay-time curve instead of needing one run
+                per ``decay_tol``. Observation only: it does not alter the
+                fields, the stopping condition, or the returned SMatrix, and
+                it is NOT part of the cache fingerprint for exactly that
+                reason -- a snapshotted run and a plain one produce the same
+                result and correctly share a cache entry. Costs one extra
+                eigenmode decomposition per sample.
+            snapshot_path: optional file to append each sample to as it is
+                taken (CSV, header written once), so the curve can be read
+                while the job is still running.
             input_idx: explicit 0-based index into ``geometry.input_ys`` to
                 excite, overriding ``port``. Added for devices with more than
                 two access ports (e.g. a 4x4 MMI, `mmi_4x4_90hybrid_fdtd.py`),
@@ -1355,7 +1425,66 @@ class FDTDSolver:
             for yc, yw in zip(self.output_monitor_centers, out_widths)
         ]
 
-        sim.run(until_after_sources=self._stop_condition())
+        # `snapshot_every` builds a transmission-vs-decay-time curve from THIS
+        # one run instead of one run per decay_tol. meep's DFT monitors
+        # accumulate, so decomposing them at time t yields exactly the result
+        # a run stopped at t would have produced, and the energy ratio recorded
+        # alongside maps each sample onto the decay_tol that would have stopped
+        # there. Samples are appended to `snapshot_path` AS THEY ARE TAKEN, so
+        # the curve is readable while the job is still running.
+        # Deliberately NOT stored on `self`. `solve_reflection()` has no
+        # _METHOD_ATTRS entry and fingerprints on a full vars() dump, so any
+        # attribute solve() leaves on the instance would silently change
+        # solve_reflection()'s cache key afterwards -- the same stranding bug
+        # `minimum_run_time` caused for 48 entries. The CSV is the output.
+        if snapshot_every:
+            _peak = {"e": 0.0}
+
+            def _snap(_sim):
+                try:
+                    e = float(_sim.field_energy_in_box(_sim.fields.total_volume()))
+                except Exception:
+                    e = float("nan")
+                if e == e and e > _peak["e"]:
+                    _peak["e"] = e
+                ratio = (e / _peak["e"]) if _peak["e"] > 0 else float("nan")
+                snap = self._extract_solve_smatrix(
+                    _sim, in_flux, out_fluxes, input_mode, wavelengths, wl_order
+                )
+                t_now = float(_sim.meep_time())
+                T = {f"out_{i}": np.asarray(snap.transmission(port=f"out_{i}"))
+                     for i in range(len(out_fluxes))}
+                # Decomposition above is collective and must run on EVERY rank.
+                # The write must not: with 8 ranks the smoke test produced a
+                # CSV with repeated headers and duplicated rows, and at 96 it
+                # would be unusable. `_extract_solve_smatrix` returns the same
+                # values on every rank, so rank 0 alone writes the file.
+                if snapshot_path and mp.am_master():
+                    try:
+                        fresh = not os.path.exists(snapshot_path)
+                        with open(snapshot_path, "a") as fh:
+                            if fresh:
+                                cols = ",".join(
+                                    f"T_out{i}_wl{j}"
+                                    for i in range(len(out_fluxes))
+                                    for j in range(len(wavelengths))
+                                )
+                                fh.write("t,energy,energy_ratio," + cols + "\n")
+                            vals = ",".join(
+                                f"{v:.10e}"
+                                for i in range(len(out_fluxes))
+                                for v in np.asarray(T[f"out_{i}"]).ravel()
+                            )
+                            fh.write(f"{t_now:.4f},{e:.10e},{ratio:.10e},{vals}\n")
+                            fh.flush()
+                    except OSError:
+                        logger.warning(
+                            "solve: could not append snapshot to %s", snapshot_path)
+
+            sim.run(mp.at_every(float(snapshot_every), _snap),
+                    until_after_sources=self._stop_condition())
+        else:
+            sim.run(until_after_sources=self._stop_condition())
 
         # Normalise by forward input-mode amplitude so |coeff|² = physical T.
         # Same mismatch guard as solve_section()'s x-axis excite branch (see
@@ -1370,34 +1499,9 @@ class FDTDSolver:
         # geometry rather than a connector this time — the failure mode isn't
         # specific to near-degenerate multimode bases the way gap 7's fix
         # was motivated, just to get_eigenmode_coefficients() itself.
-        in_coeff = sim.get_eigenmode_coefficients(
-            in_flux, [input_mode], eig_parity=mp.NO_PARITY
+        smat = self._extract_solve_smatrix(
+            sim, in_flux, out_fluxes, input_mode, wavelengths, wl_order
         )
-        in_alpha_raw = in_coeff.alpha[0, :, 0]  # [nfreq] forward amplitude, monitor order
-        in_flux_mag = np.abs(np.asarray(mp.get_fluxes(in_flux)))
-        in_mismatch = np.abs(np.sqrt(in_flux_mag) - np.abs(in_alpha_raw)) / np.maximum(np.sqrt(in_flux_mag), 1e-30)
-        if np.any(in_mismatch > _EXCITE_NORM_MISMATCH_TOL):
-            logger.warning(
-                "solve: input mode %d normalization mismatch between "
-                "get_eigenmode_coefficients() and get_fluxes() (max %.1f%% at freq "
-                "index %d) — falling back to flux-calibrated normalization.",
-                input_mode, 100 * float(in_mismatch.max()), int(in_mismatch.argmax()),
-            )
-            src_alpha = np.sqrt(in_flux_mag) * np.exp(1j * np.angle(in_alpha_raw))
-        else:
-            src_alpha = in_alpha_raw
-
-        smat = SMatrix(wavelengths=wavelengths)
-        for i, flux_mon in enumerate(out_fluxes):
-            out_port = f"out_{i}"
-            for mode_n in range(1, self.num_output_modes + 1):
-                coeff = sim.get_eigenmode_coefficients(
-                    flux_mon, [mode_n], eig_parity=mp.NO_PARITY
-                )
-                # [wl_order] lifts the ratio out of meep's ascending-frequency
-                # monitor order back onto `wavelengths` as the caller gave it.
-                alpha = (coeff.alpha[0, :, 0] / src_alpha)[wl_order]
-                smat.set(alpha, port=out_port, in_mode=input_mode, out_mode=mode_n)
 
         sim.reset_meep()
 

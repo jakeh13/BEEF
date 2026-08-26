@@ -170,8 +170,23 @@ for k in range(4):
           f"T = {T[k][idx]:.4f}  IL = {10*np.log10(max(T[k][idx], 1e-20)):.2f} dB")
 print(f"  Total  T = {T_total[idx]:.4f}  IL = {10*np.log10(max(T_total[idx], 1e-20)):.2f} dB")
 print(f"  (ideal 1x4 split: T_each=0.25, IL_total=0.0 dB)")
-print(f"\nComparison -- EME (job 11840722, confirmed N_WL=11): "
-      f"T=[0.2414, 0.2396, 0.2396, 0.2414], total=0.9620")
+# Comparison references, CORRECTED 2026-08-26. This previously cited
+# "EME (job 11840722, confirmed N_WL=11): T=[0.2414, 0.2396, 0.2396, 0.2414],
+# total=0.9620" -- but 11840722 is `beef_mmi1x4_toc`, a step-9c DESIGN-SWEEP
+# array that finished 2026-08-14, the same day the geometry changed. It is not
+# a production EME run and its numbers predate the settled geometry. The
+# authoritative EME production result is job 11887395 (and the res 40->60
+# convergence grid, jobs 12323220/12331012, confirms it is converged).
+print(f"\nComparison at band centre:")
+print(f"  EME production   (job 11887395, res=40, 20x5, N_WL=11): "
+      f"T=[0.2431, 0.2423, 0.2423, 0.2431], total=0.9707  (favours OUTER)")
+print(f"  whole-device FDTD (job 12029541, res=30, 16x4, N_WL=1):  "
+      f"T=[0.2400, 0.2424, 0.2424, 0.2400], total=0.9648  (favours INNER)")
+print(f"  ^ THIS run is the N_WL=11 counterpart of 12029541 -- same method and")
+print(f"    parameters, so its own band-centre row above should reproduce that")
+print(f"    line. A mismatch there is a red flag about this run, not a physics")
+print(f"    result. The EME-vs-FDTD gap (~3e-03/port) is check 1's real, and")
+print(f"    resolution-converged, engine disagreement.")
 
 # ---------------------------------------------------------------------------
 # 6. Save results

@@ -1930,6 +1930,152 @@ scheduling decision, not a technical one.
 `N_MODES` is now env-overridable (`MMI1X4_N_MODES`), **default unchanged**,
 so the sweep can be driven without editing the script when it is run.
 
+### ✅ CHECK 3 — resolution convergence, RESOLVED 2026-08-24 (job 12275175)
+
+**Both the original finding and its leading explanation were wrong, in
+different ways.** Full sweep res=[15,20,25,30,35,40], 16 modes solved,
+12 reported (= production `interface_modes`), BOTH engines, mode identity
+established by **field overlap** rather than by index. 3h29m. Script:
+`examples/verification/python/mmi_1x4_check3_res_convergence_corresponded.py`.
+
+**1. The mode-swapping hypothesis is REFUTED.** The doc's standing explanation
+for the 2026-08-04 inconclusive result was "mode-index correspondence swapping
+between near-degenerate higher-order modes." It is not that: **correspondence
+is the identity permutation at every resolution, in both engines**, worst
+diagonal overlap 0.9972-1.0000 on the reported modes. The naive index-tracked
+and field-overlap-corrected |dn_eff| series are consequently **identical to
+every printed digit**. The original attempt tracked modes correctly after all;
+its result was real.
+
+**2. The non-convergence is a COMMON-MODE shift, not a per-mode or
+near-cutoff problem.** Per-mode |dn_eff| (FDTD, modes 0->11) is essentially the
+same number for every mode at each step -- 15->20 is 3.4e-03 for mode 0 and
+3.2e-03 for mode 11; 30->35 is 1.1e-03 vs 9.9e-04. **The fundamental mode is
+just as non-monotonic as the near-cutoff ones.** That rules out the
+"weakly-confined high-order modes need more mesh" reading that motivated
+targeting the body cross-section in the first place, and points instead at a
+mode-independent discretisation bias on the effective index.
+
+**3. THE QUANTITY THE DEVICE DEPENDS ON DOES CONVERGE -- on the FDTD side.**
+This is what step 8's own instruction ("sweep a **Δβ-like quantity**, not just
+output power") was pointing at, and what the first attempt and my own first
+pass both missed by tracking absolute n_eff. Because the error is common-mode,
+it largely cancels in differences:
+
+| | absolute n_eff drift 30->40 | **differential** Δn_eff drift 30->40 |
+|---|---|---|
+| FDTD / meep | 1.96e-03 | **1.99e-04 max, 8.14e-05 mean — 10x smaller** |
+| EME / tidy3d | 1.35e-03 | 2.17e-03 max, 6.10e-04 mean — *not* smaller |
+
+FDTD's differential also shows a clean asymptotic tail once past the coarse
+points: max |ΔΔn_eff| runs 3.2e-03 -> 6.2e-04 -> 1.5e-04 -> **4.6e-05**,
+shrinking ~3-4x per step from res 25 up. And the mode-0<->1 spacing, the most
+self-imaging-relevant single number, agrees to ~0.1% between res 30 and 40 in
+**both** engines (FDTD -0.003563 vs -0.003559; EME -0.003553 vs -0.003555).
+
+**Verdict: res=30 is defensible for the FDTD side** on the differential
+quantity that governs MMI self-imaging, residual ~2e-04 max / 8e-05 mean
+against res=40. The absolute-n_eff offset is a common-mode discretisation bias
+that does not propagate to Δβ.
+
+> ⚠ **Two caveats, both real.**
+> **(a) The EME/tidy3d side does NOT show the same cancellation** -- its
+> differential drift (2.17e-03) is no smaller than its absolute drift, and its
+> per-step sequence stays noisy. res=30 is justified for the meep side but
+> **not** established for the tidy3d body solver. Worth connecting to check 1:
+> EME is the engine that got the split-shape *sign* wrong against the
+> whole-device FDTD reference, and split shape is a Δβ-across-many-modes
+> quantity. **Hypothesis, NOT established** -- an under-converged EME
+> differential could contribute, and it is testable by re-running the EME body
+> at res 40+ to see whether the split shape moves.
+> **(b) My script's `monotonically shrinking` flag is too crude** and prints
+> `False` for both engines. It demands *every* consecutive step shrink, which
+> a sequence with one coarse-grid spike fails even when its tail converges
+> cleanly -- exactly FDTD's case. The per-mode/per-step tables are the
+> evidence; do not read that boolean as the finding.
+
+---
+
+### ✅ EME converges — to a DIFFERENT answer than FDTD (jobs 12323220, 12331012)
+
+Full (res, domain) grid at band centre. **The split shape never flips.**
+
+| case | res | domain | total T | favours | \|outer−inner\| | dev vs FDTD |
+|---|---|---|---|---|---|---|
+| A | 40 | 20x5 | 0.9707 | OUTER | 7.93e-04 | 3.09e-03 |
+| B | 30 | 16x4 | 0.9703 | OUTER | 2.38e-03 | 3.79e-03 |
+| C | 40 | 16x4 | 0.9706 | OUTER | 2.31e-03 | 3.84e-03 |
+| D | 50 | 20x5 | 0.9705 | OUTER | 7.62e-04 | 3.04e-03 |
+| E | **60** | 20x5 | 0.9707 | **OUTER** | **7.48e-04** | **3.07e-03** |
+
+**1. EME IS resolution-converged.** At the 20x5 domain, |outer−inner| settles
+7.93e-04 → 7.62e-04 → **7.48e-04** across res 40 → 50 → 60, and total T holds
+0.9705–0.9707. This is the important negative result for check 3's own
+hypothesis: EME's *cross-section* differential non-convergence (2.17e-03 drift,
+30→40) **does NOT propagate to the device-level split shape**, which converges
+cleanly. That hypothesis is therefore **not supported** — dropped, not carried
+forward.
+
+**2. Deviation from FDTD does NOT shrink with resolution.** dev vs the
+whole-device FDTD reference sits at 3.04–3.84e-03 across *every* case, and is
+3.07e-03 at res=60 versus 3.09e-03 at res=40. **EME is converged and
+disagrees.** So check 1's engine disagreement is real physics/modelling, not a
+mesh artefact — the strongest statement available on it so far.
+
+**3. DOMAIN, not resolution, drives the split magnitude.** 20x5 gives
+|outer−inner| ≈ 7.5e-04; 16x4 gives ≈ 2.3e-03 — the smaller domain roughly
+**triples** it (B and C agree at 2.3–2.4e-03 across res 30 and 40, so this is
+a domain effect, not a resolution one). This confirms the suspicion that the
+16x4 domain — validated for the hybrid's **12** interface modes — is **not
+adequate for `mmi_1x4_eme.py`'s N_BODY=20**. The published EME run's 20x5 is
+the right choice, and is the converged one.
+
+---
+
+### ✅ decay_method="energy" is usable at this device — 3.1x cheaper (jobs 12276203, 12309040)
+
+Whole-device, band centre, scored against the trusted dft/1e-11 reference
+(job 12029541: T=[0.239975, 0.242448, 0.242448, 0.239975], total 0.9648).
+
+| method / decay_tol | hrs | speedup | total T | max per-port dev |
+|---|---|---|---|---|
+| dft, 1e-11 (reference) | 41.03 | 1.0x | 0.9648 | — |
+| energy, 1e-3 | 8.87 | 4.6x | 0.9611 | 1.27e-03 |
+| **energy, 1e-5** | **13.33** | **3.1x** | **0.9649** | **1.87e-04** |
+
+At 1e-3 the run stops before the fields settle — every port reads low and
+total T is down 0.0038, the systematic signature of truncating a still-decaying
+field (not random noise), which is why tightening fixed it rather than
+reshuffling it.
+
+At **1e-5**: total T agrees with the reference to **1e-4** (0.9649 vs 0.9648)
+and max per-port deviation is **1.87e-04**.
+
+> **Stated honestly: 1.87e-04 is ~1.9x the ≤1e-4 bar I set BEFORE running, so
+> it does not meet my own pre-registered criterion.** It is nonetheless usable,
+> and here is the sizing rather than a moved goalpost: 1.87e-04 is ~13x below
+> the FDTD split asymmetry being measured (2.5e-03) and ~16x below the
+> EME-vs-FDTD engine gap (3.07e-03). It is comfortably beneath every physical
+> effect currently under study, but it is NOT good enough to resolve effects at
+> the 1e-4 level, and should not be used for one.
+
+**`decay_tol` means different things to the two methods** — a per-DFT-component
+relative threshold for `"dft"`, a BULK-ENERGY decay factor for `"energy"`. So
+1e-11 is a sensible dft threshold and an absurd energy target; these are not
+"the same tolerance, different method".
+
+**Caveat on what this establishes.** The reference is itself a dft/1e-11 run,
+so this measures **agreement between two stopping criteria at this device**,
+not an absolute accuracy bound. Enough to justify using `"energy"` where the
+cost matters; not an independent validation of either.
+
+**Recommended use: the tapered-body device's own whole-device FDTD reference**,
+which does not exist yet and would otherwise cost ~41 hrs at dft. Nothing
+changes for check 4 (job 12260631), which is already ~56% through under dft --
+switching now would discard ~34 hrs to save ~28. Library defaults unchanged.
+
+---
+
 ### ✅ CHECK 4 — whole-device FDTD reference, MEASURED at band centre (job 12029541)
 
 **The check-4 reference exists and has since 2026-08-21.** Job 12029541
@@ -1963,6 +2109,46 @@ Three findings, none of them what the earlier framing assumed:
    **underestimates by −2.0%** — the direction and rough size mode
    truncation predicts (N_BODY=20 vs interface_modes=12, item 9d), and the
    best evidence yet that 12 modes is costing real accuracy.
+
+> ### ⚠ The check-1 comparison was CONFOUNDED — retested 2026-08-25, conclusion survives
+>
+> The comparison above was first reported as "the whole-device FDTD arbitrated
+> the engine disagreement." That claim was **not supported by those two runs**,
+> because they differ in three ways at once, not one:
+>
+> | | EME (11887395) | FDTD ref (12029541) |
+> |---|---|---|
+> | resolution | **40** | **30** |
+> | domain (y x z) | **20 x 5** | **16 x 4** |
+> | body modes | 20 | none (whole-device) |
+>
+> The device geometry is identical; the SIMULATION parameters are not. The
+> domain gap is not an oversight either: 16x4 was adopted 2026-08-19 on a
+> convergence check whose own conclusion was "modes 19/22 never converge but
+> are IRRELEVANT because production keeps N_MODES=12" -- true for the hybrid's
+> 12-mode interfaces, but `mmi_1x4_eme.py` carries **N_BODY=20**, so it is the
+> one caller that check does not cover.
+>
+> **Tested rather than argued** (job 12323220,
+> `mmi_1x4_eme_split_shape_confound.py`, band centre only):
+>
+> | case | res | domain | total T | favours | dev vs FDTD | dev vs EME pub |
+> |---|---|---|---|---|---|---|
+> | A | 40 | 20x5 | 0.9707 | **OUTER** | 3.09e-03 | **3.46e-05** |
+> | B | 30 | 16x4 | 0.9703 | **OUTER** | 3.79e-03 | 9.10e-04 |
+>
+> Case A reproduces the published EME result to 3.46e-05, so the harness is
+> faithful. Case B then matches the FDTD reference's OWN resolution and domain
+> -- and EME **still favours OUTER**, with the outer/inner gap WIDENING
+> (7.93e-04 -> 2.38e-03) and agreement with FDTD getting slightly worse.
+>
+> **So the split-shape disagreement is NOT a resolution/domain artefact.** It
+> survives matching parameters, and the check-1 conclusion stands -- now on a
+> controlled comparison. The correction was still warranted: the conclusion
+> happened to survive, but it was not supported by the evidence originally
+> cited for it. Cases C/D/E (domain isolated; res 50/60) are running to test
+> whether EME converges toward the FDTD answer at all, which check 3's finding
+> (EME's differential does not converge like meep's) predicts it may not.
 
 **Cost question from `mmi_1x4_fdtd.py`'s docstring is also resolved.** It
 projected 52 hrs if timesteps stayed near the input probe's 23,388, or
