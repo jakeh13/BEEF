@@ -2076,6 +2076,104 @@ switching now would discard ~34 hrs to save ~28. Library defaults unchanged.
 
 ---
 
+### ✅ CHECK 4 COMPLETE — full band (job 12260631, 2d18h, 43,225 steps)
+
+**Self-check passes.** This run is the N_WL=11 counterpart of the band-centre
+probe (12029541) -- same method, res, domain -- and reproduces it:
+band centre T=[0.2400, 0.2425, 0.2425, 0.2400], total **0.9649** vs the probe's
+[0.23998, 0.24245, 0.24245, 0.23998] / **0.9648**, agreeing to ~1e-4 despite
+43,225 vs 40,420 steps and ~44 vs ~4 DFT components. `decay_method="dft"`
+did not stall.
+
+> ⚠ This run printed `Comparison -- EME (job 11840722 ...) total=0.9620`.
+> **Disregard it.** 11840722 is `beef_mmi1x4_toc`, a step-9c DESIGN-SWEEP array
+> from 2026-08-14 (the day the geometry changed), not a production EME run. The
+> script was corrected 2026-08-26, but this job had already imported the old
+> version. Authoritative EME reference is 11887395.
+
+#### THE BAND-CENTRE COMPARISON WAS THE MOST FLATTERING ONE POSSIBLE
+
+Every check-1 comparison to date was made at 1.55 µm. Across the band the two
+engines have **opposite spectral slopes**, and band centre is almost exactly
+where they cross:
+
+| wl | FDTD total T | EME total T | EME−FDTD | FDTD shape | EME shape |
+|---|---|---|---|---|---|
+| 1.50 | 0.9846 | 0.9445 | **−0.0400** | OUTER | OUTER |
+| 1.52 | 0.9821 | 0.9605 | −0.0216 | INNER | OUTER |
+| 1.54 | 0.9723 | 0.9690 | −0.0033 | INNER | OUTER |
+| **1.55** | **0.9649** | **0.9707** | **+0.0058** | INNER | OUTER |
+| 1.56 | 0.9564 | 0.9705 | +0.0141 | INNER | OUTER |
+| 1.58 | 0.9356 | 0.9652 | +0.0296 | INNER | OUTER |
+| 1.60 | 0.9112 | 0.9538 | **+0.0426** | OUTER | OUTER |
+
+- **FDTD decreases monotonically** across the band: 0.9846 → 0.9112, a **7.3
+  point** fall. Physically sensible for an MMI — L_pi ∝ W²/λ, so a fixed
+  mm_length drifts off the self-imaging condition as λ grows.
+- **EME peaks at band centre** and is roughly symmetric (0.9445 → 0.9707 →
+  0.9538). A qualitatively DIFFERENT spectral shape, not an offset.
+- **The gap swings sign**, −0.0400 to +0.0426 (range 0.083), passing through
+  ~0 near 1.55. Max per-port deviation across the band is **1.25e-02** (at
+  1.50) — **4x larger** than the 3.09e-03 measured at band centre.
+- **Split shape:** EME favours OUTER at **11/11** wavelengths; FDTD favours
+  INNER at **9/11** (flipping to OUTER only at the extreme edges 1.50/1.60).
+  So the sign disagreement is not a band-centre quirk either.
+
+**Consequence for how check 1 must be reported.** Previous statements
+("engines disagree by ~2.5 points / ~3e-03 per port") were measured at the one
+wavelength where the disagreement is smallest, and understate it by ~4x.
+Quoting band-centre agreement in the manuscript would be misleading. The
+honest statement is: **the two engines disagree on the SPECTRAL SHAPE of this
+device, not by a constant offset**, and the whole-device FDTD (no interface
+truncation) is the reference.
+
+Plot: `example_output/mmi_1x4/mmi_1x4_fdtd/check1_engine_gap_vs_wavelength.png`
+
+#### Truncation is NOT the explanation — the TAPER staircase is the new suspect
+
+Free test (all three spectra already on disk, no new compute). If mode
+truncation drove the spectral-shape difference, agreement with FDTD should
+degrade with truncation: FDTD (none) → EME (N_BODY=20) → hybrid (12). It does
+the opposite.
+
+| engine | truncation | total-T slope | mean \|dev vs FDTD\| |
+|---|---|---|---|
+| FDTD | none | **−0.749 /µm** | — |
+| hybrid | interface_modes=**12** | **−0.338 /µm** | **0.0184** |
+| EME | N_BODY=**20** | **+0.087 /µm** | 0.0235 |
+
+The **more**-truncated hybrid is **closer** to FDTD on both measures. So
+`N_BODY`/`interface_modes` does not explain the shape, and item 9d's
+interface-modes sweep — ~3 days of prewarm per mode count — would **not** have
+answered this question. Worth knowing before spending it.
+
+**What actually separates them is the TAPER treatment**, and it lines up
+exactly with the slope ordering:
+- FDTD: tapers meshed exactly (slope −0.749)
+- hybrid: tapers solved in **FDTD**, body in EME (slope −0.338)
+- EME: tapers as an **8-cell staircase** (`C_TAPER=8`), body in EME (+0.087)
+
+EME is the only path approximating the tapers, and the only one whose spectrum
+is flat/symmetric rather than monotonically falling. Each staircase step jumps
+0.1375 µm in width (1.1 → 2.2 µm over 5 µm in 8 cells), and the mode mismatch
+at each step is wavelength-dependent — a plausible mechanism for a
+spectral-shape error specifically.
+
+**HYPOTHESIS, NOT ESTABLISHED.** The test is a `C_TAPER` convergence sweep
+(8 → 16 → 32) on the whole-device EME: if EME's slope steepens toward FDTD's
+−0.749 as the staircase refines, the taper discretisation is the cause. Cheap
+if run at 3 wavelengths (1.50/1.55/1.60) to capture slope rather than the full
+11-point band.
+
+
+**What this does NOT establish.** Which engine is right at the band edges. FDTD
+is the better-grounded reference (whole-device, no mode truncation, and its
+monotonic trend has a physical mechanism), but nothing here independently
+confirms its band-edge values. The EME path's fixed N_BODY=20 truncation is a
+candidate cause for its flatter/symmetric shape — untested.
+
+---
+
 ### ✅ CHECK 4 — whole-device FDTD reference, MEASURED at band centre (job 12029541)
 
 **The check-4 reference exists and has since 2026-08-21.** Job 12029541

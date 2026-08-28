@@ -83,6 +83,9 @@ class MMI(DeviceGeometry):
         body_taper_length: float = 0.0,
         body_start_width: Optional[float] = None,
         body_end_width: Optional[float] = None,
+        body_waist_width: Optional[float] = None,
+        body_waist_length: float = 0.0,
+        body_transition_length: float = 0.0,
     ):
         self.mm_length = mm_length
         self.mm_width = mm_width
@@ -111,6 +114,44 @@ class MMI(DeviceGeometry):
                                       else body_start_width)
         self.body_end_width = float(mm_width if body_end_width is None
                                     else body_end_width)
+
+        # Waist profile — BOTH faces at mm_width (a plain stub, automatically
+        # matching whatever the port tapers/fan-out need — see
+        # mmi_1x4_tapered_body_validation.md's blocker on the face-taper
+        # design, which this sidesteps entirely rather than resolves),
+        # narrowing to body_waist_width in the INTERIOR for body_waist_length,
+        # symmetric about the body centre. Independent of body_start_width/
+        # body_end_width above — the two shapes are mutually exclusive (raise
+        # below), not combinable, to keep _body_polys/_check_cut from having
+        # to reason about both at once.
+        if (body_start_width is not None or body_end_width is not None) \
+                and body_waist_width is not None:
+            raise ValueError(
+                "body_start_width/body_end_width (face taper) and "
+                "body_waist_width (interior waist) are mutually exclusive — "
+                "pick one profile shape."
+            )
+        if body_transition_length < 0.0:
+            raise ValueError(
+                f"body_transition_length must be >= 0, got {body_transition_length}")
+        if body_waist_length < 0.0:
+            raise ValueError(
+                f"body_waist_length must be >= 0, got {body_waist_length}")
+        if body_waist_width is not None and body_waist_width <= 0.0:
+            raise ValueError(f"body_waist_width must be > 0, got {body_waist_width}")
+        _waist_span = 2 * body_transition_length + body_waist_length
+        if _waist_span > mm_length + 1e-9:
+            raise ValueError(
+                f"2*body_transition_length + body_waist_length = {_waist_span} µm "
+                f"exceeds mm_length={mm_length} µm — the waist profile would not "
+                f"leave room for the two end stubs. Reduce one of them."
+            )
+        self.body_waist_length = float(body_waist_length)
+        self.body_transition_length = float(body_transition_length)
+        # Resolved to mm_width (never None) for the same reason as
+        # body_start_width/body_end_width above.
+        self.body_waist_width = float(mm_width if body_waist_width is None
+                                      else body_waist_width)
 
         def _default_ports(n: int) -> List[MMIPort]:
             return [
@@ -292,11 +333,48 @@ class MMI(DeviceGeometry):
         Lt = self.body_taper_length
         return (-half, -half + Lt), (half - Lt, half)
 
+    @property
+    def is_body_waisted(self) -> bool:
+        """True when the body narrows in its INTERIOR while both faces stay
+        at mm_width — the opposite construction from the face taper above.
+        Both faces at mm_width means this profile is automatically compatible
+        with whatever the port tapers/fan-out need (the 1x4's 4-way fan-out
+        pins its output face at mm_width — see
+        mmi_1x4_tapered_body_validation.md's blocker section), rather than
+        requiring the asymmetric-face workaround that blocker forced.
+
+        Zero-length transition is a *straight* body regardless of
+        body_waist_width, same reasoning as is_body_tapered."""
+        return (self.body_transition_length > 1e-12
+                and abs(self.body_waist_width - self.mm_width) > 1e-12)
+
+    def _body_waist_bounds(self):
+        """The two transition bands as ((din0, din1), (dout0, dout1)), or
+        None for a non-waisted body. The waist region itself is
+        [din1, dout0], centred on x=0 (symmetric), length body_waist_length."""
+        if not self.is_body_waisted:
+            return None
+        t, wl = self.body_transition_length, self.body_waist_length
+        w0, w1 = -wl / 2, wl / 2
+        return (w0 - t, w0), (w1, w1 + t)
+
     def body_width_at(self, x: float) -> float:
         """The multimode body's own width at device-frame x (µm).
 
         Only meaningful inside [-mm_length/2, +mm_length/2]; callers clamp
         first. Constant `mm_width` for a straight body."""
+        if self.is_body_waisted:
+            (din0, din1), (dout0, dout1) = self._body_waist_bounds()
+            W, Ww, t = self.mm_width, self.body_waist_width, self.body_transition_length
+            if x <= din0:
+                return W
+            if x < din1:
+                return W + (x - din0) / t * (Ww - W)
+            if x <= dout0:
+                return Ww
+            if x < dout1:
+                return Ww + (x - dout0) / t * (W - Ww)
+            return W
         if not self.is_body_tapered:
             return self.mm_width
         (bin0, bin1), (bout0, bout1) = self._body_taper_bounds()
@@ -331,6 +409,25 @@ class MMI(DeviceGeometry):
 
         def _quad(xa, xb, wa, wb):
             return [(xa, -wa / 2), (xb, -wb / 2), (xb, wb / 2), (xa, wa / 2)]
+
+        if self.is_body_waisted:
+            (din0, din1), (dout0, dout1) = self._body_waist_bounds()
+            W, Ww = self.mm_width, self.body_waist_width
+            polys: List[List[Tuple[float, float]]] = []
+            s1a, s1b = a, min(b, din0)
+            if s1b - s1a > 1e-9:
+                polys.append(_quad(s1a, s1b, W, W))
+            if lo <= din0 and hi >= din1:
+                polys.append(_quad(din0, din1, W, Ww))
+            wa, wb = max(a, din1), min(b, dout0)
+            if wb - wa > 1e-9:
+                polys.append(_quad(wa, wb, Ww, Ww))
+            if lo <= dout0 and hi >= dout1:
+                polys.append(_quad(dout0, dout1, Ww, W))
+            s2a, s2b = max(a, dout1), b
+            if s2b - s2a > 1e-9:
+                polys.append(_quad(s2a, s2b, W, W))
+            return polys
 
         if not self.is_body_tapered:
             # Byte-identical to the pre-2026-08-20 single rectangle.
@@ -379,6 +476,19 @@ class MMI(DeviceGeometry):
                         "varies there, so a section boundary cannot sit on a "
                         "single cross-section. Cuts must land on a band "
                         "endpoint or inside the uniform middle."
+                    )
+        waist_bands = self._body_waist_bounds()
+        if waist_bands is not None:
+            for (b0, b1) in waist_bands:
+                if b0 < x < b1:
+                    raise ValueError(
+                        f"Cut/stub at x={x:.4f} falls strictly inside a BODY "
+                        f"waist transition band ([{b0:.4f}, {b1:.4f}], "
+                        f"{self.mm_width} <-> {self.body_waist_width} µm) — "
+                        "the multimode body's own width varies there, so a "
+                        "section boundary cannot sit on a single "
+                        "cross-section. Cuts must land on a band endpoint or "
+                        "inside a uniform stub/waist region."
                     )
 
     def _section_polygons(self, x0: float, x1: float,

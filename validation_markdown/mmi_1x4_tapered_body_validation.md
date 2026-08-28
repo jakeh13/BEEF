@@ -634,6 +634,89 @@ cases were made *explicitly* symmetric (`body_start_width=` and
 `body_end_width=` both passed) rather than deleted — the symmetric profile is
 still supported and still worth covering.
 
+### ❌ Face-taper (body_start_width/body_end_width) profile: DEAD END, closed 2026-08-27
+
+Full grid (jobs 12383125, 12387482), 4 (Ws, Lt) combinations x 5 lengths each,
+whole-device EME at design settings (res=30, 16x4):
+
+| Ws | Lt | L_best | totalT | balance | vs straight (L=39.90, T=0.9703, bal=2.38e-03) |
+|---|---|---|---|---|---|
+| 6.0 | 8.0 | 42.00 | 0.9136 | 4.44e-03 | **+2.10 µm LONGER**, worse T, worse balance |
+| 6.0 | 4.0 | 42.00 | 0.9140 | 5.98e-03 | same |
+| 9.0 | 8.0 | 42.00 | 0.9136 | 5.17e-03 | same |
+| 9.0 | 4.0 | 42.00 | 0.9130 | 5.29e-03 | same |
+
+**Every combination converges to the same L=42.00, regardless of how
+aggressive the taper is** (Ws 6→9, a 50% change in narrowing; Lt 4→8, a 2x
+change in taper length) — totalT and balance barely move (0.9130-0.9140,
+4.4-6.0e-03). This means the face-taper amount is not the variable governing
+self-imaging length here; the taper is too small a perturbation on the
+dominant uniform-mm_width middle to matter, and mm_length alone sets the
+optimum. **The device gets LONGER, not shorter, and worse on both metrics, at
+every profile tried.** Earlier (jobs 12383125 at the ARGUED-predicted L=31.90)
+found outright imaging failure (totalT=0.554); this grid shows the true
+optimum sits past the straight device's own length, not before it.
+
+**Verdict: face-taper does not deliver the length payoff, full stop, for
+Ws in [6,9] / Lt in [4,8].** Superseded by the WAIST profile (below), which
+sidesteps the port-fan-out constraint that motivated the face-taper in the
+first place rather than fighting it.
+
+### ⚠ Waist profile, first real result: Ww=6.0 is too aggressive (job 12402940)
+
+Corrected smoke (post N_LEN=1 bug fix, see the script's own inline comment),
+real 3-length window centred on L_straight=39.90:
+
+| L | totalT | balance |
+|---|---|---|
+| 35.91 | 0.2798 | 1.26e-01 |
+| 39.90 | 0.2338 | 9.79e-02 |
+| 43.89 | 0.2720 | 1.13e-01 |
+| control (39.90, straight) | **0.9703** | **2.38e-03** |
+
+**Catastrophic across the whole window, not an edge artefact this time** —
+totalT 0.23-0.28 at all three lengths (70-77% power loss). Same qualitative
+failure the face-taper profile showed at its aggressive settings: halving
+the width (Ww=6 vs mm_width=12, a 50% narrowing) breaks self-imaging rather
+than just costing some radiation loss. Mode-reuse mechanism itself worked
+correctly throughout (104 solves/40 reused per point, confirming the width-
+keyed cache functions) -- this is a real profile result, not a script bug.
+
+**Natural next step, NOT yet run:** gentler Ww (9-10 range, i.e. 15-25%
+narrowing rather than 50%) — the same lesson the face-taper sweep already
+taught (Ws=6/9 both failed; never tried Ws=10-11). Untested whether a mild
+waist gives ANY net length saving once it stops breaking imaging, or whether
+this device's self-imaging condition is simply too sensitive to width
+changes anywhere along its length to benefit from tapering at all.
+
+### ⚠ Waist profile, Ww=9.0 smoke: still fails, less catastrophically (job 12435720)
+
+Single-point smoke at design centre length only (`N_LEN=1`, reduced cells
+`C_TRANS=4/C_WAIST=2` for speed), Ww=9.0 (25% narrowing, vs. Ww=6.0's 50%):
+
+| L | totalT | balance |
+|---|---|---|
+| 39.90 | 0.6609 | 2.05e-02 |
+| control (39.90, straight) | **0.9703** | **2.38e-03** |
+
+**Better than Ww=6.0 (0.66 vs. 0.23-0.28) but still a real failure** — 34%
+power loss and balance ~8.6x worse than control, not just a minor cost. Not
+the outright imaging collapse Ww=6.0 showed, so narrowing amount clearly
+matters (unlike the face-taper's Ws=6/9 insensitivity) — but 25% narrowing at
+this single length is still well outside "holds against the straight
+control." Flagged by the script itself as landing ON WINDOW EDGE (a
+single-point window, so not diagnostic on its own — the real question is
+whether a length *other* than 39.90 recovers totalT for this Ww, since a
+narrower interior may shift the self-imaging length rather than just costing
+loss at the straight device's own length).
+
+**Full grid submitted (job pending as of 2026-08-28), not yet returned:**
+Ww in {9.0, 10.0} x 5 lengths around centre, production design settings
+(res=30, 16x4, full cell counts) — the real test of whether gentler narrowing
+plus a re-optimised length can hold the control's totalT/balance. This smoke
+result is a caution, not yet a verdict: check the full grid before concluding
+the waist profile is dead.
+
 **Still to pick, in step 6:** the actual `body_taper_length` /
 `body_start_width` values. The 6.0/8.0 pair above is a **placeholder used for
 verification only**, not an optimised design — no sweep has been run.
