@@ -743,6 +743,65 @@ not a parameter to keep sweeping.
 `body_start_width` values. The 6.0/8.0 pair above is a **placeholder used for
 verification only**, not an optimised design — no sweep has been run.
 
+### ⚠ Waist profile REOPENED 2026-08-28: field-plot diagnostic finds cause for doubt on the closure
+
+New script `plot_mmi1x4_waist_profile_eme_fields.py` (copies the sweep
+script's own body-segment cell-building rather than importing it, since
+`mmi_1x4_waist_profile_sweep.py` has no `__main__` guard and would run its
+whole grid as an import side effect) renders straight-vs-waisted EME fields
+at a chosen design point, to answer the closure note's own open diagnostic
+question: is the totalT loss localized at the two width-transition
+interfaces, or spread through the whole waist region?
+
+**Ww=9.0, L=36.91 (job 12445061, real design settings, res=30, matching the
+grid's own C_TRANS=6):** confirms the smoke-resolution result exactly. The
+field narrows correctly into the waist, but a **spurious bright central
+lobe reappears around z=35-40**, right at the up-transition, before finally
+spreading into 4 output lobes over a much shorter remaining distance than
+the straight control needs. The refocus sits exactly where the interior's
+accumulated phase first re-expresses in the wide-body mode basis, so this
+picture does not cleanly separate "scattering happens at that step" from
+"phase error built up gradually through the waist and only becomes visible
+once re-projected there" — a per-mode power trace through the waist would
+be needed to fully disambiguate, not run.
+
+**Ww=10.0, L=45.88, C_TRANS DOUBLED to 12 (job 12446756, at the user's
+request):** qualitatively DIFFERENT field character, not just a smoother
+version of the Ww=9.0 picture. Instead of one spurious refocus, the field
+shows **genuine multi-lobe interference developing progressively** through
+z=28-45 — several bright/dark band revivals near the eventual output
+positions, closer to real Talbot self-imaging structure than the Ww=9.0
+case, just with more revival cycles than the straight control's single
+clean image. This is suggestive that:
+1. The original grid's `C_TRANS=6` may have been under-resolving the
+   transition itself (a numerical confound on TOP of the physical
+   sensitivity finding, not instead of it) — untested until now.
+2. L=45.88 (the grid's own window-edge result for Ww=10.0) may have simply
+   caught this profile mid-revival rather than at a clean image plane;
+   the multi-lobe pattern visible here suggests a longer length might land
+   on one.
+
+**Follow-up submitted, not yet returned (job 12449008):** Ww=10.0,
+`C_TRANS=12` (matching the field-plot's doubled resolution), 9-length sweep
+from 34.8 to 81.2 µm — both a rough C_TRANS convergence check (does
+doubling the transition slice count move totalT/balance materially at a
+similar length to the original grid's 45.88 point?) and a search for a
+clean revival further out than the original grid's window covered. **This
+does not retract the closure verdict above** — both taper-profile shapes
+still fail at every point measured so far — but it means the closure should
+be read as "no working point found in the grids run so far," not
+"exhaustively shown impossible," until this job lands.
+
+**Plan, contingent on 12449008 finding a real design point:** promote the
+waist profile from a `examples/verification/python/` sweep script into a
+proper independent example, mirroring step 6's original scope for the
+straight 1x4 (`mmi_1x4_eme.py`/`mmi_1x4_hybrid.py`) —
+`examples/mmi_1x4_tapered/python/mmi_1x4_tapered_eme.py` and
+`mmi_1x4_tapered_hybrid.py`, with their own `Makefile` target (see step 6's
+own note that `mmi_4x4_90hybrid` has none, which is how that device stayed
+unrun). Not started; this is a plan, not a commitment, until a design point
+actually survives the length-extension check.
+
 ### EME field plots, both geometries ✅ **MEASURED 2026-08-21** (job 12121984)
 
 `examples/verification/python/plot_mmi1x4_straight_vs_tapered_eme_fields.py` —
