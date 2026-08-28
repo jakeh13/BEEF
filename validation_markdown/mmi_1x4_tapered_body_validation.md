@@ -710,12 +710,34 @@ whether a length *other* than 39.90 recovers totalT for this Ww, since a
 narrower interior may shift the self-imaging length rather than just costing
 loss at the straight device's own length).
 
-**Full grid submitted (job pending as of 2026-08-28), not yet returned:**
-Ww in {9.0, 10.0} x 5 lengths around centre, production design settings
-(res=30, 16x4, full cell counts) — the real test of whether gentler narrowing
-plus a re-optimised length can hold the control's totalT/balance. This smoke
-result is a caution, not yet a verdict: check the full grid before concluding
-the waist profile is dead.
+### ❌ Waist profile: gentle Ww also fails, CLOSED 2026-08-28 (job 12436352)
+
+Full grid, Ww in {9.0, 10.0} x 5 lengths around centre (33.91-45.88), design
+settings (res=30, 16x4):
+
+| Ww | L_best | totalT | balance | vs control (L=39.90, T=0.9703, bal=2.38e-03) |
+|---|---|---|---|---|
+| 9.0 | 36.91 | 0.6186 | 1.26e-02 | 2.99 µm SHORTER, but 36% power loss, 5.3x worse balance |
+| 10.0 | 45.88 | 0.6858 | 6.71e-02 | 5.98 µm LONGER, 29% power loss, 28x worse balance, **on window edge** |
+
+**No (Ww, L) point in this grid holds totalT/balance against the straight
+control.** Ww=9.0's best is genuinely shorter but still loses over a third
+of the power; Ww=10.0's best sits at the edge of the tested length window
+(true optimum may lie further out) but is already longer than the control
+there and no better on either metric, so chasing the edge further cannot
+produce a win against this device's own reason for existing (a real length
+saving at matched performance).
+
+**Verdict: the waist profile fails at every Ww tried (6.0, 9.0, 10.0), same
+conclusion as the face-taper.** Two independent taper-profile shapes
+(face-taper: narrow one/both faces; waist: narrow the interior only) have
+now both failed to produce ANY design that is shorter than the straight
+1x4 while holding its totalT/balance. This is evidence, not just an
+unlucky parameter search: this device's self-imaging condition appears too
+sensitive to width perturbation ANYWHERE along its length to benefit from
+tapering at all, at 1x4's own aspect ratio (mm_width=12.0, mm_length=39.90).
+**Tapered-body premise for this device is closed pending a new idea** —
+not a parameter to keep sweeping.
 
 **Still to pick, in step 6:** the actual `body_taper_length` /
 `body_start_width` values. The 6.0/8.0 pair above is a **placeholder used for
