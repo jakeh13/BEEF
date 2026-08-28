@@ -802,6 +802,46 @@ own note that `mmi_4x4_90hybrid` has none, which is how that device stayed
 unrun). Not started; this is a plan, not a commitment, until a design point
 actually survives the length-extension check.
 
+### ⚠ Efficiency attempt REVERTED same day, 2026-08-28: width-only cache extension broke physics
+
+The sweep's own reuse cache only ever exploited the body region's
+mirror symmetry (down/up-transition + matching end stubs); every length
+point in a sweep re-solves the port tapers and straight sections from
+scratch even though — verified from source — their widths are identical
+across every output branch and every length (only `mm_length` changes, and
+`body_width_at()`'s transition bands are defined relative to x=0
+independent of it). Widening the cache's key coverage to those cells looked
+like a safe, purely-mechanical win.
+
+**It was not.** Job 12453222 (same config as the known-good baseline, job
+12435720) measured the extended cache **breaking physics**: straight-control
+`totalT` collapsed from the reference 0.9703 to 0.1507, with all 4 output
+ports coming out identically balanced (0.03768 each) — the signature of the
+same wrong substitution hitting every output branch uniformly. **Root
+cause:** the input chain (straight waveguide + input taper) is always
+ON-AXIS (x=0); the output chain (output taper + output straight) is always
+OFF-AXIS at `output_ys[output_idx]`, never 0 for any of this device's 4
+ports. Equal width does not mean equal cross-section once transverse
+position differs — `CrossSection.from_cell()`'s mode field is
+position-dependent, and reusing an on-axis mode object at an off-axis
+position silently corrupts the S-matrix cascade rather than erroring.
+
+The body region's existing cache was always safe for the opposite reason:
+the multimode body stays on-axis throughout, so no transverse mismatch is
+possible there. **Reverted the same day** (`solve_reuse()` back to
+body-only keys, with an inline comment recording why). Recorded in memory
+as [[width-only-mode-reuse-breaks-off-axis-cells]] — the same underlying
+constraint that already blocks `beef.MirrorSpec` from covering this
+device's transverse case ([[mmi-1x4-mirrorspec-gap]]); a valid extension
+would need position-aware (mirror/transpose) handling, not a bare width
+lookup. Job 12455681 confirms the revert restores the 0.9703 baseline.
+
+**Lesson for any future optimization pass on this script:** verifying "runs
+without error" is not enough for a caching change — a silent physics
+corruption produces a clean exit and a plausible-looking wrong number.
+Always diff a known-good reference config's actual totalT/balance before
+and after.
+
 ### EME field plots, both geometries ✅ **MEASURED 2026-08-21** (job 12121984)
 
 `examples/verification/python/plot_mmi1x4_straight_vs_tapered_eme_fields.py` —

@@ -168,6 +168,25 @@ def solve_reuse(mmi, output_idx, solver, mesh):
     # Width-keyed reuse cache. Every cell outside the body region gets its
     # own unique key (widths list only covers the body), so only body cells
     # -- specifically the mirror-symmetric transition/stub pairs -- can hit.
+    #
+    # DELIBERATELY NOT extended to the port tapers/straight sections despite
+    # matching widths there (tried 2026-08-28, reverted same day -- job
+    # 12453222 measured it BREAKING physics: straight control totalT
+    # collapsed 0.9703 -> 0.1507, all 4 ports identically balanced, the
+    # signature of the same wrong substitution hitting every branch). Cause:
+    # the input chain is always ON-AXIS (x=0), but the output chain is
+    # always OFF-AXIS (x=output_ys[output_idx], never 0 for any of the 4
+    # ports) -- equal WIDTH does not mean equal cross-section once transverse
+    # position differs, and CrossSection.from_cell()'s mode field is
+    # position-dependent. The body region is safe to cache precisely because
+    # it stays on-axis throughout; the input/output taper and straight
+    # sections are not, and reusing across that on-axis/off-axis boundary is
+    # a genuine physics bug, not just a missed optimization. A valid
+    # extension would need position-aware (mirror/transpose) handling --
+    # same unsolved problem as [[mmi-1x4-mirrorspec-gap]] in memory, not a
+    # simple width-keyed lookup. See
+    # mmi_1x4_tapered_body_validation.md's 2026-08-28 note for the measured
+    # failure and mmi-1x4-tapered-body-both-profiles-closed.md in memory.
     reuse_cache = {}
     solves, hits = 0, 0
     modes = []
