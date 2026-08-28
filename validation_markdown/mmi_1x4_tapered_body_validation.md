@@ -781,16 +781,51 @@ clean image. This is suggestive that:
    the multi-lobe pattern visible here suggests a longer length might land
    on one.
 
-**Follow-up submitted, not yet returned (job 12449008):** Ww=10.0,
+**Follow-up (job 12449008): RETURNED, RE-CLOSES the reopening.** Ww=10.0,
 `C_TRANS=12` (matching the field-plot's doubled resolution), 9-length sweep
-from 34.8 to 81.2 µm — both a rough C_TRANS convergence check (does
-doubling the transition slice count move totalT/balance materially at a
-similar length to the original grid's 45.88 point?) and a search for a
-clean revival further out than the original grid's window covered. **This
-does not retract the closure verdict above** — both taper-profile shapes
-still fail at every point measured so far — but it means the closure should
-be read as "no working point found in the grids run so far," not
-"exhaustively shown impossible," until this job lands.
+from 34.8 to 81.2 µm -- both a rough C_TRANS convergence check and a search
+for a clean revival well beyond the original grid's window.
+
+| L | totalT | balance |
+|---|---|---|
+| 34.80 | 0.4700 | 1.03e-01 |
+| 40.60 | 0.4875 | 1.52e-01 |
+| 46.40 | 0.7043 | 4.70e-02 |
+| 52.20 | 0.6440 | 1.04e-02 |
+| 58.00 | 0.3181 | 7.95e-02 |
+| 63.80 | 0.4736 | **1.22e-03** |
+| 69.60 | 0.5251 | 9.24e-02 |
+| 75.40 | 0.1865 | 1.72e-02 |
+| 81.20 | 0.1834 | 1.60e-03 |
+
+(control: L=39.90, totalT=0.9703, balance=2.38e-03)
+
+**Doubling C_TRANS did not reveal a hidden good design.** Even searching to
+81.2 µm -- more than double the straight device's length -- best totalT
+anywhere is 0.7043 (30% power loss), never close to the control. The
+C_TRANS=6 grid's failure was real physics, not an under-resolved transition.
+
+**Genuinely interesting wrinkle, worth carrying forward:** at L=63.80 and
+L=81.20, balance is BETTER than the straight control (1.22e-03/1.60e-03 vs
+2.38e-03) while totalT is still catastrophic (0.47/0.18). This decouples
+the two failure modes the field-plot diagnostic was trying to distinguish:
+the device CAN reach a correctly-phased, well-balanced self-imaging
+condition at certain revival lengths, yet still loses half-to-most of the
+power getting there. A pure beat-length-desynchronization story would
+mainly show up as bad BALANCE (wrong image, but same total power); good
+balance with bad totalT instead points at REAL RADIATIVE LOSS at the width
+transitions as the dominant mechanism, independent of whether the surviving
+power lands on a correctly-phased image. Not confirmed further (would need
+the per-mode power trace already flagged as the disambiguating test, still
+not run), but this is the first piece of evidence that favors one
+mechanism over the other rather than being consistent with either.
+
+**Verdict: RE-CLOSED, with more evidence than the first closure.** Two
+profile shapes, three Ww values (6/9/10), taper resolution doubled, and a
+length search covering more than 2x the device's own length all fail to
+find a working point. The plan to promote this into an independent example
+(above) is now off, pending an actually different idea -- not a parameter
+left to sweep.
 
 **Plan, contingent on 12449008 finding a real design point:** promote the
 waist profile from a `examples/verification/python/` sweep script into a
