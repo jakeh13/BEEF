@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import List, Optional
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -152,6 +152,7 @@ class EMESolver:
         mode_solver: str = "meep",
         guard_duplicate_modes: bool = True,
         dispersive: Optional[bool] = None,
+        region_cell_lengths: Optional[Dict[int, Sequence[float]]] = None,
     ):
         if len(num_modes) != len(num_cells):
             raise ValueError(
@@ -163,6 +164,8 @@ class EMESolver:
             )
         if mode_solver not in ("meep", "tidy3d"):
             raise ValueError(f"unknown mode_solver {mode_solver!r}, expected 'meep' or 'tidy3d'")
+        self.region_cell_lengths = self._validate_region_cell_lengths(
+            region_cell_lengths, num_cells, lengths)
         self.guard_duplicate_modes = bool(guard_duplicate_modes)
         self.dispersive = dispersive
         self.num_modes = num_modes
@@ -175,6 +178,50 @@ class EMESolver:
         self.material_stack = material_stack
         self.temperature = temperature
         self.mode_solver = mode_solver
+
+    @staticmethod
+    def _validate_region_cell_lengths(region_cell_lengths, num_cells, lengths):
+        """Normalize/validate the explicit per-region cell-length override.
+
+        `region_cell_lengths` maps region index -> that region's own list of
+        cell lengths, replacing the default "divide this region evenly by its
+        num_cells". It exists for bodies whose cross-section changes at
+        INTERNAL boundaries an even division cannot land on — e.g. an MMI with
+        a waisted body, whose five segments (stub/transition/waist/transition/
+        stub) must each get whole cells so no single cell straddles a width
+        discontinuity.
+
+        Guarded hard, because the two ways to get this wrong are both silent:
+        a wrong cell COUNT would desync `num_modes`/`_modes_per_cell()` from
+        the cells, and a wrong SUM would quietly change the device's physical
+        length while every other number still looked plausible.
+        """
+        if region_cell_lengths is None:
+            return None
+        out: Dict[int, List[float]] = {}
+        for idx, cells in region_cell_lengths.items():
+            idx = int(idx)
+            if not 0 <= idx < len(num_cells):
+                raise ValueError(
+                    f"region_cell_lengths key {idx} is out of range for "
+                    f"{len(num_cells)} regions")
+            cells = [float(c) for c in cells]
+            if len(cells) != num_cells[idx]:
+                raise ValueError(
+                    f"region_cell_lengths[{idx}] has {len(cells)} cells but "
+                    f"num_cells[{idx}]={num_cells[idx]} — they must match, or "
+                    "the per-cell mode counts would desync from the cells")
+            if any(c <= 0 for c in cells):
+                raise ValueError(
+                    f"region_cell_lengths[{idx}] has a non-positive cell length: {cells}")
+            total = sum(cells)
+            if abs(total - lengths[idx]) > 1e-9:
+                raise ValueError(
+                    f"region_cell_lengths[{idx}] sums to {total} but "
+                    f"lengths[{idx}]={lengths[idx]} — an explicit subdivision "
+                    "must tile its region exactly, not change the device length")
+            out[idx] = cells
+        return out
 
     def _resolved_dispersive(self) -> bool:
         """Whether this solver will actually track the band.
@@ -252,10 +299,7 @@ class EMESolver:
         )
         structs = extrude_polygons(gds_polys, self._extrusion_rules(wavelengths))
 
-        Ls = []
-        for region_len, n_cells in zip(self.lengths, self.num_cells):
-            cell_len = region_len / n_cells
-            Ls.extend([cell_len] * n_cells)
+        Ls = self._flat_cell_lengths()
 
         mesh = self._build_mesh()
         return mw.create_cells(structures=structs, mesh=mesh, Ls=Ls)
@@ -270,11 +314,34 @@ class EMESolver:
     def _flat_cell_lengths(self, region_lengths: Optional[List[float]] = None) -> List[float]:
         """Flat per-cell length list (one entry per cell), from region lengths
         divided evenly across each region's num_cells. Defaults to
-        self.lengths — the same Ls _build_cells() hands to mw.create_cells()."""
+        self.lengths — the same Ls _build_cells() hands to mw.create_cells().
+
+        A region with an explicit `region_cell_lengths` entry uses that list
+        verbatim instead of an even division. Such an entry is validated at
+        construction to tile its region exactly, so it is only usable while
+        that region still has its configured length — see the guard below.
+        """
         lengths = self.lengths if region_lengths is None else region_lengths
+        overrides = self.region_cell_lengths or {}
         out: List[float] = []
-        for region_len, n_cells in zip(lengths, self.num_cells):
-            out.extend([region_len / n_cells] * n_cells)
+        for idx, (region_len, n_cells) in enumerate(zip(lengths, self.num_cells)):
+            explicit = overrides.get(idx)
+            if explicit is not None:
+                # The override tiles the region it was validated against. If a
+                # caller is now varying that region's length (a length sweep,
+                # or solve_section's single-region rebuild), the subdivision no
+                # longer tiles it -- refuse rather than silently emit cells
+                # that do not sum to the requested length.
+                if abs(region_len - self.lengths[idx]) > 1e-9:
+                    raise ValueError(
+                        f"region {idx} has an explicit region_cell_lengths "
+                        f"subdivision tiling length {self.lengths[idx]}, but is "
+                        f"being solved at length {region_len}. An explicit "
+                        "subdivision cannot be rescaled automatically -- build a "
+                        "solver per length, the way a waisted-body sweep does.")
+                out.extend(explicit)
+            else:
+                out.extend([region_len / n_cells] * n_cells)
         return out
 
     def _region_cell_span(self, region_idx: int) -> tuple:

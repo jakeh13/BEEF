@@ -57,6 +57,38 @@ def _env_i(name, default):
     return int(os.environ.get(name, default))
 
 
+def waist_region_cell_lengths(mmi, c_stub, c_trans, c_waist):
+    """The body's own 5-segment cell-length list, aligned exactly to
+    stub/transition/waist/transition/stub.
+
+    STEP 3. This is what `EMESolver(region_cell_lengths=...)` was added for
+    (2026-08-29): the default "divide each region evenly by its num_cells"
+    cannot place a boundary at din0/din1/dout0/dout1, so with an even division
+    a single cell straddles a width discontinuity and the body's profile is
+    misrepresented no matter how many cells are used.
+
+    The 1x4's own sweep script solved this by BYPASSING
+    EMESolver.solve()/_build_cells() entirely and hand-calling
+    mw.create_cells(). That workaround is now retired: the library places the
+    boundaries, so this device keeps caching, calibration and every other
+    solve() feature instead of reimplementing them.
+    """
+    half = mmi.mm_length / 2
+    if not mmi.is_body_waisted:
+        return None
+    (din0, din1), (dout0, dout1) = mmi._body_waist_bounds()
+    segs = [(-half, din0, c_stub), (din0, din1, c_trans),
+            (din1, dout0, c_waist), (dout0, dout1, c_trans),
+            (dout1, half, c_stub)]
+    lens = []
+    for x0, x1, n in segs:
+        if n <= 0 or x1 - x0 <= 1e-12:
+            continue
+        seg = (x1 - x0) / n
+        lens.extend([seg] * n)
+    return lens
+
+
 # --- production constants, from the RESOLVED straight 2x2 -------------------
 #     (examples/mmi_2x2/python/mmi_2x2_hybrid.py:98-107)
 WL = 1.55
@@ -279,6 +311,57 @@ else:
                        "floor; extend the sweep before drawing a conclusion.")
     print(f"\n  step 2b verdict: {verdict}")
 
+# ---------------------------------------------------------------------------
+# STEP 3 -- segment-aligned cell construction via region_cell_lengths
+# ---------------------------------------------------------------------------
+print("\n--- STEP 3: segment-aligned cell construction ---")
+C_STUB = _env_i("MMI2X2_WG_CSTUB", 1)
+C_TRANS = _env_i("MMI2X2_WG_CTRANS", 4)
+C_WAIST = _env_i("MMI2X2_WG_CWAIST", 2)
+body_cells = waist_region_cell_lengths(waisted, C_STUB, C_TRANS, C_WAIST)
+n_body = len(body_cells)
+print(f"body subdivided into {n_body} cells "
+      f"(stub={C_STUB}, trans={C_TRANS}, waist={C_WAIST}, per side)")
+print(f"  sums to {sum(body_cells):.6f} um vs mm_length {MM_LENGTH}")
+
+aligned = EMESolver(
+    num_modes=[1, N_MODES, N_MODES, N_MODES, 1],
+    num_cells=[1, 1, n_body, 1, 1], lengths=lengths,
+    region_cell_lengths={2: body_cells},   # region 2 is the MMI body
+    **solver_kw)
+flat = aligned._flat_cell_lengths()
+print(f"  solver accepted it: {len(flat)} cells total, "
+      f"sum {sum(flat):.6f} um vs device {sum(lengths):.6f} um")
+
+# Every cell must sit on ONE cross-section: check no cell straddles a
+# width discontinuity, by comparing the width at each cell's two edges.
+x = -MM_LENGTH / 2
+straddlers = []
+for L in body_cells:
+    w0, w1 = waisted.body_width_at(x), waisted.body_width_at(x + L)
+    mid = waisted.body_width_at(x + L / 2)
+    # inside a transition the width varies linearly, so edges differ; that is
+    # expected and fine. What must NOT happen is a cell spanning a segment
+    # BOUNDARY, i.e. part-uniform part-ramp. Detect via second difference.
+    if abs((w0 + w1) / 2 - mid) > 1e-9:
+        straddlers.append((x, x + L, w0, mid, w1))
+    x += L
+print(f"  cells straddling a segment boundary: {len(straddlers)} "
+      f"({'OK' if not straddlers else 'PROBLEM'})")
+
+# Contrast: what an EVEN division would have done with the same cell count.
+even = [MM_LENGTH / n_body] * n_body
+x, even_straddlers = -MM_LENGTH / 2, 0
+for L in even:
+    w0, w1 = waisted.body_width_at(x), waisted.body_width_at(x + L)
+    mid = waisted.body_width_at(x + L / 2)
+    if abs((w0 + w1) / 2 - mid) > 1e-9:
+        even_straddlers += 1
+    x += L
+print(f"  (an EVEN division of the same {n_body} cells would straddle "
+      f"{even_straddlers} -- this is what region_cell_lengths fixes)")
+print(f"  step 3: {'PASS' if not straddlers else 'FAIL'}")
+
 print("\n" + "=" * 78)
-print("Steps 1/2 are gates, not results. A design point is step 6's job, and")
+print("Steps 1/2/3 are gates, not results. A design point is step 6's job, and")
 print("step 4 fixes the pass/fail metric BEFORE any sweep runs -- see the doc.")

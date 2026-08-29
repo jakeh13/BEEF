@@ -638,3 +638,111 @@ class TestDefaultOmittedAttrs:
         """Read from the signature, not duplicated — a changed default must
         move the rule with it rather than leaving it behind."""
         assert config._constructor_defaults(FDTDSolver)["minimum_run_time"] == 0.0
+
+
+class TestRegionCellLengthsFingerprint:
+    """`EMESolver(region_cell_lengths=...)` — added 2026-08-29 so a region can
+    be subdivided at explicit internal boundaries an even division cannot
+    reach (a waisted MMI body's five segments). See
+    validation_markdown/mmi_2x2_waist_body_validation.md step 3.
+
+    The load-bearing test is the FIRST one: this attribute must be invisible
+    at its default, or adding it would restale every EME cache entry and
+    golden in the repo.
+    """
+
+    def _solver(self, **kw):
+        return EMESolver(num_modes=[1, 4, 1], num_cells=[1, 4, 1],
+                         lengths=[0.5, 8.0, 0.5], **kw)
+
+    def test_default_is_omitted_so_existing_entries_stay_valid(self):
+        """An evenly-divided solver's fingerprint must be BYTE-IDENTICAL to
+        what it was before this attribute existed — i.e. the key must simply
+        not appear."""
+        cfg = _solver_config(self._solver(), "solve")
+        assert "region_cell_lengths" not in cfg
+
+    def test_explicit_subdivision_does_appear(self):
+        cfg = _solver_config(
+            self._solver(region_cell_lengths={1: [1.0, 3.0, 3.0, 1.0]}), "solve")
+        assert cfg["region_cell_lengths"] == {"1": [1.0, 3.0, 3.0, 1.0]}
+
+    def test_two_subdivisions_of_the_same_region_differ(self):
+        """Same device, same cell COUNT, different boundaries — a genuinely
+        different discretisation that must not share a cache entry."""
+        a = _hash_config(_solver_config(
+            self._solver(region_cell_lengths={1: [1.0, 3.0, 3.0, 1.0]}), "solve"))
+        b = _hash_config(_solver_config(
+            self._solver(region_cell_lengths={1: [2.0, 2.0, 2.0, 2.0]}), "solve"))
+        assert a != b
+
+    def test_an_even_explicit_subdivision_still_differs_from_the_default(self):
+        """Even when the explicit list happens to equal what even division
+        produces, it is recorded — the value is what is compared, and being
+        conservative here costs one recompute while the opposite (a silent
+        false-positive hit) costs a wrong answer."""
+        default = _hash_config(_solver_config(self._solver(), "solve"))
+        explicit = _hash_config(_solver_config(
+            self._solver(region_cell_lengths={1: [2.0, 2.0, 2.0, 2.0]}), "solve"))
+        assert default != explicit
+
+    def test_it_is_fingerprinted_for_both_whole_device_methods(self):
+        for method in ("solve", "solve_length_sweep"):
+            cfg = _solver_config(
+                self._solver(region_cell_lengths={1: [1.0, 3.0, 3.0, 1.0]}), method)
+            assert "region_cell_lengths" in cfg, method
+
+
+class TestRegionCellLengthsValidation:
+    """The two ways to get an explicit subdivision wrong are both SILENT, so
+    both are refused at construction rather than left to surface as a puzzling
+    result later."""
+
+    def _solver(self, **kw):
+        return EMESolver(num_modes=[1, 4, 1], num_cells=[1, 4, 1],
+                         lengths=[0.5, 8.0, 0.5], **kw)
+
+    def test_wrong_cell_count_is_refused(self):
+        # would desync _modes_per_cell() from the actual cells
+        with pytest.raises(ValueError, match="must match"):
+            self._solver(region_cell_lengths={1: [4.0, 4.0]})
+
+    def test_wrong_sum_is_refused(self):
+        # would silently change the device's physical length
+        with pytest.raises(ValueError, match="tile its region exactly"):
+            self._solver(region_cell_lengths={1: [1.0, 1.0, 1.0, 1.0]})
+
+    def test_out_of_range_region_is_refused(self):
+        with pytest.raises(ValueError, match="out of range"):
+            self._solver(region_cell_lengths={9: [8.0]})
+
+    def test_non_positive_cell_is_refused(self):
+        with pytest.raises(ValueError, match="non-positive"):
+            self._solver(region_cell_lengths={1: [4.0, 6.0, -1.0, -1.0]})
+
+    def test_a_valid_subdivision_tiles_the_region(self):
+        s = self._solver(region_cell_lengths={1: [1.0, 3.0, 3.0, 1.0]})
+        flat = s._flat_cell_lengths()
+        assert flat == [0.5, 1.0, 3.0, 3.0, 1.0, 0.5]
+        assert sum(flat) == pytest.approx(sum(s.lengths))
+        # one length per cell, so the per-cell mode list still lines up
+        assert len(flat) == len(s._modes_per_cell())
+
+    def test_default_still_divides_evenly(self):
+        assert self._solver()._flat_cell_lengths() == [0.5, 2.0, 2.0, 2.0, 2.0, 0.5]
+
+    def test_solving_that_region_at_another_length_is_refused_not_rescaled(self):
+        """A length sweep over a region carrying an explicit subdivision has no
+        correct automatic behaviour — the boundaries were tied to specific
+        internal features. Refuse loudly instead of emitting cells that do not
+        sum to the requested length."""
+        s = self._solver(region_cell_lengths={1: [1.0, 3.0, 3.0, 1.0]})
+        with pytest.raises(ValueError, match="cannot be rescaled automatically"):
+            s._flat_cell_lengths(region_lengths=[0.5, 12.0, 0.5])
+
+    def test_an_unaffected_region_can_still_be_swept(self):
+        """The guard is per-region: varying a region WITHOUT an override is
+        still fine even when another region carries one."""
+        s = self._solver(region_cell_lengths={1: [1.0, 3.0, 3.0, 1.0]})
+        flat = s._flat_cell_lengths(region_lengths=[0.25, 8.0, 0.5])
+        assert flat == [0.25, 1.0, 3.0, 3.0, 1.0, 0.5]

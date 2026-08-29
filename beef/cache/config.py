@@ -101,10 +101,12 @@ _METHOD_ATTRS: Dict[Tuple[str, str], Tuple[str, ...]] = {
     ("EMESolver", "solve"): (
         "num_modes", "num_cells", "lengths", "straight_length", "oxide_width",
         "oxide_height", "res", "material_stack", "temperature", "mode_solver",
+        "region_cell_lengths",
     ),
     ("EMESolver", "solve_length_sweep"): (
         "num_modes", "num_cells", "lengths", "straight_length", "oxide_width",
         "oxide_height", "res", "material_stack", "temperature", "mode_solver",
+        "region_cell_lengths",
     ),
 }
 
@@ -150,7 +152,16 @@ _METHOD_ATTRS: Dict[Tuple[str, str], Tuple[str, ...]] = {
 # must NOT be served by, or serve, a "dft" entry, which is exactly what
 # listing both in _METHOD_ATTRS above (not just omitting the default
 # here) guarantees.
-_DEFAULT_OMITTED_ATTRS = frozenset({"minimum_run_time", "decay_method", "energy_decay_dt"})
+# region_cell_lengths (added 2026-08-29, same reasoning as the three above):
+# it defaults to None, meaning "divide every region evenly", which is exactly
+# what every entry written before it existed did. Omitting the default keeps
+# all of those valid. A non-default value places cell boundaries somewhere an
+# even division cannot reach (a waisted MMI body's five segments), which is a
+# genuinely different discretisation of the same device and must NOT be served
+# by, or serve, an evenly-divided entry -- which is what listing it in
+# _METHOD_ATTRS above guarantees.
+_DEFAULT_OMITTED_ATTRS = frozenset({"minimum_run_time", "decay_method", "energy_decay_dt",
+                                    "region_cell_lengths"})
 
 
 def _constructor_defaults(solver_cls) -> Dict[str, Any]:
