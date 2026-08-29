@@ -180,12 +180,42 @@ else:
     print("\n--- STEP 2b: untapered limit, numeric ---")
     print("A body_waist_width == mm_width 'waist' must reproduce the straight")
     print("device's S-matrix to numerical precision.")
+    # NEAR-degenerate, not exactly degenerate. body_waist_width == mm_width
+    # sets is_body_waisted=False, so that geometry takes the STRAIGHT code
+    # path and trivially returns a bit-identical answer (measured: exactly
+    # 0.000e+00, job 12482595) -- which proves the fallback works but never
+    # exercises the waisted cell-construction path this gate exists to test.
+    # A waist that is narrower by EPS instead is genuinely waisted
+    # (is_body_waisted=True, real 5-segment cell construction) and must
+    # CONVERGE to the straight answer as EPS -> 0.
+    # A single EPS with a fixed bar cannot tell "physics" from "bug": an MMI's
+    # self-imaging length goes as W^2, so a fractional width change of
+    # 2*dW/W already shifts the beat phase by ~2*pi*2*dW/W over one beat
+    # length -- at EPS=1e-3 that is ~4.5e-3 rad, the same order as a
+    # measured |dS| of 1.1e-2 (job 12482618, which FAILED a 5e-3 bar).
+    # So SWEEP EPS instead and test the SCALING:
+    #   |dS| proportional to EPS  -> the waisted path converges correctly,
+    #                                the discretisation is sound, and any
+    #                                fixed bar was simply mis-set.
+    #   |dS| flattening to a floor -> a real bug in the waisted cell
+    #                                construction that does NOT vanish in
+    #                                the limit.
+    EPS_LIST = [float(v) for v in
+                os.environ.get("MMI2X2_WG_EPS", "1e-2,1e-3,1e-4,1e-5").split(",")]
+
     wavelengths = np.array([WL])
-    results = {}
-    for name, geom in [
+    cases = [
         ("straight", straight),
         ("degenerate-waist", degenerate["body_waist_width=mm_width"]),
-    ]:
+    ]
+    for eps in EPS_LIST:
+        near = MMI(**_common, body_waist_width=MM_WIDTH - eps,
+                   body_waist_length=LW, body_transition_length=LT)
+        assert near.is_body_waisted, f"EPS={eps} must take the waisted path"
+        cases.append((f"near-eps{eps:g}", near))
+
+    results = {}
+    for name, geom in cases:
         solver = EMESolver(num_modes=[1, N_MODES, N_MODES, N_MODES, 1],
                            num_cells=[1, 1, 1, 1, 1], lengths=lengths,
                            **solver_kw)
@@ -195,17 +225,59 @@ else:
         results[name] = {k: np.asarray(v) for k, v in S._data.items()}
         print(f"  {name}: solved, {len(results[name])} S entries")
 
-    a, b = results["straight"], results["degenerate-waist"]
-    if set(a) != set(b):
-        print(f"  FAIL: key sets differ")
-        print(f"    only in straight:  {sorted(set(a) - set(b))[:5]}")
-        print(f"    only in waisted:   {sorted(set(b) - set(a))[:5]}")
-    else:
-        dmax = max(float(np.max(np.abs(a[k] - b[k]))) for k in a)
-        worst = max(a, key=lambda k: float(np.max(np.abs(a[k] - b[k]))))
-        print(f"  compared {len(a)} coefficients")
-        print(f"  max |S_straight - S_degenerate| = {dmax:.3e}  (worst key {worst})")
-        print(f"  step 2b: {'PASS' if dmax < 1e-9 else 'FAIL'} (bar: 1e-9)")
+    def _dmax(name):
+        b = results[name]
+        if set(a) != set(b):
+            return None
+        return max(float(np.max(np.abs(a[k] - b[k]))) for k in a)
+
+    a = results["straight"]
+
+    # -- exact degenerate: fallback check only --
+    d_exact = _dmax("degenerate-waist")
+    exact_ok = d_exact is not None and d_exact < 1e-9
+    print(f"\n  exact degenerate (is_body_waisted=False -> STRAIGHT path):")
+    print(f"    max |dS| = {d_exact:.3e}  -> {'PASS' if exact_ok else 'FAIL'}")
+    print("    (proves only that the fallback works, not the waisted path)")
+
+    # -- the real test: does |dS| scale with EPS? --
+    print(f"\n  waisted-path convergence (the load-bearing check):")
+    print(f"    {'EPS':>10} {'max|dS|':>12} {'ratio':>8}  {'|dS|/EPS':>10}")
+    prev = None
+    rows = []
+    for eps in EPS_LIST:
+        d = _dmax(f"near-eps{eps:g}")
+        if d is None:
+            print(f"    {eps:10.1e}  KEY-SET MISMATCH")
+            continue
+        ratio = (prev / d) if (prev is not None and d > 0) else float("nan")
+        rows.append((eps, d))
+        print(f"    {eps:10.1e} {d:12.3e} {ratio:8.2f}  {d/eps:10.3e}")
+        prev = d
+
+    # Linear convergence means |dS|/EPS is CONSTANT across the sweep.
+    verdict = "INCONCLUSIVE"
+    if len(rows) >= 3:
+        slopes = [d / eps for eps, d in rows]
+        spread = max(slopes) / min(slopes) if min(slopes) > 0 else float("inf")
+        smallest_eps, smallest_d = rows[-1]
+        if spread < 3.0:
+            verdict = ("PASS -- |dS| scales linearly with EPS "
+                       f"(|dS|/EPS constant to {spread:.2f}x). The waisted "
+                       "cell construction CONVERGES to the straight body; "
+                       "the earlier fixed-bar FAIL was a mis-set bar, not a bug.")
+        elif smallest_d > 0.1 * rows[0][1]:
+            verdict = ("FAIL -- |dS| FLOORS instead of scaling: shrinking EPS "
+                       f"{rows[0][0]:g} -> {smallest_eps:g} ({rows[0][0]/smallest_eps:.0f}x) "
+                       f"only moved |dS| {rows[0][1]:.2e} -> {smallest_d:.2e}. "
+                       "A discretisation error in the waisted path that does "
+                       "NOT vanish in the limit. DO NOT trust waisted results "
+                       "-- and re-examine the 1x4's, which share this path.")
+        else:
+            verdict = (f"UNCLEAR -- |dS|/EPS varies {spread:.1f}x across the "
+                       "sweep. Neither clean linear convergence nor a flat "
+                       "floor; extend the sweep before drawing a conclusion.")
+    print(f"\n  step 2b verdict: {verdict}")
 
 print("\n" + "=" * 78)
 print("Steps 1/2 are gates, not results. A design point is step 6's job, and")

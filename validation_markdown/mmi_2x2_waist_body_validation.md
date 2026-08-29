@@ -251,13 +251,64 @@ Split into two halves, because they cost very different amounts:
 (uniformity checked at 101 points across the full body, not just the
 boundaries.)
 
-#### ⏳ STEP 2b IN FLIGHT — job 12482595
+#### ✅ STEP 2b DONE 2026-08-29 — PASS, but only after the test itself was fixed twice
 
-`batch/verification/run_mmi_2x2_waist_geometry_check.batch`
-(`MMI2X2_WG_SOLVE=1`). **No waisted 2×2 result should be trusted until this
-passes** — that is the entire point of the gate.
+**This step is worth reading as a method lesson, not just a result.** The
+first two versions of it were both too weak to gate anything, and the second
+one produced a false alarm.
 
-**Cost.** One short job.
+**Attempt 1 (job 12482595) — vacuous.** Compared the straight device against
+`body_waist_width == mm_width` and got `max |ΔS| = 0.000e+00`, exactly zero,
+in 56 s. That looked like a perfect pass and was nearly meaningless: an exact
+degenerate waist sets `is_body_waisted=False`, so it takes the **identical
+straight-body code path**. Bit-identical zero is what taking the same branch
+produces. It confirms the *fallback*, and never touches the waisted
+cell-construction path the gate exists to test.
+
+**Attempt 2 (job 12482618) — FAILED, and the failure was spurious.** Switched
+to a genuinely waisted **near**-degenerate case (`Ww = mm_width − 1e-3`, which
+does set `is_body_waisted=True`). Measured `|ΔS| = 1.127e-02` against a 5e-3
+bar → FAIL. **The bar was the problem, not the code.** An MMI's self-imaging
+length goes as W², so a fractional width change shifts the beat phase by
+~2π·2δW/W over a beat length — at δW=1e-3 that is ~4.5e-3 rad, the same order
+as the measured deviation. A single EPS with a fixed threshold **cannot
+distinguish real physics from a discretisation bug.**
+
+**Attempt 3 (job 12482636) — the right test: SCALING, not a threshold.**
+
+| EPS (µm) | max abs ΔS | ratio | abs ΔS / EPS |
+|---|---|---|---|
+| 1.0e-02 | 9.338e-02 | — | 9.34 |
+| 1.0e-03 | 1.127e-02 | 8.29 | 11.27 |
+| 1.0e-04 | 1.148e-03 | 9.82 | 11.48 |
+| 1.0e-05 | 1.150e-04 | 9.98 | 11.50 |
+
+**Clean first-order convergence.** Each decade of EPS reduces |ΔS| by a
+factor approaching exactly 10 (8.29 → 9.82 → **9.98**), and `|ΔS|/EPS` is
+constant to **1.23×** across the sweep. The waisted 5-segment cell
+construction genuinely converges to the straight body in the limit.
+
+**Verdict: step 2 PASSES.** The waisted code path is sound.
+
+**⚠ This also clears the 1×4.** That device's waist results share this exact
+code path. Had |ΔS| floored instead of scaling, every 1×4 waist conclusion —
+including the twice-closed "the waist profile fails" verdict in
+`mmi_1x4_tapered_body_validation.md` — would have been resting on a
+contaminated path. It scales, so those conclusions stand.
+
+#### 📌 Number to carry into steps 4 and 6: dS/dW ≈ 11.5 µm⁻¹
+
+The converged slope means **this device's S-matrix moves ~11.5 per µm of
+waist width**. Two consequences worth stating before any sweep:
+
+1. **The 2×2 is very width-sensitive**, and a candidate design's narrowing is
+   ~0.3-0.6 µm — orders of magnitude outside this linear regime, so do not
+   extrapolate with this slope. It bounds *numerical* tolerance, not physics.
+2. **It sets the meaningful precision floor for step 4's metric.** Distinguishing
+   two candidate profiles whose widths differ by <1e-3 µm is not physically
+   meaningful at this resolution — the sweep grid should not be finer than that.
+
+**Cost.** Three jobs, all under 1 minute each.
 
 ### Step 3 — Cell-construction path for a 5-segment 2×2 body
 
