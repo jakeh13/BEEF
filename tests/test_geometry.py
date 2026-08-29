@@ -338,6 +338,197 @@ class TestMMIBodyTaper:
         assert m.width_at(half) >= needed
 
 
+class TestMMIBodyWaist:
+    """The INTERIOR-waist body profile (body_waist_width/body_waist_length/
+    body_transition_length, added 2026-08-27/28).
+
+    Both faces stay at mm_width and the narrowing happens in the interior:
+
+        |<-stub->|<-Lt->|<--- Lw (width Ww) --->|<-Lt->|<-stub->|
+           W          W->Ww           Ww          Ww->W      W
+
+    ADDED 2026-08-29, RETROACTIVELY. This profile shipped with NO test
+    coverage anywhere in tests/ despite having produced several jobs' worth of
+    real physics results (the 1x4 waist sweeps). The claim recorded at the
+    time -- "780 passed, 0 failed" -- only established that the feature is
+    INERT to the existing suite, which it is by construction: every waist
+    parameter defaults to off. It never exercised the profile itself. These
+    tests close that gap and pin the contract for the 2x2 waist work
+    (validation_markdown/mmi_2x2_waist_body_validation.md step 1).
+    """
+
+    def _mmi_1x2(self, **kw):
+        kw.setdefault("mm_length", 6.0)
+        return MMI(n_inputs=1, n_outputs=2, mm_width=2.5,
+                   waveguide_width=0.35, taper_length=1.0, taper_width=0.8,
+                   waveguide_offset=1.0, **kw)
+
+    def _waisted(self, **kw):
+        kw.setdefault("body_waist_width", 1.5)
+        kw.setdefault("body_waist_length", 2.0)
+        kw.setdefault("body_transition_length", 1.0)
+        return self._mmi_1x2(**kw)
+
+    # -- untapered limit: every default-off path must reproduce a straight
+    # body exactly, since every existing production body is uniform. --
+
+    def test_default_is_not_body_waisted(self):
+        assert not self._mmi_1x2().is_body_waisted
+
+    def test_default_body_waist_width_is_mm_width(self):
+        assert self._mmi_1x2().body_waist_width == pytest.approx(2.5)
+
+    def test_zero_transition_length_is_not_waisted_even_with_waist_width_set(self):
+        # body_transition_length=0.0 means "no transition band exists",
+        # regardless of body_waist_width -- mirrors the body-taper rule.
+        m = self._mmi_1x2(body_waist_width=1.0, body_waist_length=2.0)
+        assert not m.is_body_waisted
+        assert m.width_at(0.0) == pytest.approx(2.5)
+
+    def test_waist_width_equal_to_mm_width_is_not_waisted(self):
+        m = self._mmi_1x2(body_waist_width=2.5, body_waist_length=2.0,
+                          body_transition_length=1.0)
+        assert not m.is_body_waisted
+        assert m.width_at(0.0) == pytest.approx(2.5)
+
+    # -- the profile itself --
+
+    def test_bounds_are_symmetric_about_centre(self):
+        (din0, din1), (dout0, dout1) = self._waisted()._body_waist_bounds()
+        # waist [-1.0, 1.0]; transitions [-2.0,-1.0] and [1.0, 2.0]
+        assert (din0, din1) == pytest.approx((-2.0, -1.0))
+        assert (dout0, dout1) == pytest.approx((1.0, 2.0))
+
+    def test_bounds_do_not_depend_on_mm_length(self):
+        """The bands are defined about x=0 from Lt/Lw alone -- mm_length only
+        changes the leftover stubs. This is what makes a length sweep reuse
+        the same cross-sections, and the sweep scripts rely on it."""
+        a = self._waisted()._body_waist_bounds()
+        b = self._waisted(mm_length=12.0)._body_waist_bounds()
+        assert [x for band in a for x in band] == pytest.approx(
+            [x for band in b for x in band])
+
+    def test_widths_at_the_five_segment_boundaries(self):
+        m = self._waisted()
+        half = m.mm_length / 2
+        assert m.is_body_waisted
+        assert m.width_at(-half) == pytest.approx(2.5)    # in face
+        assert m.width_at(-2.0) == pytest.approx(2.5)     # stub -> transition
+        assert m.width_at(-1.0) == pytest.approx(1.5)     # transition -> waist
+        assert m.width_at(0.0) == pytest.approx(1.5)      # waist centre
+        assert m.width_at(1.0) == pytest.approx(1.5)      # waist -> transition
+        assert m.width_at(2.0) == pytest.approx(2.5)      # transition -> stub
+        assert m.width_at(half) == pytest.approx(2.5)     # out face
+
+    def test_transitions_ramp_linearly_and_mirror_each_other(self):
+        m = self._waisted()
+        # halfway down the in-transition and up-transition: same width.
+        assert m.width_at(-1.5) == pytest.approx(2.0)
+        assert m.width_at(1.5) == pytest.approx(2.0)
+
+    def test_faces_stay_at_mm_width_which_is_the_whole_point(self):
+        """The waist exists to leave BOTH faces at mm_width, so the port
+        fan-out never has to be recompromised -- unlike the face-taper."""
+        m = self._waisted()
+        half = m.mm_length / 2
+        assert m.width_at(-half) == pytest.approx(m.mm_width)
+        assert m.width_at(half) == pytest.approx(m.mm_width)
+
+    # -- guards --
+
+    def test_waist_and_face_taper_are_mutually_exclusive(self):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            self._mmi_1x2(body_taper_length=1.0, body_start_width=1.5,
+                          body_waist_width=1.5, body_waist_length=1.0,
+                          body_transition_length=1.0)
+
+    def test_waist_span_cannot_exceed_mm_length(self):
+        # 2*Lt + Lw = 2*2.0 + 4.0 = 8.0 > mm_length 6.0
+        with pytest.raises(ValueError):
+            self._mmi_1x2(body_waist_width=1.5, body_waist_length=4.0,
+                          body_transition_length=2.0)
+
+    def test_negative_and_nonpositive_parameters_are_refused(self):
+        with pytest.raises(ValueError):
+            self._mmi_1x2(body_transition_length=-1.0)
+        with pytest.raises(ValueError):
+            self._mmi_1x2(body_waist_length=-1.0)
+        with pytest.raises(ValueError):
+            self._mmi_1x2(body_waist_width=0.0, body_waist_length=1.0,
+                          body_transition_length=1.0)
+
+    # -- cut validation: uniform regions allow cuts, varying bands refuse. --
+
+    def test_cut_inside_a_transition_band_is_refused(self):
+        m = self._waisted()
+        with pytest.raises(ValueError, match="BODY waist transition band"):
+            m.section_gds(-1.5, -1.0, oxide_width=6.0)
+
+    def test_cut_inside_the_uniform_waist_is_allowed(self):
+        """The waist is a genuine rectangle at body_waist_width, so a section
+        boundary there lands on a single cross-section and must be ALLOWED --
+        refusing it would forbid a valid cut, the opposite of the guard's
+        purpose (same reasoning as the face-taper's own flat-band test)."""
+        d = self._waisted().section_gds(-0.5, 0.5, oxide_width=6.0)
+        assert (2, 0) in d
+
+    def test_cut_inside_a_uniform_stub_is_allowed(self):
+        m = self._waisted()
+        half = m.mm_length / 2
+        d = m.section_gds(-half, -2.0, oxide_width=6.0)
+        assert (2, 0) in d
+
+    # -- the two real devices this profile is used on --
+
+    def test_the_real_1x4_waist_profile(self):
+        """The 1x4 SiN device the waist was added for (production constants,
+        mmi_1x4_waist_profile_sweep.py). Its results are recorded in
+        validation_markdown/mmi_1x4_tapered_body_validation.md."""
+        m = MMI(n_inputs=1, n_outputs=4, mm_length=36.91, mm_width=12.0,
+                waveguide_width=1.1, taper_length=5.0, taper_width=2.2,
+                waveguide_offset=3.1, waveguide_height=0.30,
+                use_neighbor_aperture=True,
+                body_waist_width=9.0, body_waist_length=10.0,
+                body_transition_length=8.0)
+        half = m.mm_length / 2
+        assert m.is_body_waisted
+        (din0, din1), (dout0, dout1) = m._body_waist_bounds()
+        assert [din0, din1, dout0, dout1] == pytest.approx(
+            [-13.0, -5.0, 5.0, 13.0])
+        assert m.width_at(-half) == pytest.approx(12.0)
+        assert m.body_width_at(0.0) == pytest.approx(9.0)
+        assert m.width_at(half) == pytest.approx(12.0)
+
+    def test_the_real_2x2_waist_profile_and_its_zero_face_headroom(self):
+        """The 2x2 SOI device (validation_markdown/
+        mmi_2x2_waist_body_validation.md). Constants are the production
+        straight 2x2's (mmi_2x2_hybrid.py), which is already fully resolved.
+
+        The load-bearing assertion is the SECOND one: this device's two port
+        tapers consume 100.0% of the body face (2.800 um of 2.800 um, zero
+        headroom), so the face-taper profile is not merely unattractive here
+        but geometrically IMPOSSIBLE -- the interior waist is the only body
+        profile the device can host. Re-derived from output_ys rather than
+        hardcoded, so a future port-layout change fails this test instead of
+        silently invalidating the premise of that whole validation doc."""
+        taper_width = 1.3
+        m = MMI(n_inputs=2, n_outputs=2, mm_length=28.0, mm_width=2.8,
+                waveguide_width=0.45, taper_length=4.0, taper_width=taper_width,
+                waveguide_offset=1.5, waveguide_height=0.22,
+                body_waist_width=2.24, body_waist_length=8.0,
+                body_transition_length=6.0)
+        half = m.mm_length / 2
+        assert m.is_body_waisted
+        assert m.width_at(-half) == pytest.approx(2.8)
+        assert m.body_width_at(0.0) == pytest.approx(2.24)
+        assert m.width_at(half) == pytest.approx(2.8)
+
+        # Zero face headroom: the ports span the entire face.
+        needed = 2 * (max(abs(y) for y in m.output_ys) + taper_width / 2)
+        assert needed == pytest.approx(2.8)
+        assert m.mm_width == pytest.approx(needed)
+
+
 # ---------------------------------------------------------------------------
 # DirectionalCoupler
 # ---------------------------------------------------------------------------

@@ -166,8 +166,53 @@ as arithmetic:
   in-face / mid / out-face — confirming the port-count-agnostic claim above on
   the real object, not just from reading the source.
 
-**Still to do in this step:** the render, and the five-boundary assertions as a
-test.
+#### ✅ STEP 1 DONE 2026-08-29 — render + tests landed
+
+`examples/verification/python/mmi_2x2_waist_geometry_check.py` renders the
+straight control and the waisted device **from one config** (so the only
+difference is the body profile) and prints the width profile at every segment
+boundary. Output under
+`example_output/verification/mmi_2x2_waist_geometry/`.
+
+Measured at the placeholder profile (Ww=2.24, Lw=8.0, Lt=6.0 — **not** a
+design point, step 6's job):
+
+```
+waist bounds: transitions [-10.00,-4.00] and [4.00,10.00]; waist [-4.00,4.00]
+stub length either side: 4.00 um
+  in face    x= -14.00  width= 2.800 um
+  stub->tran x= -10.00  width= 2.800 um
+  tran->wais x=  -4.00  width= 2.240 um
+  waist mid  x=  +0.00  width= 2.240 um
+  tran->stub x= +10.00  width= 2.800 um
+  out face   x= +14.00  width= 2.800 um
+port clearance: 2.800 um of the 2.800 um face -> headroom 0.000 um (0.0%)
+```
+
+Render visually confirms the intended symmetric hourglass with both faces at
+`mm_width` and the port tapers landing exactly on them.
+
+#### ⚠ FINDING: the waist profile had ZERO test coverage until today
+
+Writing this step's assertions turned up something the 1×4 work did not:
+**`grep -r waist tests/` returned nothing.** The profile shipped 2026-08-27/28
+and has since produced several jobs' worth of real physics results (every 1×4
+waist sweep), with no regression test anywhere. The claim recorded at the time
+— *"780 passed, 0 failed"* — only established the feature is **inert to the
+existing suite**, which it is by construction: every waist parameter defaults
+to off. It never exercised the profile itself. The "verified standalone"
+checking was real but ad-hoc and was never committed.
+
+**Closed:** `tests/test_geometry.py::TestMMIBodyWaist`, **17 tests, all
+passing** (123 pass across the geometry suite, no regressions). Covers the
+untapered limit (three separate degenerate paths), bounds symmetry, the
+`mm_length`-independence the sweep scripts rely on, five-boundary widths,
+ramp linearity and mirror symmetry, all four constructor guards, the cut
+validation contract (transition bands refuse; uniform waist and stubs allow),
+and **both real devices** — the 1×4's production waist (retroactively) and
+this doc's 2×2, with the zero-headroom port constraint re-derived from
+`output_ys` rather than hardcoded, so a future port-layout change fails the
+test instead of silently invalidating this doc's premise.
 
 **Cost.** Minutes.
 
@@ -183,6 +228,34 @@ at 2×2 parameters), and a single-wavelength EME solve matching the straight
 2×2's cached result. **This is the cheapest and most diagnostic check in the
 plan** — the 1×4 doc says the same thing about its own step 5 — and it must
 pass before any sweep is submitted.
+
+Split into two halves, because they cost very different amounts:
+
+- **2a, geometric — free.** Both degenerate paths must give
+  `is_body_waisted=False` and a uniform width profile.
+- **2b, numeric — one short EME solve.** A `body_waist_width == mm_width`
+  "waist" must return the same S-matrix as the straight device. This catches
+  a class of bug 2a cannot: cell boundaries placed differently, or the
+  waisted code path branching somewhere that agrees on *width* but not on
+  *discretisation*. Compares **every** stored coefficient in the `SMatrix`,
+  not a hand-picked one, against a 1e-9 bar.
+
+#### ✅ STEP 2a DONE 2026-08-29 — PASS
+
+```
+  body_transition_length=0     is_body_waisted=False uniform=True   OK
+  body_waist_width=mm_width    is_body_waisted=False uniform=True   OK
+  step 2a: PASS
+```
+
+(uniformity checked at 101 points across the full body, not just the
+boundaries.)
+
+#### ⏳ STEP 2b IN FLIGHT — job 12482595
+
+`batch/verification/run_mmi_2x2_waist_geometry_check.batch`
+(`MMI2X2_WG_SOLVE=1`). **No waisted 2×2 result should be trusted until this
+passes** — that is the entire point of the gate.
 
 **Cost.** One short job.
 
