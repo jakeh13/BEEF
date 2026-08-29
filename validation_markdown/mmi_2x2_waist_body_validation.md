@@ -331,6 +331,58 @@ directional coupler is the cheapest confirming re-run; see
 ⚠ **Do not carry over the 1×4's width-keyed reuse cache without re-deriving
 it.** See the warning above — the 2×2 has no on-axis chain.
 
+#### ✅ STEP 3 DONE 2026-08-29 — option (b) taken, the library was fixed
+
+**Decision: (b).** `EMESolver(region_cell_lengths={region_idx: [lengths]})`,
+an explicit per-region subdivision. `_build_cells()` and
+`_flat_cell_lengths()` are now unified onto one code path instead of
+duplicating the division logic, and **the 1×4's documented bypass is
+retired** — a waisted body can go through `solve()` and keep caching,
+calibration and everything else, rather than reimplementing them.
+
+**Why (b) rather than repeating the bypass:** the bypass was already costing
+real capability (the 1×4's sweep script gave up `solve()` entirely) and had
+already produced one genuine physics bug when its hand-rolled mode cache was
+extended (job 12453222, see the warning above). Fixing the library removes
+the reason to hand-roll at all.
+
+**The problem, quantified rather than asserted** — measured on this device's
+placeholder profile: with the same 12 body cells, an **even division
+straddles 4 segment boundaries** (a single cell spanning part-uniform,
+part-ramp, so it sits on no single cross-section); the segment-aligned
+subdivision straddles **0**. Even division does not converge out of this —
+more cells still misplace boundaries.
+
+**Guarded hard, because both misuse modes are silent:** a wrong cell *count*
+desyncs `_modes_per_cell()` from the cells; a wrong *sum* changes the
+device's physical length while every other number still looks plausible.
+Both are refused at construction. Solving an overridden region at a
+different length is also refused rather than silently rescaled — those
+boundaries are tied to specific internal features and have no correct
+automatic rescaling.
+
+**Cache handling (the part that had to be right):** listed in
+`_METHOD_ATTRS` for `solve`/`solve_length_sweep`, so a non-default
+subdivision can never be served by an evenly-divided entry; **and** in
+`_DEFAULT_OMITTED_ATTRS`, so at its `None` default the key does not appear
+in the fingerprint at all and **every existing EME cache entry and golden
+stays valid**. Same established pattern as `minimum_run_time`/
+`decay_method`/`energy_decay_dt`. Pinned by
+`test_default_is_omitted_so_existing_entries_stay_valid`.
+
+**✅ MEASURED INERT — job 12484205.** Per this repo's standard, an "inert"
+refactor is an argument until a run says otherwise. Step 2b's convergence
+sweep was re-run through the rewired `_build_cells()` and reproduces job
+12482636 **to every printed digit** on all four EPS rows
+(9.338e-02 / 1.127e-02 / 1.148e-03 / 1.150e-04, `|ΔS|/EPS` constant to
+1.23×). This is a real EME solve through exactly the changed code path, run
+before and after, with identical output.
+
+**Tests.** 13 new in `tests/test_cache_config.py`
+(`TestRegionCellLengthsFingerprint`, `TestRegionCellLengthsValidation`).
+Full suite **810 passed, 21 skipped**, up from 780 — +17 waist geometry
+(step 1), +13 here, no existing test's outcome changed.
+
 **Cost.** Hours of implementation; one short confirming job.
 
 ### Step 4 — Define the figure of merit BEFORE sweeping (no compute)
@@ -351,29 +403,82 @@ subtly wrong (phase), so the metric must be fixed in advance.
 
 ### Step 5 — Convergence for the waisted body (cheap-to-moderate)
 
-Two axes, neither inherited:
+Two axes, neither inherited. **5a is a hard gate on every later number in
+this doc and must run before step 6, not alongside it.**
 
-- **Transition cell count.** Sweep it and show the S-matrix plateaus. **The
-  1×4 measured this mattering**: doubling `C_TRANS` 6→12 visibly changed the
-  field character (job 12446756), though it did not rescue the device. Do not
-  pick a count for legibility and quote results from it.
-- **`num_modes` through the narrowed section.** The body *narrows*, so the
-  guided-mode count **falls** in the waist — the opposite of the 1×4-tapered
-  doc's widening case. The binding constraint is the **widest** cell (the
-  faces, at `mm_width`), where the straight device's `N_MODES=14` already
-  applies. ⚠ Heed the 4×4's warning quoted in the 1×4 doc: a probe that hits
-  its own request cap only ever measured a floor, never found a ceiling —
-  raise the cap until a real ceiling appears.
+#### 5a — Transition slice count (`C_TRANS`) convergence ⚠ GATING
+
+**This is the single most load-bearing convergence axis in the plan**, for a
+measured reason: on the 1×4, doubling `C_TRANS` 6→12 **visibly changed the
+field character** — job 12446756 turned a single spurious refocus into a
+progressive multi-lobe interference pattern. That was a large qualitative
+change from a pure discretisation parameter, on the same physical device.
+It did not rescue that device, but it proves the transition region is
+**under-resolved at counts people pick by eye**, and every waisted result is
+downstream of it.
+
+The transition is also exactly where the physics under test lives: the
+leading hypothesis for the 1×4's failure is **radiative loss at the width
+transitions** (see the top of this doc). A transition that is
+under-discretised is a *staircase*, and a staircase radiates for numerical
+reasons that have nothing to do with the real sidewall. **Measuring
+transition loss on an unconverged transition would confirm the hypothesis
+for the wrong reason** — the exact trap `mmi_1x4_sin300_validation.md`
+records for the EME taper staircase in its own check 1.
+
+**Deliverable.** A converged `C_TRANS` for this device, and the S-matrix
+plateau table that establishes it.
+
+**Procedure, pre-registered.**
+- Sweep `C_TRANS ∈ {2, 4, 6, 8, 12, 16, 24}` at a **fixed** geometry — use a
+  mid-aggressiveness profile from step 6's intended grid, not the gentlest
+  (a gentle waist under-stresses the very region being resolved).
+- Hold `C_STUB`/`C_WAIST` fixed while sweeping `C_TRANS`, so the axis is
+  isolated. The stub and waist are *uniform*, so they are not the suspect;
+  spot-check them once at the end rather than sweeping all three at once.
+- Score on **step 4's full metric** (T_bar, T_cross, excess loss, bar/cross
+  phase) — not on totalT alone. A staircase can conserve power while
+  rotating phase, and this device's observable is a transfer matrix.
+- **Converged** = successive |ΔS| below the tolerance step 4 sets, for **two
+  consecutive** refinements, not one. One step can plateau by coincidence.
+
+**Evidence.** The plateau table with the tolerance stated, plus the chosen
+count. ⚠ **Report the converged count as a floor tied to the profile it was
+measured on.** A more aggressive waist (larger Δwidth over the same `Lt`) is
+a steeper ramp and may need more slices — if step 6 explores past the
+aggressiveness used here, 5a must be re-run at the edge of that range, not
+assumed to carry.
+
+⚠ **Do not reuse the 1×4's answer.** Its `C_TRANS=12` was never shown
+converged either — it was one doubling that changed the picture, which
+demonstrates non-convergence at 6 rather than convergence at 12.
+
+#### 5b — `num_modes` through the narrowed section
+
+The body *narrows*, so the guided-mode count **falls** in the waist — the
+opposite of the 1×4-tapered doc's widening case. The binding constraint is
+the **widest** cell (the faces, at `mm_width`), where the straight device's
+`N_MODES=14` already applies. ⚠ Heed the 4×4's warning quoted in the 1×4
+doc: a probe that hits its own request cap only ever measured a floor, never
+found a ceiling — raise the cap until a real ceiling appears.
 
 **Evidence.** Plateau tables for both axes, with the tolerance stated.
 
 **Cost.** Moderate; cheaper than the 1×4's equivalent (smaller domain, fewer
-body modes).
+body modes). 5a is ~7 solves at one geometry — cheap next to step 6's grid,
+and it is what makes that grid mean anything.
 
 ### Step 6 — Find a design point, with a PRE-REGISTERED STOP RULE
 
 **Deliverable.** Either a (Ww, Lw, Lt, mm_length) point that beats the straight
 2×2 on step 4's criterion, or a decisive negative.
+
+⚠ **BLOCKED ON STEP 5a.** Do not start this grid until the transition slice
+count is converged. Every point here is measured through the transition, and
+the mechanism under test (radiative loss at the transitions) is precisely
+what an under-resolved transition fakes. A negative produced on an
+unconverged `C_TRANS` would be uninterpretable — it could not distinguish
+"the profile fails" from "the staircase radiates."
 
 **Search plan.** Sweep `mm_length` per profile, as the 1×4 did. Start
 **gentle** — the 1×4's own hard-won lesson is that aggressive narrowing
