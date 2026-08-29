@@ -399,7 +399,86 @@ two points with *better-than-control balance* and catastrophic `totalT`
 (0.47/0.18) surfaced as "BEST" in the summary table. A 2×2 has more ways to be
 subtly wrong (phase), so the metric must be fixed in advance.
 
-**Cost.** None.
+#### ✅ STEP 4 DONE 2026-08-29 — baseline measured, criterion written to disk
+
+`examples/verification/python/mmi_2x2_waist_metric.py`, job **12487988**
+(res=40, 11 wavelengths, the resolved device's own settings).
+
+**Straight control baseline:**
+
+| | value |
+|---|---|
+| T_bar | 0.4284 → 0.4454 across band |
+| T_cross | 0.4876 → 0.5092 |
+| total | 0.9160 → 0.9546 (rising monotonically) |
+| max excess loss | **0.3809 dB** |
+| max imbalance | **0.0686** |
+| bar/cross phase | −89.86° → −90.00°, **max deviation from quadrature 0.41°** |
+| Δβ₀₁ (band centre) | 0.161948 rad/µm |
+| **L_π** | **19.3988 µm** |
+| mm_length / L_π | **1.4434** |
+
+**The phase is an independent validation, not just a metric component.**
+Quadrature (±90°) is the theoretical signature of a 2×2 MMI, and this device
+sits within **0.41°** of it across the whole band without anything having
+been tuned to produce that. It is strong evidence the port conventions,
+excitation and solver config are all right — which matters because two of
+them were wrong an hour earlier (see the traps below).
+
+**The pre-registered criterion**, written to
+`example_output/verification/mmi_2x2_waist_metric/criterion.json`. A
+candidate passes only if **all** hold:
+
+- **shorter** — total device length < control's 37.0 µm
+- **excess loss** ≤ 0.3809 + 0.10 = **0.4809 dB**
+- **imbalance** ≤ 2× control = **0.1371**
+- **phase** within **2.0°** of the control's
+
+**Ranking: only among candidates that pass all four; shortest wins.** Never
+rank on one component — that is precisely the 1×4's mistake.
+
+⚠ **Step 6 must LOAD this JSON and score against it.** Moving a threshold
+after seeing results is the thing pre-registration exists to prevent.
+
+#### ⚠ Two config traps, caught only because a NUMBER looked wrong
+
+The first baseline attempt (job 12487486) reported **~2 dB excess loss and
+0.18 imbalance on the straight, resolved, well-behaved control**. The script
+ran cleanly and produced a plausible-looking table; only the *implausibility
+of the physics* flagged it. Both causes were mine:
+
+1. **Port tapers must be subdivided.** The resolved example uses
+   `num_cells=[1, 15, 1, 15, 1]` — **15 cells per 4 µm port taper**. I used
+   1, making each taper a single-step staircase worth ~2 dB of purely
+   numerical loss. Note the shape: the **body** is the region that gets 1
+   cell (it is uniform); the **tapers** need many. For a *waisted* body that
+   flips — the body then needs step 3's segment-aligned subdivision.
+2. **`N_MODES = 14` is not the EME mode count.** 14 is
+   `mmi_2x2_hybrid.py`'s **interface** count for the hybrid cascade. The EME
+   example's per-region `num_modes` is `[1, 7, 15, 7, 1]`. Same device,
+   similar-looking name, different quantity — and carrying one across to the
+   other is silent.
+
+Corrected, total went 0.61 → 0.92-0.95 and the phase snapped to quadrature.
+
+#### 📌 L_π = 19.40 µm gives step 6 a predicted starting length — ARGUED
+
+The device sits at **mm_length / L_π = 1.4434**. Since L_π ∝ W², a narrower
+interior has a *shorter* L_π, so preserving the same accumulated imaging
+phase over a **physically shorter** body is exactly the premise the waist is
+built on. Equating accumulated phase gives a predicted design length rather
+than a blind sweep:
+
+```
+L_straight / W²  =  ∫ dx / W(x)²      (over the 5-segment profile)
+```
+
+⚠ **Label this ARGUED and check it, do not trust it.** The 1×4's directly
+analogous argued formula (`L = L_straight − Lt·(W/Ws − 1)`) was **REFUTED
+outright** — at its predicted length that device lost 44% of its power. Use
+this to *centre* step 6's length window, never to replace measuring it.
+
+**Cost.** Two short jobs (~13 min total).
 
 ### Step 5 — Convergence for the waisted body (cheap-to-moderate)
 
