@@ -60,15 +60,27 @@ TOL = 0.002               # acceptance, per the validation doc
 # this gate measures. A 220 nm pass does not transfer to it for free
 # (cf. mmi_1x2 gap 3 and modal_multiplexer gap 2, where SOI_160 behaved
 # differently from SOI_220 on unrelated axes).
+# (label, core height um, band, core kind, core width um)
 CASES = [
-    ("SOI_220, C-band (coupler, mmi_2x2, ring)", 0.22, (1.50, 1.60)),
-    ("SOI_220, O-band", 0.22, (1.26, 1.36)),
-    ("SOI_160, C-band", 0.16, (1.50, 1.60)),
-    ("SOI_160, O-band (mmi_1x2, modal_mux)", 0.16, (1.26, 1.36)),
+    ("SOI_220, C-band (coupler, mmi_2x2, ring)", 0.22, (1.50, 1.60), "si", W_SI),
+    ("SOI_220, O-band", 0.22, (1.26, 1.36), "si", W_SI),
+    ("SOI_160, C-band", 0.16, (1.50, 1.60), "si", W_SI),
+    ("SOI_160, O-band (mmi_1x2, modal_mux)", 0.16, (1.26, 1.36), "si", W_SI),
+    # SIN_300, added 2026-08-31 -- the 1x4 nitride splitter's own stack and
+    # design point (mmi_1x4_sin300_validation.md step 4: sz=5.0,
+    # waveguide_width=1.1, C-band). This gate has NEVER run on a non-silicon
+    # core, and _REPARAM_LAM0_FACTOR=1.15 was validated on the four silicon
+    # rows above only. It is not a formality: the gate measures whether
+    # eps_inf still carries enough core/clad contrast for meep's subpixel
+    # averaging to act, and nitride's contrast is 5.3x weaker in d(n^2) than
+    # silicon's (1.90 vs 10.01). There is precedent for a weakly-confining
+    # stack failing -- extending this gate to SOI_160 failed on the O-band at
+    # -0.00375, which is what forced lambda_0 to become band-derived.
+    ("SIN_300, C-band (mmi_1x4 nitride)", 0.30, (1.50, 1.60), "si3n4", 1.1),
 ]
 
 
-def _solve_neff(si_med, sio2_med, label, h_si=0.22, wl=1.55):
+def _solve_neff(si_med, sio2_med, label, h_si=0.22, wl=1.55, w_core=W_SI):
     """Fundamental-mode n_eff of the strip under one pair of media.
 
     Subpixel smoothing is left at meep's default (`eps_averaging=True`) --
@@ -77,7 +89,7 @@ def _solve_neff(si_med, sio2_med, label, h_si=0.22, wl=1.55):
     import meep as mp
 
     cell = mp.Vector3(X_SPAN, CELL_Y, CELL_Z)
-    geometry = [mp.Block(size=mp.Vector3(mp.inf, W_SI, h_si),
+    geometry = [mp.Block(size=mp.Vector3(mp.inf, w_core, h_si),
                          center=mp.Vector3(), material=si_med)]
     sim = mp.Simulation(
         cell_size=cell,
@@ -104,30 +116,30 @@ def _solve_neff(si_med, sio2_med, label, h_si=0.22, wl=1.55):
     return neff, eps_inst
 
 
-def _run_case(label, h_si, band_lo, band_hi):
+def _run_case(label, h_si, band_lo, band_hi, core="si", w_core=W_SI):
     """One (core height, band) combination. Returns (delta_B, delta_C, ok)."""
     import meep as mp
 
     wl = 0.5 * (band_lo + band_hi)
     band = np.linspace(band_lo, band_hi, 21)
-    n_si = float(sellmeier_index("si", wl))
+    n_si = float(sellmeier_index(core, wl))
     n_ox = float(sellmeier_index("sio2", wl))
 
     print("\n" + "=" * 74, flush=True)
     print(f"CASE: {label}", flush=True)
-    print(f"  {W_SI*1000:.0f} x {h_si*1000:.0f} nm Si in SiO2, res {RES:.0f}, "
+    print(f"  {w_core*1000:.0f} x {h_si*1000:.0f} nm {core} in SiO2, res {RES:.0f}, "
           f"band {band_lo}-{band_hi} um, solved at {wl:.3f}", flush=True)
-    print(f"  exact n_Si = {n_si:.6f}, n_SiO2 = {n_ox:.6f}, "
+    print(f"  exact n_core({core}) = {n_si:.6f}, n_SiO2 = {n_ox:.6f}, "
           f"true eps contrast = {n_si**2 - n_ox**2:.4f}", flush=True)
     print("=" * 74, flush=True)
 
     n_a, eps_a = _solve_neff(mp.Medium(index=n_si), mp.Medium(index=n_ox),
-                             "A non-dispersive", h_si, wl)
-    n_c, eps_c = _solve_neff(meep_medium("si"), meep_medium("sio2"),
-                             "C legacy eps_inf=1 (reverted)", h_si, wl)
-    n_b, eps_b = _solve_neff(meep_medium_reparam("si", band),
+                             "A non-dispersive", h_si, wl, w_core)
+    n_c, eps_c = _solve_neff(meep_medium(core), meep_medium("sio2"),
+                             "C legacy eps_inf=1 (reverted)", h_si, wl, w_core)
+    n_b, eps_b = _solve_neff(meep_medium_reparam(core, band),
                              meep_medium_reparam("sio2", band),
-                             "B re-parameterised", h_si, wl)
+                             "B re-parameterised", h_si, wl, w_core)
 
     d_b, d_c = n_b - n_a, n_c - n_a
     harness_ok = abs(d_c) > 10 * TOL
@@ -138,7 +150,7 @@ def _run_case(label, h_si, band_lo, band_hi):
     print(f"  -> B dn_eff vs A: {d_b:+.6f}   "
           f"{'PASS' if passed else ('INCONCLUSIVE' if not harness_ok else 'FAIL')}"
           f"  (tol {TOL})", flush=True)
-    print(f"  -> eps_inf(Si) smoothed: A {eps_a:.4f} | C {eps_c:.4f} "
+    print(f"  -> eps_inf(core) smoothed: A {eps_a:.4f} | C {eps_c:.4f} "
           f"| B {eps_b:.4f}", flush=True)
     return d_b, d_c, passed
 
@@ -154,8 +166,8 @@ def main():
     print("=" * 74, flush=True)
 
     results = {}
-    for label, h_si, (lo, hi) in CASES:
-        results[label] = _run_case(label, h_si, lo, hi)
+    for label, h_si, (lo, hi), core, w_core in CASES:
+        results[label] = _run_case(label, h_si, lo, hi, core, w_core)
 
     print("\n" + "=" * 74, flush=True)
     print("SUMMARY", flush=True)

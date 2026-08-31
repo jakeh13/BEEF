@@ -110,7 +110,11 @@ N_WL = 5            # reduced from 11 -- see cost note in module docstring
 WAVEGUIDE_WIDTH = 1.1
 TAPER_WIDTH = 2.2
 TAPER_LENGTH = 5.0
-WAVEGUIDE_OFFSET = 2.4
+# ⚠ Constants refreshed 2026-08-31 to the post-step-9c geometry
+# (mm_length 206.0 -> 39.90, waveguide_offset 2.4 -> 3.1, set
+# 2026-08-14). Any output in example_output/ predating that date was
+# produced with the OLD values and does not correspond to this file.
+WAVEGUIDE_OFFSET = 3.1
 MM_WIDTH = 12.0
 STRAIGHT_LENGTH = 0.5   # um -- short wg_in/wg_out stub, matches mmi_1x2_eme.py
 

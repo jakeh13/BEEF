@@ -69,10 +69,17 @@ os.makedirs(output_dir, exist_ok=True)
 # docstring above for why this must match exactly, not just approximately,
 # for the cache-reuse this script's whole cost argument depends on.
 # ---------------------------------------------------------------------------
-RESOLUTION = 40.0
+# ⚠ Constants refreshed 2026-08-31 to the post-step-9c geometry
+# (mm_length 206.0 -> 39.90, waveguide_offset 2.4 -> 3.1, set
+# 2026-08-14). Any output in example_output/ predating that date was
+# produced with the OLD values and does not correspond to this file.
+RESOLUTION = 30.0
 WL_MIN, WL_MAX, N_WL = 1.50, 1.60, 11
 WAVEGUIDE_WIDTH, TAPER_WIDTH, TAPER_LENGTH, WAVEGUIDE_OFFSET, MM_WIDTH = 1.1, 2.2, 5.0, 2.4, 12.0
-MM_LENGTH = 206.0   # the REAL, cached device length -- NOT a sweep placeholder
+MM_LENGTH = 39.90   # the REAL device length -- NOT a sweep placeholder.
+                    # Was 206.0; that value's "cached" claim expired with the
+                    # 2026-08-14 geometry change and the cache it named is for
+                    # the superseded device.
 N_MODES = 12
 
 mmi = MMI(

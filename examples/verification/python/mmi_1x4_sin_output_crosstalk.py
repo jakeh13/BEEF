@@ -54,7 +54,15 @@ os.makedirs(output_dir, exist_ok=True)
 # access-waveguide design (steps 4-5).
 # ---------------------------------------------------------------------------
 WAVEGUIDE_WIDTH = 1.1
-WAVEGUIDE_OFFSET = 2.4
+# ⚠ Constants refreshed 2026-08-31 to the post-step-9c geometry
+# (mm_length 206.0 -> 39.90, waveguide_offset 2.4 -> 3.1, set
+# 2026-08-14). Any output in example_output/ predating that date was
+# produced with the OLD values and does not correspond to this file.
+#
+# NOTE the direction this moves the conclusion: the gap widens from
+# 2.4-1.1 = 1.3 um to 3.1-1.1 = 2.0 um, so the recorded pre-9c crosstalk
+# result is CONSERVATIVE for the current device, not optimistic.
+WAVEGUIDE_OFFSET = 3.1
 GAP_NOMINAL = WAVEGUIDE_OFFSET - WAVEGUIDE_WIDTH   # 1.3 um, edge-to-edge
 SZ = 5.0   # step 4's converged MaterialStack.sz
 STACK = MaterialStack(wg_height=0.30, sz=SZ, core_kind="si3n4")

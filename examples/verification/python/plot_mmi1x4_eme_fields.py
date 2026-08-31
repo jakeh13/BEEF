@@ -50,11 +50,21 @@ os.makedirs(output_dir, exist_ok=True)
 # Pinned to mmi_1x4/python/mmi_1x4_eme.py -- see that script for the full
 # provenance of every constant here.
 # ---------------------------------------------------------------------------
-RESOLUTION = 40.0
+# ⚠ Constants refreshed 2026-08-31 to the post-step-9c geometry
+# (mm_length 206.0 -> 39.90, waveguide_offset 2.4 -> 3.1, set
+# 2026-08-14). Any output in example_output/ predating that date was
+# produced with the OLD values and does not correspond to this file.
+#
+# ⚠ SUPERSEDED by plot_mmi1x4_straight_vs_tapered_eme_fields.py (2026-08-21),
+# which renders the straight AND tapered bodies from ONE config so the only
+# difference between the two pictures is the body profile. Prefer that one.
+# This file is kept because it is the single-geometry variant, and is now
+# updated so running it does not silently draw the superseded device.
+RESOLUTION = 30.0
 WL_MIN, WL_MAX, N_WL = 1.50, 1.60, 11
-WAVEGUIDE_WIDTH, TAPER_WIDTH, TAPER_LENGTH, WAVEGUIDE_OFFSET, MM_WIDTH = 1.1, 2.2, 5.0, 2.4, 12.0
+WAVEGUIDE_WIDTH, TAPER_WIDTH, TAPER_LENGTH, WAVEGUIDE_OFFSET, MM_WIDTH = 1.1, 2.2, 5.0, 3.1, 12.0
 STRAIGHT_LENGTH = 0.5
-MM_LENGTH = 206.0
+MM_LENGTH = 39.90
 N_BODY, N_TAPER, C_TAPER = 20, 10, 8
 
 # What THIS script adds on top of mmi_1x4_eme.py's own config.
