@@ -627,6 +627,61 @@ reason this device was chosen.
 **Deliverable.** Either a (Ww, Lw, Lt, mm_length) point that beats the straight
 2×2 on step 4's criterion, or a decisive negative.
 
+#### ✅ FREE-SWEEP FORMULATION VALIDATED 2026-08-31 — 21× speedup, step 6 running
+
+At the user's suggestion, step 6 uses the **analytic length sweep** rather
+than re-solving every point. `solve_length_sweep()`'s docstring gives the
+mechanism: a cell's cross-section depends on the taper **fraction**
+`(i+0.5)/num_cells`, never on the region's physical length, and meow's
+S-matrix factors into an interface part (modes only) and a propagation part
+(the only place length enters). Its inner loop reuses one mode set and passes
+`cell_lengths=` to `mw.compute_s_matrix()` — so an **arbitrary** cell-length
+list works with the same modes.
+
+Applied to the waisted body as **9 separate EME regions**
+(`[wg_in, taper_in, stub, ramp, waist, ramp, stub, taper_out, wg_out]`, each
+uniform segment getting ONE cell because it *is* uniform), **three of the four
+axes become analytic**:
+
+| axis | free? | why |
+|---|---|---|
+| stub `s` | ✅ | uniform at `mm_width` |
+| waist `Lw` | ✅ | uniform at `Ww` |
+| **ramp `Lt`** | ✅ | linear ramp — cells sample by *fraction*, not by `Lt` |
+| `Ww` | ❌ | changes the widths sampled |
+
+**One mode solve per (Ww, port) covers the entire (s, Lt, Lw) space** — 4
+solves for a ~768-point grid, against ~21 min/point directly.
+
+**Validated twice, deliberately.** A 21× speedup that is subtly wrong would
+look like a *result*, not an error.
+
+- **Single-region** (job 12624884): the library's own `solve_length_sweep`
+  against direct solves — worst |ΔS| **1.168e-13**.
+- **Multi-axis** (job 12627188): *my own* reimplementation, which varies three
+  regions at once through hand-built cells — a different code path, so the
+  first check does not cover it. Five cases, worst |ΔS| **1.109e-13**:
+
+| s | Lt | Lw | \|ΔS\| bar | \|ΔS\| cross | |
+|---|---|---|---|---|---|
+| 2.75 | 4.00 | 8.00 | 1.109e-13 | 1.035e-13 | reference |
+| 1.50 | 4.00 | 8.00 | 9.916e-14 | 9.324e-14 | stub only |
+| 2.75 | 4.00 | 6.00 | 8.934e-14 | 1.011e-13 | waist only |
+| 2.75 | 6.00 | 8.00 | 1.076e-13 | 8.261e-14 | **`Lt` alone** |
+| 1.00 | 5.00 | 6.00 | 8.280e-14 | 9.650e-14 | all three |
+
+The **`Lt`-alone** row is the load-bearing one: stub and waist being
+length-free is intuitive, but the ramp claim is the one that would be easy to
+get wrong and hard to notice. It holds at machine precision.
+
+**Both of the user's hard constraints are enforced in the grid loop**, not
+merely scored: candidates whose stub falls below the hybrid's folded 0.25 µm
+are skipped (the FDTD sections must stay identical to the standard device's),
+and candidates at or above the standard device's own `mm_length` are never
+evaluated.
+
+**Step 6 grid running as job 12630600.**
+
 ⚠ **BLOCKED ON STEP 5a.** Do not start this grid until the transition slice
 count is converged. Every point here is measured through the transition, and
 the mechanism under test (radiative loss at the transitions) is precisely
