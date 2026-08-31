@@ -1,5 +1,88 @@
 # 1×4 MMI on 300 nm Si₃N₄ — build plan
 
+> ## ✅ RESOLVED 2026-08-31 — all four checks measured; three residuals carried
+>
+> Moved to `resolved/` under this directory's own bar: *"whole docs
+> sufficiently addressed (open to-dos may remain)"*. **Read the three
+> residuals below before quoting any number from this device.** They are
+> stated here rather than left at line ~1869 so they travel with the doc.
+>
+> **What is closed.** Steps 1–7 (nitride Sellmeier entry, `MaterialStack`
+> core/clad generalization, cache fingerprint, cross-section design,
+> body design, two example scripts, wiring) and **all four checks**:
+> check 1 measured across the full band, check 2 (mode identity on a 2-mode
+> access waveguide), check 3 (resolution convergence, job 12275175),
+> check 4 (whole-device FDTD reference at band centre *and* full band,
+> jobs 12029541 / 12260631). Plus step 9a (β-calibration — hypothesis
+> **refuted**, it is not the split-shape explanation) and the
+> `decay_method="energy"` study.
+>
+> ### ⚠ Residual 1 — check 1's engine disagreement is REAL and unexplained
+>
+> Not a constant offset: FDTD and EME have **opposite spectral slopes**
+> (−0.749/µm vs +0.087/µm), and band centre is the crossover, so every
+> band-centre-only comparison flattered the agreement. Concretely, EME vs
+> hybrid: split shape disagrees **20× with opposite sign** (EME favours the
+> outer pair by 0.0008, hybrid the inner by ~0.017) and **total T differs by
+> 2.5 points** (0.9707 vs 0.9454) — larger than either engine's own split
+> asymmetry.
+>
+> Mode truncation was tested and **REFUTED** as the cause (a free 3-engine
+> ladder: *more* truncation correlated with *less* disagreement — the wrong
+> direction). The confound check was also done properly first: the gap
+> survives matching EME's resolution and domain to FDTD's own (jobs
+> 12323220 / 12331012).
+>
+> This residual is **larger than the precedents already sitting in
+> `resolved/`** (the 2×2's 0.47% Δβ, the coupler's ~5–10%). It is recorded,
+> not closed.
+>
+> ### ⚠ Residual 2 — the leading suspect was DROPPED, not investigated
+>
+> The remaining candidate for residual 1 is the **EME taper staircase**
+> (`C_TAPER=8` is the only path approximating the port tapers; FDTD meshes
+> them exactly). The convergence sweep that would test it was **never run,
+> at the user's instruction**. "Dropped" is not "excluded" — if this device
+> is ever picked back up, that sweep is the first thing to run.
+>
+> ### ⚠ Residual 3 — res=30 is NOT established for the EME side
+>
+> Check 3 found the real mechanism (a common-mode n_eff shift that does not
+> propagate to the differential FDTD depends on for self-imaging) and
+> concluded **res=30 defensible for FDTD, NOT established for EME** —
+> EME's differential drift 30→40 is 2.17e-03, an order of magnitude worse
+> than FDTD's 1.99e-04. Note `mmi_1x4_eme.py` still runs at
+> **`RESOLUTION = 40.0`** while `_fdtd.py`/`_hybrid.py` moved to 30 on
+> 2026-08-18. That split may well be correct given the above, but it is
+> **undocumented** — decide and record it before relying on either script.
+>
+> ### Open to-dos (do not block resolution)
+>
+> - **Nitride strip-test gate — substantively PASSES, harness needs a call.**
+>   Run 2026-08-31 (`verify_item_8_strip_gate.py`, extended to non-silicon
+>   cores; SIN_300 C-band added at the device's own 1.1 × 0.30 µm). Arm B
+>   (the re-parameterisation under test) lands **Δn_eff = +0.000207**, ten
+>   times inside the 0.002 tolerance, with ε∞ smoothed to 4.0099 against a
+>   true 3.9851 — so ε∞ *is* carrying the contrast. What did not clear is the
+>   script's **harness self-check**, which demands arm C (the known-bad ε∞=1
+>   configuration) move by more than an absolute `10 × TOL = 0.02`; nitride's
+>   C moved −0.017311. That bar was calibrated on silicon's 0.04–0.11
+>   failures, and a low-contrast core *must* fail smaller — the error is the
+>   contrast destroyed, and nitride loses 3.99→1 against a 2.085 cladding
+>   where silicon loses 12.09→1. By ratio |ΔC|/|ΔB| nitride is **84×**,
+>   mid-pack among the silicon rows (73× / 99× / 151× / 395×). **Threshold
+>   deliberately NOT changed** — re-calibrating a gate after seeing it fail is
+>   the wrong reflex; it needs a decision, not a patch.
+> - Step 9d (`interface_modes` sweep) — scoped, not run; needs a ~3-day
+>   prewarm per mode count, and the truncation refutation removed its
+>   motivation.
+> - Step 9b (output-side mirror reuse) — proposed; needs a cache-keyed
+>   `MirrorSpec` variant (`beef.MirrorSpec` is x-mirror; this device needs
+>   transverse-across-`solve()`).
+> - Four scripts carrying pre-2026-08-14 constants were refreshed
+>   2026-08-31 (commit `ca42ea9`). Outputs in `example_output/` predating
+>   that date were produced with the old geometry; each script now says so.
+
 Opened **2026-08-03**, at the user's request: a 1×4 MMI example with **FDTD, hybrid
 and EME** versions, on a **300 nm silicon nitride** core.
 
@@ -2741,13 +2824,13 @@ writeup as *more* load-bearing here than on any single-mode existing device).
 | ~~2 — stack generalization + regression test~~ | 1 array job (confirming re-run, job 11659362) | ✅ **done 2026-08-03** |
 | ~~3 — fingerprint + test~~ | none (item 2 replaced — see step 3's writeup — costing zero cache/golden invalidation instead of the originally-planned global one) | ✅ **done 2026-08-03** |
 | ~~4 — cross-section (`sz`, width, band)~~ | 2 short jobs (11660092, 11660166) + 2 cancelled false starts | ✅ **done 2026-08-03** — `sz=5.0`, `width=1.1` (2-mode, user's revised design point) |
-| 5 — body design (`mm_length` sweep) | 1 short job | blocks 6 |
-| 6a — geometry plot | none | blocks 6b–d |
-| 6b–d — three scripts | 1 array job (3 tasks) | blocks 8 |
+| ~~5 — body design (`mm_length` sweep)~~ | job array 11667114 | ✅ **done 2026-08-04**; re-chosen at step 9c (2026-08-14) → `mm_length=39.90` |
+| ~~6a — geometry plot~~ | none | ✅ **done 2026-08-04** |
+| ~~6b–d — three scripts~~ | 1 array job | ✅ **done 2026-08-04** — two scripts, not three (see 6c); `mmi_1x4_fdtd.py` revived 2026-08-19 once step 9c made it affordable |
 | ~~7 — Makefile/batch/exports~~ | none | ✅ **done 2026-08-05** |
-| 8 — four checks + material gate | several jobs | — |
+| ~~8 — four checks + material gate~~ | jobs 12275175, 12029541, 12260631, 12323220/12331012 | ✅ **all four MEASURED**; material gate substantively passes, harness call open — see the RESOLVED header |
 
-The critical path is **1 → 2 → 3 → 4 → 5 → 6**. Steps 1 and 3 need no cluster
+~~The critical path is **1 → 2 → 3 → 4 → 5 → 6**.~~ **Every step above is done.** This table described the un-started plan long after the work landed; corrected 2026-08-31 on resolution. What remains is not a step but the three residuals in the RESOLVED header at the top of this file. Steps 1 and 3 need no cluster
 time at all, and step 2's library work can be written while step 4's mode solves
 queue.
 
