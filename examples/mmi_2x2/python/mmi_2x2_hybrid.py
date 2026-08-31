@@ -64,7 +64,8 @@ import matplotlib.pyplot as plt
 
 from beef import (
     MMI, EMESolver, FDTDSolver, HybridSolver, MirrorSpec, SMatrix, SOI_220,
-    plot_beta_calibration, plot_hybrid_geometry,
+    plot_beta_calibration, plot_hybrid_geometry, plot_hybrid_body_fields,
+    port_phases,
 )
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -469,3 +470,77 @@ plt.tight_layout()
 fig.savefig(os.path.join(output_dir, "mm_length_sweep.png"), dpi=300)
 plt.close("all")
 print(f"Length-sweep plot saved → {output_dir}/mm_length_sweep.png")
+
+# ---------------------------------------------------------------------------
+# 8. Body-section field reconstruction (added 2026-08-31)
+#
+# plot_hybrid_body_fields() reconstructs the EME BODY section's field in the
+# DEVICE frame from one mode solve -- no FDTD field capture, no cascade cache,
+# and it does NOT re-enter the cascade above. See
+# validation_markdown/hybrid_field_extraction_validation.md.
+#
+# WHY IT APPLIES HERE. The reconstruction assumes a UNIFORM body
+# cross-section, which makes the calibrated body transfer matrix a pure
+# diagonal exp(2j*pi*n_eff/wl*L) -- each mode accumulates phase only, so the
+# field is a plain modal sum. This device's body is uniform, so that holds.
+# ⚠ It would NOT hold for a tapered or waisted body: those go through
+# solve_section()'s real multi-cell branch with a non-diagonal transfer
+# matrix, and assert_uniform_cross_section() raises rather than returning a
+# subtly wrong picture. The waisted 2x2 variant therefore needs
+# plot_eme_fields() + mw.propagate_modes() instead -- see
+# mmi_2x2_waist_body_validation.md.
+#
+# ⚠ THE LAUNCH IS OFF-AXIS. This device has TWO inputs, at
+# mmi.input_ys = [-0.75, +0.75] -- NOT at y=0. A centred launch would excite
+# only the even body modes and produce a symmetric picture that looks
+# plausible and is wrong. input_ys[1] is the top input, matching the
+# input_idx=1 excitation the S-matrix above is computed for. Note also that
+# waveguide_offset is the port centre-to-centre SPACING, so the ports sit at
+# +/-offset/2; read them off the geometry rather than recomputing.
+# ---------------------------------------------------------------------------
+body_x0 = -half_body + body_stub
+body_x1 = +half_body - body_stub
+
+print(f"\nReconstructing body-section field over x = [{body_x0:.3f}, "
+      f"{body_x1:.3f}] µm at λ = {wl_c:.4f} µm ...")
+body_res = plot_hybrid_body_fields(
+    mmi, body_solver, body_x0, body_x1, float(wl_c), N_MODES,
+    output_dir, tag=f"mmi2x2_body_L{mmi.mm_length:.1f}",
+    excitation="gaussian",
+    excitation_center=mmi.input_ys[1],      # OFF-AXIS: the driven top input
+    # taper_width lives on the PORT objects, not on MMI -- read it off the
+    # geometry so a design change cannot leave a stale literal here.
+    excitation_fwhm=mmi.inputs[1].taper_width,
+    wavelengths=wavelengths,
+    port_ys=mmi.output_ys,
+    body_half_width=mmi.mm_width / 2,
+    device_label="2×2 MMI",
+    total_length=mmi.total_length,
+)
+
+# Power conservation is the check that catches a bad modal projection. A 1-D
+# cut through the core instead of a 2-D area integral returned captured power
+# 1.5857 on the 1x2 -- impossible, and parity zeros survived it, so a parity
+# check alone would not have caught it.
+assert body_res["captured_power"] <= 1.0, (
+    f"captured_power = {body_res['captured_power']:.4f} > 1 -- the modal "
+    "projection is wrong (see the 1-D-cut trap in hybrid_body.py)")
+print(f"  captured power   = {body_res['captured_power']:.4f}")
+print(f"  body field plot saved → {output_dir}/")
+
+# ⚠ |E|^2 DISCARDS WHAT THIS DEVICE IS FOR. A 2x2 MMI coupler's function is
+# the bar/cross relationship, and an ideal one sits at QUADRATURE -- the EME
+# sweep measures this device at -89.6 deg, within 0.4 deg of +/-90 across the
+# band. An intensity map cannot see that at all, so read the phase too.
+# Amplitudes are printed alongside deliberately: the phase of a vanishing
+# field is numerically arbitrary, so a phase on a near-null port is
+# meaningless (the same trap MODE_SIGNS records, where a 1e-06 mode
+# disagreed by 280%).
+ph = port_phases(body_res, mmi.output_ys, reference=0)
+print("  body-section field at the output-port positions:")
+for k, y in enumerate(mmi.output_ys):
+    print(f"    port {k} (y = {y:+.3f} µm): |E| = {ph['amplitude'][k]:.4e}, "
+          f"relative phase = {ph['phase'][k]:+8.3f}°")
+print("    (relative to port 0; an ABSOLUTE phase here is meaningless -- it")
+print("     inherits the launch's own arbitrary global phase)")
+

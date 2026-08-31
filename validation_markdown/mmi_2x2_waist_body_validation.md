@@ -659,6 +659,53 @@ same two-step discipline every expensive job in this repo follows.
 
 ### Step 7 — Field plots at the decisive point (cheap, do this either way)
 
+#### ⚠ `plot_hybrid_body_fields()` does NOT apply to this device — use the multi-cell path
+
+A shared helper landed 2026-08-31 (`beef.plot_hybrid_body_fields`,
+`beef/plot/hybrid_body.py`) that reconstructs a hybrid cascade's **EME body
+section** field from one mode solve. **It cannot be pointed at a waisted body,
+and the reason is physics rather than a missing feature.**
+
+It assumes a **uniform** body cross-section, and two load-bearing consequences
+follow: one cross-section's basis serves the whole section, and with
+`calibrate_body_neff=True` the body transfer matrix is a **pure diagonal**
+`exp(2j·π·n_eff/λ·L)`, so the field is just `Σ_k c_k φ_k(y) e^{iβ_k x}`. That
+sum *is* the reconstruction.
+
+A waisted body breaks both. It goes through `solve_section()`'s real
+**multi-cell** branch — one cross-section per cell, real interface overlaps,
+**non-diagonal** transfer matrix. `beef` already enforces this:
+`assert_uniform_cross_section()` is called from both
+`EMESolver.solve_section()`'s override path and `HybridSolver._calibrated_neff()`
+(`hybrid.py:1534`), so the result is a **hard assertion, not a subtly wrong
+plot** — the right failure mode.
+
+**What to use instead** — and the library already has it:
+`plot_eme_fields()` + `mw.propagate_modes()` handle multi-cell propagation
+natively. `plot_mmi1x4_waist_profile_eme_fields.py` (written for the 1×4 waist)
+is the working template: build cells for the body span with the **real
+`num_cells`**, solve modes per cell, hand both lists to `plot_eme_fields()`.
+
+**Two traps worth stealing from the helper's development**, both real bugs:
+
+- **`plot_eme_fields()` labels in meow's frame, not the device's** —
+  `device Ex = meow Ez`, `device Ey = meow Ex`, `device Ez = meow Ey`. The
+  panel titled `|Ex|` is the device's **in-plane transverse** field and its
+  `x [µm]` axis is device **y**. This affects how the 1×4 waist field plots
+  already in this repo should be read (that script's own comment does record
+  it — it is consistent, not wrong).
+- **Any modal projection must be a 2-D area integral, never a 1-D cut through
+  the core.** Measured on the 1×2: a 1-D slice gave captured power **1.5857**
+  (impossible) and put **0.5876** on a parity-forbidden mode; the 2-D `dy·dz`
+  integral gave 0.9970 and 1e-11. **The parity zeros survived both**, so a
+  parity check does not catch this — assert `captured_power <= 1`.
+
+**The standard (uniform-body) 2×2 is a different matter and the helper does
+apply there** — now wired into `examples/mmi_2x2/python/mmi_2x2_hybrid.py`
+and its notebook, with the off-axis launch (`input_ys = [-0.75, +0.75]`, not
+0) and a `port_phases()` readout, since this device's own criterion includes
+bar/cross quadrature.
+
 **Deliverable.** Straight-vs-waisted 2×2 EME field plots at whatever step 6
 lands on, from **one config** so the only difference is the waist.
 
