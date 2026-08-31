@@ -547,6 +547,81 @@ found a ceiling — raise the cap until a real ceiling appears.
 body modes). 5a is ~7 solves at one geometry — cheap next to step 6's grid,
 and it is what makes that grid mean anything.
 
+#### ✅ STEP 5a DONE 2026-08-30 — CONVERGED at C_TRANS = 8. Step 6 unblocked.
+
+`examples/verification/python/mmi_2x2_waist_ctrans_convergence.py`, job
+**12555775** (res=40, 11 wavelengths, 2h43m). Measured at the steepest
+profile in the intended grid — Ww=2.24, Lw=8.0, Lt=4.0, **4.00° sidewall** —
+at its own equal-phase length **21.500 µm** (see the centring note below).
+
+| C_TRANS | cells | IL (dB) | imbalance | phase | ΔIL | Δimb | Δphase |
+|---|---|---|---|---|---|---|---|
+| 2 | 10 | 0.48805 | 0.04914 | −91.300 | — | — | — |
+| 4 | 14 | 0.40951 | 0.09024 | −90.675 | 7.85e-02 | 4.11e-02 | 0.625 |
+| 6 | 18 | 0.41773 | 0.09441 | −90.643 | 8.22e-03 | 4.17e-03 | 0.032 |
+| **8** | 22 | 0.41851 | 0.09570 | −90.633 | **7.72e-04** | **1.29e-03** | **0.010** |
+| 12 | 30 | 0.41732 | 0.09674 | −90.624 | 1.18e-03 | 1.04e-03 | 0.008 |
+| 16 | 38 | 0.41860 | 0.09720 | −90.613 | 1.28e-03 | 4.61e-04 | 0.011 |
+| 24 | 54 | 0.41857 | 0.09732 | −90.613 | 3.17e-05 | 1.15e-04 | 0.000 |
+
+(tolerances: 0.010 dB / 0.0069 / 0.20° — one tenth of step 4's design margins)
+
+**Converged at C_TRANS = 8** by the pre-registered two-consecutive rule.
+Worth noting the sweep was carried out to 24 rather than stopped at first
+satisfaction: **five** consecutive refinements stay inside tolerance and
+nothing re-diverges, with the final step at 3.17e-05. A rule that stops at
+the first plateau cannot see a later drift; this one was checked for.
+
+⚠ **C_TRANS = 8 is a FLOOR tied to this profile** (4.00° sidewall). It is
+conservative for gentler profiles — which is why 5a was deliberately run at
+the *steepest* point in the intended grid rather than a mid or gentle one. If
+step 6 ever explores a steeper ramp than 4.00°, re-run 5a at that edge.
+
+**The 1×4's C_TRANS=12 is now contextualised, not inherited.** That number
+came from a single doubling that changed the field character — which
+demonstrates non-convergence at 6, not convergence at 12. This device
+converges at 8 on its own measurement.
+
+#### ⚠ The centring fix — a misleading result that pointed the *expected* way
+
+The first 5a smoke (job 12555720) ran at the straight control's own
+`mm_length = 28.0` and reported **2.3–2.5 dB excess loss with the phase 38°
+off quadrature**. Read naively that says *"the waist fails on the 2×2 too"* —
+a tidy confirmation of the 1×4 result, and therefore the easiest kind of
+wrong answer to accept.
+
+It was an artefact of the operating point. **L_π ∝ W², so a narrowed interior
+images SHORTER**: the accumulated-phase integral overshoots by **23.2%** at
+L=28.0, i.e. the device was being solved **6.5 µm past where it images**.
+Re-run at the equal-phase length of 21.500 µm, the identical profile gives
+**0.43–0.50 dB and phase −90.2° to −90.8°** — back at quadrature.
+
+The script now auto-centres on the equal-phase prediction, so convergence is
+measured near where step 6 will actually operate rather than at a point it
+will never use. Predicted lengths across the intended grid (all clearing the
+`2·Lt + Lw ≤ mm_length` guard):
+
+| Ww/W | Lw | Lt | L* | saving | total device |
+|---|---|---|---|---|---|
+| 0.90 | 6.0 | 4.0 | 25.70 | 2.30 | 34.70 |
+| 0.90 | 8.0 | 6.0 | 24.79 | 3.21 | 33.79 |
+| 0.80 | 6.0 | 4.0 | 22.63 | 5.38 | 31.62 |
+| 0.80 | 8.0 | 4.0 | 21.50 | 6.50 | 30.50 |
+| 0.80 | 8.0 | 6.0 | 20.50 | 7.50 | 29.50 |
+
+⚠ **Still ARGUED.** The 1×4's directly analogous formula was refuted outright.
+This centres step 6's window; it does not replace measuring it.
+
+#### 📌 Early signal, NOT a result
+
+At the converged C_TRANS=8 this profile sits at IL 0.4185 dB, imbalance
+0.0957, phase −90.63°, total device 30.50 µm — which would clear **all four**
+of step 4's criteria (≤0.4809 dB, ≤0.1371, within 2.0°, <37.0 µm). That is
+one point at one profile, measured for convergence rather than as a design
+result, and step 6 is what actually tests it. But it is the first concrete
+indication the 2×2 may behave differently from the 1×4 — which is the whole
+reason this device was chosen.
+
 ### Step 6 — Find a design point, with a PRE-REGISTERED STOP RULE
 
 **Deliverable.** Either a (Ww, Lw, Lt, mm_length) point that beats the straight
