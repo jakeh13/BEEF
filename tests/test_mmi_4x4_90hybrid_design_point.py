@@ -34,6 +34,16 @@ They are listed in HISTORICAL below with the reason. If either is ever
 re-used for new work (taper_sweep.py is the natural starting point for a
 `taper_width` sweep), move it into CURRENT and update its constants first --
 that is the entire point of listing it here rather than just ignoring it.
+
+THE y_gap CAMPAIGN SCRIPTS ARE IN NEITHER LIST, ALSO DELIBERATELY.
+`mmi_4x4_90hybrid_ygap_grid.py`, `_ygap_eme.py`, `_ygap_fdtd.py`,
+`_wg_eval.py` and `_ygap_collect.py` exist precisely to VARY mm_width,
+taper_width and length away from the settled point -- pinning them to it
+would defeat their purpose, and exempting them under HISTORICAL would be a
+misfiling, since they are current work rather than closed studies. They are
+absent by design, not by oversight. Note that `_wg_eval.py` does hardcode
+N_MODES=16 to match the settled body-mode count; if SETTLED changes, that
+one constant has to be carried over by hand.
 """
 from __future__ import annotations
 
