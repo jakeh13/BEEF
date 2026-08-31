@@ -692,6 +692,74 @@ before a design point exists. Two device-specific notes:
 **`Makefile` target** — note that `mmi_4x4_90hybrid` has none, which is how
 that device stayed unrun.
 
+#### 📌 Standing design constraint (user, 2026-08-31): ONLY the multimode region is optimized
+
+**The ports are frozen at the standard 2×2's values and are never swept** —
+`waveguide_width=0.45`, `taper_width=1.3`, `taper_length=4.0`,
+`waveguide_offset=1.5`, straight `0.5`, `num_modes=[1,7,15,7,1]`,
+15 cells per port taper. The hybrid variant's FDTD sections must likewise be
+identical to the standard device's. Only `body_waist_width` /
+`body_waist_length` / `body_transition_length` / `mm_length` vary.
+
+**Why it matters beyond tidiness:** it is what makes the comparison a
+controlled one. Any performance difference is then attributable to the body
+profile rather than to a re-tuned port, which is exactly the isolation the
+mechanism test needs.
+
+**✅ MEASURED 2026-08-31 — the port hardware really is invariant.**
+`geometry.section_gds()` re-origins each section to `x_start=0`, so the input
+FDTD section's polygons come out **byte-identical (same hash)** across
+`mm_length` 28.0 vs 21.5 *and* across straight vs waisted. Verified directly
+rather than assumed.
+
+**⚠ The geometric constraint this imposes on the design grid.** The hybrid
+folds `body_stub = 0.25 µm` of MMI body into each FDTD section
+(`mmi_2x2_hybrid.py:195`). For those sections to stay identical, the waist
+transition must not reach into that stub, so the uniform run before the
+transition begins,
+
+```
+s = (mm_length − 2·Lt − Lw) / 2   must be  ≥ 0.25 µm
+```
+
+This is **strictly tighter** than the constructor's own `2·Lt + Lw ≤
+mm_length` guard (which only demands `s ≥ 0`). Now enforced in
+`mmi_2x2_waist_design_sweep.py`, which skips and reports any violating point.
+Checked against the stage-1 grid: 2 of 40 points violate it, both with
+*negative* stub — so they were already being skipped, but by luck rather than
+by design, and one point (Ww=2.24, Lw=8.0, Lt=6.0 at L*=20.50) sits exactly
+on the 0.25 boundary.
+
+#### ⚠ Cost finding for the hybrid: identical geometry does NOT by itself give cache reuse
+
+Worth knowing before step 9 is budgeted. The section fingerprint
+(`build_run_config`, `beef/cache/config.py:287`) includes **`call_kwargs`,
+and `x0`/`x1` are among them**. Those are absolute device-frame coordinates:
+the input section runs `[−half_total, −half_body + 0.25]`, which is
+`x0 = −18.000` at `mm_length=28.0` but `−14.750` at `21.5`. So two runs whose
+section polygons hash identically still land on **different cache entries**
+whenever `mm_length` differs.
+
+**Consequence, and the fix.** Do *not* rebuild the geometry per swept length
+for the hybrid. Follow the standard 2×2's own trick
+(`mmi_2x2_hybrid.py:206-213`): keep the geometry at a **fixed reference
+`mm_length`**, solve the FDTD sections **once**, and vary only the EME body
+section. The waisted body cannot use that device's *analytic* length
+substitution (its body is not a length-independent uniform slab, so each
+profile/length needs its own body EME solve) — but the body solve is the
+cheap half. The expensive FDTD sections stay at one fingerprint.
+
+**And a real payoff if the reference is chosen as `mm_length = 28.0`:** the
+sections' `x0`/`x1` then match the *standard 2×2's own completed runs*
+exactly, making them genuine cache hits rather than fresh solves. Given that
+device's calibration cost (~3.4–4.1 h, and FDTD sections are the expensive
+part — `resolved/mmi_2x2_validation.md`), that is the difference between a
+cheap hybrid variant and an expensive one. **Verify the hit before relying on
+it** (compare fingerprints, or watch for time-stepping in the log) — a
+"should be a cache hit" that silently misses is exactly the failure mode
+`cache-only-probe-still-writes-outputs` and the 1×4's superset-cache probe
+both record.
+
 ---
 
 ## Cross-references

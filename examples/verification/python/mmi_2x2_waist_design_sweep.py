@@ -92,6 +92,28 @@ C_STUB = _env_i("MMI2X2_DS_CSTUB", 1)
 C_WAIST = _env_i("MMI2X2_DS_CWAIST", 4)
 C_TRANS = _env_i("MMI2X2_DS_CTRANS", 8)            # step 5a's converged floor
 
+# ---------------------------------------------------------------------------
+# ONLY THE MULTIMODE REGION IS OPTIMIZED. The ports are FROZEN at the standard
+# 2x2's values (waveguide_width 0.45, taper_width 1.3, taper_length 4.0,
+# waveguide_offset 1.5, straight 0.5, NUM_MODES [1,7,15,7,1], TAPER_CELLS 15)
+# and are NOT swept. Every constant above comes from mmi_2x2_eme.py /
+# mmi_2x2_hybrid.py unchanged.
+#
+# WHY, and the geometric constraint it imposes. The hybrid variant folds
+# HYBRID_BODY_STUB um of MMI body into each FDTD section, past the taper/body
+# discontinuity (mmi_2x2_hybrid.py:195). For those FDTD sections to be
+# IDENTICAL to the standard device's, the waist transition must not intrude
+# into that stub -- i.e. the uniform body run before the transition starts,
+#     s = (mm_length - 2*Lt - Lw) / 2
+# must be >= HYBRID_BODY_STUB. Otherwise the "input section" is no longer the
+# standard 2x2's input section and the comparison stops isolating the body.
+#
+# MEASURED 2026-08-31: geometry.section_gds() re-origins each section to
+# x_start=0, so the input-section polygons are BYTE-IDENTICAL (same hash)
+# across mm_length 28.0 vs 21.5 and across straight vs waisted. The port
+# hardware really is unchanged by anything this sweep varies.
+HYBRID_BODY_STUB = _env_f("MMI2X2_DS_HYBSTUB", 0.25)
+
 wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
 
 # --- gates ------------------------------------------------------------------
@@ -208,9 +230,16 @@ for ww in WW_LIST:
             lens = ([lstar] if N_LEN == 1 else
                     np.linspace(lstar - LEN_HALFSPAN, lstar + LEN_HALFSPAN, N_LEN))
             for L in lens:
-                if 2 * lt + lw > L - 1e-9:
+                # Uniform body run before the transition starts. Must clear the
+                # hybrid's folded body stub so the FDTD sections stay identical
+                # to the standard 2x2's -- see HYBRID_BODY_STUB above. This is
+                # STRICTLY tighter than the constructor's own 2*Lt+Lw <= L
+                # guard (which only requires s >= 0), so it subsumes it.
+                s = (L - 2 * lt - lw) / 2
+                if s < HYBRID_BODY_STUB - 1e-9:
                     print(f"{ww:6.2f} {lw:5.1f} {lt:5.1f} {deg:5.2f} {lstar:7.3f} "
-                          f"{L:7.3f}  skipped (2*Lt+Lw exceeds body)")
+                          f"{L:7.3f}  skipped (stub {s:+.3f} < hybrid body stub "
+                          f"{HYBRID_BODY_STUB}: would change the FDTD sections)")
                     continue
                 t0 = time.time()
                 try:
