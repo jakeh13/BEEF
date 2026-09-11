@@ -155,11 +155,34 @@ meant to be pasted into whichever session owns each device.
 >      global phase, which is why the helper subtracts a reference port rather
 >      than reporting absolutes.
 >
->    Validated on two textbook predictions: a symmetric 1×2 splitter's two
->    outputs come back in phase, and a directional coupler's cross port comes
->    back near quadrature from its driven port. Neither is a 90° hybrid, so
->    **your device is the first real test of this helper** — treat a surprising
->    number as possibly the helper's fault, not only the device's.
+>    Validated on two textbook predictions. A symmetric 1×2 splitter's outputs
+>    come back in phase (**−0.21°**, both ports strong). A directional coupler's
+>    cross port comes back near quadrature — and that one was swept over body
+>    length, which matters for you:
+>
+>    | L/L_π | cross phase | P_cross |
+>    |---|---|---|
+>    | 0.086 | +99.70° | 0.019 |
+>    | 0.250 | +93.66° | 0.147 |
+>    | **0.500** | **+92.52°** | **0.500** |
+>    | 0.750 | +93.47° | 0.853 |
+>    | 0.900 | +97.83° | 0.975 |
+>    | 1.000 | −180.00° | 0.9996 |
+>
+>    **The reading is only trustworthy where both ports carry real power.** The
+>    phase minimises at the equal-power point and degrades symmetrically as
+>    either port weakens; at full transfer the drained port reads −180°, i.e.
+>    noise. **This is directly your problem**: a 4×4 90° hybrid's ports are not
+>    all equally illuminated for a given input, so expect the phase on
+>    weakly-driven ports to be unreliable, and read `amplitude` before quoting
+>    any of them. The 2.5° residual at the clean point is the approximate
+>    Gaussian launch (even/odd split 0.4981/0.4621 rather than exactly 50/50) —
+>    so treat ~2–3° as the helper's own floor, well below the 44–62° effect you
+>    care about, but not zero.
+>
+>    Neither test device is a 90° hybrid, so **your device is the first real
+>    test of this helper** — treat a surprising number as possibly the helper's
+>    fault, not only the device's.
 >
 >    Standing caveat still applies: these are the BODY's own phase accumulation
 >    from an approximate launch, not the cascade's port-to-port phases.

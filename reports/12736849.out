@@ -1,0 +1,179 @@
+---------------------------------------
+Begin Slurm Prolog: Sep-02-2026 09:50:35
+Job ID:    12736849
+User ID:   jhiesener3
+Account:   gts-sr108-gedc_main
+Job name:  beef_1x2_stitch_res40
+Partition: cpu-small
+QOS:       inferno
+---------------------------------------
+=== 1x2 Step 3 stitch at res 40: Wed Sep  2 09:50:40 EDT 2026 ===
+Using MPI version 4.1, 8 processes
+[1/4] FDTD input section x in [-3.25, -2.00] at res 40, capturing fields...
+-----------
+Initializing structure...
+Splitting into 8 chunks by voxels
+time for choose_chunkdivision = 0.00137601 s
+Working in 3D dimensions.
+Computational cell is 2.25 x 6 x 2.5 with resolution 40
+     prism, center = (-0.875,0,0)
+          height 0.16, axis (0,0,1), sidewall angle: 0 radians, 4 vertices:
+          (-1.125,-0.175,-0.08)
+          (-0.625,-0.175,-0.08)
+          (-0.625,0.175,-0.08)
+          (-1.125,0.175,-0.08)
+          dielectric constant epsilon diagonal = (12.2774,12.2774,12.2774)
+     prism, center = (-0.125,1.38778e-17,0)
+          height 0.16, axis (0,0,1), sidewall angle: 0 radians, 4 vertices:
+          (-0.625,-0.175,-0.08)
+          (0.375,-0.4,-0.08)
+          (0.375,0.4,-0.08)
+          (-0.625,0.175,-0.08)
+          dielectric constant epsilon diagonal = (12.2774,12.2774,12.2774)
+     prism, center = (0.75,0,0)
+          height 0.16, axis (0,0,1), sidewall angle: 0 radians, 4 vertices:
+          (0.375,-1,-0.08)
+          (1.125,-1,-0.08)
+          (1.125,1,-0.08)
+          (0.375,1,-0.08)
+          dielectric constant epsilon diagonal = (12.2774,12.2774,12.2774)
+time for set_epsilon = 1.0517 s
+-----------
+MPB solved for frequency_1(1,0,0) = 0.596577 after 23 iters
+MPB solved for frequency_1(1.52529,0,0) = 0.733672 after 12 iters
+MPB solved for frequency_1(1.64948,0,0) = 0.763243 after 10 iters
+MPB solved for frequency_1(1.64997,0,0) = 0.763359 after 5 iters
+MPB solved for frequency_1(1.64997,0,0) = 0.763359 after 1 iters
+on time step 1 (time=0.0125), 6.72501 s/step
+on time step 321 (time=4.0125), 0.0125062 s/step
+on time step 642 (time=8.025), 0.0124675 s/step
+on time step 961 (time=12.0125), 0.0125614 s/step
+on time step 1280 (time=16), 0.0125407 s/step
+on time step 1600 (time=20), 0.0125358 s/step
+on time step 1920 (time=24), 0.0125401 s/step
+on time step 2240 (time=28), 0.01251 s/step
+on time step 2562 (time=32.025), 0.0124432 s/step
+on time step 2884 (time=36.05), 0.0124268 s/step
+on time step 3204 (time=40.05), 0.0125227 s/step
+on time step 3524 (time=44.05), 0.0125257 s/step
+on time step 3844 (time=48.05), 0.0125364 s/step
+on time step 4167 (time=52.0875), 0.012413 s/step
+on time step 4491 (time=56.1375), 0.012381 s/step
+on time step 4814 (time=60.175), 0.012394 s/step
+on time step 5133 (time=64.1625), 0.0125477 s/step
+on time step 5453 (time=68.1625), 0.0125341 s/step
+on time step 5772 (time=72.15), 0.0125502 s/step
+on time step 6092 (time=76.15), 0.0125373 s/step
+on time step 6412 (time=80.15), 0.0125379 s/step
+on time step 6733 (time=84.1625), 0.0124643 s/step
+on time step 7056 (time=88.2), 0.0124186 s/step
+on time step 7379 (time=92.2375), 0.0124058 s/step
+on time step 7702 (time=96.275), 0.012394 s/step
+on time step 8025 (time=100.312), 0.0123966 s/step
+on time step 8347 (time=104.338), 0.0124235 s/step
+run 0 finished at t = 106.325 (8506 timesteps)
+MPB solved for frequency_1(2.67474,0,0) = 0.988964 after 20 iters
+MPB solved for frequency_1(1.80795,0,0) = 0.766028 after 11 iters
+MPB solved for frequency_1(1.79745,0,0) = 0.763359 after 7 iters
+MPB solved for frequency_1(1.79745,0,0) = 0.763359 after 1 iters
+Dominant planewave for band 1: (1.797452,-0.000000,0.000000)
+MPB solved for frequency_1(2.67474,0,0) = 0.935606 after 56 iters
+MPB solved for frequency_1(2.05443,0,0) = 0.762152 after 16 iters
+MPB solved for frequency_1(2.05871,0,0) = 0.763359 after 9 iters
+MPB solved for frequency_1(2.05871,0,0) = 0.763359 after 1 iters
+Dominant planewave for band 1: (2.058711,-0.000000,0.000000)
+MPB solved for frequency_2(2.67474,0,0) = 0.94517 after 49 iters
+MPB solved for frequency_2(2.01138,0,0) = 0.762769 after 19 iters
+MPB solved for frequency_2(2.01351,0,0) = 0.763359 after 8 iters
+MPB solved for frequency_2(2.01351,0,0) = 0.763359 after 1 iters
+Dominant planewave for band 2: (2.013509,-0.400000,0.000000)
+MPB solved for frequency_3(2.67474,0,0) = 0.96083 after 46 iters
+MPB solved for frequency_3(1.93896,0,0) = 0.764129 after 18 iters
+MPB solved for frequency_3(1.93607,0,0) = 0.763359 after 9 iters
+MPB solved for frequency_3(1.93607,0,0) = 0.763359 after 1 iters
+Dominant planewave for band 3: (1.936069,0.600000,0.000000)
+MPB solved for frequency_4(2.67474,0,0) = 0.982199 after 40 iters
+MPB solved for frequency_4(1.83634,0,0) = 0.766758 after 17 iters
+MPB solved for frequency_4(1.82283,0,0) = 0.76336 after 11 iters
+MPB solved for frequency_4(1.82282,0,0) = 0.763359 after 2 iters
+Dominant planewave for band 4: (1.822823,-1.000000,0.000000)
+MPB solved for frequency_5(2.67474,0,0) = 1.0088 after 37 iters
+MPB solved for frequency_5(1.7025,0,0) = 0.771408 after 16 iters
+MPB solved for frequency_5(1.66798,0,0) = 0.763376 after 12 iters
+MPB solved for frequency_5(1.66791,0,0) = 0.763359 after 3 iters
+MPB solved for frequency_5(1.66791,0,0) = 0.763359 after 1 iters
+Dominant planewave for band 5: (1.667907,1.200000,0.000000)
+MPB solved for frequency_6(2.67474,0,0) = 1.04011 after 40 iters
+MPB solved for frequency_6(1.53645,0,0) = 0.778856 after 14 iters
+MPB solved for frequency_6(1.46341,0,0) = 0.763447 after 12 iters
+MPB solved for frequency_6(1.46299,0,0) = 0.763359 after 7 iters
+MPB solved for frequency_6(1.46299,0,0) = 0.763359 after 1 iters
+Dominant planewave for band 6: (1.462987,-1.400000,0.000000)
+MPB solved for frequency_7(2.67474,0,0) = 1.0756 after 47 iters
+MPB solved for frequency_7(1.33734,0,0) = 0.757284 after 101 iters
+MPB solved for frequency_7(1.35518,0,0) = 0.763316 after 14 iters
+MPB solved for frequency_7(1.35531,0,0) = 0.763359 after 6 iters
+MPB solved for frequency_7(1.35531,0,0) = 0.763359 after 1 iters
+Dominant planewave for band 7: (1.355309,-0.000000,0.000000)
+MPB solved for frequency_8(2.67474,0,0) = 1.10782 after 72 iters
+MPB solved for frequency_8(1.21729,0,0) = 0.734138 after 94 iters
+MPB solved for frequency_8(1.29896,0,0) = 0.762294 after 18 iters
+MPB solved for frequency_8(1.30216,0,0) = 0.763357 after 13 iters
+MPB solved for frequency_8(1.30216,0,0) = 0.763359 after 2 iters
+Dominant planewave for band 8: (1.302163,-0.400000,0.000000)
+      transfer matrix (1, 8, 1)
+      interface plane at device x = -2.0000 (body starts at -2.0000)
+[2/4] solving 8 body modes at 1.31 um...
+Warning: grid volume is not an integer number of pixels; cell size will be rounded to nearest pixel.
+Warning: grid volume is not an integer number of pixels; cell size will be rounded to nearest pixel.
+Warning: grid volume is not an integer number of pixels; cell size will be rounded to nearest pixel.
+Warning: grid volume is not an integer number of pixels; cell size will be rounded to nearest pixel.
+Warning: grid volume is not an integer number of pixels; cell size will be rounded to nearest pixel.
+Warning: grid volume is not an integer number of pixels; cell size will be rounded to nearest pixel.
+Warning: grid volume is not an integer number of pixels; cell size will be rounded to nearest pixel.
+Warning: grid volume is not an integer number of pixels; cell size will be rounded to nearest pixel.
+Warning: grid volume is not an integer number of pixels; cell size will be rounded to nearest pixel.
+      n_eff: 2.696915, 2.637710, 2.536282, 2.387965, 2.185091, 1.916790, 1.775436, 1.706013
+[3/4] projecting the captured interface field onto the body modes...
+interface component magnitudes: Ex=3.018e+00, Ey=1.312e+01, Ez=3.890e-01  -> using Ey
+projected onto 8 body modes; basis accounts for 0.9818 of the interface field's power
+      |c_k|^2 (relative): 0.6877, 0.0000, 0.2768, 0.0000, 0.0354, 0.0000, 0.0000, 0.0000
+      odd-mode fraction 1.907e-09 (a centred input should give ~0)
+[4/4] propagating the body and stitching...
+stitched map -> /storage/scratch1/8/jhiesener3/duty/example_output/mmi_1x2/mmi_1x2_hybrid_stitched_res40/fields/hybrid_stitched_mmi1x2_res40_1.310um.png
+
+SEAM CONTINUITY at x = -2.000 um
+  integrated |E|^2: FDTD side 3.3894e+03  body side 3.2104e+03  ratio 0.9472
+  basis accounted for 0.9818 of the interface field's power (8 modes)
+
+STEP 4 CROSS-CHECK -- capture+projection vs transfer matrix
+  mode   |T|^2 norm   |c|^2 norm      delta
+     0     0.666958     0.687703  +2.07e-02
+     1     0.000000     0.000000  +2.43e-11
+     2     0.285820     0.276850  -8.97e-03
+     3     0.000000     0.000000  -3.24e-10
+     4     0.047222     0.035447  -1.18e-02
+     5     0.000000     0.000000  -2.31e-10
+     6     0.000000     0.000000  +4.99e-11
+     7     0.000000     0.000000  -7.95e-09
+  max |delta| 2.075e-02   sum|delta| 4.149e-02
+  (two independent routes to the same modal amplitudes: meep's eigenmode
+   decomposition at the flux plane, vs a DFT field capture projected onto
+   the EME mode basis)
+
+NOTE: the ratio is NOT expected to be 1.0. The body side is the truncated-basis reconstruction, so it is missing exactly the power the line above reports as uncaptured, plus any non-guided content the FDTD slice still carries at that plane.
+
+Elapsed run time = 313.8402 s
+=== done: Wed Sep  2 09:55:59 EDT 2026 ===
+---------------------------------------
+Begin Slurm Epilog: Sep-02-2026 09:55:59
+Job ID:        12736849
+User ID:       jhiesener3
+Account:       gts-sr108-gedc_main
+Job name:      beef_1x2_stitch_res40
+Resources:     cpu=8,mem=32G,node=1
+Rsrc Used:     cput=00:43:20,vmem=0,walltime=00:05:25,mem=37496K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-005-11-1
+---------------------------------------

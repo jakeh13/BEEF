@@ -71,6 +71,7 @@ Core public API:
 
     Plot:
         plot_eme_fields            — EME field visualization
+        plot_hybrid_body_fields    — hybrid cascade body-section field reconstruction
         plot_eme_geometry          — EME device + region geometry plot
         plot_fdtd_geometry         — FDTD device + source/monitor/PML geometry plot
         plot_section_fdtd_geometry — standalone FDTDSolver.solve_section() geometry plot
@@ -116,7 +117,11 @@ from .plot import (
     plot_beta_calibration, plot_beta_calibration_fits,
     plot_beta_calibration_geometry, plot_beta_calibration_merged_geometry,
     plot_beta_calibration_summary,
-    plot_eme_fields, plot_eme_geometry, plot_fdtd_geometry, plot_section_fdtd_geometry,
+    plot_eme_fields, plot_hybrid_body_fields, solve_body_modes, body_mode_weights,
+    port_phases,
+    load_captured_section, dominant_component,
+    project_interface_onto_body, stitch_hybrid_fields,
+    plot_eme_geometry, plot_fdtd_geometry, plot_section_fdtd_geometry,
     plot_hybrid_geometry, plot_performance, plot_splitting_ratio,
 )
 
@@ -155,6 +160,10 @@ __all__ = [
     "plot_beta_calibration", "plot_beta_calibration_fits",
     "plot_beta_calibration_geometry", "plot_beta_calibration_merged_geometry",
     "plot_beta_calibration_summary",
-    "plot_eme_fields", "plot_eme_geometry", "plot_fdtd_geometry", "plot_section_fdtd_geometry",
+    "plot_eme_fields", "plot_hybrid_body_fields", "solve_body_modes", "body_mode_weights",
+    "port_phases",
+    "load_captured_section", "dominant_component",
+    "project_interface_onto_body", "stitch_hybrid_fields",
+    "plot_eme_geometry", "plot_fdtd_geometry", "plot_section_fdtd_geometry",
     "plot_hybrid_geometry", "plot_performance", "plot_splitting_ratio",
 ]

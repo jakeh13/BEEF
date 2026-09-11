@@ -108,7 +108,15 @@ import matplotlib.pyplot as plt
 from beef import MMI, EMESolver, FDTDSolver, HybridSolver, SIN_300, SMatrix, plot_hybrid_geometry, plot_beta_calibration
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_1x4", "mmi_1x4_hybrid"))
+# MMI1X4_OUTPUT_SUFFIX appends to the output folder name, DEFAULT "" -- the
+# unsuffixed path is byte-for-byte what this script has always written. Added
+# 2026-09-03 for the N_MODES probe below: MMI1X4_N_MODES changes the answer but
+# not the output path, so a probe run would silently overwrite the production
+# 12-mode figures/pickle in place, leaving a folder whose contents no longer
+# match its name. Same hazard as the CACHE_ONLY probes that wrote mislabeled
+# folders -- an env knob that alters physics needs one that separates outputs.
+output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_1x4",
+                                          "mmi_1x4_hybrid" + os.environ.get("MMI1X4_OUTPUT_SUFFIX", "")))
 os.makedirs(output_dir, exist_ok=True)
 save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
@@ -335,6 +343,49 @@ boundaries = [
 ]
 interface_modes = [N_MODES, N_MODES]
 
+# ---------------------------------------------------------------------------
+# PINNED MONITOR PLANE -- added 2026-09-05 to unlock mode-count cache reuse.
+#
+# WHY. solve_section() only builds a `family_config` (the mode-count "superset"
+# cache family, which lets a cached 12-mode solve serve a smaller request by
+# slicing) when `monitor_size is not None` -- fdtd.py's own gate. This chain
+# never pinned it, so every mode count needed its own ~3-day prewarm and item
+# 9d's interface_modes convergence sweep was priced as a multi-week commitment.
+# Measured twice: jobs 12260083 (2026-08-23, capped -t 12) and 12797780
+# (2026-09-03) both started time-stepping against the warm 12-mode cache
+# instead of hitting it.
+#
+# THE PHYSICS IS UNCHANGED, and both keys are needed for that to be true:
+#   monitor_size:   with n_measure = N_MODES > 1 and monitor_size None,
+#                   section_fdtd_layout() already picks mea_w = sim_width
+#                   (fdtd.py:752). Pinning it to FDTD_SIM_WIDTH restates that.
+#   monitor_center: the `mea_c = 0.0` fallback is gated on
+#                   `n_measure > 1 AND monitor_size is None` (fdtd.py:755), so
+#                   pinning the size ALONE would skip it and silently fall back
+#                   to the geometry-derived c_left/c_right -- the arbitrary
+#                   single-port position that fallback exists to avoid. Both
+#                   evaluate to 0.0 here (center_at at either cut plane is
+#                   +0.0000 for every output_idx -- the body is on-axis), so
+#                   pinning both is a restatement, not a change. Verified, not
+#                   assumed: relying on that coincidence silently is exactly
+#                   how the modal multiplexer's gap-7 aperture bug happened.
+#
+# ⚠ IT DOES CHANGE THE CACHE FINGERPRINT. monitor_center/monitor_size are in
+# solve_section()'s run config, so the FDTD sections rehash and the ~3-day
+# prewarm from array 12031838 no longer serves them. Set MMI1X4_PIN_MONITOR=0
+# to restore the old unpinned keys and reach that cache again -- the shipped
+# 12227591 numbers are reproducible that way without editing this file.
+#
+# ⚠ SECTIONS 0 AND 2 ONLY, NEVER THE BODY. HybridSolver._calibrated_neff()
+# forwards exactly monitor_center/monitor_size out of the BODY section's kwargs
+# into section_mode_beta_details() (hybrid.py's `passthrough`). Putting these
+# keys on section 1 would rehash the beta calibration too and re-pay the part
+# of the prewarm that this change is specifically trying to preserve.
+PIN_MONITOR = os.environ.get("MMI1X4_PIN_MONITOR", "1") not in ("0", "false", "False")
+_MONITOR_PIN = (dict(monitor_center=0.0, monitor_size=FDTD_SIM_WIDTH)
+                if PIN_MONITOR else {})
+print(f"monitor plane pinned: {PIN_MONITOR} ({_MONITOR_PIN or 'geometry-derived, pre-2026-09-05 keys'})")
+
 hybrid = HybridSolver(
     solvers=[input_solver, body_solver, output_solver],
     boundaries=boundaries,
@@ -416,7 +467,10 @@ coeffs_grids = np.zeros((4, len(mm_lengths), len(wavelengths)), dtype=complex)
 for k in range(4):
     coeffs = hybrid.solve_length_sweep(
         mmi, wavelengths, body_lengths, sweep_section=BODY_SECTION,
-        geometry_kwargs={2: {"output_idx": k}},
+        # Section 1 (the EME body) deliberately gets NO monitor keys -- see the
+        # PIN_MONITOR comment on why they must not reach the beta calibration.
+        geometry_kwargs={0: dict(_MONITOR_PIN),
+                         2: dict(_MONITOR_PIN, output_idx=k)},
         cache=section_cache, save_dir=save_dir,
     )   # [n_L, n_wl, 1, 1] complex
     coeffs_grids[k] = coeffs[:, :, 0, 0]

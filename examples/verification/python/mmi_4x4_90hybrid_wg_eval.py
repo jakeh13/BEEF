@@ -68,6 +68,12 @@ else:
 # this width is later a cache hit. Without this, N points launched in
 # parallel would each pay the ~77 min body solve independently.
 BODY_ONLY = os.environ.get("MMI4X4_BODY_ONLY", "") not in ("", "0")
+# Re-score a geometry that has already been simulated, without running anything:
+# every FDTD section and the body length sweep must already be in the cache, and
+# a miss raises rather than silently starting a 5 h solve. Added 2026-09-03 for
+# the excess-loss audit -- the campaign's 33 points recorded only phase and CMRR,
+# so loss had to be recovered from cache for geometries already paid for.
+CACHE_ONLY = os.environ.get("MMI4X4_CACHE_ONLY", "") not in ("", "0")
 RESOLUTION = float(os.environ.get("MMI4X4_EVAL_RES", 40.0))
 DECAY_TOL = float(os.environ.get("MMI4X4_EVAL_TOL", 1e-4))
 N_MODES = int(os.environ.get("MMI4X4_EVAL_NMODES", 16))
@@ -77,7 +83,16 @@ WL_MIN = float(os.environ.get("MMI4X4_WLMIN", 1.29))
 WL_MAX = float(os.environ.get("MMI4X4_WLMAX", 1.33))
 
 WAVEGUIDE_WIDTH = 0.35
-TAPER_LENGTH = 1.0
+# taper_length became a real search axis on 2026-09-01 (round 8). It was
+# hardcoded at 1.0 um -- the MMI class default, Step 2's placeholder -- and the
+# 2026-08-07/08 taper_sweep.py study closed it as null. That study was PURE EME,
+# the path later disqualified for this device (no port crosstalk), and its
+# "flat" answer was identical to 4 displayed digits across a 3x length change,
+# which reads as solver insensitivity rather than physics. Under this
+# evaluator's FDTD input sections (all 4 ports present) it is untested.
+# Geometry: 0.35 -> taper_width over TAPER_LENGTH, so at the settled
+# taper_width=1.065 the default is a 0.7 um width change in 1.0 um of length.
+TAPER_LENGTH = float(os.environ.get("MMI4X4_TAPER_LENGTH", 1.0))
 L_PI_REF = 108.9195          # measured at mm_width=6.0; L_pi/W^2 is ~constant
                              # (3.02-3.03 um^-1 over 3.5-16 um, Step 1c), so
                              # scale rather than re-measure per width.
@@ -168,7 +183,16 @@ def metrics_at(M_in, M_body_one):
         dphi[j] = ((raw + 180.0) % 360.0) - 180.0
     max_dphi = float(max(np.abs(dphi[j]).max() for j in (1, 2, 3)))
     min_cmrr = float(min(np.asarray(c).min() for c in cm))
-    return max_dphi, min_cmrr
+    # Excess loss and imbalance are RECORDED, not optimised -- the objective is
+    # deliberately unchanged so every ranking in the validation doc stays
+    # comparable. They are here because the campaign drove mm_width (and with
+    # it mm_length, 91 -> 141 um) upward for 33 points while measuring only
+    # phase and CMRR, which cannot see a device getting lossier as it grows.
+    max_xl = float(max(np.asarray(smat[i].excess_loss_db(PORT_NAMES)).max()
+                       for i in DRIVEN))
+    max_imb = float(max(np.asarray(smat[i].imbalance_db(PORT_NAMES)).max()
+                        for i in DRIVEN))
+    return max_dphi, min_cmrr, max_xl, max_imb
 
 
 def objective(max_dphi, min_cmrr, w_phase=0.5, w_cmrr=0.5):
@@ -183,7 +207,8 @@ def objective(max_dphi, min_cmrr, w_phase=0.5, w_cmrr=0.5):
 
 def main():
     print(f"WGEVAL: mm_width={MM_WIDTH:.2f} y_gap={Y_GAP:.2f} -> "
-          f"offset={WAVEGUIDE_OFFSET:.3f} taper_width={TAPER_WIDTH:.3f}", flush=True)
+          f"offset={WAVEGUIDE_OFFSET:.3f} taper_width={TAPER_WIDTH:.3f} "
+          f"taper_length={TAPER_LENGTH:.2f}", flush=True)
     print(f"WGEVAL: L_pi={L_PI:.3f} centre={L_CENTRE:.3f} "
           f"length sweep {LENGTH_MIN}-{LENGTH_MAX} um, "
           f"{len(MM_LENGTH_GRID)} lengths, {N_WL} wl {WL_MIN}-{WL_MAX}", flush=True)
@@ -212,7 +237,7 @@ def main():
             mmi, wavelengths, boundaries[0], boundaries[1],
             n_modes_in=1, n_modes_out=N_MODES,
             stub_left=input_solver.waveguide_length, stub_right=0.0,
-            input_idx=k, save_dir=save_dir))
+            input_idx=k, save_dir=save_dir, cache_only=CACHE_ONLY))
         print(f"WGEVAL:   input_idx={k} {time.time()-tk:.0f}s", flush=True)
     t_in = time.time() - t0
     print(f"WGEVAL: 4 FDTD input sections in {t_in/60:.1f} min", flush=True)
@@ -221,30 +246,60 @@ def main():
     body_lengths = MM_LENGTH_GRID - 2 * body_stub
     M_body_grid = body_solver.solve_section_length_sweep(
         mmi, wavelengths, boundaries[1], boundaries[2], body_lengths,
-        n_modes_in=N_MODES, n_modes_out=N_MODES, save_dir=save_dir)
+        n_modes_in=N_MODES, n_modes_out=N_MODES, save_dir=save_dir,
+        cache_only=CACHE_ONLY)
     print(f"WGEVAL: body solve + {len(body_lengths)}-length sweep in "
           f"{(time.time()-t1)/60:.1f} min", flush=True)
 
     best = None
     for li in range(len(MM_LENGTH_GRID)):
-        md, mc = metrics_at(M_in, M_body_grid[li:li + 1])
+        md, mc, xl, imb = metrics_at(M_in, M_body_grid[li:li + 1])
         obj = objective(md, mc)
         if best is None or obj < best[0]:
-            best = (obj, float(MM_LENGTH_GRID[li]), md, mc)
-    obj, best_mm_length, md, mc = best
+            best = (obj, float(MM_LENGTH_GRID[li]), md, mc, xl, imb)
+    obj, best_mm_length, md, mc, xl, imb = best
     dl = best_mm_length - L_CENTRE  # informational only, vs the old design centre
     print(f"\nWGEVAL: BEST mm_length={best_mm_length:.2f} um "
           f"(dL vs 3/4-Lpi centre={dl:+.2f})", flush=True)
     print(f"WGEVAL:   max|dphi|={md:.3f} deg  min CMRR={mc:.3f} dBe", flush=True)
+    print(f"WGEVAL:   max excess loss={xl:.3f} dB  max imbalance={imb:.3f} dB",
+          flush=True)
     print(f"WGEVAL:   objective={obj:.4f}", flush=True)
     print(f"WGEVAL: total {(time.time()-t0)/60:.1f} min", flush=True)
 
-    np.savez(os.path.join(out_dir, f"eval_W{MM_WIDTH:.2f}_y{Y_GAP:.2f}.npz"),
+    # The historical name is kept EXACTLY when taper_length is at its default,
+    # so the 28 existing points and mmi_4x4_90hybrid_bo.py's own filename
+    # parser see no change; any other taper_length gets a _tl tag, which that
+    # parser now rejects rather than mis-reading as a default-taper point.
+    fn = f"eval_W{MM_WIDTH:.2f}_y{Y_GAP:.2f}"
+    if abs(TAPER_LENGTH - 1.0) > 1e-9:
+        fn += f"_tl{TAPER_LENGTH:.2f}"
+    # N_MODES belongs in the name for the same reason taper_length does: a
+    # basis-convergence re-run is a DIFFERENT measurement of the same geometry,
+    # not a replacement for it. Without this, round 9's N_MODES=20 confirmation
+    # at (8.0, 0.80, tl=4.0) would have silently overwritten the N_MODES=16
+    # result it exists to check against. Caught before the job's save step;
+    # the 16-mode npz was also copied to *_nmodes16.npz.bak at that moment.
+    if N_MODES != 16:
+        fn += f"_n{N_MODES}"
+    # Third instance of the same hazard (after _tl and _n): the wavelengths are
+    # part of every FDTD cache key, so a different band is a DIFFERENT
+    # measurement of the same geometry -- and without this tag the 1310+-10 nm
+    # evaluation would overwrite the +-20 nm result it exists to be compared
+    # against. Standing rule for this evaluator: every axis added here must also
+    # appear in the output name.
+    if abs(WL_MIN - 1.29) > 1e-9 or abs(WL_MAX - 1.33) > 1e-9:
+        fn += f"_wl{WL_MIN:.3f}-{WL_MAX:.3f}"
+    fn += ".npz"
+    np.savez(os.path.join(out_dir, fn),
              mm_width=MM_WIDTH, y_gap=Y_GAP, taper_width=TAPER_WIDTH,
+             taper_length=TAPER_LENGTH, n_modes=N_MODES,
+             wl_min=WL_MIN, wl_max=WL_MAX, n_wl=N_WL,
              best_delta_L=dl, best_mm_length=best_mm_length,
              max_dphi=md, min_cmrr=mc, objective=obj,
+             max_excess_loss_db=xl, max_imbalance_db=imb,
              wavelengths=wavelengths)
-    print(f"WGEVAL: saved -> eval_W{MM_WIDTH:.2f}_y{Y_GAP:.2f}.npz", flush=True)
+    print(f"WGEVAL: saved -> {fn}", flush=True)
 
 
 if __name__ == "__main__":

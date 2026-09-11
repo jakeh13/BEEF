@@ -71,7 +71,17 @@ import matplotlib.pyplot as plt
 from beef import MMI, EMESolver, SMatrix, SOI_220, plot_eme_geometry
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_4x4_90hybrid", "mmi_4x4_90hybrid_eme"))
+# Output directory carries N_WL when it is not the default 3. Fourth instance of
+# the same hazard the _tl / _n / _wl filename tags exist for (see wg_eval.py):
+# a denser wavelength sweep is a DIFFERENT measurement of the same geometry, and
+# these scripts write fixed filenames, so without this a denser run would
+# silently destroy the 3-point results that were verified on 2026-09-06 to
+# reproduce the optimiser exactly. Default stays untagged so every existing
+# path and reference keeps working.
+_NWL_ENV = int(os.environ.get("MMI4X4_EME_NWL", 3))
+output_dir = os.path.abspath(os.path.join(
+    _HERE, "..", "..", "..", "..", "example_output", "mmi_4x4_90hybrid",
+    "mmi_4x4_90hybrid_eme" + ("" if _NWL_ENV == 3 else f"_nwl{_NWL_ENV}")))
 os.makedirs(output_dir, exist_ok=True)
 save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
@@ -80,9 +90,17 @@ save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_
 # overridable for a smoke pass (see module docstring).
 # ---------------------------------------------------------------------------
 RESOLUTION = float(os.environ.get("MMI4X4_EME_RES", 40.0))
-WL_MIN = 1.26
-WL_MAX = 1.36
-N_WL = int(os.environ.get("MMI4X4_EME_NWL", 3))   # matches the paper's own Eq. 12 convention
+# BAND: 1.31 +- 0.02 um -- the band the geometry above was OPTIMISED over.
+# These scripts previously ran 1.26-1.36 (+-50 nm), which is 2.5x wider than
+# the design band, and this device is steeply wavelength-dependent: measured
+# 2026-09-05, min CMRR falls 20.761 -> 18.482 dBe and excess loss rises
+# 0.654 -> 2.706 dB going from 1.310 um alone to +-20 nm (job 12831929).
+# Reporting the optimised geometry over +-50 nm would judge it far outside the
+# band it was designed for. The old window is still reachable via the env
+# overrides for anyone who wants the wider sweep.
+WL_MIN = float(os.environ.get("MMI4X4_WLMIN", 1.29))
+WL_MAX = float(os.environ.get("MMI4X4_WLMAX", 1.33))
+N_WL = _NWL_ENV   # matches the paper's own Eq. 12 convention
                                                     # (Sec. IV) and the hybrid script's own N_WL
 
 N_MODES_TAPER = int(os.environ.get("MMI4X4_EME_NMODES_TAPER", 12))   # was 4 (PLACEHOLDER,
@@ -93,14 +111,46 @@ N_MODES_TAPER = int(os.environ.get("MMI4X4_EME_NMODES_TAPER", 12))   # was 4 (PL
 # 1. Geometry -- identical to mmi_4x4_90hybrid_hybrid.py's settled Steps 1-3
 #    parameters (same device, different simulation method).
 # ---------------------------------------------------------------------------
+# Geometry -- the OPTIMISED design point, not Step 2's first pass.
+# Result of the (mm_width, y_gap, taper_width, taper_length, mm_length)
+# campaign documented in validation_markdown/mmi_4x4_90_hybrid_validation.md
+# (~45 hybrid-path evaluations, rounds 8-10, 2026-08-28..09-05). Measured at
+# this point over 1.29-1.33 um: max|dphi| = 3.933 deg (spec <=5, MET),
+# min CMRR = 18.482 dBe (spec >=20, 1.52 short), excess loss 2.706 dB,
+# imbalance 1.972 dB. Superseded first pass, for the record: mm_width=6.0,
+# taper_width=0.8, taper_length=1.0, mm_length=78.9396 -- which measured
+# 4.764 deg / 12.109 dBe / 4.076 dB / 5.202 dB on the same evaluator.
+#
+# taper_width tracks mm_width: the campaign's most reliable finding is that a
+# taper which has not widened with the body cannot be rescued by ANY length
+# (0 of 7601 lengths met the phase spec at mm_width=8.5 with taper 1.20).
+# Measured optima: 6.5 -> 1.065, 7.0 -> 1.10, 7.5 -> 1.20, 8.0 -> 1.20,
+# 8.5 -> 1.30.
 WAVEGUIDE_WIDTH = 0.35
-MM_WIDTH = 6.0
+MM_WIDTH = 8.5
 WAVEGUIDE_OFFSET = MM_WIDTH / 4.0
-TAPER_WIDTH = 0.8
-TAPER_LENGTH = 1.0
-L_PI = 108.9195
-DELTA_L = -2.75
-MM_LENGTH = 0.75 * L_PI + DELTA_L   # = 78.9396 -- same settled point as the hybrid script
+TAPER_WIDTH = 1.30            # MEASURED optimum at this width (round 10, job 12783704)
+TAPER_LENGTH = 4.0            # MEASURED (round 8): tl=1->4 cut excess loss 4.076->2.940 dB;
+                              # tl=8 bought only 0.006 more objective for 2x the footprint
+L_PI = 218.5954   # = 108.9195 * (8.5/6.0)**2 -- SCALED, not re-measured. L_pi/W^2 was
+                  # measured constant to 0.1% over 3.5-16 um (Step 1c), so the mm_width=6.0
+                  # measurement (job 11693043) carries.
+# MM_LENGTH: the campaign's own optimum for THIS geometry, selected from the
+# shared absolute 20-400 um / 0.05 um grid (mmi_4x4_90hybrid_ygap_grid.py's
+# MM_LENGTH_GRID), not from a +-10 um DELTA_L window around 3/4*L_pi. The
+# length re-score (job 12832166) confirmed this is simultaneously the best
+# length under all three selection rules tried -- the live objective,
+# phase-as-constraint, and maximise-CMRR-subject-to-phase -- so nothing is
+# being traded away by pinning it. Only 19 of 7601 lengths meet the 5 deg
+# phase spec at all, so the grid-snap assert below matters more here than it
+# did at the first-pass point.
+MM_LENGTH = 159.30
+_LENGTH_STEP = 0.05
+assert abs(round(MM_LENGTH / _LENGTH_STEP) * _LENGTH_STEP - MM_LENGTH) < 1e-9, (
+    f"MM_LENGTH={MM_LENGTH} is not an exact point on the {_LENGTH_STEP} um "
+    f"MM_LENGTH_GRID the optimum was selected from -- do not silently snap."
+)
+DELTA_L = MM_LENGTH - 0.75 * L_PI   # = -4.6465, informational only
 # DELTA_L/N_MODES_BODY CORRECTED 2026-08-21, and this was a real staleness
 # bug, not a tidy-up. The 2026-08-09 body-mode redo (N_MODES_BODY 8->16,
 # which shifted the optimum to DELTA_L=-2.75/mm_length=78.9396) was applied

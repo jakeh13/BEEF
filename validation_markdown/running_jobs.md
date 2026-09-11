@@ -1,5 +1,43 @@
 # Active SLURM jobs — snapshot
 
+**★ THIRTIETH SNAPSHOT — 2026-09-01, verified against `squeue -u jhiesener3`
+immediately after submitting. This is the current one.** It covers only the
+4×4 90° hybrid BO round; two other jobs in the queue at snapshot time
+(`beef_mmi2x2_free` 12674569, `beef_1x2_step0_MPI` 12674181) belong to
+concurrent session activity and are recorded here only so they are not
+mistaken for this round's. Everything below the next rule is the
+twenty-ninth snapshot (2026-08-21), not reverified this pass.
+
+## 4×4 90° hybrid — BO round 7, 4 jobs, all RUNNING from submit
+
+The `(mm_width, y_gap)` campaign's round 7, after the optimizer was
+reparameterized to `(mm_width, taper_width)` — full reasoning in
+`mmi_4x4_90_hybrid_validation.md`, section "The (mm_width, y_gap)
+optimization campaign". 4 nodes / 96 ranks each, `gts-sr108-gedc_main`
+(`sshare` at submit: `-gedc_main` Infinity, `-ece` 159.40, `gts-sr108`
+71.43), `-t 720`. Both bodies (W=6.5, W=7.0) are cached from Phase A, so
+~3-3.7 h/point is the expectation, not the 4:43:45 cold cost.
+
+| job | state | what |
+|---|---|---|
+| **12677821** | 🏃 RUNNING (started immediately) | `beef_bo_W7.00_y0.65` — taper_width 1.100, the ridge point at W=7.0. **Decides whether the monotone 5.0 → 6.5 objective improvement continues past 6.5.** |
+| **12677822** | 🏃 RUNNING | `beef_bo_W7.00_y0.40` — taper 1.350, wide-taper side at W=7.0 |
+| **12677823** | 🏃 RUNNING | `beef_bo_W7.00_y0.85` — taper 0.900, narrow-taper side; with the two above and the existing y_gap=1.11 point, W=7.0's interior is bracketed |
+| **12677824** | 🏃 RUNNING | `beef_bo_W6.50_y0.44` — taper 1.185, fills the gap at the best width between taper 1.115 (obj 0.677) and 1.305 (obj 0.856) |
+
+All four write `eval_W*_y*.npz` into
+`example_output/mmi_4x4_90hybrid/wg_ygap_opt/`. Harvest with
+`python mmi_4x4_90hybrid_bo.py status`; refresh the table/plot with
+`python mmi_4x4_90hybrid_ygap_collect.py`. **Use
+`propose --dry-run` before every new round** — round 6's acquisition
+collapse was invisible until a job had already been submitted.
+
+One job was cancelled by hand this pass: **12674307** (`beef_bo_W6.00_y0.52`)
+— round 6's single surviving candidate, 0.01-0.02 µm from two points already
+measured at objective ≈1.006. Not resubmitted, deliberately.
+
+---
+
 **★ TWENTY-NINTH SNAPSHOT — 2026-08-21, verified against
 `squeue -u jhiesener3` immediately after submitting. This is the current one.
 Everything below the next rule is the twenty-eighth snapshot (2026-08-18),

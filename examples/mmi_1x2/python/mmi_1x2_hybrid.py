@@ -84,6 +84,11 @@ output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "exampl
 CALIBRATE_BODY = bool(int(os.environ.get("MMI1X2_CALIBRATE_BODY", "1")))
 if not CALIBRATE_BODY:
     output_dir = output_dir + "_uncalibrated"
+# Free-form suffix so a run at a non-shipped decay_tol (or any other swept
+# knob) cannot clobber the production result. Learned the hard way elsewhere in
+# this repo: a reduced/variant run that writes into the production tree is
+# indistinguishable from the real thing to a later reader.
+output_dir = output_dir + os.environ.get("MMI1X2_OUT_SUFFIX", "")
 os.makedirs(output_dir, exist_ok=True)
 save_dir = os.environ.get("MMI1X2_SAVE_DIR") or os.path.abspath(
     os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
@@ -95,6 +100,73 @@ RESOLUTION = 40.0   # mesh resolution (pixels/µm) — used by both the EME and 
 WL_MIN = 1.26       # wavelength sweep start (µm)
 WL_MAX = 1.36       # wavelength sweep end (µm)
 N_WL = 11           # number of wavelength points
+
+# ---------------------------------------------------------------------------
+# Decay tolerance — the dominant cost knob, now overridable.
+#
+# WHY THIS CHANGED (2026-08-31). decay_tol=1e-11 was inherited here with **no
+# recorded justification anywhere in the repo**, and it is what makes this
+# device expensive: the fully-cold Step 0 re-baseline (job 12627227) ran
+# 3.5 h against a 1:28 precedent on the same configuration.
+#
+# It is NOT a reachability problem on this device. The floor documented for the
+# 4×4 (energy decays, bottoms out, then grows exponentially — so a sub-floor
+# tolerance can never be met) was measured on an 84 µm device, where res=40
+# floors around ~5e-6. This device's FDTD sections are 2.75–3.775 µm cells,
+# an order of magnitude shorter with a correspondingly shorter tail, and
+# job 11608690 demonstrably COMPLETED at 1e-11. So 1e-11 is reachable here,
+# just slow. This is a cost change, not a correctness fix.
+#
+# PATTERN COPIED FROM modal_multiplexer_fdtd.py (2026-08-08), including the
+# part that is easy to miss:
+#
+#   ⚠ LOOSENING decay_tol WITHOUT A minimum_run_time FLOOR IS A BUG. When the
+#   mux tried DECAY_TOL=1e-9 alone (job 11749567) the sim stopped at t=107-112
+#   — not even one transit of its 66 µm device, before the pulse could
+#   physically reach the output monitors. minimum_run_time exists to guard
+#   exactly that, and a tight tolerance masks the need for it (1e-11 is
+#   restrictive enough to rule out a trivial early stop on its own; 1e-9 is
+#   not).
+#
+# MIN_RUN_TIME for THIS device, from its own cell sizes rather than copied:
+# the largest section cell is 3.775 µm in x, and even a conservative silicon
+# group index ~4.5 needs only ~3.775*4.5 ≈ 17 meep time units for one transit.
+# 100 leaves ~6x margin for reflections and multiple bounces before decay is
+# evaluated at all, while staying far below what 1e-11 actually requires here.
+#
+# CACHE: decay_tol is NOT in beef/cache/config.py's _DEFAULT_OMITTED_ATTRS, so
+# it is always fingerprinted — a loosened run writes its OWN cache entries and
+# cannot serve or be served by the existing 1e-11 ones. minimum_run_time IS
+# default-omitted, so setting it non-zero also gets fingerprinted. Nothing
+# already cached is disturbed either way.
+#
+# ⚠ COMPARABILITY: every number in resolved/mmi_1x2_validation.md gaps 4/5 was
+# measured at 1e-11. Set MMI1X2_DECAY_TOL=1e-11 to reproduce them exactly. The
+# T-vs-decay_tol sensitivity on this device has NOT been measured yet — the
+# right instrument is FDTDSolver.solve(snapshot_every=, snapshot_path=), which
+# yields the whole transmission-vs-tolerance curve from ONE run (DFT monitors
+# accumulate, so sample t equals what a run stopped at t would have returned).
+# Until that is done, treat 1e-9 as a cost setting whose accuracy cost is
+# UNQUANTIFIED on this device, not as a validated equivalent of 1e-11.
+#   ⚠ AND minimum_run_time IS SILENTLY IGNORED IF decay_method="energy".
+#   Verified against meep's own source: `stop_when_energy_decayed(dt,
+#   decay_by)` takes no minimum_run_time argument, and FDTDSolver.
+#   _stop_condition() only forwards it on the "dft" branch. So the floor below
+#   is a no-op under the energy method. That is not actually a hole -- the
+#   energy criterion stops only once energy has decayed from its own MAXIMUM
+#   RECORDED value, and energy must rise before it can fall, so it cannot trip
+#   before the pulse is in the cell the way the DFT relative-change criterion
+#   can. But do not read MIN_RUN_TIME as protecting an energy-method run; it
+#   does not, and it does not need to.
+# ⚠ 1e-9 IS PROVISIONAL — IT IS A GUESS, NOT A MEASUREMENT. It was chosen by
+# analogy with modal_multiplexer_fdtd.py's own 1e-9, not from this device's
+# transmission-vs-decay curve, which did not exist when it was set. Job
+# 12636328 (batch/mmi_1x2_decaytol_convergence.batch) is measuring exactly
+# that curve for THIS device. **Set this default from that result once it
+# lands** — the correct value is wherever T stops moving by more than the
+# precision the conclusions need, and it may be looser OR tighter than 1e-9.
+DECAY_TOL = float(os.environ.get("MMI1X2_DECAY_TOL", "1e-9"))
+MIN_RUN_TIME = float(os.environ.get("MMI1X2_MIN_RUN_TIME", "100.0"))
 
 # ---------------------------------------------------------------------------
 # 0. Simulation method per section — HybridSolver is solver-agnostic (any
@@ -121,6 +193,11 @@ mmi = MMI(
 )
 print(f"MMI total length: {mmi.total_length:.2f} µm")
 print(f"calibrate_body_neff = {CALIBRATE_BODY}  (output -> {output_dir})")
+print(f"decay_tol = {DECAY_TOL:.0e} (default changed 1e-11->1e-9, 2026-08-31 -- "
+      f"see DECAY_TOL's comment; MMI1X2_DECAY_TOL=1e-11 reproduces the "
+      f"validation doc's gap 4/5 numbers)")
+print(f"minimum_run_time = {MIN_RUN_TIME:.0f} (mandatory floor once decay_tol "
+      f"is loosened; ~6x this device's ~17 t.u. transit)")
 
 # ---------------------------------------------------------------------------
 # 2. Configure sub-solvers — one per section, per the METHOD switches above.
@@ -143,7 +220,9 @@ _fdtd_common = dict(
     monitor_margin=0.25,
     three_d=True,       # full 3-D FDTD: real 160 nm Si core in oxide, PML on all six faces
     material_stack=SOI_160,
-    decay_tol=1e-11,
+    decay_tol=DECAY_TOL,
+    minimum_run_time=MIN_RUN_TIME,   # mandatory companion to a loosened
+                                     # decay_tol -- see DECAY_TOL's comment
 )
 
 N_MODES = 8   # modes carried at the two input/output <-> body interfaces.
