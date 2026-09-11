@@ -57,7 +57,8 @@ from __future__ import annotations
 import inspect
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
+from typing import (Any, Callable, Dict, List, Literal, Optional, Sequence,
+                    Tuple, Union)
 
 import numpy as np
 
@@ -99,6 +100,10 @@ def _supports_cache_only(method) -> bool:
 
 def _supports_neff_override(method) -> bool:
     return "neff_override" in inspect.signature(method).parameters
+
+
+def _supports_cell_neff_override(method) -> bool:
+    return "cell_neff_override" in inspect.signature(method).parameters
 
 
 def _supports_pad(method) -> bool:
@@ -279,6 +284,23 @@ class HybridSolver:
             cached under `save_dir` like any other. Applies only to sections
             whose solver has no `section_mode_beta()` of its own — in practice
             the EME bodies; an all-FDTD chain is unaffected.
+        cell_neff_fn: optional callable ``(k, geometry, wavelengths, n_modes, x0, x1)``
+            returning ``[len(wavelengths), n_cells, n_modes]`` of n_eff for
+            section ``k``, or None to leave that section alone. This is the
+            TAPERED-body counterpart of ``calibrate_body_neff``, which is
+            hard-refused on a taper because it propagates a section as one
+            diagonal ``exp(2j·π·n_eff·L/λ)`` -- no mode mixing, the very
+            effect a taper exists to produce. A per-cell array instead keeps
+            the multi-cell solve and all its interface S-matrices and
+            calibrates only the propagation inside each cell; see
+            ``EMESolver.solve_section(cell_neff_override=...)``.
+
+            Supplied by the caller rather than measured here because an
+            intermediate taper width has no neighbouring FDTD section to take
+            β from -- it must be interpolated from a β(width) curve built with
+            ``FDTDSolver.section_mode_beta()``. Returning a non-None array for
+            a section that ``calibrate_body_neff`` already calibrated raises,
+            rather than letting one silently win.
         calibrate_lengths: section lengths (µm) the calibration fits β over.
             None (default) lets `FDTDSolver.section_mode_beta()` choose them —
             three β-capped lengths at `[spacing, 2*spacing, 3*spacing]`, NOT
@@ -398,6 +420,7 @@ class HybridSolver:
         mirror_check_tol: float = 1e-3,
         material_consistency_action: Literal["warn", "raise", "ignore"] = "warn",
         calibrate_body_neff: bool = False,
+        cell_neff_fn: Optional[Callable] = None,
         calibrate_lengths: Optional[List[float]] = None,
         calibrate_kwargs: Optional[Dict[str, Any]] = None,
         check_mode_correspondence: bool = False,
@@ -422,6 +445,7 @@ class HybridSolver:
         self.solvers = solvers
         self.boundaries = boundaries
         self.interface_modes = interface_modes
+        self.cell_neff_fn = cell_neff_fn
         # Two views of the same declaration, deliberately:
         #   mirror_specs — the full MirrorSpec, used by everything in here
         #                  that needs partner_kwargs/mode_signs.
@@ -1715,6 +1739,30 @@ class HybridSolver:
                         kwargs, save_dir, cache_only)
                     if neff is not None:
                         section_kwargs["neff_override"] = neff
+                # PER-CELL calibration, for sections the section-level flag
+                # cannot express -- a tapered body. Supplied by the caller
+                # rather than measured here, because the beta for an
+                # intermediate taper width has no neighbouring FDTD section to
+                # come from: it has to be interpolated from a beta(width) curve
+                # the caller builds (see FDTDSolver.section_mode_beta). Keeping
+                # that out of the library leaves this hook small and lets the
+                # curve be cached/reused however the study needs.
+                if (self.cell_neff_fn is not None
+                        and _supports_cell_neff_override(solver.solve_section)):
+                    cell_neff = self.cell_neff_fn(
+                        k, geometry, wavelengths,
+                        max(n_in_list[k], n_out_list[k]), x0, x1)
+                    if cell_neff is not None:
+                        if "neff_override" in section_kwargs:
+                            raise ValueError(
+                                f"section {k} would be calibrated twice: "
+                                "calibrate_body_neff produced a section-level "
+                                "neff_override AND cell_neff_fn returned a "
+                                "per-cell array. They are different "
+                                "propagation models (diagonal vs multi-cell); "
+                                "return None from cell_neff_fn for sections "
+                                "the section-level flag already handles.")
+                        section_kwargs["cell_neff_override"] = cell_neff
                 mat = solver.solve_section(
                     geometry, wavelengths, x0, x1,
                     n_modes_in=n_in_list[k], n_modes_out=n_out_list[k],

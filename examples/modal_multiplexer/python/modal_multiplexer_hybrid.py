@@ -174,46 +174,133 @@ N_WL = int(os.environ.get("MUX_HYBRID_N_WL", "11"))
 #    BEEF_Legacy/configs_mmi/config_mux.json (160 nm SOI), rebuilt as two
 #    MMI devices + a WaveguideRun connector instead of one hand-rolled class.
 # ---------------------------------------------------------------------------
-TAPER_L = 3.0                # every taper's length (µm). CORRECTED
-                              # 2026-08-07 from 2.0 -- the published seed-
-                              # device geometry (Hiesener et al., "Topology
-                              # Optimization Enhancements for Multimode
-                              # Interferometers," Table 2) reports
-                              # L_taper = 3.0 um for this exact device; 2.0
-                              # was never measured/derived, just wrong. Every
-                              # boundary/domain-size computation below derives
-                              # from this constant, so the fix propagates
-                              # automatically -- not independently re-verified
-                              # against a real run yet.
-WO = 1.0375                  # centre-to-centre pitch of the three branches (µm)
+TAPER_L = 2.0                # every taper's length (µm). REVERTED to 2.0 on
+                              # 2026-09-06, and this time it is MEASURED, not
+                              # read off a table. The fabricated seed layout
+                              # (`mux_MMI_2.gds`, supplied by the author,
+                              # parsed with gdstk) has ALL FIVE tapers at
+                              # exactly 2.000 µm, and its segment lengths sum
+                              # to exactly 64.000 µm -- the device length the
+                              # manuscript's own prose states:
+                              #   0.920 + 2.000 + 16.920 + 2.000 + 3.000
+                              #     + 2.000 + 34.240 + 2.000 + 0.920 = 64.000
+                              # With TAPER_L=3.0 the same sum is 66.16, which
+                              # is what this repo built from 2026-08-07 until
+                              # now.
+                              #
+                              # The 2026-08-07 change 2.0 -> 3.0 came from the
+                              # manuscript's Table 2 (`L_taper` = 3.0) and was
+                              # recorded as "2.0 was never measured/derived,
+                              # just wrong ... not independently re-verified
+                              # against a real run yet". It is now verified
+                              # against the built device, and 2.0 was right.
+                              # Table 2's 3.0 disagrees with what was
+                              # fabricated -- a typo, or it denotes something
+                              # other than the drawn taper length. THE GDS IS
+                              # AUTHORITATIVE; do not "correct" this back to
+                              # 3.0 from the table again.
+                              #
+                              # Invalidates every cached section and every
+                              # result computed since 2026-08-07 -- see
+                              # modal_multiplexer_validation.md gap 11.
+WO = 1.0375                  # centre-to-centre pitch of the three branches (µm),
+                             # measured at the MMI-body-face end of every
+                             # taper (mmi1's outputs, mmi2's inputs AND
+                             # outputs) — exact in the fabricated GDS at
+                             # every one of those 9 tapers.
+WO_ARM = 1.0480              # the TOP phase-shift arm's own y (µm) — the
+                             # fabricated GDS is NOT symmetric here: arms sit
+                             # at -1.0380 / 0.0000 / +1.0480, i.e. the top
+                             # arm is shifted 0.0105 µm further out than WO,
+                             # pairing with its 0.33 µm width as the
+                             # deliberate symmetry-breaking (bot's own
+                             # -1.0380 vs -WO=-1.0375 is 0.0005 µm, noise-
+                             # level, not modeled). Confirmed by measuring
+                             # every taper polygon's vertices directly
+                             # (gdstk): mmi1's own output-top-taper and
+                             # mmi2's own input-top-taper are BOTH slanted,
+                             # symmetric mirror images meeting the arm at
+                             # exactly WO_ARM on their connector-facing ends,
+                             # while their MMI-body-face ends stay at exactly
+                             # WO — mmi2's own OUTPUT-top-taper (to the
+                             # outside world) is NOT slanted (1.0375 ->
+                             # 1.038, noise-level like bot).
+                             #
+                             # ADOPTED 2026-09-09 via `MMIPort.y_far` (added
+                             # same day specifically for this — previously
+                             # this dataclass had no field to express a
+                             # slanted taper at all, forcing this asymmetry
+                             # off). Adopted only after the run-duration and
+                             # TAPER_L hypotheses for gap 9's manuscript
+                             # shortfall were both ruled out by direct
+                             # measurement — see modal_multiplexer_
+                             # validation.md gap 9 item 2 / gap 3.
 BETWEEN_WG_LENGTH = 3.0      # connecting-waveguide length between the MMIs (µm)
 MM_WIDTH = 2.8               # both MMI body widths (µm)
 
 # (y, waveguide_width, taper_width) for the three inter-stage/output
 # branches, top -> mid -> bot — same ordering/values as
-# BEEF_Legacy/configs_mmi/config_mux.json.
+# BEEF_Legacy/configs_mmi/config_mux.json. `y` here is always the
+# MMI-body-face position (WO_ARM only ever applies to the OTHER,
+# connector-facing end via _branch_ports(slanted=True) below). Top's
+# 0.33 is the INNER (phase-shift-arm-facing) waveguide width only — see
+# TOP_OUTPUT_WW below for mmi2's own OUTPUT-facing top taper, which the
+# GDS shows narrows to 0.35 instead, like the other two branches.
 BRANCH_SPECS = [
     (+WO, 0.33, 0.725),   # top
     (0.0, 0.35, 1.15),    # mid
     (-WO, 0.35, 0.725),   # bot
 ]
+TOP_OUTPUT_WW = 0.35         # mmi2's own OUTPUT-facing top taper's far-end
+                             # width. Measured directly from the GDS
+                             # (gdstk): every one of the top branch's THREE
+                             # tapers (mmi1-out, mmi2-in, mmi2-out) has body-
+                             # face width 0.725, but only the two INNER ones
+                             # (mmi1-out, mmi2-in — the ones flanking the
+                             # phase-shift arm) narrow to 0.33 at their far
+                             # end; mmi2's own OUTPUT taper narrows to 0.35
+                             # instead, matching mid/bot. Confirms gap 11's
+                             # own prior note in as many words: "the 0.33
+                             # width belongs to the inter-stage phase-shift
+                             # arm only" — this branch's true external
+                             # single-mode access width (drawn as a taper
+                             # end here; gap 11 already found NO actual
+                             # output waveguide continues past it, the NC
+                             # port not being wired out) is 0.35, not 0.33.
+                             # ADOPTED alongside WO_ARM, 2026-09-09.
 
-def _branch_ports():
-    return [MMIPort(y=y, waveguide_width=ww, taper_length=TAPER_L, taper_width=tw)
-            for y, ww, tw in BRANCH_SPECS]
+def _branch_ports(slanted: bool = False):
+    """slanted=True: the INTER-STAGE ports facing the phase-shift-arm
+    connector (mmi1's own outputs, mmi2's own inputs) — the top branch's
+    taper gets its measured y_far=WO_ARM (MMIPort.y stays WO, the body-
+    face end, unaffected). slanted=False (default): mmi2's own OUTPUT
+    tapers, facing the outside world — NOT slanted (the GDS's own 0.0005 µm
+    offset there is 1nm-grid quantization of the ideal ±WO/0, confirmed by
+    the same offset appearing on BOTH bot and top with opposite sign —
+    not modeled, it is 2% of one pixel at this device's own res 40), but
+    the top branch's own waveguide_width IS overridden to TOP_OUTPUT_WW
+    here — see that constant's own comment."""
+    ports = []
+    for y, ww, tw in BRANCH_SPECS:
+        if not slanted and y > 0:
+            ww = TOP_OUTPUT_WW
+        ports.append(MMIPort(y=y, waveguide_width=ww, taper_length=TAPER_L,
+                             taper_width=tw,
+                             y_far=(WO_ARM if (slanted and y > 0) else None)))
+    return ports
 
 mmi1 = MMI(  # 1x3: multi-mode input -> three branches
     n_inputs=1, n_outputs=3,
     mm_length=16.92, mm_width=MM_WIDTH,
     inputs=[MMIPort(y=0.0, waveguide_width=0.7, taper_length=TAPER_L, taper_width=1.4)],
-    outputs=_branch_ports(),
+    outputs=_branch_ports(slanted=True),
     waveguide_height=0.16,
 )
 mmi2 = MMI(  # 3x3: three branches -> three branches (mux output stage)
     n_inputs=3, n_outputs=3,
     mm_length=34.24, mm_width=MM_WIDTH,
-    inputs=_branch_ports(),
-    outputs=_branch_ports(),
+    inputs=_branch_ports(slanted=True),
+    outputs=_branch_ports(slanted=False),
     waveguide_height=0.16,
     # Three branches only WO (~1 µm) apart, one exactly on the y=0 axis —
     # half_domain_aperture's fixed half-domain rule can't isolate the mid
@@ -223,7 +310,10 @@ mmi2 = MMI(  # 3x3: three branches -> three branches (mux output stage)
 )
 connector = WaveguideRun(
     length=BETWEEN_WG_LENGTH,
-    ports=[(y, ww) for y, ww, _ in BRANCH_SPECS],
+    # top branch runs at WO_ARM here, not WO — the connector waveguide
+    # sits at the SAME y the two flanking tapers' far ends do (see
+    # WO_ARM's own comment above), for a physically continuous top branch.
+    ports=[(WO_ARM if y > 0 else y, ww) for y, ww, _ in BRANCH_SPECS],
 )
 mux = CompoundGeometry([mmi1, connector, mmi2])
 print(f"MMI MUX total length: {mux.total_length:.2f} µm "

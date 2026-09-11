@@ -164,6 +164,37 @@ MIN_RUN_TIME = float(os.environ.get("MUX_FDTD_MIN_RUN_TIME", "1000.0"))
                     # tolerance already rules out the trivial-early-stop) has
                     # separately shown is needed regardless of this floor.
 
+DISPERSIVE = os.environ.get("MUX_FDTD_DISPERSIVE", "true") == "true"
+                    # ADDED 2026-09-10, a methodology experiment matching
+                    # this file's own DECAY_TOL/RESOLUTION override pattern
+                    # -- NOT a bug fix, and the default stays True (this
+                    # repo's own SOI_160 default since 2026-08-01, unchanged
+                    # here). Motivated by comparing this script against
+                    # archive/mux_sim/*.py (a different device, same lab's
+                    # FDTD conventions, at the user's direction): every
+                    # variant there builds Si's permittivity from the SAME
+                    # Sellmeier/Lorentzian model this repo uses, but
+                    # evaluates it ONCE at the sweep's center frequency and
+                    # freezes that into a plain non-dispersive medium for
+                    # the whole broadband run -- exactly this repo's own
+                    # `dispersive=False` ("frozen-band") mode, not the
+                    # `dispersive=True` re-parameterized-Lorentzian default
+                    # neither mux script has ever overridden.
+                    #
+                    # WHY THIS MATTERS MORE THAN ANYTHING ELSE TESTED SO
+                    # FAR: `beef/materials/stack.py`'s own `core_medium()`
+                    # docstring already measured the size of this choice on
+                    # a comparable SOI strip (450x220 nm, res 40, 1.55 um):
+                    # non-dispersive n_eff=2.313398 vs dispersive
+                    # n_eff=2.363038, a 0.0496 (2.1%) difference -- over 20x
+                    # larger than the geometry fix's measured <0.1 dB
+                    # effect on this device's own gap-9 shortfall. If the
+                    # manuscript's own FDTD reference (whatever tool
+                    # produced it) used a frozen-band index the way this
+                    # lab's other FDTD scripts do, that is a serious,
+                    # unexplored candidate for the residual 0.77/1.85 dB
+                    # gap. Override: MUX_FDTD_DISPERSIVE=false to test it.
+
 WL_MIN = 1.26       # O-band, same grid as modal_multiplexer_hybrid.py so a
 WL_MAX = 1.36       # future comparison script needs no reconciliation beyond
 N_WL = 11           # port naming (both already use top/mid/bot).
@@ -174,43 +205,134 @@ N_WL = 11           # port naming (both already use top/mid/bot).
 #    short enough that this is the lower-risk option over a shared helper
 #    module for two call sites).
 # ---------------------------------------------------------------------------
-TAPER_L = 3.0                # every taper's length (µm). CORRECTED
-                              # 2026-08-07 from 2.0 -- the published seed-
-                              # device geometry (Hiesener et al., "Topology
-                              # Optimization Enhancements for Multimode
-                              # Interferometers," Table 2) reports
-                              # L_taper = 3.0 um for this exact device; 2.0
-                              # was never measured/derived, just wrong. Every
-                              # boundary/domain-size computation below derives
-                              # from this constant, so the fix propagates
-                              # automatically -- not independently re-verified
-                              # against a real run yet.
-WO = 1.0375                  # centre-to-centre pitch of the three branches (µm)
+TAPER_L = 2.0                # every taper's length (µm). REVERTED to 2.0 on
+                              # 2026-09-06, and this time it is MEASURED, not
+                              # read off a table. The fabricated seed layout
+                              # (`mux_MMI_2.gds`, supplied by the author,
+                              # parsed with gdstk) has ALL FIVE tapers at
+                              # exactly 2.000 µm, and its segment lengths sum
+                              # to exactly 64.000 µm -- the device length the
+                              # manuscript's own prose states:
+                              #   0.920 + 2.000 + 16.920 + 2.000 + 3.000
+                              #     + 2.000 + 34.240 + 2.000 + 0.920 = 64.000
+                              # With TAPER_L=3.0 the same sum is 66.16, which
+                              # is what this repo built from 2026-08-07 until
+                              # now.
+                              #
+                              # The 2026-08-07 change 2.0 -> 3.0 came from the
+                              # manuscript's Table 2 (`L_taper` = 3.0) and was
+                              # recorded as "2.0 was never measured/derived,
+                              # just wrong ... not independently re-verified
+                              # against a real run yet". It is now verified
+                              # against the built device, and 2.0 was right.
+                              # Table 2's 3.0 disagrees with what was
+                              # fabricated -- a typo, or it denotes something
+                              # other than the drawn taper length. THE GDS IS
+                              # AUTHORITATIVE; do not "correct" this back to
+                              # 3.0 from the table again.
+                              #
+                              # Invalidates every cached section and every
+                              # result computed since 2026-08-07 -- see
+                              # modal_multiplexer_validation.md gap 11.
+WO = 1.0375                  # centre-to-centre pitch of the three branches (µm),
+                             # measured at the MMI-body-face end of every
+                             # taper (mmi1's outputs, mmi2's inputs AND
+                             # outputs) — exact in the fabricated GDS at
+                             # every one of those 9 tapers.
+WO_ARM = 1.0480              # the TOP phase-shift arm's own y (µm) — the
+                             # fabricated GDS is NOT symmetric here: arms sit
+                             # at -1.0380 / 0.0000 / +1.0480, i.e. the top
+                             # arm is shifted 0.0105 µm further out than WO,
+                             # pairing with its 0.33 µm width as the
+                             # deliberate symmetry-breaking (bot's own
+                             # -1.0380 vs -WO=-1.0375 is 0.0005 µm, noise-
+                             # level, not modeled). Confirmed by measuring
+                             # every taper polygon's vertices directly
+                             # (gdstk): mmi1's own output-top-taper and
+                             # mmi2's own input-top-taper are BOTH slanted,
+                             # symmetric mirror images meeting the arm at
+                             # exactly WO_ARM on their connector-facing ends,
+                             # while their MMI-body-face ends stay at exactly
+                             # WO — mmi2's own OUTPUT-top-taper (to the
+                             # outside world) is NOT slanted (1.0375 ->
+                             # 1.038, noise-level like bot).
+                             #
+                             # ADOPTED 2026-09-09 via `MMIPort.y_far` (added
+                             # same day specifically for this — previously
+                             # this dataclass had no field to express a
+                             # slanted taper at all, forcing this asymmetry
+                             # off). Adopted only after the run-duration and
+                             # TAPER_L hypotheses for gap 9's manuscript
+                             # shortfall were both ruled out by direct
+                             # measurement — see modal_multiplexer_
+                             # validation.md gap 9 item 2 / gap 3.
+                             #
+                             # KEEP THIS BLOCK IN SYNC WITH
+                             # modal_multiplexer_hybrid.py's own copy by
+                             # hand, per this file's own module docstring.
 BETWEEN_WG_LENGTH = 3.0      # connecting-waveguide length between the MMIs (µm)
 MM_WIDTH = 2.8               # both MMI body widths (µm)
 
+# `y` here is always the MMI-body-face position (WO_ARM only ever applies
+# to the OTHER, connector-facing end via _branch_ports(slanted=True)). Top's
+# 0.33 is the INNER (phase-shift-arm-facing) waveguide width only — see
+# TOP_OUTPUT_WW below for mmi2's own OUTPUT-facing top taper, which the
+# GDS shows narrows to 0.35 instead, like the other two branches.
 BRANCH_SPECS = [
     (+WO, 0.33, 0.725),   # top
     (0.0, 0.35, 1.15),    # mid
     (-WO, 0.35, 0.725),   # bot
 ]
+TOP_OUTPUT_WW = 0.35         # mmi2's own OUTPUT-facing top taper's far-end
+                             # width. Measured directly from the GDS
+                             # (gdstk): every one of the top branch's THREE
+                             # tapers (mmi1-out, mmi2-in, mmi2-out) has body-
+                             # face width 0.725, but only the two INNER ones
+                             # (mmi1-out, mmi2-in — the ones flanking the
+                             # phase-shift arm) narrow to 0.33 at their far
+                             # end; mmi2's own OUTPUT taper narrows to 0.35
+                             # instead, matching mid/bot. Confirms gap 11's
+                             # own prior note in as many words: "the 0.33
+                             # width belongs to the inter-stage phase-shift
+                             # arm only" — this branch's true external
+                             # single-mode access width (drawn as a taper
+                             # end here; gap 11 already found NO actual
+                             # output waveguide continues past it, the NC
+                             # port not being wired out) is 0.35, not 0.33.
+                             # ADOPTED alongside WO_ARM, 2026-09-09.
 
-def _branch_ports():
-    return [MMIPort(y=y, waveguide_width=ww, taper_length=TAPER_L, taper_width=tw)
-            for y, ww, tw in BRANCH_SPECS]
+def _branch_ports(slanted: bool = False):
+    """slanted=True: the INTER-STAGE ports facing the phase-shift-arm
+    connector (mmi1's own outputs, mmi2's own inputs) — the top branch's
+    taper gets its measured y_far=WO_ARM (MMIPort.y stays WO, the body-
+    face end, unaffected). slanted=False (default): mmi2's own OUTPUT
+    tapers, facing the outside world — NOT slanted (the GDS's own 0.0005 µm
+    offset there is 1nm-grid quantization of the ideal ±WO/0, confirmed by
+    the same offset appearing on BOTH bot and top with opposite sign —
+    not modeled, it is 2% of one pixel at this device's own res 40), but
+    the top branch's own waveguide_width IS overridden to TOP_OUTPUT_WW
+    here — see that constant's own comment."""
+    ports = []
+    for y, ww, tw in BRANCH_SPECS:
+        if not slanted and y > 0:
+            ww = TOP_OUTPUT_WW
+        ports.append(MMIPort(y=y, waveguide_width=ww, taper_length=TAPER_L,
+                             taper_width=tw,
+                             y_far=(WO_ARM if (slanted and y > 0) else None)))
+    return ports
 
 mmi1 = MMI(
     n_inputs=1, n_outputs=3,
     mm_length=16.92, mm_width=MM_WIDTH,
     inputs=[MMIPort(y=0.0, waveguide_width=0.7, taper_length=TAPER_L, taper_width=1.4)],
-    outputs=_branch_ports(),
+    outputs=_branch_ports(slanted=True),
     waveguide_height=0.16,
 )
 mmi2 = MMI(
     n_inputs=3, n_outputs=3,
     mm_length=34.24, mm_width=MM_WIDTH,
-    inputs=_branch_ports(),
-    outputs=_branch_ports(),
+    inputs=_branch_ports(slanted=True),
+    outputs=_branch_ports(slanted=False),
     waveguide_height=0.16,
     use_neighbor_aperture=True,   # irrelevant to a full single-domain FDTD run
                                   # (no per-section reverse launch here), kept
@@ -219,7 +341,8 @@ mmi2 = MMI(
 )
 connector = WaveguideRun(
     length=BETWEEN_WG_LENGTH,
-    ports=[(y, ww) for y, ww, _ in BRANCH_SPECS],
+    # top branch runs at WO_ARM here, not WO — see WO_ARM's own comment.
+    ports=[(WO_ARM if y > 0 else y, ww) for y, ww, _ in BRANCH_SPECS],
 )
 mux = CompoundGeometry([mmi1, connector, mmi2])
 print(f"MMI MUX total length: {mux.total_length:.2f} µm "
@@ -232,6 +355,9 @@ print(f"decay_tol = {DECAY_TOL:.0e} (default changed 1e-11->1e-9, 2026-08-08 -- 
 print(f"minimum_run_time = {MIN_RUN_TIME:.0f} (new 2026-08-08, guards against "
       f"decay_tol being satisfied before the pulse crosses the device -- see "
       f"module docstring/MIN_RUN_TIME comment)")
+print(f"dispersive = {DISPERSIVE} (default True unchanged; False matches "
+      f"archive/mux_sim/*.py's frozen-band Si -- see module docstring/"
+      f"DISPERSIVE comment, modal_multiplexer_validation.md gap 9)")
 
 # top -> mid -> bot, same index convention as modal_multiplexer_hybrid.py's
 # PORTS / the legacy master's PORT_DEFS (0=top, 1=mid, 2=bot).
@@ -267,6 +393,7 @@ solver = FDTDSolver(
     material_stack=SOI_160,
     decay_tol=DECAY_TOL,
     minimum_run_time=MIN_RUN_TIME,
+    dispersive=DISPERSIVE,
 )
 
 # ---------------------------------------------------------------------------

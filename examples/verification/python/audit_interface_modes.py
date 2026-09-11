@@ -201,12 +201,50 @@ def _mmi_1x4():
     )
 
 
+def _mmi_4x4_90hybrid():
+    # Pinned to examples/mmi_4x4_90hybrid/python/mmi_4x4_90hybrid_hybrid.py
+    # exactly -- the OPTIMISED design point (mm_width=8.5, taper_width=1.30,
+    # taper_length=4.0, mm_length=159.30, N_MODES=16), not Step 2's first
+    # pass. Flagged elevated-risk in the validation doc's own Step 8 plan
+    # (A7): four closely-spaced ports per end is closer to the modal
+    # multiplexer's 16-mode regime (where check 2 first failed, on a real
+    # bug) than to either existing MMI's two-or-one-port ends.
+    #
+    # Single-cut, not MULTI_DEVICES, despite HybridSolver actually cutting
+    # at TWO x-positions (boundaries[1]/[2]) for FOUR different physical
+    # input ports: the body is one uniform mm_width=8.5 slab over its whole
+    # length (straight sidewalls, no taper/bend inside it), so it is
+    # translation-invariant along x -- exactly the same reasoning the
+    # mmi_1x2/mmi_2x2/mmi_1x4 audits above already rely on to check a
+    # short interior cut instead of the real (edge-hugging) boundaries[1]/
+    # [2] positions. All 4 input-port FDTD sections end on this SAME body
+    # cross-section (only the source differs, not the interface geometry),
+    # and boundaries[2]'s output-side interface is the mirror of
+    # boundaries[1] on an identical cross-section -- so one cut audits
+    # every interface this device's cascade actually contracts across.
+    mmi = MMI(
+        n_inputs=4, n_outputs=4,
+        mm_length=159.30, mm_width=8.5, waveguide_width=0.35,
+        taper_length=4.0, taper_width=1.30, waveguide_offset=8.5 / 4.0,
+        waveguide_height=0.22, use_neighbor_aperture=True,
+    )
+    # Body half-length is 79.65 um; [-1, 1] is ~78.6 um clear of either
+    # taper seam -- deeply interior, same convention as every device above.
+    return dict(
+        geometry=mmi, n_modes=16, wl=1.31, stack=SOI_220,
+        section=(-1.0, 1.0), sim_width=8.5 + 3.0, sim_height=2.0, dpml=0.5, res=40.0,
+        note="8.5 x 0.22 um slab body, mm_length 159.30 um, O-band, "
+             "4 physical ports/end sharing this one interior cut",
+    )
+
+
 DEVICES = {
     "directional_coupler": _dc,
     "directional_coupler_soi160": _dc_soi160,
     "mmi_1x2": _mmi_1x2,
     "mmi_2x2": _mmi_2x2,
     "mmi_1x4": _mmi_1x4,
+    "mmi_4x4_90hybrid": _mmi_4x4_90hybrid,
 }
 
 

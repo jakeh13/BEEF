@@ -1190,6 +1190,7 @@ class FDTDSolver:
         input_idx: Optional[int] = None,
         snapshot_every: Optional[float] = None,
         snapshot_path: Optional[str] = None,
+        capture_fields_dir: Optional[str] = None,
         **kwargs,
     ) -> SMatrix:
         """Run a broadband FDTD simulation for one input port.
@@ -1229,6 +1230,30 @@ class FDTDSolver:
             snapshot_path: optional file to append each sample to as it is
                 taken (CSV, header written once), so the curve can be read
                 while the job is still running.
+            capture_fields_dir: if set, capture ONE 2-D z=0 (core-plane) DFT
+                field slice at ``fcen`` across the WHOLE non-PML domain (not
+                just a section) and write it to this directory, reusing
+                ``solve_section()``'s own ``capture_fields_dir`` machinery
+                (``_write_section_fields()``) verbatim for the write itself —
+                same rank-safety (every ``get_dft_array()`` call happens on
+                every rank before the ``am_master()``-guarded write), same
+                ``.npz`` schema (``x``, ``y``, ``Ex``/``Ey``/``Ez``,
+                ``frame="device"``), same reasoning for a slice rather than a
+                volume (see that method's docstring). The one difference:
+                ``solve()`` needs no ``dft_interface`` (there is no adjacent
+                section to project onto — this is a whole-device picture, not
+                a cascade stitching input), and no coordinate shift is needed
+                for ``x`` (unlike ``solve_section()``, ``solve()`` already
+                builds its cell centered on the device, so meep x IS device
+                x here — see the ``src_x`` comment above). Filename is
+                ``section_fields_band{input_idx}.npz`` for the same reason
+                ``solve_section()``'s files are named by band: one call here
+                excites exactly one port, so the excited port index serves
+                the same distinguishing role a mode band index does there.
+                Observation only, like ``snapshot_every`` — NOT part of the
+                cache fingerprint, and (same caveat as ``snapshot_every``)
+                silently produces no file on a cache HIT, since a hit never
+                runs a fresh simulation to capture from.
             input_idx: explicit 0-based index into ``geometry.input_ys`` to
                 excite, overriding ``port``. Added for devices with more than
                 two access ports (e.g. a 4x4 MMI, `mmi_4x4_90hybrid_fdtd.py`),
@@ -1452,7 +1477,17 @@ class FDTDSolver:
                     _sim, in_flux, out_fluxes, input_mode, wavelengths, wl_order
                 )
                 t_now = float(_sim.meep_time())
-                T = {f"out_{i}": np.asarray(snap.transmission(port=f"out_{i}"))
+                # in_mode MUST match the input_mode this solve() call actually
+                # excited -- SMatrix.transmission()'s own default (in_mode=1)
+                # silently looks up TE0's key regardless of what was launched.
+                # Every snapshot_every caller before this one only ever used
+                # input_mode=1 (TE0), so this mismatch never fired; the first
+                # input_mode=2 (TE1) snapshot run (modal_multiplexer_
+                # decaytol_convergence.py, job 13023027) hit it immediately —
+                # KeyError('out_0', 1, 1), the (port, in_mode, out_mode) key
+                # SMatrix._data actually only holds under (port, 2, 1).
+                T = {f"out_{i}": np.asarray(
+                         snap.transmission(port=f"out_{i}", in_mode=input_mode))
                      for i in range(len(out_fluxes))}
                 # Decomposition above is collective and must run on EVERY rank.
                 # The write must not: with 8 ranks the smoke test produced a
@@ -1481,10 +1516,30 @@ class FDTDSolver:
                         logger.warning(
                             "solve: could not append snapshot to %s", snapshot_path)
 
+        # Opt-in spatial field capture (capture_fields_dir) -- same
+        # single-frequency, single z=0 slice `solve_section()` adds, just
+        # sized to the whole non-PML domain instead of one section. Must be
+        # added BEFORE sim.run() (a DFT monitor accumulates only field added
+        # to the simulation after it is registered).
+        dft_fields = None
+        if capture_fields_dir:
+            dft_fields = sim.add_dft_fields(
+                [mp.Ex, mp.Ey, mp.Ez], fcen, fcen, 1,
+                center=mp.Vector3(0, 0, 0),
+                size=mp.Vector3(Sx - 2 * self.dpml, Sy - 2 * self.dpml, 0),
+            )
+
+        if snapshot_every:
             sim.run(mp.at_every(float(snapshot_every), _snap),
                     until_after_sources=self._stop_condition())
         else:
             sim.run(until_after_sources=self._stop_condition())
+
+        if dft_fields is not None:
+            self._write_section_fields(
+                sim, dft_fields, capture_fields_dir, resolved_input_idx, fcen,
+                Sx - 2 * self.dpml, Sy - 2 * self.dpml, -Sx / 2 + self.dpml,
+            )
 
         # Normalise by forward input-mode amplitude so |coeff|² = physical T.
         # Same mismatch guard as solve_section()'s x-axis excite branch (see
@@ -2670,6 +2725,146 @@ class FDTDSolver:
     # Generic section solver (used by HybridSolver)
     # ------------------------------------------------------------------
 
+    def _write_section_fields(self, sim, dft_fields, out_dir, band, fcen,
+                              span_x, span_y, x_origin, dft_interface=None):
+        """Persist one excite branch's captured DFT field slice to .npz.
+
+        Called from solve_section() only when `capture_fields_dir` is set. One
+        file per excited band, so an N-mode section writes N files.
+
+        RANK SAFETY. `get_dft_array()` is collective and must be called on
+        every rank, but only rank 0 may write -- the same split
+        `solve(snapshot_path=...)` already needs, where an 8-rank smoke test
+        produced a CSV with repeated headers and duplicated rows. So the
+        extraction happens unconditionally and the write is guarded.
+
+        FRAME. Unlike the EME side, no axis remap is needed: FDTDSolver builds
+        the device with x as the propagation axis directly, so meep's Ex/Ey/Ez
+        ARE the device's Ex/Ey/Ez here. (`beef.plot.hybrid_body` documents the
+        opposite situation for meow, whose labels are its own local axes.)
+        Recorded in the npz as `frame="device"` so a reader never has to guess.
+        """
+        # meep is imported per-method throughout this file (see
+        # _stop_condition), not at module scope.
+        import meep as mp
+        import numpy as _np
+
+        # ⚠ EVERY get_dft_array() CALL MUST HAPPEN ON EVERY RANK, AND BEFORE
+        # THE am_master() GUARD BELOW. It is a collective MPI operation.
+        #
+        # This deadlocked job 12736213 for 40 minutes on 24 ranks: the
+        # interface extraction was appended AFTER the master-only return, so
+        # rank 0 sat in a collective call the other 23 ranks had already left
+        # (`futex_wait_queue`, 24 procs pinned at 99% CPU, no output). A serial
+        # smoke test cannot catch it -- with one rank `am_master()` is always
+        # true -- so the ordering here is load-bearing, not stylistic.
+        #
+        # A failure must also not short-circuit: returning early from inside
+        # the loop on one rank desynchronises the others the same way. Collect
+        # a flag and keep calling.
+        comps, icomps = {}, {}
+        ok = True
+        for name, comp in (("Ex", mp.Ex), ("Ey", mp.Ey), ("Ez", mp.Ez)):
+            try:
+                comps[name] = _np.asarray(sim.get_dft_array(dft_fields, comp, 0))
+            except Exception:                      # pragma: no cover
+                logger.warning(
+                    "capture_fields: get_dft_array failed for %s, band %d",
+                    name, band)
+                ok = False
+        if dft_interface is not None:
+            dft_if_obj = dft_interface[0]
+            for name, comp in (("Ex", mp.Ex), ("Ey", mp.Ey), ("Ez", mp.Ez)):
+                try:
+                    icomps["if_" + name] = _np.asarray(
+                        sim.get_dft_array(dft_if_obj, comp, 0))
+                except Exception:                  # pragma: no cover
+                    logger.warning(
+                        "capture_fields: interface get_dft_array failed for "
+                        "%s, band %d", name, band)
+                    icomps = {}
+                    break
+        if not ok:
+            return
+        if not mp.am_master():
+            return
+        ny_nx = next(iter(comps.values())).shape
+        if len(ny_nx) != 2:
+            logger.warning(
+                "capture_fields: expected a 2-D slice, got shape %s -- not "
+                "writing (is this a 2-D solver run, where the slice is "
+                "degenerate?)", ny_nx)
+            return
+        nx, ny = ny_nx
+        # Cell centres in the DEVICE frame. x_origin is the section's own left
+        # edge (x0 - stub_left), so the array is directly stitchable against a
+        # neighbouring section instead of living in a local 0-based frame --
+        # that shared coordinate is precisely what Step 3 needs.
+        x = x_origin + _np.linspace(0.0, span_x, nx)
+        y = _np.linspace(-span_y / 2.0, span_y / 2.0, ny)
+        # The TRANSVERSE interface plane, for Step 3's modal projection.
+        # Stored under an `if_` prefix so a reader can tell the longitudinal
+        # slice (plotting) from the transverse plane (projection) without
+        # guessing from array shapes.
+        extra = {}
+        if dft_interface is not None and icomps:
+            _dft_if, if_c, if_s, if_axis = dft_interface
+            if True:
+                a = next(iter(icomps.values()))
+                # The plane is normal to `if_axis`, so its two in-plane
+                # directions are whichever of (x, y, z) are not that axis.
+                # Recorded generically as (u, v) with `if_u_axis`/`if_v_axis`
+                # naming them, rather than assuming a y-z plane -- solve_section
+                # supports a y-normal measure axis too.
+                axis_order = [ax for ax in ("x", "y", "z") if ax != if_axis]
+                # _port_point/_port_size may return a 2-tuple (the 2-D path
+                # omits z), so pad to three before indexing by axis name.
+                def _pad(t):
+                    t = tuple(t)
+                    return t + (0.0,) * (3 - len(t))
+                cen = dict(zip(("x", "y", "z"), _pad(if_c)))
+                siz = dict(zip(("x", "y", "z"), _pad(if_s)))
+                # ⚠ THE MEASURE PLANE'S x IS IN THE *SHIFTED SIM* FRAME.
+                # solve_section() builds the section centred on the origin, so
+                # `mea_along` is a sim coordinate, whereas the longitudinal
+                # slice above is already device-frame. Caught on the 1x2 input
+                # section: the plane recorded as sim x=+0.625 is really device
+                # x=-2.000, i.e. exactly x1, but +0.625 lies OUTSIDE the
+                # section's own [-3.250, -2.000] span -- Step 3 would have
+                # stitched at a nonsense position. Convert here so everything
+                # in the npz is one frame.
+                #
+                # y and z need no shift: the sim cell is centred on y=0 and the
+                # devices are symmetric about it, which is why the longitudinal
+                # slice's own y array is already correct.
+                _xshift = x_origin + span_x / 2.0
+                cen["x"] = cen["x"] + _xshift
+                shape = _np.atleast_1d(a).shape
+                coords = {}
+                for dim, ax in enumerate(axis_order):
+                    n = shape[dim] if dim < len(shape) else 1
+                    half = siz[ax] / 2.0
+                    # cen[] is already device-frame (x shifted above), so
+                    # an in-plane x axis inherits the correction too.
+                    coords["if_" + ("u" if dim == 0 else "v")] = (
+                        cen[ax] + _np.linspace(-half, half, n) if n > 1
+                        else _np.array([cen[ax]]))
+                extra = dict(
+                    icomps, **coords,
+                    if_axis=if_axis, if_u_axis=axis_order[0],
+                    if_v_axis=axis_order[1],
+                    if_pos=cen[if_axis], if_shape=_np.asarray(shape))
+
+        os.makedirs(out_dir, exist_ok=True)
+        path = os.path.join(out_dir, f"section_fields_band{band}.npz")
+        _np.savez_compressed(
+            path, x=x, y=y, fcen=fcen, wavelength=1.0 / fcen, band=band,
+            frame="device", res=self.res, three_d=self.three_d,
+            decay_tol=self.decay_tol, decay_method=self.decay_method,
+            **comps, **extra)
+        logger.info("capture_fields: band %d -> %s (%d x %d)",
+                    band, path, nx, ny)
+
     def solve_section(
         self,
         geometry,
@@ -2689,6 +2884,7 @@ class FDTDSolver:
         measure_margin: Optional[float] = None,
         measure_margins: Optional[Sequence[float]] = None,
         measure_diagonal_only: bool = False,
+        capture_fields_dir: Optional[str] = None,
         save_dir: Optional[str] = None,
         cache_only: bool = False,
         **geometry_kwargs,
@@ -3022,6 +3218,30 @@ class FDTDSolver:
                 )
                 if diagonal_only:
                     call["measure_diagonal_only"] = True
+                if capture_fields_dir:
+                    # ADDITIVE, exactly like measure_diagonal_only above and
+                    # for the same reason: a key present on every config would
+                    # rehash every entry in save_dir. A call WITHOUT capture
+                    # fingerprints precisely as it did before this flag
+                    # existed, so every prior entry still hits.
+                    #
+                    # Fingerprinted as a BOOL, not the path -- two capture runs
+                    # writing to different directories compute an identical
+                    # simulation and should share one cache entry.
+                    #
+                    # WHY FINGERPRINTED AT ALL, when solve()'s `snapshot_every`
+                    # deliberately is NOT: snapshotting cannot alter the run,
+                    # but field capture CAN. Under the default
+                    # decay_method="dft", stop_when_dft_decayed() requires
+                    # EVERY registered DFT component to fall below decay_tol
+                    # (see decay_method's own docstring), so an added field
+                    # monitor can extend the run and therefore change the
+                    # accumulated transfer matrix. Under decay_method="energy"
+                    # it cannot -- that criterion reads total cell energy and
+                    # never inspects DFT objects -- but fingerprinting
+                    # unconditionally is the safe choice and costs existing
+                    # entries nothing.
+                    call["capture_fields"] = True
                 return build_run_config(self, "solve_section", call, geometry)
 
             config = _run_config(measure_diagonal_only)
@@ -3294,7 +3514,62 @@ class FDTDSolver:
                                   size=mp.Vector3(*_port_size(mea_axis, mea_width, self._mon_sz))),
                 )
 
+            # --- opt-in spatial field capture (capture_fields_dir) ---------
+            # A 2-D z-SLICE at the core plane, deliberately NOT a 3-D volume.
+            # Two reasons, the second one measured:
+            #   1. A volume at this resolution is enormous, and the pictures
+            #      only ever want the in-plane view.
+            #   2. stop_when_dft_decayed() requires EVERY registered DFT
+            #      component to individually fall below decay_tol (see
+            #      decay_method's docstring), so DFT content added here can
+            #      lengthen the run. A slice adds ~1/N_z of a volume's content,
+            #      keeping that risk small rather than inviting the open-ended
+            #      stall decay_method exists to escape. Measure it on any new
+            #      device before trusting the cost -- plan doc Step 2.
+            # Single frequency (fcen), the section's own excitation centre:
+            # that is what a field picture of THIS excite branch means, and a
+            # broadband capture would multiply the DFT content by N_freq for a
+            # picture nobody asked for.
+            dft_fields = None
+            dft_interface = None
+            if capture_fields_dir:
+                dft_fields = sim.add_dft_fields(
+                    [mp.Ex, mp.Ey, mp.Ez], fcen, fcen, 1,
+                    center=mp.Vector3(0, 0, 0),
+                    size=mp.Vector3(Sx - 2 * self.dpml,
+                                    Sy - 2 * self.dpml, 0),
+                )
+                # SECOND capture: the TRANSVERSE plane at the measure boundary.
+                # Not redundant with the slice above, and Step 3 cannot work
+                # without it. The slice is longitudinal (x-y at the core z), so
+                # its interface column is a 1-D line in y -- and projecting a
+                # 1-D cut onto a 3-D mode basis is exactly the pathology
+                # `beef.plot.hybrid_body.body_mode_weights` documents from
+                # measurement: captured power 1.5857 (impossible) and |c|^2 =
+                # 0.5876 on a parity-forbidden mode. A proper projection needs
+                # the full transverse cross-section, so capture one.
+                #
+                # Geometry reuses the MEASURE MONITOR's own region verbatim, so
+                # the projection plane coincides exactly with where the transfer
+                # matrix is evaluated rather than being a nearby guess.
+                _if_c = _port_point(mea_axis, mea_along, mea_transverse)
+                _if_s = _port_size(mea_axis, mea_width, self._mon_sz)
+                dft_interface = (
+                    sim.add_dft_fields([mp.Ex, mp.Ey, mp.Ez], fcen, fcen, 1,
+                                       center=mp.Vector3(*_if_c),
+                                       size=mp.Vector3(*_if_s)),
+                    tuple(float(v) for v in _if_c),
+                    tuple(float(v) for v in _if_s),
+                    mea_axis,
+                )
+
             sim.run(until_after_sources=self._stop_condition())
+
+            if dft_fields is not None:
+                self._write_section_fields(
+                    sim, dft_fields, capture_fields_dir, k, fcen,
+                    Sx - 2 * self.dpml, Sy - 2 * self.dpml, x0 - stub_left,
+                    dft_interface=dft_interface)
 
             norm_coeff = sim.get_eigenmode_coefficients(norm_flux, [k], eig_parity=mp.NO_PARITY)
             alpha_raw = norm_coeff.alpha[0, :, ex_alpha_idx]

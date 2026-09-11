@@ -42,6 +42,14 @@ sentence explicitly says "optical hybrid" or "90° hybrid."
 
 ---
 
+**CURRENT STATUS (2026-09-01): the active work is the (mm_width, y_gap)
+optimization campaign — jump to
+[The (mm_width, y_gap) optimization campaign](#the-mm_width-y_gap-optimization-campaign--2026-08-26--2026-09-01)
+at the bottom of this file. Best geometry so far: `mm_width=6.50`,
+`y_gap=0.56`, `mm_length=91.0` — phase spec MET at 4.764°, CMRR 12.109 dBe
+still short of the 20 dBe bar. The 2026-08-09 status block below is retained
+as history.**
+
 **CURRENT STATUS (2026-08-09) — read this first, history follows below.**
 Steps 1-7 done. Step 6 (all 3 example scripts) done and RE-RUN at a
 properly-converged body mode basis -- see "Body/taper mode-count
@@ -3241,3 +3249,1982 @@ inherited `1e-11` these four runs would have been impossible.
 
 The EME script IS the BO's evaluation function, so this validates exactly what
 the optimizer will call, objective included.
+---
+
+## The (mm_width, y_gap) optimization campaign — 2026-08-26 → 2026-09-01
+
+**Documentation gap closed 2026-09-01.** Everything in this section happened
+after this file's last edit (2026-08-26) and was undocumented here: the bias
+study's close-out, the hybrid-path evaluator, Phase A bodies, the 106-point
+grid's replacement by a Bayesian optimizer, and 24 real BO evaluations. The
+crash-recovery snapshot `context/context_2026-08-28_0913_4x4_hybrid.md` covers
+Aug 26-28 only, and calls itself non-durable; this is the durable record.
+
+### ✅ Pure-EME BO DISQUALIFIED — bias study CLOSED, all three points (2026-09-01)
+
+The verdict rule fixed in advance above ("error VARIES strongly → the BO would
+be biased") fired. Full table, `max|Δφ|` over the 1.26-1.36 µm band,
+`mm_width=6.0`, `mm_length=78.9396` on both methods:
+
+| y_gap | EME max\|Δφ\| | FDTD max\|Δφ\| | EME error | FDTD min CMRR |
+|---|---|---|---|---|
+| 0.40 | 66.293° | 22.436° | **+43.86°** | 9.746 dBe |
+| 0.70 | 82.478° | 20.46° | **+62.02°** | 9.19 dBe |
+| 1.00 | 89.203° | 53.707° | **+35.50°** | 1.264 dBe |
+
+- The y_gap=1.00 row was the one still missing on 2026-08-28 (job 12352478,
+  port 3, was still running at 22h12m). It landed; **computed 2026-09-01 from
+  the npz already on disk, zero new cluster time**, by rebuilding `SMatrix`
+  objects from `ygap_study/fdtd_ygap1.00_{bot,idx2}.npz`'s `c_out_*` and
+  running `mmi_4x4_90hybrid_check4_metrics.py`'s own `metrics()` on them.
+  Pipeline verified first by reproducing the already-published y_gap=0.40
+  FDTD number (22.436° vs. 22.44° documented) before trusting the new row.
+  The y_gap=0.70 FDTD entry is Check 4's cached full-device run, not an
+  `ygap_study` npz — that point was deliberately reused, not re-run.
+- **The bias is not a constant offset and not even monotonic**: +43.9°,
+  +62.0°, +35.5° as y_gap goes 0.40 → 0.70 → 1.00, a 26° swing against a true
+  (FDTD) signal that itself only moves 33° over the same range. Nothing
+  cancels in a relative ranking, and no fitted offset repairs it.
+- **The two methods rank the candidates differently**: FDTD orders
+  0.70 < 0.40 << 1.00 (best to worst); EME orders 0.40 < 0.70 < 1.00. EME gets
+  the worst point right and flips the two that matter.
+- Cause, as predicted: `EMESolver.solve()` draws one input and one output
+  branch per call and models no port crosstalk, and y_gap *is* the tip-to-tip
+  separation that sets crosstalk.
+
+### The evaluator that replaced it — `mmi_4x4_90hybrid_wg_eval.py`
+
+Hybrid path, not pure EME: 4 real FDTD input sections with **all four ports
+present simultaneously** (so crosstalk is real), cascaded with an EME body at
+`mode_solver="meep"` (same-engine bases, per `body_sweep.py`'s convention).
+Per point it also sweeps 81 lengths (`DELTA_L_GRID = linspace(-10, 10, 81)`,
+centred on `0.75·L_π` scaled as `W²` from the `mm_width=6.0` measurement) and
+returns the best — cheap, since tier-3 cache reconstructs `T` from cached
+`n_eff` with no new mode solve per length. Scalar objective, lower-is-better,
+0 = both specs met:
+
+    objective = 0.5·(max|Δφ| / 5°) + 0.5·max(0, (20 − min CMRR) / 20)
+
+**Measured per-point cost: 4:43:45 on 4 nodes** (job 12383245, the nominal
+point with no pre-cached body) — roughly 1.0-2.25 h body + 3-3.7 h FDTD input
+sections. That is 3-4× the earlier extrapolation from the offset sweep; budget
+from this number, not that one.
+
+### Why BO, not the 106-point grid
+
+At the measured 3.5-4.7 h/point, 106 points at the batch script's own 8-way
+concurrency cap is 45+ wall-clock hours *with nodes free on demand*, and this
+campaign has seen single 4-node requests pend 3.5-22 h. The grid
+(`mmi_4x4_90hybrid_ygap_grid.py`, `POINTS`) was never submitted as Phase B;
+`mmi_4x4_90hybrid_bo.py` replaced it over the **same** per-point evaluator and
+objective. Phase A's 5 body solves (job 12387804 + 12383245 backfilling
+W=6.0) are why `mm_width` is **Categorical on {5.0, 5.5, 6.0, 6.5, 7.0}**: on
+that lattice every candidate's body solve is a cache hit, and only the FDTD
+input sections are paid per point. `y_gap` stays continuous (it only changes
+which input sections are solved).
+
+### The 24 evaluated points (2026-09-01, `ygap_campaign_summary.txt`)
+
+| W | y_gap | taper | ΔL | mm_len | max\|Δφ\| | min CMRR | obj |
+|---|---|---|---|---|---|---|---|
+| 5.0 | 0.10 | 1.150 | −3.23 | 53.500 | 20.058 | 14.516 | 2.1429 |
+| 5.0 | 0.43 | 0.820 | −3.58 | 53.150 | 19.933 | 5.600 | 2.3533 |
+| 5.0 | 0.89 | 0.360 | −3.33 | 53.400 | 29.197 | 0.423 | 3.4091 |
+| 5.5 | 0.34 | 1.035 | −4.14 | 64.500 | 15.977 | 9.710 | 1.8549 |
+| 5.5 | 0.47 | 0.905 | −3.99 | 64.650 | 13.459 | 7.368 | 1.6617 |
+| 6.0 | 0.10 | 1.400 | −5.24 | 76.450 | 10.278 | 8.990 | 1.3030 |
+| 6.0 | 0.30 | 1.200 | −4.74 | 76.950 | 10.776 | 11.471 | 1.2908 |
+| 6.0 | 0.40 | 1.100 | −4.44 | 77.250 | 9.771 | 11.576 | 1.1877 |
+| 6.0 | 0.42 | 1.080 | −4.44 | 77.250 | 9.676 | 11.426 | 1.1819 |
+| 6.0 | 0.44 | 1.060 | −4.39 | 77.300 | 9.239 | 11.186 | 1.1442 |
+| 6.0 | 0.45 | 1.050 | −4.34 | 77.350 | 8.809 | 11.034 | 1.1050 |
+| 6.0 | 0.50 | 1.000 | −4.24 | 77.450 | 7.666 | 10.477 | 1.0047 |
+| 6.0 | 0.51 | 0.990 | −4.24 | 77.450 | 7.663 | 10.415 | 1.0060 |
+| 6.0 | 0.65 | 0.850 | −4.29 | 77.400 | 7.473 | 9.606 | 1.0071 |
+| 6.0 | 0.80 | 0.700 | −4.09 | 77.600 | 11.213 | 7.924 | 1.4232 |
+| 6.5 | 0.10 | 1.525 | −5.57 | 90.300 | 6.709 | 7.641 | 0.9799 |
+| 6.5 | 0.32 | 1.305 | −5.07 | 90.800 | 5.900 | 9.351 | 0.8562 |
+| 6.5 | 0.51 | 1.115 | −4.87 | 91.000 | 4.788 | 12.081 | 0.6767 |
+| **6.5** | **0.56** | **1.065** | **−4.87** | **91.000** | **4.764** | **12.109** | **0.6737** |
+| 6.5 | 0.65 | 0.975 | −4.67 | 91.200 | 6.093 | 11.672 | 0.8175 |
+| 6.5 | 0.85 | 0.775 | −4.12 | 91.750 | 10.824 | 7.939 | 1.3839 |
+| 7.0 | 0.21 | 1.540 | −5.34 | 105.850 | 9.475 | 6.221 | 1.2920 |
+| 7.0 | 1.11 | 0.640 | −3.44 | 107.750 | 17.026 | 3.419 | 2.1171 |
+| 7.0 | 1.36 | 0.390 | −3.29 | 107.900 | 24.179 | 1.399 | 2.8829 |
+
+**Best point: `mm_width=6.50`, `y_gap=0.56` (`taper_width=1.065`),
+`mm_length=91.0000` (ΔL=−4.87) — max|Δφ| = 4.764°, min CMRR = 12.109 dBe.**
+
+- **The phase spec is now MET** (4.764° ≤ 5°) — it was 12.32° at the settled
+  geometry in Check 4, and 8.09° at the nominal point once length was
+  optimized. This is the first geometry in this device's history to clear it.
+- **The CMRR spec is not close, anywhere.** Best CMRR over all 24 points is
+  14.516 dBe (W=5.0, y_gap=0.10) and that point's phase is 20.058° — 4× over
+  spec. Along the good-phase ridge CMRR saturates at 11-12 dBe. Nothing in
+  this 2D space approaches 20 dBe, and the two metrics trade off against each
+  other: the objective's own CMRR term never reaches 0.
+- Per-width picture: the objective improves monotonically 5.0 → 6.5 (2.14 →
+  1.66 → 1.00 → 0.674), and each width has an interior optimum near
+  `taper_width ≈ 0.85-1.12`, i.e. the good region tracks roughly constant
+  *taper width*, not constant *y_gap*.
+
+### ⚠ The GP has collapsed — MEASURED 2026-09-01, and the driver is now fixed
+
+Round 6's `propose` submitted **one** job instead of four: three of four
+candidates were `W=6.00` at `y_gap` 0.50/0.51/0.52, all inside an
+already-measured neighbourhood (W=6.00 y=0.50 and 0.51 were in hand at
+objective 1.0047/1.0060), and the driver's only guard was an exact-tuple
+`(mm_width, y_gap)` match, so it silently skipped 3 and shrank the round.
+
+Then measured directly: oversampling `opt.ask(n_points=16, strategy="cl_min")`
+returns **16 of 16** candidates inside 0.03 µm of an evaluated point — 15 at
+`W=6.00, y_gap=0.50-0.53` and one at `W=6.50, y_gap=0.55`. EI is effectively
+zero everywhere else; the acquisition is fully exploitative and the campaign
+cannot make progress by re-running `propose` as-is. (Each `ask` costs ~2-6 min
+of login-node GP fitting at 24 observations — `cl_min` refits per point.)
+
+`mmi_4x4_90hybrid_bo.py` changed, 2026-09-01:
+- `MIN_YGAP_SEP = 0.03` — a candidate within 0.03 µm of an evaluated point at
+  the **same** width is rejected, not just an exact duplicate. 3× the npz
+  naming precision, and well inside the objective differences the table shows
+  at 0.01 µm spacing (y_gap 0.50 vs 0.51: 1.0047 vs 1.0060).
+- `ASK_OVERSAMPLE = 4` — rejections are refilled from the GP's own ranking
+  instead of shrinking the round.
+- `explore_fill()` — farthest-point fallback in (width-index, y_gap-frac)
+  space when the GP cannot supply distinct candidates, so a round always
+  submits its full batch.
+- `propose --dry-run` — prints the round's candidates and submits nothing.
+  Use it before every round now; the GP's collapse was invisible until a job
+  had already been submitted.
+
+**But the fallback's own answer is not good enough either, and this is the
+load-bearing finding.** With the GP exhausted, `explore_fill` proposes
+`(5.5, 0.85)`, `(6.0, 1.10)`, `(5.0, 0.65)`, `(6.5, 1.15)` — all four in
+regions the table already shows are bad (large y_gap, or the two worst
+widths). Pure exploration would spend 4 × ~4 h on known-bad territory.
+
+### The real gap the GP cannot see: W=7.0's interior is unmeasured
+
+`W=7.0` has been sampled at `y_gap` 0.21, 1.11, 1.36 — `taper_width` 1.540,
+0.640, 0.390. **Every other width's optimum sits at `taper_width` ≈
+0.85-1.12; at W=7.0 that band is `y_gap` ≈ 0.63-0.90 — entirely unmeasured.**
+The GP will not ask for it because it works in `(mm_width, y_gap_frac)` space,
+where the good ridge is diagonal, and because EI has already collapsed onto
+W=6.00.
+
+Two things follow, both cheap (W=7.0's body is cached from Phase A):
+
+1. **Highest-information points available: `W=7.0, y_gap≈0.65`
+   (`taper_width=1.10`) and `W=7.0, y_gap≈0.40` (`taper_width=1.35`)** — they
+   decide whether the monotone 5.0 → 6.5 improvement continues past 6.5 or
+   turns over, which is the whole question of whether the width lattice needs
+   extending to 7.5/8.0 (each new width = one new ~1-2 h body solve).
+2. **Reparameterize the GP to `(mm_width, taper_width)`** instead of
+   `(mm_width, y_gap_frac)`. `y_gap = mm_width/4 − taper_width` is exact, so
+   **all 24 existing points convert for free, zero cluster time** — and the
+   ridge becomes axis-aligned, which an isotropic kernel can actually learn.
+   This is a coordinate change on the search only; the device, the evaluator
+   and the objective are untouched.
+
+### Open, needs a decision (2026-09-01)
+
+- **Job 12674307 (`beef_bo_W6.00_y0.52`, 4 nodes) is in flight and
+  redundant** — it is the one job round 6 managed to submit, 0.01-0.02 µm from
+  two points already measured at objective ≈1.006, and 0.33 in objective worse
+  than the best point. `scancel` on it was blocked by this session's tool
+  permissions; it needs to be cancelled by hand. Until it clears, `propose`
+  refuses to open a new round by design (one round outstanding at a time).
+- **The CMRR wall.** No point in the 2D space gets past ~12 dBe on the
+  good-phase ridge (spec: 20 dBe). Options, none yet chosen: extend the width
+  lattice upward (7.5/8.0, one body solve each); free a third parameter
+  (`taper_length`, `waveguide_width`, or decoupling `taper_width` from the
+  paper's Eq. 8 relation entirely); or accept the measured frontier and report
+  the device as phase-compliant / CMRR-limited.
+
+### ✅ Reparameterization landed + round 7 submitted (2026-09-01)
+
+`mmi_4x4_90hybrid_bo.py` now searches **`(mm_width, taper_width)`** —
+`Categorical(MM_WIDTHS)` × `Real(TAPER_MIN=0.36, TAPER_MAX=1.65)`, with
+`y_gap = mm_width/4 − taper_width`. Exact coordinate change, all 24 results
+converted with no new simulation. Immediate effect, visible in the first
+`--dry-run`: the GP's own top candidate became `W=7.00, taper=1.060`, i.e. it
+now asks for the ridge it could not see in `y_gap`-fraction space.
+
+Two further fixes found by that dry run:
+- **`TAPER_CLIP_SLACK = 0.02`, out-of-range candidates rejected not clipped.**
+  The `Real` dimension spans the *widest* width's taper range, so at
+  W=5.0-6.0 a large fraction of it is invalid; clipping collapsed those
+  candidates onto the same `y_gap = 0.10` floor point (3 of 4 in one round).
+- `propose --seed W,YGAP` (repeatable) — hand-picked points enter the round
+  ahead of the GP's candidates, for exactly the case where a documented
+  physics read beats an exhausted acquisition.
+
+**Round 7, submitted 2026-09-01, all four started immediately (4 nodes each,
+`gts-sr108-gedc_main`; W=6.5 and W=7.0 bodies both cached from Phase A, so
+~3-3.7 h/point expected):**
+
+| job | mm_width | y_gap | taper_width | what it decides |
+|---|---|---|---|---|
+| 12677821 | 7.0 | 0.65 | 1.100 | the ridge point at W=7.0 — same taper as W=6.0's 1.100 (obj 1.188) and near W=6.5's best 1.065/1.115 (obj 0.674/0.677). **Does the monotone 5.0 → 6.5 improvement continue past 6.5, or turn over?** |
+| 12677822 | 7.0 | 0.40 | 1.350 | the ridge's wide-taper side at W=7.0, against W=6.5's 1.305 (obj 0.856) |
+| 12677823 | 7.0 | 0.85 | 0.900 | the narrow-taper side, connecting to W=7.0's already-measured 0.640 (obj 2.117) — brackets 7.0's interior optimum from both sides |
+| 12677824 | 6.5 | 0.44 | 1.185 | fills the one real gap at the best width, between taper 1.115 (obj 0.677) and 1.305 (obj 0.856) |
+
+If W=7.0 at taper ≈ 1.10 beats 6.5's 0.674, the width lattice needs extending
+to 7.5/8.0 (one ~1-2 h Phase A body solve per new width). If it does not,
+`mm_width = 6.5` is the optimum on this lattice and the CMRR wall is the only
+remaining question — see the open decision above.
+
+### ✅ ROUND 7 LANDED — the width trend TURNS OVER at 6.5 (2026-09-01)
+
+All four jobs COMPLETED, **04:02:31 - 04:07:20** each (4 nodes). Per-section
+timing from the logs: ~3620-3720 s × 4 input sections, i.e. **the body was NOT
+a cache hit at these points** — the 3-3.7 h/point estimate assumed it was, so
+budget ~4.1 h/point for W=6.5-7.0 from now on.
+
+| job | W | y_gap | taper | max\|Δφ\| | min CMRR | obj |
+|---|---|---|---|---|---|---|
+| 12677821 | 7.0 | 0.65 | 1.100 | 6.534° | **13.587** | 0.8138 |
+| 12677822 | 7.0 | 0.40 | 1.350 | 6.552° | 8.909 | 0.9325 |
+| 12677823 | 7.0 | 0.85 | 0.900 | 10.047° | 10.928 | 1.2315 |
+| 12677824 | 6.5 | 0.44 | 1.185 | 4.980° | 10.895 | 0.7256 |
+
+**The question round 7 was built to answer is answered: the objective turns
+over at `mm_width = 6.5`.** W=7.0's own ridge point (taper 1.100, the same
+taper band where 6.0 and 6.5 optimize) lands at **0.8138 vs 6.5's 0.6737** —
+20% worse, and worse than three separate W=6.5 points. The monotone 5.0 → 6.5
+improvement (2.14 → 1.66 → 1.00 → 0.674) does not continue.
+
+**Consequence: do NOT extend the width lattice to 7.5/8.0.** That was the
+contingency in round 7's own table; it is now ruled out by measurement rather
+than left open, and the two Phase A body solves it would have needed are not
+worth spending.
+
+W=7.0's interior is now bracketed on both sides (taper 0.900 → 1.2315,
+1.100 → 0.8138, 1.350 → 0.9325), so 7.0's own best is ≈0.81 near taper 1.10 —
+still above 6.5's. W=6.5's optimum is bracketed to **taper 1.065-1.115**
+(y_gap 0.51-0.56): the new taper-1.185 point is 0.7256, worse than both.
+
+**New physics datum, and the most useful thing round 7 produced beyond the
+turn-over: CMRR on the good-phase ridge is still climbing with width.**
+Best min-CMRR at each width's ridge point: 6.0 → 11.576, 6.5 → 12.109,
+7.0 → **13.587** dBe. Phase moves the opposite way (9.771° → 4.764° →
+6.534°). So the two spec metrics are *anti-correlated in width* along the
+ridge, and the 20 dBe CMRR bar is not reachable by widening — 7.0 buys
+1.5 dBe of CMRR for 1.8° of phase, and the objective gets worse. **The CMRR
+wall is structural in this 2-parameter family, not a search failure.** That
+strengthens the case for freeing a third parameter over any further
+(mm_width, y_gap) search.
+
+**28 points evaluated. Best unchanged: `mm_width=6.50`, `y_gap=0.56`
+(taper 1.065), `mm_length=91.0` — max|Δφ| 4.764°, min CMRR 12.109 dBe,
+objective 0.6737.**
+
+### Round 8 — `taper_length` opened as a third axis (2026-09-01)
+
+**Why no round 8 in `(mm_width, y_gap)`, decided from the 28 points at zero
+cluster cost:**
+- The basin is flat: the top two points are 0.4% apart in objective (0.6737
+  vs 0.6767) and 0.05 µm apart in `y_gap`. Not resolvable at ~4.1 h/point.
+- **Re-scored every point with phase as a hard CONSTRAINT** —
+  `0.5·max(0, (max|Δφ| − 5)/5) + 0.5·max(0, (20 − CMRR)/20)`, giving no credit
+  for driving phase below spec, unlike the live objective's graded phase term
+  — and the ranking is **identical**, same top three in the same order
+  (W=6.5 at taper 1.065 / 1.115 / 1.185). The objective's shape is not hiding
+  a better region, so there is no "fix the objective and re-search" move.
+- Only **3 of 28** points meet the phase spec, all at W=6.5, and their CMRR
+  spans just 10.895-12.109 dBe. Best CMRR anywhere is 14.516 dBe at
+  (5.0, 0.10) — whose phase is 20.058°, 4× over spec.
+
+**The lever that aims at the failing metric.** The taper is 0.35 µm →
+`taper_width` over `TAPER_LENGTH`, and `TAPER_LENGTH` has been **1.0 µm** the
+whole campaign (the `MMI` class default, Step 2's placeholder). At the settled
+`taper_width=1.065` that is a 0.7 µm width change in 1.0 µm of length — steep
+enough to be non-adiabatic, which puts power into unwanted body modes. That
+shows up as the 6.5-8.4 dB excess loss and as output imbalance, and imbalance
+is exactly what caps CMRR.
+
+**⚠ This axis was closed once, on 2026-08-08, by the user's direct call — and
+that close does not survive the method change.** The null result came from
+`mmi_4x4_90hybrid_taper_sweep.py`, i.e. **pure EME**, the path this campaign
+later disqualified for this device (no port crosstalk; see the bias study
+above). Its "flat" answer was identical to 4 displayed digits between
+`taper_length` 1.0 and 3.0 µm — a 3× geometry change producing no digit of
+difference reads as solver insensitivity, not physics. Under this evaluator's
+FDTD input sections, with all four ports present, `taper_length` has never
+been measured. Reopened on that basis, not because the earlier decision was
+wrong on its own evidence.
+
+Code changes, both minimal and backward-compatible:
+- `mmi_4x4_90hybrid_wg_eval.py`: `TAPER_LENGTH` now reads
+  `MMI4X4_TAPER_LENGTH` (default 1.0, so every existing point is unchanged),
+  is echoed in the header log line, and is stored in the npz. The output
+  filename keeps the **exact** historical form at the default and gains a
+  `_tl<len>` tag otherwise.
+- `mmi_4x4_90hybrid_bo.py`: `absorb_disk()` now requires the filename to
+  equal `eval_W{w}_y{y}.npz` exactly. Without that guard a `_tl` file would
+  have parsed as the default-taper point at the same (W, y_gap) and
+  overwritten its objective with a different geometry's — silently.
+
+**Round 8, submitted 2026-09-01, 4 nodes each, `-t 720`:**
+
+| job | W | y_gap | taper_length | what it decides |
+|---|---|---|---|---|
+| 12699318 | 6.5 | 0.56 | 2.0 | best geometry, 2× taper |
+| 12699319 | 6.5 | 0.56 | 4.0 | 4× |
+| 12699320 | 6.5 | 0.56 | 8.0 | 8× — where adiabaticity should show if it is the mechanism |
+| 12699321 | 7.0 | 0.65 | 4.0 | does the lever's sign hold at the width with the best measured CMRR (13.587 dBe)? |
+
+`taper_length=1.0` at (6.5, 0.56) is the existing 0.6737 point, so no job
+spends time re-measuring the baseline. **If this comes back null under FDTD
+too, the honest conclusion is that the device is phase-compliant and
+CMRR-limited in this topology, and the campaign closes** — there is no further
+2-parameter search worth running.
+
+#### ✅ FIRST ROUND-8 RESULT — `taper_length` is REAL, not null (job 12699318, 2026-09-01)
+
+`W=6.5, y_gap=0.56, taper_length=2.0` — COMPLETED 04:06:17.
+
+| | taper_length=1.0 (baseline) | taper_length=2.0 | change |
+|---|---|---|---|
+| max\|Δφ\| | 4.764° | **4.154°** | −0.61° (−12.8%) |
+| min CMRR | 12.109 dBe | **13.021 dBe** | **+0.91 dBe** |
+| objective | 0.6737 | **0.5898** | −12.5% |
+| best mm_length | 91.00 | 91.50 | +0.5 |
+
+**Both metrics improved at once.** That is the important part, and it is
+qualitatively different from the `mm_width` axis, where phase and CMRR are
+anti-correlated (round 7: 7.0 bought +1.5 dBe of CMRR for +1.8° of phase and a
+worse objective). `taper_length` moves them together — consistent with the
+non-adiabaticity hypothesis, where a steeper taper injects power into unwanted
+body modes and degrades *both* the phase relationship and the output balance.
+Best objective on the campaign is now **0.5898**, beating the 28-point
+(mm_width, y_gap) optimum.
+
+**This directly contradicts the 2026-08-08 pure-EME null** (`taper_sweep.py`:
+"still exactly flat", identical to 4 displayed digits between tl=1.0 and 3.0).
+Under FDTD input sections with all four ports present, doubling the taper is
+worth 12.5% of the objective. The earlier flatness was the disqualified
+solver's insensitivity, exactly as suspected when the axis was reopened — the
+close was sound on its own evidence and wrong on the physics.
+
+Cost note: 4 FDTD input sections in 245.6 min (~3680 s each, same as tl=1.0 —
+taper length does not change per-section cost), and the **body solve + 7601-
+length sweep took 0.2 min**, i.e. a clean cache hit. The body depends on
+`mm_width` only, and that holds across `taper_length` too.
+
+Three jobs still running: tl=4.0 and tl=8.0 at the same geometry, and tl=4.0
+at (7.0, 0.65). **The open question is whether this keeps improving with
+length or turns over** — 2.0 is only the first step, and a monotone trend to
+8.0 would mean the taper should be longer still.
+
+#### tl=4.0 — the lever SATURATES fast (job 12699319, COMPLETED 04:20:12)
+
+| taper_length | max\|Δφ\| | min CMRR | objective | Δobj vs previous |
+|---|---|---|---|---|
+| 1.0 (baseline) | 4.764° | 12.109 dBe | 0.6737 | — |
+| 2.0 | 4.154° | 13.021 dBe | 0.5898 | **−0.0839** |
+| 4.0 | **4.133°** | **13.280 dBe** | **0.5813** | −0.0085 |
+
+**Doubling 1→2 bought 10× what doubling 2→4 bought.** Phase is essentially
+converged (4.154 → 4.133°, a 0.02° move), CMRR is still creeping (+0.26 dBe).
+The shape is a saturating curve, not a linear trend — the taper is already
+close to adiabatic by 2 µm, and the residual is something else.
+
+**Consequence for the CMRR wall: this lever does not open it.** Extrapolating
+the CMRR sequence (12.109 → 13.021 → 13.280, steps of +0.91 then +0.26) gives
+an asymptote near **13.4-13.5 dBe**, nowhere near the 20 dBe bar. Round 8 has
+found a real ~13% objective improvement and a better device, but it has not
+changed the campaign's headline conclusion.
+
+`mm_length` keeps drifting with taper length (91.00 → 91.50 → 91.80), as
+expected — a longer taper moves the effective self-imaging plane, and the
+per-point 81-length sweep re-finds it each time. Body solve was again a cache
+hit (0.3 min).
+
+tl=8.0 (12699320) will say whether the curve is flat or still creeping past 4.
+
+#### ⚠ W=7.0 at tl=4.0 — the width ordering FLIPS, round 7's turn-over was an artifact of the short taper (job 12699321, COMPLETED 04:23:35)
+
+`W=7.0, y_gap=0.65, taper_length=4.0` → **max|Δφ| = 3.732°, min CMRR = 13.672
+dBe, objective = 0.5314** — the best point of the entire campaign, beating
+W=6.5 at the same taper length (0.5813).
+
+| geometry | tl=1.0 | tl=4.0 | Δobj from the taper |
+|---|---|---|---|
+| W=6.5, y=0.56 | 0.6737 | 0.5813 | −0.092 |
+| W=7.0, y=0.65 | 0.8138 | **0.5314** | **−0.282** |
+
+**The two axes interact, and round 7's headline is now void.** Round 7
+concluded "the objective turns over at mm_width = 6.5" and, on that basis,
+ruled out extending the width lattice to 7.5/8.0. That conclusion was measured
+entirely at `taper_length = 1.0`. At tl=4.0 the ordering reverses: 7.0 beats
+6.5. The turn-over was not a property of the width axis — it was the wider
+device being hurt more by a non-adiabatic taper, which is exactly what one
+would expect, since a wider body supports more modes for a steep taper to
+scatter into.
+
+Per-metric, the mechanism is clear: **W=7.0's gain is almost entirely phase**
+(6.534° → 3.732°, −2.8°), while its CMRR barely moves (13.587 → 13.672 dBe).
+W=6.5's phase was already near-converged at 4.7° and had little to give.
+
+**Two consequences:**
+1. **`mm_width` 7.5 / 8.0 must be re-opened**, at tl≈4.0, not at tl=1.0. Each
+   new width costs one Phase A body solve (~1-2 h) plus ~4.4 h/point. The
+   "ruled out by measurement" note in the round 7 section above applies ONLY
+   at tl=1.0 and should not be cited without that qualifier.
+2. **Any conclusion in this document drawn from the 28-point (mm_width, y_gap)
+   campaign is conditional on `taper_length = 1.0`** — including the shape of
+   the ridge, the taper_width optimum, and the width trend. The 2D surface was
+   mapped with a systematically non-adiabatic taper.
+
+**The CMRR wall survives all of it.** Best CMRR anywhere is now 13.672 dBe
+against a 20 dBe spec, and the taper lever moved it +0.09 dBe at W=7.0. Phase
+is comfortably met (3.732° vs 5°); CMRR is not close, and nothing measured so
+far — width, y_gap, or taper length — moves it more than ~1.5 dBe.
+
+#### ✅ ROUND 8 COMPLETE — tl=8.0 landed (job 12699320, 04:35:12), and the saturation read was WRONG
+
+Full `taper_length` series at `W=6.5, y_gap=0.56`:
+
+| taper_length | max\|Δφ\| | min CMRR | objective | ΔCMRR per doubling |
+|---|---|---|---|---|
+| 1.0 | 4.764° | 12.109 dBe | 0.6737 | — |
+| 2.0 | 4.154° | 13.021 dBe | 0.5898 | +0.91 |
+| 4.0 | 4.133° | 13.280 dBe | 0.5813 | +0.26 |
+| 8.0 | 4.159° | **13.615 dBe** | **0.5755** | +0.34 |
+
+**Correction to the tl=4.0 entry above: CMRR is not saturating to 13.4-13.5.**
+That extrapolation was made from two steps (+0.91, +0.26) and the third step
+came in *larger* (+0.34), not smaller. The real behaviour is two different
+curves in one:
+- **Phase saturates hard.** 4.154° → 4.133° → 4.159° from tl=2 to tl=8 — a
+  0.026° spread, at or below this evaluator's own noise. The taper is
+  adiabatic for phase purposes by 2 µm, full stop.
+- **CMRR does not saturate; it creeps ~+0.3 dBe per doubling** and shows no
+  sign of stopping over 3 doublings. That is a logarithmic trend, not an
+  approach to an asymptote.
+
+**The logarithmic creep makes the CMRR verdict stronger, not weaker.** At
++0.3 dBe per doubling from 13.6, reaching the 20 dBe bar needs of order
+**twenty more doublings** — a taper millions of µm long. `taper_length` cannot
+deliver the spec even in principle, and the honest statement is now
+quantitative rather than a guess at an asymptote.
+
+**Round 8's verdict: the lever is REAL but it is a phase/loss lever, not a
+CMRR lever.** It bought a genuine 12-15% objective improvement at W=6.5, a 35%
+improvement at W=7.0, overturned round 7's width conclusion, and is worth
+keeping in the design (tl=4.0 is the sensible setting — tl=8.0 buys 0.006 of
+objective for 2× the taper footprint). It does not move the device toward
+CMRR compliance.
+
+### Campaign state after round 8 (2026-09-01)
+
+**Best geometry measured: `mm_width=7.0`, `y_gap=0.65` (taper_width=1.100),
+`taper_length=4.0`, `mm_length=106.85` — max|Δφ| = 3.732°, min CMRR = 13.672
+dBe, objective = 0.5314.** Phase spec MET with 25% margin. CMRR spec MISSED by
+6.3 dBe.
+
+32 evaluated points (28 at tl=1.0, 4 at tl>1.0). Round 8 cost 4 jobs at
+04:06-04:35 each; per-section FDTD cost is independent of taper length
+(~3680-4130 s), and the body remained a cache hit throughout (0.2-0.3 min),
+confirming body independence from `taper_length` as well as from `y_gap`.
+
+**The two open items, in priority order:**
+1. **`mm_width` 7.5 / 8.0 at tl=4.0** — round 7 ruled these out at tl=1.0 and
+   that ruling does not transfer (see the flip above). This is the only
+   remaining unexplored direction with evidence behind it: W=7.0 improved by
+   0.282 when given an adiabatic taper, and nothing says 7.5 will not.
+   Cost: one Phase A body solve per width (~1-2 h) + ~4.4 h/point.
+2. **The CMRR wall, now characterized rather than merely observed.** Three
+   independent levers have been measured against it: `mm_width` (±1.5 dBe,
+   anti-correlated with phase), `y_gap` (±1.5 dBe across the whole valid
+   range), `taper_length` (+0.3 dBe per doubling, logarithmic). None reaches
+   20 dBe. If the spec is to be met, it needs a change of kind — a different
+   port/aperture topology, or a re-read of what CMRR bar this device actually
+   has to hit — not another parameter sweep.
+
+### Round 9 — re-opening `mm_width` 7.5 / 8.0 at an adiabatic taper (2026-09-02)
+
+Item 1 from the round-8 close-out. Round 7 ruled these widths out; that ruling
+was measured at `taper_length=1.0` and does not transfer (see the tl=4.0 flip).
+
+**Phase A first — jobs 12735983_0 (W=7.5) and _1 (W=8.0), 1 node/8 ranks each,
+RUNNING from submit.** Body-only solves, so the four evaluation points that
+follow are cache hits on the body rather than each paying its own ~1-2 h solve
+— and, just as important, two points at the same width do not become two
+concurrent writers on one set of cache keys.
+
+`run_mmi_4x4_90hybrid_ygap_bodies.batch` now takes its width list from
+`MMI4X4_WIDTHS` (default: the original Phase A five, so `--array=0-4` is
+unchanged), and echoes the width per array task so the mapping is in the log
+rather than inferred. No `taper_length` is set — round 8 measured the body to
+be independent of it (tl=2/4/8 all hit the tl=1-era cache in 0.2-0.3 min).
+
+**Planned Phase B points, all at `taper_length=4.0`** (round 8's sensible
+setting: tl=8.0 bought only 0.006 of objective for 2× the footprint):
+
+| W | taper_width | y_gap | why |
+|---|---|---|---|
+| 7.5 | 1.10 | 0.775 | the constant-taper line through 6.5/7.0 — the direct width comparison |
+| 7.5 | 1.20 | 0.675 | the measured optimum taper drifts up with width (6.0 ≈ 0.85-1.00, 6.5 ≈ 1.065-1.115, 7.0 ≈ 1.10), so probe above the line too |
+| 8.0 | 1.10 | 0.900 | constant-taper line at the far end |
+| 8.0 | 1.20 | 0.800 | shifted-taper probe at the far end |
+
+**⚠ Methodological caveat to settle before these numbers are load-bearing.**
+Every width in this campaign is evaluated at `N_MODES = 16`, and that basis
+size was converged at `mm_width = 6.0` (see "Body/taper mode-count convergence
+investigation", 2026-08-09). The Step-1c width scope measured 24 guided modes
+at every width from 4.0 to 10.0 µm — the `n_request=24` cap — so a fixed
+16-mode basis is not obviously adequate at 8.0 just because it was at 6.0. If
+a wide point wins, re-run it at `N_MODES=20` before treating the win as real;
+if the wide points lose, the caveat does not matter, since a truncated basis
+would if anything flatter the wider device's self-imaging, not penalise it.
+
+Expect >4.4 h/point at these widths: `sim_width = mm_width + 3`, so the FDTD
+domain grows with the device (11 µm at W=8.0 vs 9.5 at 6.5). `-t 720` has
+ample headroom.
+
+#### ✅ Round 9 Phase A DONE, Phase B submitted (2026-09-02)
+
+Both body solves COMPLETED: **W=8.0 in 1:05:07** (body + 7601-length sweep in
+64.9 min), **W=7.5 in 1:10:09** (70.0 min) — 1 node/8 ranks each, in line with
+the original Phase A's 1.0-2.25 h range. `L_pi = 193.635 µm` at W=8.0, centre
+145.2 µm, comfortably inside the shared 20-400 µm length grid, so no grid
+widening is needed at these widths.
+
+The two W=8.0 points were submitted as soon as *its* body landed rather than
+waiting for W=7.5 — the bodies are per-width cache keys, so the still-running
+W=7.5 solve could not collide with them, and it saved an hour of wall clock.
+
+| job | W | y_gap | taper_width |
+|---|---|---|---|
+| 12737440 | 8.0 | 0.900 | 1.10 |
+| 12737441 | 8.0 | 0.800 | 1.20 |
+| 12737705 | 7.5 | 0.775 | 1.10 |
+| 12737706 | 7.5 | 0.675 | 1.20 |
+
+All at `taper_length=4.0`, 4 nodes/96 ranks, `-t 720`. Baselines to beat:
+**W=7.0 y=0.65 tl=4.0 → 3.732° / 13.672 dBe / 0.5314** (campaign best) and
+W=6.5 y=0.56 tl=4.0 → 4.133° / 13.280 dBe / 0.5813.
+
+#### ⚠⚠ W=8.0 BREAKS THE CMRR WALL — 17.664 dBe (job 12737440, COMPLETED 04:52:22)
+
+`W=8.0, y_gap=0.900 (taper 1.10), taper_length=4.0, mm_length=140.75` →
+**max|Δφ| = 6.794°, min CMRR = 17.664 dBe, objective = 0.7378.**
+
+CMRR by width along the constant-taper≈1.10 line, all at tl=4.0:
+
+| W | taper | max\|Δφ\| | min CMRR | objective |
+|---|---|---|---|---|
+| 6.5 | 1.065 | 4.133° | 13.280 dBe | 0.5813 |
+| 7.0 | 1.100 | 3.732° | 13.672 dBe | 0.5314 |
+| 8.0 | 1.100 | 6.794° | **17.664 dBe** | 0.7378 |
+
+**Correction, and it is a big one: my "the CMRR wall is structural, no lever
+moves it more than ~1.5 dBe" conclusion was wrong.** It was generalized from
+widths ≤ 7.0, where CMRR really does sit at 12-13.7 dBe. Going to 8.0 moves it
+**+4.0 dBe in one step** — 17.664 dBe, within 2.3 dBe of the 20 dBe spec, and
+by far the best CMRR this device has ever produced. The earlier statement
+should be read as "no lever moves CMRR within 5.0 ≤ mm_width ≤ 7.0", which is
+what was actually measured.
+
+**Why the objective still looks worse (0.7378 vs 0.5314):** phase degraded to
+6.794°, over the 5° bar, and the live objective grades phase linearly with no
+credit for meeting it. Under a phase-as-constraint scoring this point is
+`0.5·(6.794−5)/5 + 0.5·(20−17.664)/20 = 0.238`, which would make it the best
+point of the campaign by a wide margin, versus 0.197 for the old W=6.5
+optimum... i.e. **the two scorings now disagree about which geometry wins.**
+They agreed on all 28 earlier points; they do not agree here. That has to be
+resolved before anything is called "the" optimum — see below.
+
+**This is not a converged result yet, and the pre-registered caveat now
+matters.** Round 9's plan said: *"if a wide point wins, re-run it at
+`N_MODES=20` before treating the win as real."* A wide point has now won on
+the metric that was the whole problem, at `N_MODES = 16` — a basis converged at
+`mm_width = 6.0`, against a cross-section the Step-1c scope measured at 24
+guided modes. **The N_MODES=20 re-run is now required, not optional.**
+
+Cost note: 4 input sections in 291.7 min (~4380 s each vs ~3680 s at W=6.5-7.0
+— the `sim_width = mm_width + 3` domain growth, +19%/section as expected).
+`mm_length = 140.75 µm` at this width, still well inside the 20-400 grid.
+
+Three jobs still running, and two of them are now much more interesting than
+when they were submitted: `W=8.0 y=0.800` (taper 1.20 — does the wider taper
+recover the phase at this width?) and the two W=7.5 points, which bracket
+where the CMRR climb begins.
+
+#### ✅✅ W=8.0 AT taper 1.20 — BEST POINT OF THE CAMPAIGN, phase MET and CMRR 17.4 dBe (job 12737441, COMPLETED 04:53:23)
+
+`W=8.0, y_gap=0.800 (taper 1.20), taper_length=4.0, mm_length=140.70` →
+**max|Δφ| = 4.306° (MEETS the 5° spec), min CMRR = 17.393 dBe,
+objective = 0.4957.**
+
+The wider taper recovered the phase at this width without giving back the CMRR
+gain, which is exactly what the "optimum taper drifts up with width" trend
+predicted (6.0 ≈ 0.85-1.00, 6.5 ≈ 1.065, 7.0 ≈ 1.10, **8.0 ≈ 1.20**):
+
+| W | taper | max\|Δφ\| | min CMRR | obj (live) | obj (phase-as-constraint) |
+|---|---|---|---|---|---|
+| 6.5 | 1.065 | 4.133° | 13.280 | 0.5813 | 0.1973 |
+| 7.0 | 1.100 | 3.732° | 13.672 | 0.5314 | 0.1582 |
+| 8.0 | 1.100 | 6.794° | 17.664 | 0.7378 | 0.2379 |
+| **8.0** | **1.200** | **4.306°** | **17.393** | **0.4957** | **0.0652** |
+
+**The scoring disagreement flagged one entry above is resolved: this point
+dominates under BOTH scorings** — best live objective (0.4957 vs 0.5314) and
+best constraint objective (0.0652 vs 0.1582) in the campaign. No trade-off to
+adjudicate.
+
+**Where the device now stands: phase MET at 4.306°, CMRR 2.6 dBe short of the
+20 dBe bar** — against 12.109 dBe when this campaign's optimizer started, and
+against the "structurally capped ~13.6" I wrote yesterday. The campaign moved
+CMRR +5.3 dBe while keeping phase compliant.
+
+**Pre-registered confirmation now in flight: job 12748566** — body-only solve
+at `W=8.0, N_MODES=20`, 1 node/8 ranks. The evaluation point at N_MODES=20
+follows once that body lands. This is the round-9 plan's own gate on a wide
+win, and until it clears, the 17.4 dBe number is provisional.
+
+*(Note for anyone re-running this: `run_mmi_4x4_90hybrid_ygap_bodies.batch`
+takes its width from `MMI4X4_WIDTHS`, and the in-script `WIDTHS` assignment
+OVERRIDES a plain `MMI4X4_W` export — a first attempt at this job with
+`MMI4X4_W=8.0` would silently have solved W=5.0 instead. Caught before it ran;
+cancelled and resubmitted with `MMI4X4_WIDTHS="8.0"`, and the per-task echo
+in the log is what makes this checkable.)*
+
+#### W=7.5 at taper 1.10 — the CMRR climb is monotone AND accelerating (job 12737705, COMPLETED 04:58:40)
+
+`W=7.5, y_gap=0.775 (taper 1.10), taper_length=4.0, mm_length=123.45` →
+max|Δφ| = 5.229°, min CMRR = 15.251 dBe, objective = 0.6417.
+
+The constant-taper-1.10 line is now four points, all at tl=4.0:
+
+| W | max\|Δφ\| | min CMRR | ΔCMRR per +0.5 µm |
+|---|---|---|---|
+| 6.5 | 4.133° | 13.280 | — |
+| 7.0 | 3.732° | 13.672 | +0.39 |
+| 7.5 | 5.229° | 15.251 | +1.58 |
+| 8.0 | 6.794° | 17.664 | +2.41 |
+
+**CMRR rises monotonically with width and the steps are getting BIGGER, not
+smaller** (+0.39, +1.58, +2.41 dBe). Nothing in this sequence looks like an
+approach to a ceiling — which is the opposite of what the 5.0-7.0 range
+suggested, and the reason the "structural wall" reading was wrong.
+
+Phase along the same line degrades past 7.0 (3.732° → 5.229° → 6.794°), but
+that is recoverable: at W=8.0 moving the taper from 1.10 to 1.20 brought phase
+back to 4.306° while holding CMRR at 17.393 dBe. The per-width recipe is
+"widen the taper along with the body," and the un-recovered taper-1.10 points
+should be read as the *floor* of what each width can do on phase, not its best.
+
+**Extrapolating the trend, CMRR ≥ 20 dBe looks reachable near W ≈ 9** — with
+the same caveat as everything else here: it needs measuring, not extrapolating,
+and it needs the `N_MODES` question settled first, since basis adequacy is
+exactly what a wider body strains.
+
+*Minor bookkeeping wart, noted so it does not confuse a later reader: the npz
+for this point is named `eval_W7.50_y0.78_tl4.00.npz` — the filename rounds
+y_gap to 2 decimals, while the value actually simulated (and stored inside the
+npz) is 0.775. The BO driver's exact-filename guard means such a point is not
+absorbed into `bo_state.json` as a y=0.78 result, which is the safe failure
+mode, but the name should not be read as the geometry.*
+
+#### ✅ ROUND 9 PHASE B COMPLETE — and the two scorings now genuinely disagree (job 12737706, COMPLETED 04:59:49)
+
+`W=7.5, y_gap=0.675 (taper 1.20), taper_length=4.0, mm_length=123.15` →
+**max|Δφ| = 3.261° (best phase of the entire campaign), min CMRR = 15.495 dBe,
+objective = 0.4387 (best LIVE objective of the campaign).**
+
+All four round-9 points, tl=4.0:
+
+| W | taper | max\|Δφ\| | min CMRR | obj (live) | obj (constraint) |
+|---|---|---|---|---|---|
+| 7.5 | 1.10 | 5.229° | 15.251 | 0.6417 | 0.1417 |
+| 7.5 | 1.20 | **3.261°** | 15.495 | **0.4387** | 0.1126 |
+| 8.0 | 1.10 | 6.794° | 17.664 | 0.7378 | 0.2379 |
+| 8.0 | 1.20 | 4.306° | **17.393** | 0.4957 | **0.0652** |
+
+Two clean sub-results first:
+- **Taper 1.20 beats taper 1.10 at both new widths**, confirming the
+  taper-drifts-up-with-width recipe as a rule rather than a one-off at 8.0.
+- **Round 7's width turn-over is now fully dead.** With an adiabatic taper and
+  a width-matched taper_width, the objective improves monotonically
+  6.5 → 7.0 → 7.5, and 8.0 is better than everything on CMRR.
+
+**The scoring disagreement is now decision-relevant, and it needs settling.**
+The live objective ranks W=7.5/1.20 first (0.4387); phase-as-constraint ranks
+W=8.0/1.20 first (0.0652). The disagreement is real, not cosmetic: the live
+objective is still paying for phase improvements *below* the 5° spec — at
+3.261° it banks 0.326 of credit for margin the device cannot use — while
+treating a 4.5 dBe CMRR shortfall as the smaller problem.
+
+**Recommendation, and how this document will score from here: phase as a
+constraint, CMRR as the objective.** Both candidates meet the phase spec
+(3.261° and 4.306° against a 5° bar), so the only difference that reaches the
+finished device is CMRR, where 17.393 beats 15.495 by 1.9 dBe. On that basis
+**`W=8.0, y_gap=0.800, taper_width=1.20, taper_length=4.0, mm_length=140.70`
+is the best geometry this campaign has produced.** The earlier check that
+found the two scorings agreeing was run on the 28 tl=1.0 points, where nothing
+met the phase spec and the question could not arise; that check should not be
+cited as evidence they agree in general.
+
+**Round 9 answered item 1 in full: the width lattice DID need extending.**
+Round 7's "ruled out by measurement" was an artifact of `taper_length = 1.0`,
+and the widths it excluded contain the best points found so far — including
+the only ones above 15 dBe CMRR.
+
+**Still open, in flight:** the `N_MODES = 20` confirmation at W=8.0
+(body 12748566 running). Until it lands, every number in the table above
+carries the 16-mode-basis caveat, and the wide points carry it most.
+
+#### N_MODES=20 confirmation in flight — and a silent-overwrite bug caught on the way (2026-09-02)
+
+`W=8.0, N_MODES=20` body-only COMPLETED in **1:59:52** (119.4 min vs 64.9 min
+for the same body at N_MODES=16 — the larger basis costs ~1.8×). Evaluation
+point submitted as **job 12752148** (`W=8.0, y_gap=0.800, taper_length=4.0,
+N_MODES=20`).
+
+**Bug caught before it did damage: `wg_eval.py`'s npz filename encoded
+`mm_width`, `y_gap` and `taper_length` but NOT `N_MODES`.** The confirmation
+run would therefore have written to `eval_W8.00_y0.80_tl4.00.npz` — silently
+overwriting the N_MODES=16 result that it exists to be compared against, and
+destroying the very baseline the check needs. Two fixes, both applied while
+12752148 was still PENDING:
+
+1. `eval_W8.00_y0.80_tl4.00.npz` copied to
+   `eval_W8.00_y0.80_tl4.00_nmodes16.npz.bak` immediately (the running job
+   imports its code at start, so a patch alone could not be relied on to
+   protect it).
+2. `wg_eval.py` now appends `_n{N_MODES}` to the filename whenever
+   `N_MODES != 16`, and stores `n_modes` inside the npz. Same reasoning as the
+   `_tl` tag: **a basis-convergence re-run is a different measurement of the
+   same geometry, not a replacement for it.**
+
+This is the second naming-collision hazard in this campaign (the first was the
+`_tl` tag itself, guarded in `mmi_4x4_90hybrid_bo.py`'s `absorb_disk()`). The
+pattern to watch: every time an axis is added to this evaluator, its output
+name has to grow with it, or an old result gets overwritten by a new one that
+is not comparable to it.
+
+#### ✅✅ N_MODES=20 CONFIRMS THE WIDE WIN — basis is converged at W=8.0 (job 12752148, COMPLETED 06:54:36)
+
+Same geometry, same everything, basis 16 → 20:
+
+| | N_MODES=16 | N_MODES=20 | difference |
+|---|---|---|---|
+| max\|Δφ\| | 4.306° | 4.288° | 0.018° (0.4%) |
+| min CMRR | 17.393 dBe | 17.368 dBe | 0.025 dBe (0.14%) |
+| objective | 0.4957 | 0.4946 | 0.0011 (0.2%) |
+| wall time | 04:53:23 | 06:54:36 | +41% |
+
+**The 16-mode basis is adequate at `mm_width = 8.0`.** Every metric moves by
+well under 1%, far below the differences the campaign is ranking geometries
+on (the 6.5→8.0 CMRR gain is 4.1 dBe; this check's disagreement is 0.025 dBe,
+160× smaller). **The pre-registered gate is cleared and the wide-point result
+stands as measured** — 17.4 dBe CMRR with the phase spec met is real, not a
+truncation artifact.
+
+That also retires the standing worry that the whole width comparison was
+biased by a basis converged only at `mm_width = 6.0`: it now has a direct
+check at the far end of the range, where the strain is worst. Points between
+6.0 and 8.0 are bracketed by two confirmed widths, and no re-run of the
+intermediate widths is needed.
+
+Both npz files survive side by side — `eval_W8.00_y0.80_tl4.00.npz` (n=16) and
+`eval_W8.00_y0.80_tl4.00_n20.npz` — which is exactly what the `_n` filename
+tag added an hour earlier exists to guarantee.
+
+**Round 9 is COMPLETE.** Final campaign state:
+
+- **Best geometry: `mm_width=8.0`, `y_gap=0.800`, `taper_width=1.20`,
+  `taper_length=4.0`, `mm_length=140.70` — max|Δφ| = 4.31° (spec ≤5°, MET),
+  min CMRR = 17.39 dBe (spec ≥20 dBe, 2.6 dBe short).** Basis-converged.
+- Campaign progress on CMRR: 12.109 dBe (28-point 2D optimum, tl=1.0) →
+  13.672 (tl=4.0 at W=7.0) → **17.393** (W=8.0, width-matched taper). Phase
+  has stayed inside spec throughout the last three of those.
+- Three of this document's own conclusions were overturned by measurement in
+  the last two days, each recorded above rather than quietly edited: the
+  width turn-over at 6.5 (round 7 — artifact of `taper_length=1.0`), the
+  `taper_length`-is-null close of 2026-08-08 (artifact of pure EME), and the
+  "CMRR wall is structural at ~13.6 dBe" reading (artifact of never having
+  measured above `mm_width = 7.0`).
+
+**The one open direction: `mm_width` 8.5 / 9.0.** The CMRR-vs-width steps are
++0.39, +1.58, +2.41 dBe per +0.5 µm and still growing; a linear read of the
+last two steps puts 20 dBe near W ≈ 8.5-9.0. Each new width needs one Phase A
+body (~2 h at N_MODES=16) plus ~5 h/point, and taper_width should start near
+1.25-1.30 following the width-matched-taper rule.
+
+### ✅ Excess-loss audit — loss does NOT degrade with width (job 12780374, 2026-09-03)
+
+**The gap this closes:** `wg_eval.py` recorded only `max|Δφ|` and `min CMRR`
+for all 33 campaign points, while the optimum was being driven from
+`mm_width` 6.5 → 8.0 and `mm_length` 91 → 141 µm. Neither recorded metric can
+see a device getting lossier as it grows, so the ranking that named W=8.0 best
+rested on two of the three numbers that decide whether the device is usable.
+
+`metrics_at()` now also returns `max_excess_loss_db` and `max_imbalance_db`
+(max over both driven ports), printed and stored in the npz. **The objective is
+deliberately unchanged** — these are recorded, not optimised, so every ranking
+already in this document stays comparable. A new `MMI4X4_CACHE_ONLY` flag
+threads `cache_only=True` into both the FDTD sections and the body length
+sweep, so an already-simulated geometry can be re-scored with **zero new
+simulation** and a cache miss raises instead of silently starting a 5 h solve.
+
+**Audit: 7 geometries, all cache hits, COMPLETED in 02:26** — the entire
+recovery cost 2.5 minutes of one node, against ~35 h of FDTD already banked.
+
+| W | y_gap | taper | tl | max\|Δφ\| | min CMRR | **max XL** | **max imb** |
+|---|---|---|---|---|---|---|---|
+| 6.5 | 0.56 | 1.065 | 1.0 | 4.764° | 12.109 | **4.076 dB** | **5.202 dB** |
+| 6.5 | 0.56 | 1.065 | 4.0 | 4.133° | 13.280 | 2.940 | 4.535 |
+| 7.0 | 0.65 | 1.100 | 4.0 | 3.732° | 13.672 | 3.340 | 3.976 |
+| 7.5 | 0.775 | 1.100 | 4.0 | 5.229° | 15.251 | 2.980 | 2.698 |
+| 7.5 | 0.675 | 1.200 | 4.0 | 3.261° | 15.495 | 3.036 | 3.117 |
+| 8.0 | 0.900 | 1.100 | 4.0 | 6.794° | 17.664 | 3.314 | 2.409 |
+| **8.0** | **0.800** | **1.200** | **4.0** | **4.306°** | **17.393** | **2.956** | **2.129** |
+
+**Every phase and CMRR value reproduces the original run exactly** — same
+digits, from cache, through a code path that now computes four metrics instead
+of two. That is a free end-to-end check on the section cache and on the audit
+itself, and it passed. Zero `AUDIT FAILED` lines.
+
+**Three findings:**
+
+1. **Excess loss is FLAT in `mm_width`: 2.94-3.34 dB across 6.5 → 8.0, with no
+   trend and no monotonicity** (2.94, 3.34, 2.98/3.04, 3.31/2.96). The concern
+   that drove this audit — that the campaign was optimising toward a longer,
+   lossier device without measuring it — **is not borne out.** Doubling the
+   body length from 91 to 141 µm costs nothing measurable in excess loss.
+2. **Imbalance IMPROVES monotonically with width: 4.535 → 3.976 → 2.698 →
+   2.129 dB.** This is the mechanism behind the CMRR climb rather than an
+   independent result — CMRR is set by the amplitude balance of the paired
+   outputs, so imbalance falling and CMRR rising are two views of one effect.
+   It is the first *physical* explanation the campaign has for why wider is
+   better, as opposed to an empirical trend.
+3. **`taper_length` is also a loss lever, retro-confirming its mechanism.**
+   At W=6.5, going tl=1.0 → 4.0 cut excess loss **4.076 → 2.940 dB (−1.14 dB)**
+   and imbalance 5.202 → 4.535 dB. Round 8 argued the taper was non-adiabatic
+   and scattering power into unwanted modes, but could not show it because loss
+   was not recorded then. It is now: the lengthened taper recovers over a dB.
+
+**The ranking is unchanged, and is now better supported than before.**
+`W=8.0, y_gap=0.800, taper 1.20, tl=4.0` has the best CMRR of any
+phase-compliant point, the **lowest imbalance (2.129 dB)** and the
+second-lowest excess loss (2.956 dB) of all seven. It wins on every recorded
+metric except phase, where W=7.5/1.20's 3.261° beats its 4.306° — and both
+meet the 5° spec, so that margin is not usable.
+
+*Absolute caveat, unchanged by this audit: ~3 dB of excess loss is still
+substantial (half the power) for a coherent-receiver front end. It is simply
+not a function of width, so it is a separate problem from the one this
+campaign has been solving, and it should not be read as "fixed."*
+
+### Round 10 — `mm_width` 8.5 / 9.0, chasing the 20 dBe CMRR bar (2026-09-03)
+
+Motivated by round 9's CMRR-vs-width steps (+0.39, +1.58, +2.41 dBe per
++0.5 µm, still growing) and cleared to proceed by the excess-loss audit, which
+showed loss flat in width so a wider device is not being bought with loss.
+
+**Phase A done:** W=8.5 COMPLETED 01:11:29 (body + 7601-length sweep in
+71.2 min), W=9.0 COMPLETED 01:27:23 (87.2 min) — 1 node/8 ranks each. Body cost
+grows with width (64.9 → 71.2 → 87.2 min at 8.0 → 8.5 → 9.0) but stays cheap
+next to a ~5 h evaluation point.
+
+**Phase B submitted, all at `taper_length=4.0`,** following the
+width-matched-taper rule (measured optima: 6.5 → 1.065, 7.0 → 1.10,
+7.5 → 1.20, 8.0 → 1.20), so each width is probed at taper 1.20 and 1.30:
+
+| job | W | y_gap | taper_width | expected mm_length |
+|---|---|---|---|---|
+| 12783703 | 8.5 | 0.925 | 1.20 | ~164 µm (0.75·L_π, L_π ≈ 218) |
+| 12783704 | 8.5 | 0.825 | 1.30 | ~164 µm |
+| 12783705 | 9.0 | 1.05 | 1.20 | ~184 µm (L_π ≈ 245) |
+| 12783706 | 9.0 | 0.95 | 1.30 | ~184 µm |
+
+Both widths are well inside the validity bound (`y_gap < mm_width/4 − 0.35`,
+i.e. < 1.775 at 8.5 and < 1.90 at 9.0) and inside the 20-400 µm length grid.
+Expect >5 h/point — the FDTD domain is `mm_width + 3`, so 12 µm wide at W=9.0
+against 11 at 8.0, on top of the longer body.
+
+**What decides the outcome:** whether `min CMRR` crosses **20 dBe** while
+`max|Δφ|` stays under 5°, with excess loss still near 3 dB. Beating the
+current best needs CMRR > 17.393 dBe at a phase-compliant point.
+
+#### W=8.5 at taper 1.20 — best CMRR yet (18.126 dBe), but phase breaks the spec (job 12783703, COMPLETED 05:30:53)
+
+`W=8.5, y_gap=0.925 (taper 1.20), taper_length=4.0, mm_length=159.40` →
+**max|Δφ| = 5.438° (FAILS the 5° bar by 0.44°), min CMRR = 18.126 dBe (best of
+the campaign), max XL = 2.949 dB, max imbalance = 2.413 dB, objective 0.5906.**
+
+Against the current best (W=8.0, taper 1.20 — 4.306°, 17.393 dBe, XL 2.956,
+imb 2.129):
+- **CMRR: +0.73 dBe, a new campaign high**, now 1.87 dBe from the 20 dBe spec.
+- **Excess loss: FLAT — 2.949 vs 2.956 dB.** The audit's finding holds at the
+  new width; loss is still not a function of `mm_width`.
+- **Phase: FAILS.** 5.438° vs 4.306°.
+- Imbalance ticked up slightly (2.413 vs 2.129 dB), tracking the phase.
+
+**This is the same pattern W=8.0 showed at taper 1.10** — a wider body at a
+taper that has not widened with it overshoots on phase while still gaining
+CMRR. There, moving taper 1.10 → 1.20 recovered phase (6.794° → 4.306°) at
+essentially no CMRR cost. **The companion point `W=8.5, taper 1.30`
+(job 12783704) is exactly that probe at this width**, and it is the one that
+decides whether 8.5 beats 8.0.
+
+**Caution on the extrapolation that motivated round 10.** Along the *taper
+1.20* line, CMRR now reads 15.495 (7.5) → 17.393 (8.0) → 18.126 (8.5): steps
+of **+1.90 then +0.73 — decelerating**, unlike the accelerating steps seen
+along the taper-1.10 line. If that deceleration is real, 20 dBe is further
+away than the linear read suggested, and W=9.0 (already queued) may land near
+18.5-19 rather than clearing the bar.
+
+#### ✅✅ W=8.5 at taper 1.30 — NEW BEST ON EVERY METRIC (job 12783704, COMPLETED 05:28:43)
+
+`W=8.5, y_gap=0.825 (taper 1.30), taper_length=4.0, mm_length=159.30` →
+**max|Δφ| = 3.933° (MEETS 5°), min CMRR = 18.482 dBe (campaign high),
+max XL = 2.706 dB (campaign LOW), max imbalance = 1.972 dB (campaign low),
+objective = 0.4312 (best live objective of the campaign).**
+
+vs the previous best (W=8.0, taper 1.20):
+
+| | W=8.0 / 1.20 | **W=8.5 / 1.30** | change |
+|---|---|---|---|
+| max\|Δφ\| | 4.306° | **3.933°** | −0.373° |
+| min CMRR | 17.393 dBe | **18.482 dBe** | **+1.09 dBe** |
+| max excess loss | 2.956 dB | **2.706 dB** | −0.25 dB |
+| max imbalance | 2.129 dB | **1.972 dB** | −0.16 dB |
+| objective (live) | 0.4957 | **0.4312** | better |
+| objective (constraint) | 0.0652 | **0.0380** | better |
+
+**No trade-off anywhere: it wins on all four measured quantities and under
+both scorings.** The scoring ambiguity that had to be adjudicated at W=7.5 vs
+8.0 does not arise here.
+
+**The taper-widening recipe is confirmed a third time.** At this width,
+taper 1.20 → 1.30 moved phase 5.438° → 3.933° (recovering the spec) *and*
+raised CMRR 18.126 → 18.482 dBe — the same "widen the taper with the body"
+pattern seen at W=8.0 (1.10 → 1.20) and W=7.5 (1.10 → 1.20). The per-width
+optimum taper now reads: 6.5 → 1.065, 7.0 → 1.10, 7.5 → 1.20, 8.0 → 1.20,
+**8.5 → 1.30**.
+
+**Excess loss did not just stay flat — it improved to the campaign minimum**
+(2.706 dB), and imbalance to 1.972 dB. The loss audit's conclusion (loss is
+not a function of width) survives at 8.5, and the imbalance-falls-with-width
+trend that explains the CMRR climb continues: 4.535 → 3.976 → 2.698 → 2.129
+→ **1.972 dB**.
+
+**Still 1.52 dBe short of the 20 dBe CMRR spec.** The two W=9.0 points
+(12783705 taper 1.20, 12783706 taper 1.30) are running and will say whether
+the remaining gap closes at the next width.
+
+#### ✅ ROUND 10 COMPLETE — W=9.0 lands, and the CMRR climb has PLATEAUED (jobs 12783705/12783706, COMPLETED 05:52)
+
+| W | taper | max\|Δφ\| | min CMRR | max XL | max imb | obj (live) |
+|---|---|---|---|---|---|---|
+| 9.0 | 1.20 | 5.965° (FAILS) | 16.593 | 2.651 | 2.932 | 0.6817 |
+| 9.0 | 1.30 | 4.499° (meets) | **18.488** | 2.671 | 2.363 | 0.4877 |
+| **8.5** | **1.30** | **3.933°** | **18.482** | **2.706** | **1.972** | **0.4312** |
+
+**The decisive number: W=9.0 at taper 1.30 gives 18.488 dBe against W=8.5's
+18.482 dBe — a difference of 0.006 dBe, i.e. nothing.** The best-at-width CMRR
+sequence is now 17.393 (8.0) → 18.482 (8.5) → **18.488 (9.0)**: steps of
++1.09 then **+0.006**. The climb that motivated rounds 9 and 10 has flattened
+into a plateau at ≈18.5 dBe.
+
+**Round 10's question is answered: the 20 dBe CMRR spec is NOT reachable by
+widening `mm_width`.** The linear extrapolation that put 20 dBe "near W ≈ 9"
+was wrong — the deceleration first visible along the taper-1.20 line
+(+1.90 → +0.73) continued to zero. This supersedes that projection.
+
+**W=8.5 / taper 1.30 stays the best geometry**, and W=9.0 is worse on every
+metric that separates them: phase 4.499° vs 3.933°, imbalance 2.363 vs 1.972
+dB, objective 0.4877 vs 0.4312. Only excess loss is a wash (2.671 vs 2.706 dB,
+both at the campaign floor). The width axis has genuinely turned over this
+time — at *matched* taper, not at a stale taper as in round 7.
+
+**Caveat, stated because it is the one loose end.** W=9.0 was probed at tapers
+1.20 and 1.30 only, while the per-width optimum taper has been drifting up
+(8.0 → 1.20, 8.5 → 1.30), so 9.0's own optimum may be ≈1.40 and was not
+measured. A single point at `W=9.0, y_gap=0.85 (taper 1.40)` would close it.
+It is unlikely to change the conclusion — 9.0/1.30 already matches 8.5/1.30 on
+CMRR while losing on phase and imbalance — but "the plateau" rests on one
+matched-taper comparison until that point exists.
+
+### Campaign summary — where the device stands (2026-09-04)
+
+**Best geometry: `mm_width=8.5`, `y_gap=0.825`, `taper_width=1.30`,
+`taper_length=4.0`, `mm_length=159.30` — max|Δφ| = 3.933° (spec ≤5°, MET with
+21% margin), min CMRR = 18.482 dBe (spec ≥20 dBe, 1.52 dBe short),
+excess loss = 2.706 dB, imbalance = 1.972 dB.**
+
+Progress from the campaign's own starting point (the 28-point 2D optimum at
+`mm_width=6.5`, `taper_length=1.0`):
+
+| | start | **now** | change |
+|---|---|---|---|
+| max\|Δφ\| | 4.764° | 3.933° | −0.83° |
+| min CMRR | 12.109 dBe | **18.482 dBe** | **+6.37 dBe** |
+| excess loss | 4.076 dB | **2.706 dB** | **−1.37 dB** |
+| imbalance | 5.202 dB | **1.972 dB** | **−3.23 dB** |
+
+Every measured quantity improved, and phase stayed inside spec throughout.
+
+**Levers measured against the CMRR spec, and what each is worth:**
+- `taper_length` (rounds 8): +1.5 dBe from tl=1→8, logarithmic, ~+0.3/doubling
+- `mm_width` (rounds 9-10): +5.1 dBe from 6.5→8.5, then **plateaus at 8.5**
+- `y_gap` / `taper_width`: sets whether a width meets phase at all; the
+  width-matched-taper rule (6.5→1.065, 7.0→1.10, 7.5→1.20, 8.0→1.20,
+  8.5→1.30) is the single most reliable finding of the campaign
+- `mm_length`: re-optimized per point, worth ~1-2 dBe within a width
+
+**The remaining 1.5 dBe is not available from any parameter this campaign has
+searched.** Closing it needs a change of kind — a different port/aperture
+topology, a non-linear taper profile, or a re-read of what CMRR bar this
+device actually has to hit.
+
+### ⚠⚠ THE DEVICE IS BANDWIDTH-LIMITED, NOT LOSS- OR CMRR-LIMITED (job 12831929, 2026-09-04)
+
+Five cache-only probes, **01:30 total, zero new simulation**, printing the
+per-wavelength breakdown the campaign never recorded. New script
+`mmi_4x4_90hybrid_band_probe.py` reuses wg_eval's own solvers and cascade but
+keeps the wavelength axis instead of collapsing it, and scores each geometry at
+the `best_mm_length` stored in that geometry's own npz. Zero cache misses.
+
+**Best geometry (`W=8.5, y_gap=0.825, taper 1.30, tl=4.0`), per wavelength:**
+
+| λ (µm) | max\|Δφ\| | min CMRR | max XL | max imb |
+|---|---|---|---|---|
+| 1.290 | 3.933° | 18.734 | 2.706 | 1.619 |
+| **1.310** | **3.490°** | **20.761** | **0.654** | **0.940** |
+| 1.330 | 3.930° | 18.482 | 1.696 | 1.972 |
+| **BAND (reported)** | 3.933° | 18.482 | 2.706 | 1.972 |
+| band-edge penalty | 0.44° | **2.28 dBe** | **2.05 dB** | **1.03 dB** |
+
+**At 1.310 µm the device MEETS the 20 dBe CMRR spec (20.761 dBe) and its excess
+loss is 0.654 dB.** The 1.52 dBe CMRR shortfall and three-quarters of the
+2.7 dB "excess loss" are **band-edge effects, not a lossy or unbalanced
+device.** Every conclusion this document has drawn about "the CMRR wall" and
+"~3 dB of excess loss" describes a ±20 nm *bandwidth* limit, not the device at
+its design wavelength.
+
+W=9.0 is even starker and asymmetric: CMRR reads 21.044 / 21.159 / 18.488 at
+1.29 / 1.31 / 1.33 — **it clears 20 dBe at two of three wavelengths and fails
+only at the red edge.** An asymmetric band response means the operating point
+is not centred, which is a length-tuning question, not a geometry question.
+
+**Answering the question that prompted this — would optimising over
+1310 ± 10 nm instead of ± 20 nm help?** Yes, substantially, and it should be
+called what it is:
+- It would recover a large share of the 2.28 dBe CMRR and 2.05 dB loss penalty,
+  very likely putting CMRR over the bar. **That is a specification change, not
+  a design improvement** — the same fabricated device, judged over a narrower
+  band.
+- **It is not yet quantified.** The cached solves are at 1.29/1.31/1.33 only;
+  1.30 and 1.32 are new cache keys and need a real ~5.5 h FDTD run at the
+  chosen geometry. The ±10 nm worst case lies somewhere between the centre and
+  ±20 nm values, and the sampling here (3 points) cannot say where.
+- The honest framing for a write-up: report both bands, or state the band with
+  the numbers rather than quoting a band-worst figure without it.
+
+**Excess loss IS basis-converged — the 2.7 dB is physical, not truncation.**
+The N_MODES=20 confirmation predated loss recording, so this pair closes it at
+`W=8.0, y_gap=0.800, tl=4.0`:
+
+| | N_MODES=16 | N_MODES=20 | difference |
+|---|---|---|---|
+| max XL | 2.956 dB | 2.975 dB | +0.019 (0.6%) |
+| max XL at 1.31 | 0.755 dB | 0.755 dB | 0.000 |
+| max imb | 2.129 dB | 2.266 dB | +0.137 (6.4%) |
+| min CMRR | 17.393 dBe | 17.368 dBe | −0.025 |
+
+Loss agrees to 0.6% and at band centre to three decimals. Imbalance moves 6.4%
+at the 1.33 edge (1.4% at centre) — same order, not a truncation artifact.
+**So a `waveguide_width` sweep aimed at "fixing 2.7 dB of loss" would be
+chasing a band-edge number, and the centre-wavelength loss it would target is
+already 0.654 dB.**
+
+**Follow-up launched, also free: job 12832166,
+`mmi_4x4_90hybrid_length_rescore.py`.** Every published length in this campaign
+was chosen by minimising the live objective, which grades phase linearly and so
+keeps buying phase margin *below* the 5° spec at CMRR's expense. The cached
+7601-length sweep is re-scored under two further rules — phase-as-constraint,
+and maximise band-worst CMRR subject to |Δφ| ≤ 5° — across the five best
+geometries. If a different length balances the band, **the 20 dBe spec may be
+reachable at ±20 nm with no change to the fabricated geometry at all.**
+
+#### ❌ Length re-selection buys NOTHING — hypothesis refuted (job 12832166, COMPLETED 01:33)
+
+The idea tested: every published length was chosen by minimising the live
+objective, which grades phase linearly and so keeps buying phase margin below
+the 5° spec at CMRR's expense; a length that balanced the band instead might
+lift band-worst CMRR over 20 dBe with no geometry change. **It does not.**
+
+All three selection rules — live objective, phase-as-constraint, and
+maximise-band-worst-CMRR-subject-to-|Δφ|≤5° — pick the **identical** length at
+every geometry:
+
+| W | y_gap | taper | mm_length (all 3 rules) | max\|Δφ\| | min CMRR | XL | imb | phase-compliant lengths |
+|---|---|---|---|---|---|---|---|---|
+| 8.5 | 0.825 | 1.30 | 159.30 | 3.933° | 18.482 | 2.706 | 1.972 | 19 / 7601 |
+| 9.0 | 0.95 | 1.30 | 179.35 | 4.499° | 18.488 | 2.671 | 2.363 | 15 / 7601 |
+| 8.0 | 0.800 | 1.20 | 140.70 | 4.306° | 17.393 | 2.956 | 2.129 | 20 / 7601 |
+| 8.5 | 0.925 | 1.20 | 159.40 | 5.438° | 18.126 | 2.949 | 2.413 | **0 / 7601** |
+| 9.0 | 1.05 | 1.20 | 179.65 | 5.965° | 16.593 | 2.651 | 2.932 | **0 / 7601** |
+
+**The length axis is exhausted.** The published lengths were already optimal
+under every rule, so the campaign's phase-weighted objective never cost it any
+CMRR — a nice retro-validation of ~40 points' worth of length selection, and a
+clean refutation of the hypothesis that motivated this job. **The 20 dBe spec
+is NOT reachable at 1310 ± 20 nm by length tuning with the geometry fixed.**
+
+Two side findings worth keeping:
+- **Only 15-20 of 7601 lengths (≈0.25%) meet the phase spec at all** — about
+  1 µm of usable length in narrow islands. Comfortable for lithography
+  (±0.1 µm is routine), but it means length is a knife-edge parameter that
+  cannot be traded for anything else, which is exactly why all three rules
+  agree.
+- **The two taper-mismatched geometries have ZERO phase-compliant lengths out
+  of 7601.** A taper that has not widened with the body cannot be rescued by
+  any length whatsoever — the strongest form yet of the width-matched-taper
+  rule (6.5→1.065, 7.0→1.10, 7.5→1.20, 8.0→1.20, 8.5→1.30).
+
+**Where that leaves the 1.5 dBe gap.** Two routes remain, and they are
+different in kind:
+1. **Narrow the judging band.** At 1.310 µm the device already makes
+   20.761 dBe. A ±10 nm worst case is bounded between that and the ±20 nm
+   figure, but is unmeasured — 1.30/1.32 are new cache keys and cost one
+   ~5.5 h job at the best geometry. This is a specification decision.
+2. **Change of kind** — different port/aperture topology, or a non-linear
+   taper profile (noting the 1×4 tapered-body work in this repo closed both
+   profiles after a doubled-resolution, 2×-length search, with a
+   good-balance/bad-total-T signature pointing at radiative loss).
+
+A `waveguide_width` sweep is NOT on that list any more: the loss it would
+target is a band-edge number (0.654 dB at centre), and loss was just shown
+basis-converged.
+
+#### ❌ 1310 ± 10 nm does NOT reach spec — narrowing the band is not worth it (job 12852577, COMPLETED 07:00:22)
+
+Same geometry (`W=8.5, y_gap=0.825, taper 1.30, tl=4.0`), re-optimised over
+**1.30 / 1.31 / 1.32 µm**. Nothing was cached at this band, so this was a full
+fresh run: 4 FDTD input sections (346.3 min) plus a fresh body solve.
+
+| | ±20 nm (1.29-1.33) | **±10 nm (1.30-1.32)** | 1.310 µm alone |
+|---|---|---|---|
+| max\|Δφ\| | 3.933° | **3.691°** | 3.490° |
+| min CMRR | 18.482 dBe | **18.902 dBe** | 20.761 dBe |
+| max excess loss | 2.706 dB | **2.658 dB** | 0.654 dB |
+| max imbalance | 1.972 dB | **1.652 dB** | 0.940 dB |
+| objective | 0.4312 | **0.3966** | — |
+| best mm_length | 159.30 | **157.70** | — |
+
+**Halving the band buys +0.42 dBe of CMRR and 0.05 dB of loss. It does not
+reach the 20 dBe spec (18.902), and it does not fix the loss (2.658 dB).**
+
+**Correction to this document's own prediction.** The previous section argued
+narrowing "would recover a large share of the 2.28 dBe CMRR penalty, very
+likely putting CMRR over the bar." **That was wrong — it recovers 18% of it
+(0.42 of 2.28 dBe).** The error was assuming a smooth, roughly quadratic
+wavelength dependence, so that halving the band would remove most of the
+edge penalty. The measurement says the dependence is far steeper near centre:
+by ±10 nm the device has already given up 1.86 dBe of CMRR and 2.00 dB of
+excess loss relative to 1.310 µm. **The 20.761 dBe / 0.654 dB figures at
+1.310 µm are a narrow peak, not a plateau** — which is consistent with the
+length sensitivity found by the re-score (only ~0.25% of lengths meet the
+phase spec).
+
+Note this is the *generous* reading of "narrow the spec": mm_length was
+re-optimised for the narrow band (159.30 → 157.70 µm), so this is a device
+redesigned for ±10 nm, not merely the ±20 nm device judged over a smaller
+window. The plain re-labelling would score no better than this.
+
+**Verdict: do not adopt 1310 ± 10 nm.** It halves the operating bandwidth,
+still misses CMRR, and leaves excess loss essentially unchanged — the worst
+kind of trade. **Report the device at ±20 nm.**
+
+**What this settles about the device.** The CMRR ceiling is not a
+bandwidth-accounting artifact after all. Both bands land at 18.5-18.9 dBe, and
+the only place 20 dBe appears is a single wavelength. The remaining route to
+spec is a change of kind — port/aperture topology or a non-linear taper
+profile — and that is now the only route left on the table, since `mm_width`
+plateaued (round 10), `taper_length` saturated (round 8), `mm_length` is
+exhausted under every selection rule (job 12832166), and the band is exhausted
+here.
+
+*Bookkeeping: the `_wl` filename tag added before this run did its job — the
+±20 nm baseline `eval_W8.50_y0.82_tl4.00.npz` is intact (wavelengths
+[1.29 1.31 1.33], CMRR 18.482, mm_length 159.30) alongside the new
+`eval_W8.50_y0.82_tl4.00_wl1.300-1.320.npz` (wavelengths [1.30 1.31 1.32],
+CMRR 18.902, mm_length 157.70). Verified by reading both npz files.*
+
+## ✅ Step 6 re-landed at the OPTIMISED geometry — the deliverable gap closed (2026-09-06)
+
+**The gap.** All three published example scripts still carried Step 2's
+first-pass point — `mm_width=6.0`, `taper_width=0.8`, `taper_length=1.0`,
+`mm_length≈78.94`, with both taper values labelled "PLACEHOLDER — MMI's own
+class default, not measured". Everything rounds 8-10 produced lived in
+`wg_ygap_opt/*.npz` and in this document, not in the examples the build plan
+exists to deliver. Ported now.
+
+**Geometry, all three scripts** (`mmi_4x4_90hybrid_{eme,fdtd,hybrid}.py`):
+
+| | was (first pass) | **now (optimised)** |
+|---|---|---|
+| `mm_width` | 6.0 | **8.5** |
+| `waveguide_offset` | 1.5 | **2.125** |
+| `taper_width` | 0.8 (placeholder) | **1.30** (measured, job 12783704) |
+| `taper_length` | 1.0 (placeholder) | **4.0** (measured, round 8) |
+| `L_PI` | 108.9195 (measured @ 6.0) | **218.5954** (scaled by W², documented as scaled) |
+| `mm_length` | 78.9396 | **159.30** |
+| measured performance | 4.764° / 12.109 dBe / 4.076 dB / 5.202 dB | **3.933° / 18.482 dBe / 2.706 dB / 1.972 dB** |
+
+**Length pinning changed form.** The old scripts derived `MM_LENGTH` from a
+`DELTA_L` on a ±10 µm / 0.25 µm grid around 0.75·L_π, asserted against that
+grid (a guard added after a real grid-snap bug). The campaign selected lengths
+from the shared **absolute 20-400 µm / 0.05 µm** `MM_LENGTH_GRID`, so the
+scripts now pin `MM_LENGTH = 159.30` and assert *that* grid instead, keeping
+`DELTA_L` as an informational derived value. The guard matters more here, not
+less: only 19 of 7601 lengths meet the phase spec at this geometry.
+
+**Two stale settings fixed at the same time, both measured wrong rather than
+merely old:**
+1. **Band: 1.26-1.36 → 1.29-1.33 µm** (env-overridable, so the old ±50 nm
+   window is still reachable). The geometry was optimised over ±20 nm, and
+   this device is steeply wavelength-dependent — min CMRR falls 20.761 →
+   18.482 dBe from 1.310 µm alone to ±20 nm. Publishing the optimised
+   geometry judged over a 2.5× wider window would report it far outside its
+   design band.
+2. **`decay_tol`: 1e-11 → 1e-4 with `decay_method="energy"`.** 1e-11 is
+   MEASURED UNREACHABLE for this project's solver (the residual floors, then
+   diverges — `mmi_1x2_decay_tol_measurement.md`); 1e-4 with energy decay was
+   measured sufficient for this device at 0.015 dB and is what all ~45
+   campaign points used. Left at 1e-11 these runs could not have converged.
+
+**Geometry smoke-checked before submitting** (no solve): total_length 167.30 µm,
+`mm_length` 159.30, ports at ±3.1875 / ±1.0625 µm (spacing 2.125 = the offset),
+`input_ys == output_ys` so paper Eq. 8 mirror symmetry holds, and
+0.35 < taper_width 1.30 < offset 2.125 so the taper is neither inverse nor
+overlapping.
+
+**Runs submitted: 12877997 (`mmi_4x4_90hybrid_eme.py`, 1 node/8 cpu, -t 360)
+and 12877998 (`mmi_4x4_90hybrid_hybrid.py`, 1 node/24, -t 900).** The
+full-device FDTD (`mmi_4x4_90hybrid_fdtd.py`) is deliberately held: it is the
+long pole (the device is now 167 µm long and 11.5 µm wide vs 84 µm before, and
+Check 4's runs at the *old* geometry took 14-21 h), and it is only needed for
+Step 8's check 4. Submit it once the two above land and confirm the geometry
+behaves.
+
+**Steps 8 and 9 remain open**, and Step 8's four checks are all still to run at
+this (SOI_220, O-band) cross-section — none of them transfer from another
+device or another geometry.
+
+### ✅ Step 6a re-landed at the optimised geometry — EME example (job 12877997, COMPLETED 01:42:38)
+
+Geometry confirmed in the log: `MMI total length: 167.3000 µm
+(mm_length=159.3000)` — the port took effect. Ran well inside `-t 360`.
+
+Per-wavelength output at 1.29 / 1.31 / 1.33 µm:
+
+| | 1.29 | 1.31 | 1.33 |
+|---|---|---|---|
+| imbalance, port 1 / port 3 (dB) | 2.608 / 4.646 | 0.558 / 1.384 | 0.685 / 0.834 |
+| excess loss, port 1 / port 3 (dB) | 4.862 / 5.843 | 1.227 / 1.623 | 0.951 / 0.880 |
+| min CMRR (dBe) | 8.396 | 24.150 | 21.888 |
+| max \|Δφ\| (deg) | 13.366 | 0.836 | 5.962 |
+
+Band-worst: **max|Δφ| = 13.366°, min CMRR = 8.396 dBe, max XL = 5.843 dB,
+max imbalance = 4.646 dB** — all set by the 1.29 µm edge.
+
+**These differ substantially from the hybrid-path campaign values for the same
+geometry (3.933° / 18.482 dBe / 2.706 dB / 1.972 dB), and that is EXPECTED, not
+a sign of a broken port.** This script is **pure EME**, which this campaign
+disqualified for this device by direct measurement (the 3-point bias study,
+jobs 12352460-78): `EMESolver.solve()` draws one input and one output branch
+per call and models no port crosstalk, and at the *old* geometry its phase
+error against full-device FDTD ran +43.9° to +62.0°. A large EME-vs-hybrid gap
+here is that same documented limitation, re-appearing at the new geometry.
+
+Two things the EME run does corroborate independently:
+- **The steep wavelength dependence.** At 1.31 µm alone this script reports
+  0.836° and 24.150 dBe; at 1.29 µm, 13.366° and 8.396 dBe. Same
+  narrow-peak-not-plateau shape the hybrid path showed (job 12831929), from a
+  different solver.
+- **The direction of the EME bias is optimistic at centre** (24.15 dBe vs the
+  hybrid path's 20.76 dBe at 1.310), consistent with neglected crosstalk
+  flattering the device.
+
+The like-for-like comparison against the campaign numbers is
+`mmi_4x4_90hybrid_hybrid.py` (job 12877998), still running.
+
+### ❌ Hybrid example FAILED at 05:51:25 — my port bug, fixed, NOT auto-resubmitted (job 12877998)
+
+```
+NameError: name '_DELTA_L_GRID' is not defined
+  File ".../mmi_4x4_90hybrid_hybrid.py", line 290, in <module>
+    _body_lengths_grid = (0.75 * L_PI + _DELTA_L_GRID) - 2 * body_stub
+```
+
+**Cause: the geometry port removed `_DELTA_L_GRID`'s definition but not its
+use.** The length block was rewritten to pin `MM_LENGTH = 159.30` on the shared
+absolute grid, which deleted the `_DELTA_L_GRID = np.linspace(-10, 10, 81)`
+definition — but 140 lines further down, the body length sweep still built its
+`lengths` array from that grid. `mmi_4x4_90hybrid_{eme,fdtd}.py` do not do a
+length sweep and were unaffected (the EME run completed fine).
+
+**The failure came AFTER the expensive part, not before it.** The traceback is
+at 5:51:25, i.e. the FDTD interface solves had already completed and are now in
+`example_sim_cache/`. A resubmission should skip straight past them.
+
+**Fix — and it makes the script cheaper than it was.** The old grid was Step 3's
+±10 µm / 0.25 µm `DELTA_L` window, whose cache entries all live at the
+superseded `mm_width=6.0` geometry and would have missed anyway. It now uses
+the **shared absolute `MM_LENGTH_GRID` (20-400 µm @ 0.05 µm)** — the same grid
+every campaign point and the `mm_width=8.5` Phase A body solve (job
+12780661_0) used, reproduced inline rather than imported so a published example
+does not reach into `examples/verification/`. `body_stub = 0.25` and the
+boundary construction are byte-identical to `wg_eval.boundaries_for()`, which
+is what makes that a **cache hit** instead of a fresh ~70 min body solve.
+Guarded with an assert that `MM_LENGTH` is actually on the grid (it is: index
+2786 of 7601 → 159.30).
+
+**Not resubmitted.** Standing directive of 2026-08-17: if these long runs
+crash, report and wait for direction rather than auto-resubmitting.
+
+### ✅✅ Step 6c re-landed — the example REPRODUCES the campaign numbers exactly (job 12889625, COMPLETED 01:11:34)
+
+Resubmitted after the `_DELTA_L_GRID` fix. **01:11:34 vs the 05:51:25 the failed
+attempt burned** — the FDTD interface solves came from cache, and the body sweep
+hit the `mm_width=8.5` Phase A entry exactly as the fix intended:
+`body solved (shared MM_LENGTH_GRID reused, sliced at mm_length=159.30 um):
+(1, 3, 16, 16)`. Geometry confirmed: `MMI total length: 167.3000 µm
+(mm_length=159.3000)`, ports at ±3.1875 / ±1.0625 µm, `input_ys == output_ys`.
+
+Per wavelength (1.29 / 1.31 / 1.33 µm):
+
+| | 1.29 | 1.31 | 1.33 |
+|---|---|---|---|
+| imbalance p1 / p3 (dB) | 0.915 / 1.619 | 0.725 / 0.940 | 1.039 / 1.972 |
+| excess loss p1 / p3 (dB) | 2.282 / 2.706 | 0.395 / 0.654 | 1.696 / 1.036 |
+| min CMRR (dBe) | 18.734 | 20.761 | 18.482 |
+| Δφ_6 / Δφ_7 / Δφ_8 (deg) | −2.642 / 1.682 / 3.933 | −3.490 / −0.153 / 3.391 | 2.467 / 3.930 / 2.192 |
+
+**Band-worst, against the campaign's hybrid-path values for this geometry:**
+
+| | campaign (wg_eval) | example (this run) | difference |
+|---|---|---|---|
+| max\|Δφ\| | 3.933° | **3.933°** | 0.000 |
+| min CMRR | 18.482 dBe | **18.482 dBe** | 0.000 |
+| max excess loss | 2.706 dB | **2.706 dB** | 0.000 |
+| max imbalance | 1.972 dB | **1.972 dB** | 0.000 |
+
+**Exact to three decimals on all four metrics** — and the per-wavelength values
+match the band probe (job 12831929) exactly too (1.31 µm: 0.654 dB / 0.940 dB /
+20.761 dBe). This is a reproduction, not an approximation, which is the
+expected outcome: the published example's hybrid path and `wg_eval` build the
+same cascade at the same `N_MODES=16`, off the same cached body, at the same
+length. **The port is verified end to end** — the deliverable example now
+reports the optimised device, and reports it identically to the optimiser that
+found it.
+
+Artifacts written to
+`example_output/mmi_4x4_90hybrid/mmi_4x4_90hybrid_hybrid/`:
+`smatrix_hybrid_port{1,3}.pkl`, `hybrid_results.npz`, `hybrid_results.png`.
+
+**Step 6 status: 6a (EME) ✅ and 6c (hybrid) ✅ both re-landed at the optimised
+geometry. 6b (full-device FDTD) is the remaining one**, and it is also Step 8's
+check 4. It is the long pole: the device is now 167.3 µm long and 11.5 µm wide
+against 84 µm before, and check 4's runs at the *old* geometry took 14-21 h.
+
+### Dense wavelength sweep — EME at N_WL=11 submitted (job 12904783, 2026-09-07)
+
+**Why.** Every plot in this campaign interpolates between exactly three
+wavelengths (1.29 / 1.31 / 1.33), and the device's dominant behaviour *is* its
+wavelength dependence — the sharp 54.8 dBe CMRR "peak" and the V-shaped loss
+minimum in `hybrid_results.png` are shapes imposed by 3-point sampling, not
+measured curves. 11 points over the same design band gives 4 mm resolution in
+wavelength instead of 20.
+
+**The cost asymmetry, read from the solvers rather than assumed:**
+- **FDTD is broadband** — `fdtd.py:170` builds DFT monitors from
+  `monitor_freq_grid(wavelengths)` and drives one wideband source
+  (`source_fwidth`). One time-domain run yields every wavelength, so extra
+  wavelengths are nearly free in stepping time.
+- **EME is per-wavelength** — `eme.py` loops
+  `for wl_idx, wl in enumerate(wavelengths)` with a mode solve each, at six
+  separate sites. Cost is linear in `N_WL`.
+- The hybrid script is a mix: flat FDTD stepping plus per-wavelength interface
+  mode bases and a per-wavelength EME body solve (those "Dominant planewave for
+  band N" lines that filled its log).
+- **No partial cache reuse.** `cache/config.py` hashes `wavelengths` as an
+  array, so changing `N_WL` invalidates the 3-point entries wholesale — the
+  same thing that made the ±10 nm run re-solve from scratch.
+
+Measured 1:42:38 at N_WL=3 → **~6.3 h expected at N_WL=11**, so
+`run_mmi_4x4_90hybrid_eme_nwl11.batch` raises `-t` from 360 to 480.
+
+**Fourth instance of the overwrite hazard, guarded before launch.** These
+examples write fixed filenames (`eme_results.npz`, `hybrid_results.png`,
+`smatrix_*_port{1,3}.pkl`) with no `N_WL` in the path, so a denser run would
+have silently destroyed the 3-point results verified on 2026-09-06 to reproduce
+the optimiser exactly. Both scripts now tag `output_dir` with `_nwl{N}` whenever
+`N_WL != 3` (default stays untagged, so every existing path keeps working), and
+`mmi_4x4_90hybrid_hybrid.py`'s hardcoded `N_WL = 3` became env-overridable via
+`MMI4X4_HYB_NWL` to match the EME script's `MMI4X4_EME_NWL`. Verified: N_WL=3 →
+untagged dir; 7 → `_nwl7`, grid 1.2967/1.3033/… ; 11 → `_nwl11`, grid at 4 nm
+spacing.
+
+**EME first deliberately** — besides being the cheap one, it measures the
+per-wavelength mode-solve cost at this cross-section directly, which is the
+unknown term in the hybrid estimate (~8-21 h at N_WL=7, the spread being how
+much of its cold 5:51 was FDTD stepping vs mode solves). The hybrid dense run
+follows once that number is real.
+
+### ⚠⚠ DENSE SWEEP OVERTURNS THE "NARROW PEAK" READING — there is a ~24 nm dual-spec window (job 12904783, COMPLETED 06:07:19)
+
+`mmi_4x4_90hybrid_eme.py` at **N_WL=11** (4 nm spacing over 1.29-1.33), same
+optimised geometry. Output went to the tagged directory
+`mmi_4x4_90hybrid_eme_nwl11/` and **the 3-point results are intact** —
+`mmi_4x4_90hybrid_eme/eme_results.npz` still dated Sep 6 11:11, the new one
+Sep 7 15:33. The `_nwl` tag did its job.
+
+| λ (µm) | min CMRR | max XL | max imb | max\|Δφ\| |
+|---|---|---|---|---|
+| 1.290 | 8.396 | 5.843 | 4.646 | 13.366 |
+| 1.294 | 12.035 | 4.891 | 2.849 | 9.552 |
+| 1.298 | 15.888 | 3.860 | 1.910 | 6.195 |
+| 1.302 | 19.659 | 2.929 | 1.509 | 3.387 |
+| 1.306 | 22.735 | 2.177 | 1.389 | 1.582 |
+| **1.310** | **24.150** | 1.623 | 1.384 | **0.836** |
+| 1.314 | 23.824 | 1.248 | 1.382 | 1.014 |
+| 1.318 | 22.272 | 1.022 | 1.287 | 1.912 |
+| 1.322 | 20.905 | 0.905 | 1.020 | 3.424 |
+| 1.326 | 20.551 | **0.865** | **0.818** | 4.766 |
+| 1.330 | 21.888 | 0.951 | 0.834 | 5.962 |
+
+**Both "shapes" the 3-point sampling implied are wrong.**
+
+1. **CMRR is not a triangular peak — it is a broad plateau with a steep blue
+   edge.** It climbs 8.4 → 24.2 dBe from 1.290 to 1.310, then decays *gently*:
+   23.8, 22.3, 20.9, 20.6, and **turns back up to 21.9 at 1.330**. CMRR stays
+   **above 20 dBe from ≈1.304 all the way to 1.330** — a ≥26 nm window. The
+   3-point samples (8.4 / 24.2 / 21.9) linearly interpolated into a spike and
+   hid the entire plateau.
+2. **Excess loss is not a V centred at 1.310.** It decays monotonically across
+   almost the whole band, 5.843 → 0.865 dB, with its **minimum at 1.326, not
+   1.310**, and only a token rise to 0.951 at 1.330. Imbalance behaves the same
+   way (minimum 0.818 dB at 1.326).
+
+**Consequence — the device has a real operating window, not a single good
+wavelength.** Taking both specs together: CMRR crosses 20 dBe between 1.302 and
+1.306, and |Δφ| crosses 5° between 1.326 and 1.330, giving a dual-compliant
+band of roughly **1.304-1.328 µm (~24 nm)** — and it is **centred near 1.316,
+not 1.310.**
+
+**This corrects two statements written earlier in this document**, both of
+which were 3-point artifacts: "the 20.761 dBe / 0.654 dB figures at 1.310 µm
+are a narrow peak, not a plateau", and "the only place 20 dBe appears is a
+single wavelength". Neither survives 11-point sampling.
+
+**Caveat, and it is the important one: this is the EME path.** Pure EME is
+disqualified for *absolute* numbers on this device (no port crosstalk; the
+3-point comparison shows it optimistic by ≈+3.4 dBe on CMRR at both 1.310 and
+1.330 against the hybrid path). What transfers is the **shape**, and the shape
+says plateau. Applying the ≈3.4 dBe offset to the plateau puts the hybrid-path
+CMRR somewhere near 17-21 dBe across 1.31-1.33 — which is exactly the range
+where "does it meet spec over a usable band" is decided, and cannot be settled
+without the hybrid dense sweep.
+
+**Cost, now measured rather than extrapolated.** 06:07:19 for 11 wavelengths
+vs 01:42:38 for 3 → **2003 s/wavelength vs 2053 s/wavelength**. EME is cleanly
+linear in `N_WL`, within 2.5%, so the earlier 6.3 h estimate was right.
+
+**Hybrid dense-sweep estimate.** Its cold 3-wavelength run was 5:51:25, of
+which the post-interface part (body solve + 7601-length sweep + metrics)
+measured 4274 s when interfaces were cached. FDTD *stepping* is flat in `N_WL`
+but the interface mode bases are not, so the honest bracket is:
+- fully linear → **N_WL=7 ≈ 13.7 h, N_WL=11 ≈ 21.5 h**
+- stepping-dominated → **N_WL=7 ≈ 9 h, N_WL=11 ≈ 13 h**
+
+`-t` must go to 1440 either way; `-t 900` would risk a timeout at N_WL=11.
+
+### ⚠ HYBRID DENSE SWEEP: THE EME PLATEAU DOES NOT SURVIVE — narrower window, shifted lower, peaked not flat (job 12963168, COMPLETED 2026-09-09 01:01:56, 13:44:28 elapsed)
+
+`mmi_4x4_90hybrid_hybrid.py` at **N_WL=7** (1.29, 1.2967, 1.3033, 1.31, 1.3167,
+1.3233, 1.33), same optimised geometry (mm_width=8.5, taper_width=1.30,
+taper_length=4.0, mm_length=159.30). Output went to the tagged directory
+`mmi_4x4_90hybrid_hybrid_nwl7/` and **the 3-point directory is intact** —
+`mmi_4x4_90hybrid_hybrid/hybrid_results.npz` still dated Sep 6 19:39, the new
+one Sep 9 01:01. All three previously-verified 3-point values reproduce
+exactly at their matching indices (18.734/2.706/3.933 at 1.29; 20.761/0.654/
+3.490 at 1.31; 18.482/1.696/3.930 at 1.33) — confirms this is the same
+evaluator, not a re-derivation.
+
+| λ (µm) | min CMRR (dBe) | max XL (dB) | max imb (dB) | max\|Δφ\| (°) | CMRR≥20 | \|Δφ\|≤5 | both |
+|---|---|---|---|---|---|---|---|
+| 1.2900 | 18.734 | 2.706 | 1.619 | 3.933 | ✗ | ✓ | ✗ |
+| 1.2967 | 23.085 | 1.573 | 1.408 | 1.367 | ✓ | ✓ | ✓ |
+| 1.3033 | 22.745 | 0.930 | 1.334 | 1.488 | ✓ | ✓ | ✓ |
+| **1.3100** | **20.761** | 0.654 | 0.940 | 3.490 | ✓ | ✓ | ✓ |
+| 1.3167 | 21.577 | 0.640 | 0.726 | **5.619** | ✓ | ✗ | ✗ |
+| 1.3233 | 19.616 | 1.135 | 1.341 | 6.041 | ✗ | ✗ | ✗ |
+| 1.3300 | 18.482 | 1.696 | 1.972 | 3.930 | ✗ | ✓ | ✗ |
+
+(`min CMRR` = min over {CMRR_I, CMRR_Q} × {port 1, port 3}; `max XL`/`max imb`
+= max over the two driven ports, matching the evaluator's existing metric
+definitions.)
+
+**Answer to the open question: the hybrid path does *not* show the EME
+sweep's broad flat plateau.** The EME 11-point sweep found CMRR climbing to a
+plateau ≥20 dBe from ≈1.304 to 1.330, decaying gently and turning back up at
+the top edge. The hybrid path instead shows a **single peaked/decaying curve**
+— it jumps from 18.734 (1.290, below spec) up to a peak of 23.085 at 1.2967,
+then declines with a small wobble (22.745, 20.761, 21.577) before dropping
+further to 19.616 and 18.482 at the two longest wavelengths. There is no
+turn-back-up at 1.330 in the hybrid path — it keeps falling, mirroring the
+already-known 3-point value there rather than the EME plateau's recovery.
+
+**CMRR-only window** (ignoring phase): 1.2967-1.3167 µm, ≈20 nm, contiguous.
+**Dual-compliant window** (CMRR≥20 dBe **and** max\|Δφ\|≤5°): **1.2967-1.3100
+µm, ≈13.3 nm**, centred near **1.303 µm** — narrower than the EME-based
+estimate of ~24 nm, and shifted to a *lower* wavelength than EME's ~1.316 µm
+centre. The phase constraint, not CMRR, is what cuts the window short at the
+long-wavelength end: 1.3167 clears CMRR (21.577) but fails phase (5.619° >
+5°), a failure mode the EME-only view (no phase-degrading crosstalk paths
+modelled) could not have shown.
+
+**This is consistent with, not contradicted by, the previously-documented
++3.4 dBe EME optimism** — the offset was measured only at 1.310 and 1.330 in
+the 3-point comparison, both of which are exactly where the two paths diverge
+most in *shape*, not just magnitude. The hybrid path's real port crosstalk
+evidently reshapes the curve rather than uniformly translating it.
+
+**Net finding for the device:** a genuine dual-compliant operating window
+exists, but it is materially narrower (~13 nm vs the ~24 nm EME suggested) and
+sits at the *blue* edge of the design band (1.2967-1.3100 µm) rather than
+centred on it. 1.310 µm — the original single-wavelength design target — is
+the *edge* of this window, not its centre; 1.290 and 1.330 µm, and everything
+at 1.3167 µm and above, fail at least one spec.
+
+**Cost.** 13:44:28 (49445 s) for N_WL=7, inside the predicted 9-13.7 h bracket
+(near its upper end) — confirms the interface mode bases are not purely
+stepping-dominated; the linear extrapolation is closer to reality than the
+optimistic one. Per-wavelength marginal cost above the 3-point baseline:
+(49445 s - 21085 s [5:51:25 cold 3-pt run]) / 4 new wavelengths ≈ 7090
+s/wavelength — consistent with N_WL=11 costing roughly 21-22 h if run next.
+
+### Step 8, Check 1 (engine agreement) — short-body FDTD-vs-hybrid probe at THIS device's own cross-section (jobs 13024684 / 13024689, both COMPLETED 2026-09-09)
+
+Full-device FDTD at the production optimum (mm_length=159.30) was excluded as
+too big (~100-140 h/port). Shrinking `mm_length` to <20 µm shrinks the
+single-domain FDTD box ~6-12x by volume and makes a real Check 1 (engine
+agreement, this device's own SOI_220/O-band/mm_width=8.5 cross-section)
+affordable. Both scripts gained an `MMI4X4_MM_LENGTH` env override for this
+(default 159.30 unchanged; output dirs get a `_L{length}` suffix whenever
+used, so nothing collides with the production 159.30 µm results).
+
+**mm_length=5.00 µm is NOT a device operating point** — L_pi=218.5954, so
+3/4·L_pi≈164 µm is where self-imaging actually happens; at 5 µm the device
+is nowhere near it. Both methods agree on this at face value: CMRR is
+essentially 0 dBe, imbalance 33-74 dB, phase errors up to 171°, all far
+outside spec. This run exists purely to compare the two methods' raw
+S-matrices at a length cheap enough for full-device FDTD to reach true decay.
+
+**Cost, measured, not extrapolated:**
+- FDTD probe (job 13024684): single node, 24 ranks (deliberately NOT the
+  96-rank/4-node config the full-length device measured as efficient — that
+  was tuned for a 159M-voxel domain, 3.3M/rank at 48; this ~20.6M-voxel
+  domain would put only ~215k voxels/rank at 96, likely communication-bound).
+  Steady **0.134 s/step**, comparable to the OLD full-length domain's
+  96-rank rate (0.147 s/step) despite ~7.7x fewer voxels — confirms this
+  small box is already communication-bound at only 24 ranks, not
+  compute-bound; more ranks would likely not have helped here. Both ports
+  (1 and 3) fully decayed to `decay_tol=1e-4` well inside budget: **1:49:41
+  total wall**, vs the 6h budget and the full-length device's ~100-140h
+  estimate — a ~55-75x speedup, roughly matching the ~7x volume shrink times
+  a shorter physical ring-down time.
+- Hybrid probe (job 13024689): single node, 24 ranks, **6:58:47 total wall**
+  — NOT proportionally cheaper than the full-length production run's own
+  ~9h fresh-solve precedent, confirming the prediction in both scripts'
+  updated docstrings: the 4 FDTD input-section solves span a region whose
+  physical size (taper_length + body_stub) is independent of `mm_length`,
+  and the body EME mode basis is a per-cross-section, not a per-length,
+  solve. Shortening the body bought no discount here, as expected.
+
+**Results at mm_length=5.00 µm, both methods** (Δφ_6/7/8, wavelengths
+1.29/1.31/1.33 µm — all values expected to be far outside spec, this is not
+a device-performance measurement):
+
+| | full-device FDTD | hybrid |
+|---|---|---|
+| Input 1 imbalance (dB) | 49.517 / 38.116 / 42.526 | 73.529 / 69.179 / 71.547 |
+| Input 1 excess loss (dB) | 3.444 / 3.302 / 3.470 | 3.378 / 3.376 / 3.362 |
+| Input 1 CMRR_I (dBe) | 0.00117 / 0.00314 / 0.00097 | ~0 (7.7e-7 / 2.1e-6 / 1.2e-6) |
+| Input 1 CMRR_Q (dBe) | 0.0165 / 0.174 / 0.625 | 0.0249 / 0.0364 / 0.0460 |
+| Input 3 imbalance (dB) | 47.689 / 37.857 / 33.486 | 48.407 / 46.120 / 44.521 |
+| Input 3 excess loss (dB) | 3.705 / 3.192 / 3.641 | 3.367 / 3.423 / 3.477 |
+| Δφ_6 (deg) | −120.2 / −117.6 / −21.9 | −70.0 / −78.9 / −88.5 |
+| Δφ_7 (deg) | −154.4 / −143.0 / +61.4 | −47.9 / −65.5 / −84.7 |
+| Δφ_8 (deg) | −46.0 / −0.9 / +171.4 | +84.8 / +119.1 / +98.2 |
+
+The derived spec metrics themselves disagree substantially between methods
+at this length — expected: at an arbitrary off-self-imaging length, small
+differences in how each method distributes power among nominally-equal
+output ports get amplified by the CMRR/phase-error ratios, which are not a
+meaningful comparison here. **The comparison that matters is the raw
+per-port |T|² transmission**, computed directly from both `SMatrix` objects:
+
+**Input port 1 driven** (out5 = the dominant, "correct" output at this port):
+
+| port | hybrid 1.29/1.31/1.33 | FDTD 1.29/1.31/1.33 | max abs | max rel |
+|---|---|---|---|---|
+| out5 | 0.4548/0.4544/0.4552 | 0.4472/0.4603/0.4444 | 0.0108 | 2.4% |
+| out6 | 0.00454/0.00518/0.00583 | 0.00527/0.00707/0.00514 | 0.0019 | 26.8% |
+| out7 | 7.0e-6/1.1e-5/1.5e-5 | 5.0e-6/7.1e-5/1.85e-4 | 0.0002 | 91.6% |
+| out8 | 0/0/0 | 3.0e-5/8.3e-5/2.5e-5 | 0.0001 | 99.9% |
+
+Totals: 1.29 µm hybrid=0.4594 FDTD=0.4525 (**+1.5%**); 1.31 µm
+hybrid=0.4596 FDTD=0.4675 (**−1.7%**); 1.33 µm hybrid=0.4611 FDTD=0.4497
+(**+2.5%**).
+
+**Input port 3 driven** (out7 = the dominant output at this port):
+
+| port | hybrid 1.29/1.31/1.33 | FDTD 1.29/1.31/1.33 | max abs | max rel |
+|---|---|---|---|---|
+| out5 | 7.0e-6/1.1e-5/1.5e-5 | 7.0e-6/7.6e-5/1.88e-4 | 0.0002 | 91.8% |
+| out6 | 0.00467/0.00530/0.00595 | 0.00564/0.00639/0.00747 | 0.0015 | 20.3% |
+| out7 | 0.4514/0.4442/0.4373 | 0.4152/0.4660/0.4198 | 0.0362 | 8.7% |
+| out8 | 0.00454/0.00518/0.00583 | 0.00522/0.00702/0.00506 | 0.0018 | 26.2% |
+
+Totals: 1.29 µm hybrid=0.4606 FDTD=0.4261 (**+8.1%**); 1.31 µm
+hybrid=0.4547 FDTD=0.4795 (**−5.2%**); 1.33 µm hybrid=0.4491 FDTD=0.4325
+(**+3.8%**).
+
+**This does NOT reproduce the old geometry's engine-agreement pattern.** The
+old-geometry comparison (job 11778128/12272573) found a clean, monotonic
+trend: FDTD found MORE power than hybrid at every wavelength, by an amount
+that grew steadily toward short wavelength (+30.2%/+49.6% at 1.26 µm down to
+−0.3% at 1.36 µm — one consistent sign, one consistent direction). Here the
+sign **oscillates** with wavelength for both driven ports (port 1:
++1.5%/−1.7%/+2.5%; port 3: +8.1%/−5.2%/+3.8%) — no monotonic trend toward
+either band edge, and no single dominant sign. The dominant "correct" output
+port agrees far better for port 1 (out5, max 2.4%) than for port 3 (out7,
+max 8.7%), an asymmetry the old geometry's I/O structure didn't show either.
+
+**Interpretation.** The old geometry's finding was measured at a length near
+its own self-imaging condition, where the beat pattern between the excited
+modes is smooth and slowly varying with wavelength — exactly the regime
+where a systematic, monotonic bias (e.g. from the hybrid's port-isolation
+crosstalk approximation) would show up cleanly. At mm_length=5 µm the device
+is far from any self-imaging condition; many modes are simultaneously
+mid-beat, and small differences in mode content and phase between the two
+methods land on different parts of an oscillatory pattern at each
+wavelength, which can flip sign non-monotonically without implying a
+different *magnitude* of underlying error. **The magnitude of disagreement
+here (max port-total 8.1%, single dominant-port max 8.7%) is comparable to,
+not larger than, the old geometry's 1.31/1.36 µm points (+4.1%/−0.3%,
++3.9%/−0.3%)** — this short-length probe does not show the two engines
+agreeing WORSE at this device's own cross-section than they did at the old
+one; it shows a *different-shaped* disagreement, consistent with the
+length-regime argument above rather than a cross-section-specific problem.
+
+**What this settles and what it doesn't.** It gives real, this-cross-section
+engine-agreement data (Check 1) that did not exist before, at a cost 55-75x
+cheaper than the full production length would require. It does NOT settle
+whether the OLD geometry's specific "hybrid under-collects, worst at short
+wavelength" mechanism (candidate: the port-isolation crosstalk
+approximation, per the original Check 4 section above) is present or absent
+at mm_width=8.5's wider/closer-packed ports — the short length here changes
+too many things at once (length regime, not just cross-section) to isolate
+that. A clean test of the port-isolation hypothesis specifically would need
+either a length near this device's OWN self-imaging point (159.30 µm,
+prohibitively expensive) or a different diagnostic that varies port spacing
+independent of length.
+
+### Step 8, Check 2 (mode identity) — audit FAILED on a duplicate-mode guard, diagnostic dump does NOT reproduce it (jobs 13060190 FAILED, 13062141 COMPLETED, 2026-09-10)
+
+Added a `_mmi_4x4_90hybrid()` entry to `examples/verification/python/
+audit_interface_modes.py`'s `DEVICES` (this device had no Check 2 entry
+before now). Config: single-cut (not `MULTI_DEVICES`), section=(-1, 1) at
+body center — the body is one uniform mm_width=8.5 slab with straight
+sidewalls over its whole length, so a short interior cut audits the same
+cross-section `HybridSolver` actually contracts at (near-edge, body_stub
+inside the taper seam) by the same translation-invariance argument every
+other MMI device's own Check 2 config already relies on. n_modes=16 (this
+device's real `N_MODES`), wl=1.31, stack=SOI_220, sim_width=11.5,
+sim_height=2.0, res=40 — pinned to `mmi_4x4_90hybrid_hybrid.py` exactly.
+
+**Job 13060190 FAILED at 41:33 elapsed** (`AUDIT_ARGS=mmi_4x4_90hybrid`, no
+`--convergence`, single node/1 task/8 cpus, serial):
+
+```
+RuntimeError: FDTDSolver: could not find 16 distinct eigenmodes within 24
+band_num attempts at this cross-section -- meep/MPB returned a duplicate
+more times than this guard tolerates. See validation_markdown/
+modal_multiplexer_validation.md gap 6.
+```
+
+This is `FDTDSolver._iter_distinct_bands()`'s own duplicate-eigenmode guard
+(`beef/solvers/fdtd.py`) — it silently skips any `band_num` whose field
+overlaps an already-accepted one above 0.9 (using its own small, fixed
+16×8-point diagnostic grid, independent of the caller's real resolution)
+and raises once it exhausts `n_modes + 8 = 24` attempts. This device's own
+Step 8 plan flagged exactly this risk in advance (A7): four closely-spaced
+ports per end puts it closer to the modal multiplexer's 16-mode regime
+(where this guard was originally built after a real duplicate-mode bug)
+than to either existing MMI's simpler port count.
+
+**Diagnostic follow-up: `mmi_4x4_90hybrid_mode_field_dump.py` (NEW script),
+job 13062141 COMPLETED 1:15:05.** The guard discards the fields it skips,
+so nothing in job 13060190's log said *which* bands collided or what they
+looked like. This new script re-walks the identical cross-section, same
+k-seed-laddering algorithm, band-by-band via `sim.get_eigenmode()` directly
+— but keeps **every** raw band's field (no skip/raise), plots each one's
+`|Ey|²+|Ez|²` intensity in the y-z plane, and computes the **full 30×30
+self-overlap matrix** on a much finer 231×41-point (0.05 µm) grid, rather
+than inferring anything from where an exception fired.
+
+**Result: all 30 requested bands came back guided** (this 8.5 µm slab
+supports far more than 16 guided modes — n_eff ranged 2.963 down to 2.287,
+cladding is 1.4468, nowhere close to the guided edge even at band 30), and
+**the self-overlap table found NO duplicates at all** — max off-diagonal
+overlap across every one of the 30×29/2 pairs is **0.017** (bands 22/27),
+orders of magnitude below the 0.9 threshold that trips the guard. Full
+table and 30 field plots at `example_output/verification/
+mmi_4x4_90hybrid_mode_field_dump/`.
+
+**This does not reproduce the audit's failure.** Bands 1-24 (the exact range
+the guard exhausted its attempts within) show clean, well-separated n_eff
+(spacing 0.02-0.05/band) and no field-shape overlap anywhere near duplicate
+territory. Bands 25-30 show n_eff spacing collapsing sharply (2.331 → 2.328
+→ 2.321 → 2.320 → 2.313 → 2.301 → 2.287, vs ~0.02-0.05/band through 24) —
+modes genuinely crowding as expected approaching a dense higher-order
+region on a wide multimode slab — but even there, the finest-spaced pair
+(bands 24/26, Δn_eff=0.0018) overlaps at only 0.0003 in field shape. Not
+one pair anywhere in the walk is ambiguous, let alone a duplicate.
+
+**Leading hypothesis, not yet confirmed: the guard's own coarse diagnostic
+grid is the likely source of a false positive, not a real degeneracy.**
+`_iter_distinct_bands()`'s duplicate check uses a FIXED `_DUP_BAND_DIAG_NY
+=16, _DUP_BAND_DIAG_NZ=8` grid regardless of the caller's real resolution
+or geometry — 8 points spanning the *whole* `sim_height=2.0` µm gives
+~0.25 µm z-spacing, against a **0.22 µm-thick guided core**. That is under
+one grid cell resolving the entire vertical mode profile of every mode in
+the basis, for a device whose sole distinguishing structure in z is that
+0.22 µm slab. The 16×8 diagnostic grid was sized generically (its own
+docstring: "it only needs to tell 'same eigenvector' from 'different
+eigenvector'... stays cheap regardless of how finely a caller wants its own
+returned fields sampled") and was validated against the modal multiplexer's
+own cross-section (also SOI_220-ish core height, but not audited against a
+wide mm_width=8.5 slab with this many closely-packed higher-order modes
+sharing similar vertical structure) — a resolution adequate for a handful
+of well-separated low-order modes can plausibly alias two genuinely
+different but similarly-shaped high-order lobes into an apparent overlap
+above 0.9 once enough modes are requested on a wide enough slab.
+
+**Not yet established as fact** — this is the strongest available
+explanation given the data (clean fine-grid result vs. a real coarse-grid
+failure on the identical cross-section/algorithm), but confirming it
+requires directly comparing the coarse-grid overlap against the fine-grid
+one on the SAME live eigenmode objects (the field-dump job did not save raw
+field arrays, only the fine-grid overlap matrix, so this needs one more
+short run rather than post-hoc analysis of what's already on disk).
+
+**Status: Check 2 is OPEN, not closed and not failed-as-a-device-problem.**
+The evidence so far argues the device's real 16-mode interface basis is
+very likely sound (no genuine near-degeneracy found at any resolution
+tested), but the production audit tool itself needs either a resolution fix
+(scale `_DUP_BAND_DIAG_NY`/`_DUP_BAND_DIAG_NZ` to the caller's real z-extent
+relative to core thickness) or a documented exception for wide slabs before
+this device's Check 2 can be run to actual completion through the shared
+`audit_interface_modes.py` harness.
+
+### ✅✅ Check 2 coarse-grid-aliasing hypothesis CONFIRMED — real shared-library bug, not a device problem (job 13064925, COMPLETED 59:16)
+
+`mmi_4x4_90hybrid_mode_dup_grid_compare.py` (NEW script) computed BOTH the
+guard's exact 16×8 diagnostic grid and the 231×41 fine grid from the SAME
+live eigenmode objects, one pass, 27 bands. Full table at
+`example_output/verification/mmi_4x4_90hybrid_mode_dup_grid_compare/
+grid_compare_table.md`.
+
+**Confirmed, and far more extensively than expected.** 22 of 27 bands flag
+a coarse-grid-only "duplicate" (coarse overlap 0.96–0.996, fine overlap
+0.0006–0.017 for the identical pair). This is not scattered noise — it is a
+clean **spatial-aliasing pattern**: band *i* coarse-duplicates band
+*(24 − i)* almost exactly across the whole range (1↔23, 2↔22, 3↔21, 4↔20,
+5↔19, 6↔18, 7↔17, 8↔16, 9↔15, 10↔14, 11↔13 — the last pair peaking at
+0.996, the tightest "duplicate" in the table). Band 12, sitting at this
+series' center, is the one clean exception (coarse overlap only 0.140).
+Past the mode-crowding point found in the earlier dump (bands 24-27), a new
+false pair appears (27↔22, coarse 0.909) with a different mechanism (genuine
+n_eff crowding there, not the same mirror pattern).
+
+**Mechanism, now understood, not just hypothesized:** `_DUP_BAND_DIAG_NY=16`
+samples across the full `sim_width` gives roughly one sample per
+`mode_index/8` lobes for this cross-section's mode family. Once a mode's
+transverse lobe count exceeds what 16 points can resolve (Nyquist), the
+coarse sampling **aliases** higher-order spatial oscillation back onto a
+lower apparent pattern — and modes with complementary/mirrored lobe counts
+alias onto nearly-identical sampled values, which is exactly the *(i, 24−i)*
+mirror pattern observed. This is a real, generic failure mode: the guard's
+diagnostic grid is a small FIXED constant (16×8, chosen once, validated
+against the coupler/mmi_1x2/mmi_2x2/modal_multiplexer's narrower/lower-mode
+cross-sections) with no relationship to how many modes or how wide a slab a
+given caller requests — it will alias on ANY device whose requested mode
+count approaches or exceeds what 16 transverse samples can resolve, not
+just this one.
+
+**This closes the device-side half of Check 2.** The device's real 16-mode
+interface basis is sound — no genuine near-degeneracy exists among the
+first 27 guided modes at any resolution actually capable of resolving mode
+shape (confirmed twice now: the fine-grid dump and this same-run
+comparison). **The audit tool itself has a real bug**: `FDTDSolver.
+_iter_distinct_bands()`'s duplicate guard produces false positives on wide,
+many-mode cross-sections, and would have silently (or, as here, loudly)
+mis-served this device's Check 2 regardless of how many times it was
+re-run, because the failure is deterministic given the same k-seed-laddering
+algorithm and the same undersized diagnostic grid.
+
+**Fix needed, not yet made:** `_DUP_BAND_DIAG_NY`/`_DUP_BAND_DIAG_NZ` should
+scale with the cross-section actually being queried (e.g. tied to
+`n_modes` and `sim_width`/core thickness, Nyquist-safe for the highest
+mode index requested) rather than being a fixed 16×8 constant. This is a
+`beef/solvers/fdtd.py` change, shared across every device that calls
+`section_mode_neff()`/`section_mode_fields()`/`audit_interface_modes.py`,
+not a `mmi_4x4_90hybrid`-local one — filed here as an open item, not fixed
+inline, since it touches the shared library's own duplicate-guard contract
+and the four already-audited devices' recorded results.
+
+**Step 8 Check 2 status: DEVICE SIDE CLOSED, TOOL SIDE OPEN.** This
+device's interface mode identity/ordering is not blocked by anything found
+here; the `audit_interface_modes.py` harness cannot currently complete a
+clean run for this device without either the diagnostic-grid fix above or a
+one-off override (e.g. passing a wider diagnostic grid just for this
+device's config) — a decision for whoever picks up the shared-library fix,
+not made unilaterally here.
+
+### Step 8, Check 1 follow-up — top-port (port 4) FDTD-vs-hybrid comparison at 3 lengths (jobs 13069782-787, all COMPLETED 2026-09-10)
+
+The earlier short-body Check 1 probe (mm_length=5.00) only ever excited ports
+1 and 3 (the paper's own I={1,3}). At the user's request, added same-monitor-
+locations FDTD-vs-hybrid engine-agreement data for the **top port (paper
+port 4, `input_ys[-1]`)** — never driven through either script before this —
+at mm_length = 5.00 / 10.00 / 15.00 µm. Both `mmi_4x4_90hybrid_fdtd.py` and
+`mmi_4x4_90hybrid_hybrid.py` gained an `MMI4X4_DRIVEN_PORTS` env override
+(comma list of 1-based paper ports, default `"1,3"` unchanged) — when the
+driven set isn't exactly `{1,3}`, the paper's CMRR/Δφ metrics are skipped
+(they need both driven inputs) and plain per-arm `|T|²`/phase(S) is reported
+instead. Output directories carry a `_p{ports}` tag so nothing collides with
+the canonical ports-1&3 files. The hybrid script's 4 input-section solves
+always run regardless of the driven set (mirror reuse needs all 4), so the
+L=5.00 case (job 13069785) was mostly a `save_dir` cache hit from job
+13024689 — **26 s wall time**; L=10.00/15.00 (jobs 13069786/787) were fresh,
+**6:55:30 / 6:58:45**. FDTD probes (13069782/783/784) were each fresh:
+**54:32 / 1:35:00 / 2:52:02**.
+
+**Per-arm `|T|²`, FDTD vs hybrid, at 1.29/1.31/1.33 µm:**
+
+| L (µm) | port | FDTD `\|T\|²` | hybrid `\|T\|²` | max abs diff | max rel diff |
+|---|---|---|---|---|---|
+| 5 | out5 | 3.02e-5/8.31e-5/2.48e-5 | 2.02e-8/5.49e-8/3.19e-8 | 8.30e-5 | ~100% (both near noise floor) |
+| 5 | out6 | 5.02e-6/7.11e-5/1.85e-4 | 6.52e-6/1.08e-5/1.54e-5 | 1.69e-4 | 30-92% (near noise floor) |
+| 5 | out7 | 0.00527/0.00707/0.00514 | 0.00454/0.00518/0.00583 | 0.00189 | 27% |
+| **5** | **out8 (dominant)** | 0.4472/0.4602/0.4444 | 0.4548/0.4544/0.4552 | **0.0108** | **2.4%** |
+| 10 | out5 | 3.80e-6/4.84e-5/1.89e-4 | 3.22e-6/3.84e-6/5.52e-6 | 1.84e-4 | 15-97% (near noise floor) |
+| 10 | out6 | 4.89e-4/8.47e-4/1.378e-3 | 7.86e-4/9.56e-4/1.176e-3 | 2.97e-4 | 61% |
+| 10 | out7 | 0.05854/0.05839/0.06177 | 0.06425/0.06490/0.06478 | 0.00651 | 11.2% |
+| **10** | **out8 (dominant)** | 0.5521/0.5560/0.5522 | 0.5356/0.5338/0.5319 | **0.0222** | **4.0%** |
+| 15 | out5 | 6.39e-5/3.37e-4/6.07e-4 | 3.04e-4/3.93e-4/5.04e-4 | 2.41e-4 | 17-376% (near noise floor) |
+| 15 | out6 | 0.01312/0.01882/0.02060 | 0.01509/0.01674/0.01842 | 0.00219 | 15% |
+| 15 | out7 | 0.03560/0.04184/0.03510 | 0.03806/0.03836/0.03923 | 0.00412 | 11.7% |
+| **15** | **out8 (dominant)** | 0.3771/0.3897/0.3203 | 0.3738/0.3619/0.3508 | **0.0306** | **9.5%** |
+
+**The dominant output arm (out8) agrees well at every length** — max
+absolute difference 0.011-0.031, relative 2.4-9.5%, growing mildly with
+length (more mode content accumulated by L=15 than L=5). This is comparable
+to or better than the earlier ports-1/3 probe's own agreement level at
+these same short, off-self-imaging lengths, and is independent confirmation
+across a THIRD physical port (this device's engine agreement does not look
+port-specific). The weaker arms (out5/out6/out7) show larger relative
+disagreement, but out5 in particular is dominated by numerical noise floor
+(`|T|²` ~1e-5 to 1e-4) where a percent-level absolute difference between two
+independently-converged near-zero numbers reads as tens to hundreds of
+percent — not a meaningful disagreement.
+
+**Phase(S) does NOT usefully compare at these lengths, and this is
+expected, not a red flag.** E.g. out8's phase at L=15: FDTD
+[-78.4°,-120.4°,-146.8°] vs hybrid [94.8°,60.9°,38.3°] — a ~170-185°
+offset, and at L=5/L=10 the offset is neither constant nor small (tens to
+~120°, varying with wavelength). None of these lengths are anywhere near
+this device's self-imaging condition (3/4·L_π≈164 µm), so the ABSOLUTE
+propagation phase accumulated between input and output is highly sensitive
+to small path-length/dispersion differences between the two methods'
+cascades — a difference of a fraction of a degree in effective index
+compounds into tens of degrees of absolute phase over even a few µm at
+these off-resonance lengths. The paper's own metrics (Δφ, Eq. 15) are
+built entirely from *differences* between two excitations' phases for
+exactly this reason (an absolute reference cancels out); a single-port
+absolute phase was never a meaningful comparison target to begin with.
+**Magnitude agreement (the table above) is the real signal here.**
+
+**Unrelated to this numeric comparison**: the same-session attempt to build
+a rigorous stitched-field-plot capability for the output taper FAILED its
+own correctness check — see the next section for the full writeup. That
+failure blocks only the field-plot/stitching work, not the numeric per-arm
+comparison documented here.
+
+### Step 8 field-plot work — output-taper capture mechanism FAILS its own correctness check (job 13069673, COMPLETED 2:25:24, HYPOTHESIS NOT CONFIRMED)
+
+At the user's request for stitched hybrid + full-device FDTD field plots at
+L=5/10/15 for the top-port excitation, added `FDTDSolver.solve()` a new
+`capture_fields_dir` parameter (mirrors `solve_section()`'s own, reusing its
+`_write_section_fields()` writer verbatim) so the full-device FDTD side can
+dump a single z=0 in-plane field slice — straightforward, and unblocks the
+FDTD-side field picture on its own.
+
+The hybrid side is harder: the output taper is driven by a superposition of
+up to 16 body modes, not one physical mode, so a real output-taper field
+picture needs each body eigenmode launched INDIVIDUALLY from the interior
+(body) side into the output taper — the reverse of every existing call on
+this device (which always excite from the physical-port side, the "fewer
+modes" side `solve_section()` picks by default). Forcing the reversed
+direction needs `solve_section()`'s `excite_port`/`measure_port` `PortSpec`
+override (both given bypasses the "fewer side" tie-break entirely) — a code
+path exercised only once before in this repo
+(`verify_ring_bend_reciprocity_3d.py`, a completely different port
+topology: a bent ring coupler's x/y-normal ports, not two x-normal ports on
+a straight MMI slab).
+
+**Before committing to the full 16-mode capture across 3 lengths (a real
+~40-70 cluster-hour cost), `mmi_4x4_90hybrid_output_capture_validate.py`
+(NEW script) checked the mechanism cheaply**: launch just `N_TEST_MODES=3`
+body modes from the interior at mm_length=5.00, and compare the resulting
+transfer coefficients against the one free, exact ground truth already
+available — reciprocity says this reversed call's own coefficients must
+equal `M_in[TOP_PORT].transpose()`, already computed (and cached from job
+13024689) by the production hybrid script's own mirror-reuse trick.
+
+**Result: HYPOTHESIS NOT CONFIRMED.** At all 3 wavelengths × 3 test modes,
+relative difference was **198.4-202.1%**, not scattered noise — e.g. at
+1.31 µm mode 0: test=0.068235+0.191649j vs predicted=0.024942-0.190566j
+(max abs diff 0.894). The two values' **magnitudes are comparable** (same
+order, 10-20% apart) but their **phase/direction disagrees sharply** — the
+signature of a sign/direction convention error (a wrong `PortSpec.sign`,
+the wrong forward/backward `alpha_idx`, or a conjugate mismatch somewhere
+in the reversed-excitation construction), not a magnitude/normalization
+bug. Not yet root-caused.
+
+**A real, unrelated bug was found and fixed along the way**: the
+validation script's own `save_dir` pointed at the wrong, near-empty
+`BEEF/example_sim_cache` (5 entries) instead of the real, actively-used
+`example_sim_cache` at the repo root (1076 entries) — a copy-paste path
+error, not a cache-mechanism problem. Fixed in the script for future runs;
+the already-running job was left to finish rather than restarted, since it
+still produced a valid (if slower than necessary) result.
+
+**Status: the output-taper field-plot capability is BLOCKED**, pending a
+root cause for the sign/direction mismatch above. The full-device FDTD
+field capture (the `solve()` `capture_fields_dir` addition) is unaffected
+and ready to use independently. Not attempted further without new
+direction, per the user's own explicit instruction after this result.

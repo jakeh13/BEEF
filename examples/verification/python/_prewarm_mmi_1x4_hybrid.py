@@ -39,10 +39,42 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
 RESOLUTION = float(os.environ.get("MMI1X4_HPREWARM_RES", 30.0))
-WL_MIN, WL_MAX = 1.50, 1.60
+# DEFAULTS UNCHANGED (1.50/1.60/11 -- the original full-band grid). Env-
+# overridable as of 2026-09-11 for a C-band sub-sweep aimed at pinning the
+# TE10 cutoff (the kink observed between the 16- and 24-mode results near
+# 1.555-1.56 um -- see mmi_1x4_sin300_validation.md item 9d). Changing ANY of
+# these changes `wavelengths`, which is hashed directly into every
+# solve_section() fingerprint (_resolved_spectral_config, fdtd.py:479) -- a
+# new grid is a guaranteed cache MISS on the input/output sections, not an
+# incremental add. There is no way around that; only the target grid should
+# be chosen deliberately, not spread across many ad hoc re-runs.
+WL_MIN = float(os.environ.get("MMI1X4_HPREWARM_WL_MIN", 1.50))
+WL_MAX = float(os.environ.get("MMI1X4_HPREWARM_WL_MAX", 1.60))
 N_WL = int(os.environ.get("MMI1X4_HPREWARM_NWL", 11))
 DECAY_TOL = float(os.environ.get("MMI1X4_HPREWARM_DECAY_TOL", 1e-11))
-CALIBRATE_BODY = True
+# DEFAULT UNCHANGED (True). Env-overridable as of 2026-09-06, matching
+# mmi_1x4_hybrid.py's own MMI1X4_CALIBRATE_BODY knob, for the interface_modes
+# convergence sweep (item 9d).
+#
+# WHY THE SWEEP TURNS IT OFF. The calibration is this prewarm's entire cost.
+# It is measure_diagonal_only, which time-steps once per excited band, so it is
+# 16 runs at N_MODES=16 against the input section's 1 -- measured on the
+# cancelled array 12853535: ~4.7 of its projected ~5.3 days. Everything else
+# (input section + output section) is under a day.
+#
+# Dropping it does not compromise what the sweep measures. A mode-count
+# convergence test asks whether the S-matrix plateaus as interface_modes grows;
+# the calibration replaces the body's per-mode beta and was measured to move
+# total T by ~0.4% (0.9454 calibrated vs 0.9495 uncalibrated, jobs 12227591 /
+# 12227682) against the ~3.45% of interface power that sits outside the 12-mode
+# basis. It is also mildly HARMFUL against the whole-device FDTD reference at 8
+# of 11 wavelengths. So it is not the effect under study, and it is an order of
+# magnitude smaller than the one that is.
+#
+# ⚠ The resulting convergence conclusion is established for the UNCALIBRATED
+# chain. If the plateau lands near the production 12, re-confirm it calibrated
+# -- much cheaper once the plateau location is known than sweeping blind.
+CALIBRATE_BODY = os.environ.get("MMI1X4_CALIBRATE_BODY", "1") not in ("0", "false", "False")
 
 WAVEGUIDE_WIDTH, TAPER_WIDTH, TAPER_LENGTH, WAVEGUIDE_OFFSET, MM_WIDTH = 1.1, 2.2, 5.0, 3.1, 12.0
 MM_LENGTH = 39.90
@@ -82,6 +114,15 @@ body_stub = 0.25
 boundaries = [-half_total, -half_body + body_stub, +half_body - body_stub, +half_total]
 interface_modes = [N_MODES, N_MODES]
 
+# Mirrors mmi_1x4_hybrid.py's PIN_MONITOR block (2026-09-05) -- read that
+# comment for why both keys are needed and why the BODY section must not get
+# them. This file's whole purpose is to warm THAT script's keys, so the two
+# must agree exactly: prewarming unpinned entries while the real run asks for
+# pinned ones warms a cache nothing will ever read.
+PIN_MONITOR = os.environ.get("MMI1X4_PIN_MONITOR", "1") not in ("0", "false", "False")
+_MONITOR_PIN = (dict(monitor_center=0.0, monitor_size=FDTD_SIM_WIDTH)
+                if PIN_MONITOR else {})
+
 hybrid = HybridSolver(
     solvers=[input_solver, body_solver, output_solver],
     boundaries=boundaries, interface_modes=interface_modes,
@@ -100,9 +141,11 @@ if k not in (0, 1, 2, 3):
 print(f"Prewarming branch {k}: HybridSolver.solve_length_sweep(), "
       f"{len(body_lengths)} lengths, {len(wavelengths)} wavelengths, "
       f"N_MODES={N_MODES}, CALIBRATE_BODY={CALIBRATE_BODY}, "
-      f"decay_tol={DECAY_TOL}", flush=True)
+      f"PIN_MONITOR={PIN_MONITOR}, decay_tol={DECAY_TOL}", flush=True)
 coeffs = hybrid.solve_length_sweep(
     mmi, wavelengths, body_lengths, sweep_section=BODY_SECTION,
-    geometry_kwargs={2: {"output_idx": k}}, save_dir=save_dir,
+    geometry_kwargs={0: dict(_MONITOR_PIN),
+                     2: dict(_MONITOR_PIN, output_idx=k)},
+    save_dir=save_dir,
 )
 print(f"Branch {k} done -- cache warmed at {save_dir}", flush=True)

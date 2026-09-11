@@ -14,6 +14,16 @@ class Taper(DeviceGeometry):
     """Straight-line linear width transition, centered at x=0:
     width_start at x=-length/2, width_end at x=+length/2, linear between.
 
+    The centerline may ALSO be slanted: `y_start` at x=-length/2, `y_end`
+    at x=+length/2, linear between (both default 0.0 — a straight,
+    non-slanted taper, byte-identical to every use of this class before
+    2026-09-09). Added for `MMIPort.y_far`
+    (modal_multiplexer_validation.md gap 9 item 2): the fabricated seed
+    mux's top branch taper measures MMI-side end at y=+1.0375 but
+    waveguide-side end at y=+1.0480 — a real, if sub-pixel-at-res-40,
+    asymmetry this repo's geometry model could not previously express at
+    all (every taper was forced fully straight).
+
     The cross-section varies everywhere along its length, so
     section_prisms()/section_gds() must include it whole or not at all.
     """
@@ -24,11 +34,15 @@ class Taper(DeviceGeometry):
         width_start: float,
         width_end: float,
         waveguide_height: float = 0.16,
+        y_start: float = 0.0,
+        y_end: float = 0.0,
     ):
         self.length = length
         self.width_start = width_start
         self.width_end = width_end
         self.waveguide_height = waveguide_height
+        self.y_start = y_start
+        self.y_end = y_end
 
     @property
     def total_length(self) -> float:
@@ -37,11 +51,12 @@ class Taper(DeviceGeometry):
     def polygons(self, stub_length: float = 0.0) -> Dict[Tuple[int, int], List[List[Tuple[float, float]]]]:
         L = self.length
         wa, wb = self.width_start, self.width_end
-        wg = [[(-L/2, -wa/2), (L/2, -wb/2), (L/2, wb/2), (-L/2, wa/2)]]
+        ya, yb = self.y_start, self.y_end
+        wg = [[(-L/2, ya-wa/2), (L/2, yb-wb/2), (L/2, yb+wb/2), (-L/2, ya+wa/2)]]
         if stub_length > 0:
             sl = stub_length
-            wg.append([(-L/2-sl, -wa/2), (-L/2, -wa/2), (-L/2, wa/2), (-L/2-sl, wa/2)])
-            wg.append([(L/2, -wb/2), (L/2+sl, -wb/2), (L/2+sl, wb/2), (L/2, wb/2)])
+            wg.append([(-L/2-sl, ya-wa/2), (-L/2, ya-wa/2), (-L/2, ya+wa/2), (-L/2-sl, ya+wa/2)])
+            wg.append([(L/2, yb-wb/2), (L/2+sl, yb-wb/2), (L/2+sl, yb+wb/2), (L/2, yb+wb/2)])
         return {_WG_LAYER: wg}
 
     def to_gds_eme(
@@ -69,22 +84,23 @@ class Taper(DeviceGeometry):
                            stub_left: float = 0.0, stub_right: float = 0.0):
         L = self.length
         wa, wb = self.width_start, self.width_end
+        ya, yb = self.y_start, self.y_end
         lo, hi = x0 - stub_left, x1 + stub_right
         self._check_cut(lo)
         self._check_cut(hi)
 
         polys: List[List[Tuple[float, float]]] = []
 
-        def _rect(xa, xb, w):
+        def _rect(xa, xb, w, y):
             if xb - xa > 1e-9:
-                polys.append([(xa, -w/2), (xb, -w/2), (xb, w/2), (xa, w/2)])
+                polys.append([(xa, y-w/2), (xb, y-w/2), (xb, y+w/2), (xa, y+w/2)])
 
         if lo < -L/2:
-            _rect(lo, min(hi, -L/2), wa)
+            _rect(lo, min(hi, -L/2), wa, ya)
         if lo <= -L/2 and hi >= L/2:
-            polys.append([(-L/2, -wa/2), (L/2, -wb/2), (L/2, wb/2), (-L/2, wa/2)])
+            polys.append([(-L/2, ya-wa/2), (L/2, yb-wb/2), (L/2, yb+wb/2), (-L/2, ya+wa/2)])
         if hi > L/2:
-            _rect(max(lo, L/2), hi, wb)
+            _rect(max(lo, L/2), hi, wb, yb)
         return polys
 
     def section_prisms(self, x0: float, x1: float, si_medium,
@@ -117,7 +133,13 @@ class Taper(DeviceGeometry):
         return self.width_start + frac * (self.width_end - self.width_start)
 
     def center_at(self, x: float, **_kwargs) -> float:
-        return 0.0
+        L = self.length
+        if x <= -L/2:
+            return self.y_start
+        if x >= L/2:
+            return self.y_end
+        frac = (x + L/2) / L
+        return self.y_start + frac * (self.y_end - self.y_start)
 
     def eme_lengths(self, straight_length: float) -> List[float]:
         return [straight_length, self.length, straight_length]

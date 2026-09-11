@@ -46,6 +46,31 @@ def _neff_fingerprint(neff_override: Optional[np.ndarray]):
             for row in np.atleast_2d(arr)]
 
 
+def _cell_neff_fingerprint(cell_neff_override: Optional[np.ndarray]):
+    """JSON-safe cache-key form of a `cell_neff_override` array, or None.
+
+    Same reasoning as `_neff_fingerprint` — a section propagated on different
+    per-cell n_eff is a different physical result and must not share a cache
+    entry — but one axis deeper: [wavelength, cell, mode] rather than
+    [wavelength, mode]. Same 9-decimal rounding so a JSON round-trip cannot
+    turn a hit into a miss.
+
+    NOTE this is only ever ADDED to a config dict when the override is not
+    None; see solve_section(). An uncalibrated run must keep the exact
+    fingerprint it had before this parameter existed, or every cached FDTD
+    section in the repo is invalidated at once.
+    """
+    if cell_neff_override is None:
+        return None
+    arr = np.asarray(cell_neff_override)
+    if arr.ndim != 3:
+        raise ValueError(
+            f"cell_neff_override must be [n_wavelengths, n_cells, n_modes]; "
+            f"got shape {arr.shape}")
+    return [[[[round(float(np.real(v)), 9), round(float(np.imag(v)), 9)]
+              for v in mode_row] for mode_row in cell_row] for cell_row in arr]
+
+
 # Tolerance for the diagonal-reconstruction self-check in
 # solve_section_length_sweep() -- see that method's "neff cache" tier. Loose
 # enough to absorb meow's own solver noise, tight enough that a real ordering/
@@ -572,6 +597,8 @@ class EMESolver:
         neff_override: Optional[np.ndarray] = None,
         save_dir: Optional[str] = None,
         cache_only: bool = False,
+        *,
+        cell_neff_override: Optional[np.ndarray] = None,
         **geometry_kwargs,
     ) -> np.ndarray:
         """Modal transfer matrix for the device section [x0, x1] (device frame).
@@ -606,6 +633,35 @@ class EMESolver:
                 ``HybridSolver(calibrate_body_neff=True)`` rather than by hand;
                 see ``FDTDSolver.section_mode_beta()``. None (default) uses the
                 mode solver's own n_eff, unchanged.
+            cell_neff_override: optional array ``[len(wavelengths), n_cells,
+                n_modes]`` replacing each mode's n_eff **per cell**, for the
+                REAL multi-cell solve. This is the tapered-body counterpart of
+                ``neff_override`` and a different operation, not a variant of
+                it:
+
+                * ``neff_override`` replaces the whole section's transfer
+                  matrix with a diagonal ``exp(2j·π·n_eff·L/λ)``, skipping the
+                  mode solve entirely. Diagonal means NO mode mixing, which is
+                  exact for a uniform slab and destroys the physics of a taper,
+                  where conversion between modes is the whole point. Hence its
+                  uniform-cross-section guard.
+                * ``cell_neff_override`` keeps every part of the multi-cell
+                  solve — cells, modes, and above all the interface S-matrices
+                  — and substitutes n_eff ONLY in the propagation within each
+                  cell. The split is exact: interface overlaps depend on the
+                  mode FIELDS, propagation depends on n_eff, so calibrating one
+                  cannot disturb the other.
+
+                That makes a tapered body calibratable cell by cell, which the
+                section-level flag cannot express. Each taper slice IS a
+                uniform cell with a well-defined β; what was missing was a way
+                to use it without collapsing the section.
+
+                Supply β as n_eff (``β·λ/2π``), e.g. interpolated from a
+                β(width) curve measured with
+                ``FDTDSolver.section_mode_beta()``. None (default) leaves
+                every code path byte-identical to before this parameter
+                existed, including the cache fingerprint.
             save_dir: persistent on-disk cache directory (see beef/cache/).
                 None/"" (default) disables the cache — see
                 FDTDSolver.solve_section()'s save_dir docstring for the full
@@ -624,6 +680,20 @@ class EMESolver:
         n_modes = max(n_modes_in, n_modes_out)
         length = (x1 - x0) + stub_left + stub_right
 
+        # Mutually exclusive by construction: neff_override REPLACES the
+        # section with a diagonal and skips the mode solve, while
+        # cell_neff_override calibrates propagation INSIDE a real multi-cell
+        # solve. Honouring both is not meaningful -- the diagonal path never
+        # builds the cells the per-cell array indexes -- so refuse rather than
+        # silently let one win.
+        if neff_override is not None and cell_neff_override is not None:
+            raise ValueError(
+                "neff_override and cell_neff_override are different "
+                "propagation models, not two settings of one: the former "
+                "collapses the section to a diagonal transfer matrix (no mode "
+                "mixing, uniform spans only), the latter keeps the multi-cell "
+                "solve and its interface S-matrices. Pass exactly one.")
+
         # A request for fewer modes than a prior call already computed can
         # reuse that larger result by slicing its mode axes — unlike FDTD,
         # EME has no excited/measured-side asymmetry and no monitor geometry
@@ -636,6 +706,15 @@ class EMESolver:
         # long as meow's mode solver doesn't reorder near-degenerate modes
         # differently between differently-sized requests — see
         # tests/test_cache_config.py's EME superset-reuse coverage.
+        # Included in the fingerprint ONLY when set. Adding a key
+        # unconditionally would change EVERY existing solve_section hash and
+        # invalidate the whole on-disk cache for every device in this repo --
+        # the expensive FDTD sections included. Keeping it conditional means a
+        # run that does not use per-cell calibration fingerprints exactly as it
+        # did before this parameter existed. tests/test_cache_config.py pins
+        # that with a golden hash.
+        _cell_fp = ({} if cell_neff_override is None
+                    else {"cell_neff_override": _cell_neff_fingerprint(cell_neff_override)})
         family_config = None
         if save_dir:
             family_config = build_run_config(
@@ -644,6 +723,7 @@ class EMESolver:
                      stub_left=stub_left, stub_right=stub_right,
                      geometry_kwargs=geometry_kwargs,
                      neff_override=_neff_fingerprint(neff_override),
+                     **_cell_fp,
                      **resolved_material_config(
                          self.material_stack, wavelengths,
                          self._resolved_dispersive())),
@@ -656,6 +736,7 @@ class EMESolver:
                      stub_left=stub_left, stub_right=stub_right,
                      geometry_kwargs=geometry_kwargs,
                      neff_override=_neff_fingerprint(neff_override),
+                     **_cell_fp,
                      **resolved_material_config(
                          self.material_stack, wavelengths,
                          self._resolved_dispersive())),
@@ -757,12 +838,47 @@ class EMESolver:
             modes_per_cell = [n_modes] * len(cell_lengths)
             cells = mw.create_cells(structures=structs, mesh=mesh, Ls=cell_lengths)
 
+            if cell_neff_override is not None:
+                _cno = np.asarray(cell_neff_override)
+                if _cno.shape[:2] != (len(wavelengths), len(cells)):
+                    raise ValueError(
+                        f"cell_neff_override has shape {_cno.shape}; expected "
+                        f"[{len(wavelengths)}, {len(cells)}, >= {n_modes}] "
+                        f"(wavelengths, cells, modes). A silent shape mismatch "
+                        f"here would calibrate the wrong cell.")
+                if _cno.shape[2] < n_modes:
+                    raise ValueError(
+                        f"cell_neff_override supplies {_cno.shape[2]} modes but "
+                        f"this section carries {n_modes}; every propagating "
+                        f"mode needs a calibrated n_eff.")
+
             T = np.zeros((len(wavelengths), n_modes_out, n_modes_in), dtype=complex)
 
             for wl_idx, wl in enumerate(wavelengths):
                 env = mw.Environment(wl=float(wl), T=self.temperature)
                 css = [mw.CrossSection.from_cell(cell=cell, env=env) for cell in cells]
                 modes = [self.compute_modes(cs, nm) for cs, nm in zip(css, modes_per_cell)]
+                if cell_neff_override is not None:
+                    # Substitute n_eff PER CELL, leaving every field untouched.
+                    #
+                    # This is what makes a tapered body calibratable. meow
+                    # splits cleanly: `compute_interface_s_matrix` integrates
+                    # the mode FIELDS, while propagation within a cell is
+                    # exp(2j*pi*neff/wl*L). So replacing neff changes only the
+                    # propagation and cannot perturb a single interface
+                    # overlap -- unlike `neff_override`, which discards the
+                    # interfaces altogether by going diagonal.
+                    #
+                    # Modes are rebuilt rather than mutated because meow's Mode
+                    # is immutable; `meow.mode.normalize()` constructs new ones
+                    # the same way.
+                    modes = [
+                        [type(m)(neff=complex(_cno[wl_idx, ci, mi]), cs=m.cs,
+                                 Ex=m.Ex, Ey=m.Ey, Ez=m.Ez,
+                                 Hx=m.Hx, Hy=m.Hy, Hz=m.Hz)
+                         for mi, m in enumerate(cell_modes)]
+                        for ci, cell_modes in enumerate(modes)
+                    ]
                 S, port_map = mw.compute_s_matrix(modes, cells=cells)
                 # S is a flat dense matrix keyed by string port labels ("left@n",
                 # "right@n"), not an NxN block per port pair — look up indices

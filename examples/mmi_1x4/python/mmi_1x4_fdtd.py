@@ -52,7 +52,13 @@ import matplotlib.pyplot as plt
 from beef import MMI, FDTDSolver, SIN_300, plot_fdtd_geometry
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_1x4", "mmi_1x4_fdtd"))
+# MMI1X4_OUTPUT_SUFFIX, default "" -- mirrors mmi_1x4_hybrid.py's own knob.
+# A WL-grid override (above) must not land in the unsuffixed folder: that is
+# the production 1.50-1.60/N_WL=11 reference every existing plot in this
+# campaign compares against, and overwriting its smatrix.pkl would silently
+# invalidate all of them.
+output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_1x4",
+                                          "mmi_1x4_fdtd" + os.environ.get("MMI1X4_OUTPUT_SUFFIX", "")))
 os.makedirs(output_dir, exist_ok=True)
 save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
@@ -64,9 +70,16 @@ save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_
 # genuinely UNMEASURED for a whole-device run with bends/tapers present).
 # ---------------------------------------------------------------------------
 RESOLUTION = 30.0
-WL_MIN = 1.50
-WL_MAX = 1.60
-N_WL = 11
+# DEFAULTS UNCHANGED (1.50/1.60/11). Env-overridable as of 2026-09-11 for a
+# C-band sub-sweep (1.530-1.565 um, 21 pts) targeting the TE10 cutoff found
+# between the hybrid's 16- and 24-mode results -- see mmi_1x4_sin300_
+# validation.md item 9d. `wavelengths` is hashed into solve()'s own
+# fingerprint too (same _resolved_spectral_config mechanism as solve_section),
+# so any override here also produces a fresh, uncached whole-device run --
+# there is no reduced-cost path for changing the wavelength grid.
+WL_MIN = float(os.environ.get("MMI1X4_FDTD_WL_MIN", 1.50))
+WL_MAX = float(os.environ.get("MMI1X4_FDTD_WL_MAX", 1.60))
+N_WL = int(os.environ.get("MMI1X4_FDTD_NWL", 11))
 
 # ---------------------------------------------------------------------------
 # 1. Geometry -- identical to mmi_1x4_eme.py/mmi_1x4_hybrid.py, step 9c.

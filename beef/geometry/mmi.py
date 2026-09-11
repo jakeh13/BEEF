@@ -17,11 +17,34 @@ class MMIPort:
     """One input or output port: y-position plus its own taper geometry.
 
     The taper always spans from `waveguide_width` (at the access-waveguide
-    end) to `taper_width` (at the MMI body face) over `taper_length`."""
+    end) to `taper_width` (at the MMI body face) over `taper_length`.
+
+    `y` is the taper's y-position at the MMI-BODY-FACE end — unchanged
+    meaning, every existing use of this field (mode-overlap/aperture
+    alignment with the body's own transverse profile, `input_ys`/
+    `output_ys`, etc.) is untouched by the field below.
+
+    `y_far`: optional y-position at the ACCESS-WAVEGUIDE end instead,
+    making the taper's centerline SLANTED rather than straight when it
+    differs from `y`. None (default) means "same as `y`" — a straight
+    taper, bit-identical to every device built before this field existed.
+    Added 2026-09-09 (modal_multiplexer_validation.md gap 9 item 2): the
+    modal multiplexer's fabricated seed GDS measures its top branch taper
+    with MMI-side end at y=+1.0375 but waveguide-side end at y=+1.0480 —
+    a real fabricated asymmetry (0.0105 µm, 0.42 px at res 40) this
+    dataclass previously had no field to express at all."""
     y: float
     waveguide_width: float
     taper_length: float
     taper_width: float
+    y_far: Optional[float] = None
+
+    @property
+    def y_far_eff(self) -> float:
+        """`y_far` if set, else `y` — the taper's waveguide-end y-position,
+        always resolved (never None) so call sites never need the
+        `is None` check themselves."""
+        return self.y if self.y_far is None else self.y_far
 
 
 class MMI(DeviceGeometry):
@@ -227,33 +250,44 @@ class MMI(DeviceGeometry):
 
         for i, p in enumerate(self.inputs):
             ww = p.waveguide_width
+            yf = p.y_far_eff
             x_taper_start = -half - p.taper_length
-            t = Taper(length=p.taper_length, width_start=ww, width_end=p.taper_width)
-            wg.extend(shift_polys(t.polygons()[_WG_LAYER], -half - p.taper_length/2, p.y))
+            # y_start pairs with width_start (the FAR/waveguide end here);
+            # y_end pairs with width_end (the NEAR/body-face end) — see
+            # MMIPort.y_far's docstring. dy=0 in the shift below: the taper's
+            # own polygon already carries both absolute y's.
+            t = Taper(length=p.taper_length, width_start=ww, width_end=p.taper_width,
+                      y_start=yf, y_end=p.y)
+            wg.extend(shift_polys(t.polygons()[_WG_LAYER], -half - p.taper_length/2, 0.0))
             extra = in_max - p.taper_length
             if extra > 1e-9:
-                wg.append([(x_taper_start-extra, -ww/2+p.y), (x_taper_start, -ww/2+p.y),
-                           (x_taper_start, ww/2+p.y), (x_taper_start-extra, ww/2+p.y)])
+                wg.append([(x_taper_start-extra, -ww/2+yf), (x_taper_start, -ww/2+yf),
+                           (x_taper_start, ww/2+yf), (x_taper_start-extra, ww/2+yf)])
             if stub_length > 0 and i in stub_in_idxs:
                 sl = stub_length
                 x_far = -half - in_max
-                wg.append([(x_far-sl, -ww/2+p.y), (x_far, -ww/2+p.y),
-                           (x_far, ww/2+p.y), (x_far-sl, ww/2+p.y)])
+                wg.append([(x_far-sl, -ww/2+yf), (x_far, -ww/2+yf),
+                           (x_far, ww/2+yf), (x_far-sl, ww/2+yf)])
 
         for i, p in enumerate(self.outputs):
             ww = p.waveguide_width
+            yf = p.y_far_eff
             x_taper_end = half + p.taper_length
-            t = Taper(length=p.taper_length, width_start=p.taper_width, width_end=ww)
-            wg.extend(shift_polys(t.polygons()[_WG_LAYER], half + p.taper_length/2, p.y))
+            # y_start pairs with width_start (NEAR/body-face here); y_end
+            # pairs with width_end (FAR/waveguide) — mirrored vs. inputs
+            # above because width_start/width_end are swapped for outputs.
+            t = Taper(length=p.taper_length, width_start=p.taper_width, width_end=ww,
+                      y_start=p.y, y_end=yf)
+            wg.extend(shift_polys(t.polygons()[_WG_LAYER], half + p.taper_length/2, 0.0))
             extra = out_max - p.taper_length
             if extra > 1e-9:
-                wg.append([(x_taper_end, -ww/2+p.y), (x_taper_end+extra, -ww/2+p.y),
-                           (x_taper_end+extra, ww/2+p.y), (x_taper_end, ww/2+p.y)])
+                wg.append([(x_taper_end, -ww/2+yf), (x_taper_end+extra, -ww/2+yf),
+                           (x_taper_end+extra, ww/2+yf), (x_taper_end, ww/2+yf)])
             if stub_length > 0 and i in stub_out_idxs:
                 sl = stub_length
                 x_far = half + out_max
-                wg.append([(x_far, -ww/2+p.y), (x_far+sl, -ww/2+p.y),
-                           (x_far+sl, ww/2+p.y), (x_far, ww/2+p.y)])
+                wg.append([(x_far, -ww/2+yf), (x_far+sl, -ww/2+yf),
+                           (x_far+sl, ww/2+yf), (x_far, ww/2+yf)])
         return {_WG_LAYER: wg}
 
     def to_gds_eme(
@@ -516,19 +550,26 @@ class MMI(DeviceGeometry):
                 polys.append([(xa, -half_w + yc), (xb, -half_w + yc),
                               (xb, half_w + yc), (xa, half_w + yc)])
 
-        # left access waveguides (uniform, one per input port)
+        # left access waveguides (uniform, one per input port) — sit at the
+        # taper's FAR/waveguide-end y (p.y_far_eff), not the body-face y:
+        # straight waveguide beyond a slanted taper continues at the far
+        # end's position, not the near end's.
         if lo < in0:
             for p in self.inputs:
-                _rect(lo, min(hi, in0), p.waveguide_width / 2, yc=p.y)
+                _rect(lo, min(hi, in0), p.waveguide_width / 2, yc=p.y_far_eff)
         # input tapers band (all-or-nothing — never cut mid-band)
         if lo <= in0 and hi >= in1:
             for p in self.inputs:
                 x_taper_start = in1 - p.taper_length
                 extra = x_taper_start - in0
                 if extra > 1e-9:
-                    _rect(in0, x_taper_start, p.waveguide_width / 2, yc=p.y)
-                t = Taper(length=p.taper_length, width_start=p.waveguide_width, width_end=p.taper_width)
-                polys.extend(shift_polys(t.polygons()[_WG_LAYER], x_taper_start + p.taper_length/2, p.y))
+                    _rect(in0, x_taper_start, p.waveguide_width / 2, yc=p.y_far_eff)
+                # y_start (far/waveguide end) = p.y_far_eff, y_end (near/body
+                # end) = p.y — see MMIPort.y_far's docstring. dy=0: the
+                # taper polygon already carries both absolute y's.
+                t = Taper(length=p.taper_length, width_start=p.waveguide_width, width_end=p.taper_width,
+                          y_start=p.y_far_eff, y_end=p.y)
+                polys.extend(shift_polys(t.polygons()[_WG_LAYER], x_taper_start + p.taper_length/2, 0.0))
         # MMI body — uniform middle, optionally tapered at both faces
         # (`_body_polys` is a no-op outside [in1, out0] via its own clamping,
         # so passing the full [lo, hi] here is correct, not just convenient).
@@ -537,15 +578,19 @@ class MMI(DeviceGeometry):
         if lo <= out0 and hi >= out1:
             for p in self.outputs:
                 x_taper_end = out0 + p.taper_length
-                t = Taper(length=p.taper_length, width_start=p.taper_width, width_end=p.waveguide_width)
-                polys.extend(shift_polys(t.polygons()[_WG_LAYER], x_taper_end - p.taper_length/2, p.y))
+                # y_start (near/body end) = p.y, y_end (far/waveguide end)
+                # = p.y_far_eff — mirrored vs. inputs (width_start/width_end
+                # are swapped for outputs too).
+                t = Taper(length=p.taper_length, width_start=p.taper_width, width_end=p.waveguide_width,
+                          y_start=p.y, y_end=p.y_far_eff)
+                polys.extend(shift_polys(t.polygons()[_WG_LAYER], x_taper_end - p.taper_length/2, 0.0))
                 extra = out1 - x_taper_end
                 if extra > 1e-9:
-                    _rect(x_taper_end, out1, p.waveguide_width / 2, yc=p.y)
+                    _rect(x_taper_end, out1, p.waveguide_width / 2, yc=p.y_far_eff)
         # right access waveguides (uniform, one per output port)
         if hi > out1:
             for p in self.outputs:
-                _rect(max(lo, out1), hi, p.waveguide_width / 2, yc=p.y)
+                _rect(max(lo, out1), hi, p.waveguide_width / 2, yc=p.y_far_eff)
 
         return polys
 
@@ -592,9 +637,25 @@ class MMI(DeviceGeometry):
     def center_at(self, x: float, input_idx: int = 0, output_idx: int = 0, **_kwargs) -> float:
         half_body = self.mm_length / 2
         if x < -half_body:
-            return self.inputs[input_idx].y
+            p = self.inputs[input_idx]
+            yf = p.y_far_eff
+            x0 = -half_body - p.taper_length
+            if x <= x0:
+                return yf
+            # frac: 0 at the far/waveguide end, 1 at the body face — same
+            # convention width_at() uses for this same band, so a straight
+            # taper (yf == p.y) reduces to the old constant-p.y behaviour
+            # exactly, bit-for-bit.
+            frac = (x - x0) / p.taper_length
+            return yf + frac * (p.y - yf)
         if x > half_body:
-            return self.outputs[output_idx].y
+            p = self.outputs[output_idx]
+            yf = p.y_far_eff
+            x1 = half_body + p.taper_length
+            if x >= x1:
+                return yf
+            frac = (x - half_body) / p.taper_length
+            return p.y + frac * (yf - p.y)
         return 0.0
 
     def source_aperture_at(self, x: float, input_idx: int = 0, output_idx: int = 0,
@@ -617,9 +678,16 @@ class MMI(DeviceGeometry):
             idx, ports = output_idx, self.outputs
         if len(ports) < 2:
             return None
-        y_k = ports[idx].y
+        # Resolve each port's ACTUAL y at this cross-section, not its
+        # body-face `.y` — for a slanted taper (MMIPort.y_far) those differ
+        # anywhere outside the body face itself, and every call here lands
+        # in a taper band or the straight waveguide beyond it by construction
+        # (the `in1 <= x <= out0` body check above already returned).
+        y_at = lambda j: (self.center_at(x, input_idx=j) if x < in1
+                          else self.center_at(x, output_idx=j))
+        y_k = y_at(idx)
         w = lambda j: self.width_at(x, input_idx=j) if x < in1 else self.width_at(x, output_idx=j)
-        half = min(abs(ports[j].y - y_k) - w(j) / 2 for j in range(len(ports)) if j != idx)
+        half = min(abs(y_at(j) - y_k) - w(j) / 2 for j in range(len(ports)) if j != idx)
         return 2.0 * half
 
     def eme_lengths(self, straight_length: float) -> List[float]:

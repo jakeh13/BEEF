@@ -532,7 +532,375 @@ assumed to carry.
 converged either — it was one doubling that changed the picture, which
 demonstrates non-convergence at 6 rather than convergence at 12.
 
-#### 5b — `num_modes` through the narrowed section
+#### ❌ STEP 5b DONE 2026-09-02 — job 12780420 (3:38:23) — AND IT INVALIDATES STEP 6's SCORING
+
+**Read this before trusting any step-6 number.** Two independent 1-D sweeps at
+the design point (`Ww=2.24, Lw=8.0, Lt=6.0, L=20.5`), res 40, 11 wl, each point
+streamed to disk.
+
+##### Axis A — `N_BODY`: CONVERGED at 15, and my truncation hypothesis is REFUTED
+
+| N_BODY | 12 | 15 | 18 | 21 | 24 | 27 |
+|---|---|---|---|---|---|---|
+| IL dB | 0.3881 | 0.3910 | 0.3934 | 0.3931 | 0.3928 | 0.3930 |
+
+Span **0.0053 dB**; plateau from 18, last four within **0.0006 dB**. A real
+plateau, not a cap artifact (the 4×4's warning) — it flattens well below the 27
+tried. **`N_BODY=15` was adequate**, so step 6's body basis is fine.
+
+I had predicted that if the check-4 EME-vs-FDTD loss offset were basis
+truncation, raising the body count would drive IL toward FDTD. It does not —
+it moves *away* by 0.005 dB. **Prediction falsified on measurement.**
+
+##### ❌ Axis B — `N_TAPER`: NOT CONVERGED, and 7 is a lucky point
+
+| N_TAPER | IL dB | gap to FDTD | phase° | mean-dev° | verdict |
+|---|---|---|---|---|---|
+| 5 | 0.4676 | +0.264 | −91.862 | 2.112 | FAIL |
+| **7 (what step 6 used)** | 0.3910 | +0.187 | −91.446 | **1.696** | **PASS** |
+| 9 | 0.3658 | +0.162 | −91.803 | 2.053 | FAIL |
+| 11 | 0.3459 | +0.142 | −91.939 | 2.189 | FAIL |
+| 13 | 0.3536 | +0.150 | −92.025 | 2.275 | FAIL |
+
+Span **0.1217 dB — 23× the body axis.** Loss falls steeply then scatters around
+~0.35 dB without a clean plateau, and never reaches FDTD's 0.2036 dB.
+
+> ### ❌ THE DESIGN POINT PASSES THE PHASE CRITERION ONLY AT `N_TAPER = 7`
+> It **fails at 5, 9, 11 and 13.** `7` sits between failures, and its phase
+> (−91.446°) breaks a sequence that otherwise brackets the check-4 FDTD
+> reference (**−91.849°**) from both sides. That is the profile of a lucky
+> point on an unconverged axis, not of a converged one.
+
+**Consequences, stated plainly:**
+
+1. **Step 6's entire 56-passer set was scored at `N_TAPER=7`.** The ranking,
+   the design point and the 20.3% headline all rest on a basis measured here as
+   unconverged. **The 29.50 µm point must not be treated as validated**, and
+   step 6 needs re-scoring at a converged taper basis before it can be closed.
+2. **This corroborates check 4 independently.** Full-device FDTD gave a phase
+   mean-dev of **2.099°**; a better-resolved EME gives **2.05–2.28°**. Two
+   different routes now agree the phase margin is not there, and `N_TAPER=7`
+   was the single configuration that hid it.
+3. **Neither mode axis explains the loss offset.** At the best taper basis EME
+   still sits **~0.15 dB above FDTD**, so ~80% of the check-4 gap has another
+   cause — candidates: `C_TRANS` interaction, the 15-cell taper
+   discretisation, or something structural in the cascade. **Open.**
+
+⚠ **`N_TAPER` is not converged even at 13** (11→13 moves +0.0077 dB, having
+moved −0.0199 before that). The axis needs extending past 13, and the taper
+cell count (`TAPER_CELLS=15`) should be swept with it — more modes through the
+same 15 cells may itself be the limiter. **Do not read 11 or 13 as "the
+converged answer".**
+
+#### ▶ IN FLIGHT 2026-09-10 — STEP 5b PART 2, as the prerequisite for re-scoring step 6
+
+Asked to re-score step 6. **It cannot be validly re-scored yet, and the
+reason is in 5b part 1's own table above**: `N_TAPER` is unconverged even at
+13 (11→13 moves +0.0077 dB having moved −0.0199 before it), so picking any
+particular value to re-score at — 13 included — would repeat step 6's
+original mistake at a different number. 5b part 1 also left `TAPER_CELLS`
+pinned at 15 throughout, so *more modes through the same 15 cells* may itself
+be the limiter; that is an interaction, and independent sweeps cannot test it.
+
+Job **13058925**, array 0-9, one `(N_TAPER, TAPER_CELLS)` pair per task via
+the script's existing `--taper-convergence` mode:
+
+- **edge B'** (tasks 0-3): N_TAPER 15, 17, 19, 21 at TAPER_CELLS=15 — does the
+  mode axis plateau once pushed past 13?
+- **edge C** (tasks 4-7): TAPER_CELLS 10, 20, 25, 30 at N_TAPER=13 — does the
+  cell axis matter at all?
+- **diagonal** (tasks 8-9): 19×25 and 21×30 — is it the interaction?
+
+Held at 5b part 1's own design point (`Ww=2.24 Lw=8.0 Lt=6.0 L=20.5`) so these
+points EXTEND that table instead of starting a second one. The port taper
+(0.45→1.3 over 4.0 µm) is frozen and identical at every step-6 candidate, so a
+taper basis that plateaus here plateaus for the grid.
+
+⚠ **One-pair-per-task was required, not a convenience.** The mode wrote to
+`taper_convergence_res{RES}.json` — res only, no geometry, no pair — so an
+array would have had all ten tasks clobbering one file, the same defect this
+study has already hit six times (most recently the geometry-less `check4`
+name). Filename now carries geometry + pair + `nb`/`nwl`; assemble by
+globbing. The mode already rewrites its JSON after every pair, so a task that
+times out still leaves finished work on disk.
+
+**Then, and only then**, re-score the 668-point grid at the plateaued basis.
+
+##### ✅ EDGE B' IS ALREADY DONE — recovered, not re-run
+
+The earlier killed 5b-part-2 attempt had in fact **completed all four edge-B'
+points** before it was stopped; they were sitting in the res-only
+`taper_convergence_res40.json` (the very filename defect noted above, which is
+why they were easy to miss). Recovered 2026-09-10 and folded in with 5b part
+1's own points, at the same res 40 / 11 wl / N_BODY=15 / design point:
+
+| N_TAPER (cells=15) | IL dB | ΔIL vs prev | mean-dev° | verdict |
+|---|---|---|---|---|
+| 5 | 0.4676 | — | 2.112 | FAIL |
+| **7 (what step 6 used)** | 0.3910 | −0.0766 | **1.696** | **PASS** |
+| 9 | 0.3658 | −0.0252 | 2.053 | FAIL |
+| 11 | 0.3459 | −0.0199 | 2.189 | FAIL |
+| 13 | 0.3536 | +0.0077 | 2.275 | FAIL |
+| 15 | 0.3542 | +0.0006 | 2.253 | FAIL |
+| 17 | 0.3612 | +0.0070 | 2.304 | FAIL |
+| 19 | 0.3693 | +0.0081 | 2.261 | FAIL |
+| 21 | 0.3706 | +0.0013 | 2.239 | FAIL |
+
+**The mode axis has essentially settled past 13.** Span 13→21 is
+**0.0170 dB**, against **0.1217 dB** over 5→13 — a 7× reduction. It still
+creeps upward rather than being flat, so "converged" is too strong; but it is
+no longer the dominant uncertainty, and it moves AWAY from FDTD (0.2036 dB),
+not toward it.
+
+> ### ❌ THE DESIGN POINT FAILS THE PHASE CRITERION AT EVERY N_TAPER FROM 9 TO 21
+> mean-dev sits in a tight **2.05°–2.30°** band across nine mode counts, against
+> a **≤2.0°** criterion. `N_TAPER=7`'s 1.696° is an outlier low by ~0.5°, off
+> a cluster that never comes back under threshold. This is now the THIRD
+> independent route to the same verdict: converged EME says 2.24–2.30°,
+> full-device FDTD (check 4) says **2.099°**, and only the single `N_TAPER=7`
+> configuration step 6 happened to use ever said otherwise.
+
+**Consequence: the 29.50 µm design point is not recoverable by refining the
+taper basis, and step 6's 20.3%-shorter headline does not survive.** The
+re-score is therefore not "re-rank the same 56 passers" — it has to answer
+whether ANY grid point clears the phase criterion on a settled basis.
+
+##### ⚠ The CELL axis matters more than the mode axis past 13
+
+First edge-C point (job 13058925 task 4, the one shard that survived the OOM):
+
+| N_TAPER=13 | TAPER_CELLS | IL dB | mean-dev° |
+|---|---|---|---|
+| | 10 | 0.3900 | 2.231 |
+| | 15 | 0.3536 | 2.275 |
+
+Dropping 15→10 cells moves IL **+0.0364 dB** — more than twice the entire
+13→21 mode-axis span (0.0170 dB). So `TAPER_CELLS` is the live axis now, and
+whether 15 is itself converged is unanswered. Job **13059401** (array 0-4)
+covers the remaining `13:20`, `13:25`, `13:30` and the diagonals `19:25`,
+`21:30`.
+
+##### ✅ EDGE C DONE 2026-09-10 (job 13059401) — and mean-dev is BASIS-INVARIANT
+
+| N_TAPER | CELLS | IL dB | ΔIL vs prev | imb | phase° | mean-dev° |
+|---|---|---|---|---|---|---|
+| 13 | 10 | 0.3900 | — | 0.0796 | −91.981 | 2.231 |
+| 13 | 15 | 0.3536 | −0.0364 | — | — | 2.275 |
+| 13 | 20 | 0.3327 | −0.0209 | 0.0807 | −91.987 | 2.238 |
+| 13 | 25 | 0.3302 | −0.0025 | 0.0812 | −91.987 | 2.237 |
+| 13 | 30 | 0.3220 | −0.0082 | 0.0812 | −91.977 | 2.227 |
+| 19 | 25 | 0.3511 | — | 0.0777 | −91.929 | 2.180 |
+
+Plus the two diagonals, which turn out to be the best points measured:
+
+| N_TAPER × CELLS | IL dB | mean-dev° |
+|---|---|---|
+| 19 × 25 | 0.3511 | 2.180 |
+| 21 × 30 | 0.3436 | **2.160** |
+
+**The decisive observation is the last column.** Over all 13 settled points
+(`N_TAPER` ≥ 9, cells 10→30) mean-dev spans only **2.053°–2.304°** — a 0.251°
+spread — and **every single one FAILS the 2.0° criterion**, while IL swings
+0.068 dB across the same space. `N_TAPER=7`'s 1.696° is the sole outlier in
+the entire 15-point map.
+
+⚠ **"Basis-invariant" is slightly too strong, and the diagonal is why.**
+Raising BOTH axes together does help — the diagonal reaches 2.160/2.180,
+below every edge point (edges give 2.23–2.30) — so 5b part 1's interaction
+hypothesis is partly borne out, and the diagonal has **not flattened**
+(19×25 → 21×30 still moves −0.020°, with IL still falling −0.008 dB). So the
+honest claim is: **the design point fails phase on every basis actually
+measured, by a margin (0.16°) far larger than the drift left in the axis**,
+and closing the remaining 0.16° by refinement alone would need an
+extrapolation this study's own record warns against (convergence ratios
+stall — see the HCG lesson). Not "proven physical", but not a basis artifact
+either.
+IL, by contrast, is still creeping (cells 25→30 moves −0.008 dB, modes 13→21
++0.017 dB) and never approaches FDTD's 0.2036 dB — best here is 0.3220 at
+13×30, still **+0.118 dB** high, so 5b part 1's unexplained loss offset
+stands.
+
+#### ✅ STEP 6 RE-SCORED 2026-09-10 — job 13061906, 8/8 tasks, 668/668 points, no faults
+
+Full grid re-scored at the settled basis **N_TAPER=13 / TAPER_CELLS=30 /
+N_BODY=15** (8 tasks by (Ww, Lw), ~1h20m each; basis 2144 s per Ww then
+~20 s/point warm, interface memo re-verified |dS| = 0.000e+00 at the new
+basis). Result is **POSITIVE, and the opposite of what I predicted.**
+
+**PASSERS: 56 (nt7/tc15) → 70 (nt13/tc30).** Churn: 46 kept, 10 lost, 24
+gained. Refining the taper basis ADDS passers rather than removing them.
+
+##### ⚠ TWO DIFFERENT "DESIGN POINTS" — I had been conflating them, and they diverge
+
+| | Ww | Lw | Lt | L | s | total | nt7 verdict | nt13/tc30 verdict |
+|---|---|---|---|---|---|---|---|---|
+| step 6's original winner, and **5b's subject** | 2.24 | 8.0 | 6.0 | 20.5 | **0.25** | 29.50 | PASS (mdev 1.696) | ❌ **FAIL (2.227)** |
+| **the point every hybrid run used** | 2.24 | 6.0 | 6.0 | 21.5 | 1.75 | 30.50 | PASS (mdev 1.505) | ✅ **PASS (1.846)** |
+
+- **Step 6's 29.50 µm headline is dead**, now by direct re-score rather than
+  extrapolation: mdev 2.227 > 2.0. That is the point 5b swept across the whole
+  2-D basis map and found failing at every settled basis, and the re-score
+  agrees. It was *already* excluded from hybrid work anyway — s=0.25 is below
+  the s ≥ body_stub+dpml = 0.75 buildability floor.
+- **The hybrid work's design point SURVIVES**, and improves on two axes at the
+  better basis: IL 0.3880 → **0.3017 dB**, imbalance 0.0127 → **0.0088**, with
+  phase mdev 1.505 → 1.846 (still inside 2.0). **So the hybrid-vs-FDTD
+  comparison, the C_TRANS sweep and the stitched field maps were all measured
+  on a design point that is still valid.**
+
+#### ✅ STAGE 2 CONFIRMS IT 2026-09-10 — job 13065614, 668/668 at N_TAPER=21 / TAPER_CELLS=30
+
+Re-ran the whole grid on the most phase-favourable basis in the 2-D map
+(mdev 2.160° at the old point, vs 2.227° at 13×30). Basis cost 2737 s vs
+2144 s at 13 modes — only 1.28×, so the full grid was affordable rather than
+just a shortlist. Zero rank-deficiency escalations even at 21 modes (the port
+taper is wide enough to fill the basis, unlike the waist cells).
+
+| basis | passers |
+|---|---|
+| nt7 / tc15 (original) | 56 |
+| nt13 / tc30 (stage 1) | **70** |
+| nt21 / tc30 (stage 2) | **70** |
+
+**The two settled bases agree on 660 of 668 verdicts (98.8%)** — 66 passers in
+common, 4 unique to each. So the re-scored passer set is basis-STABLE, not an
+artifact of picking 13×30. That is the check stage 2 existed to make, and it
+passes.
+
+##### Verdicts across all three bases
+
+| point | s | total | nt7/tc15 | nt13/tc30 | nt21/tc30 |
+|---|---|---|---|---|---|
+| old 29.50 winner (5b's subject) `Lw8 Lt6 L20.5` | 0.25 | 29.50 | PASS 1.696 | ❌ FAIL 2.227 | ❌ FAIL 2.160 |
+| **hybrid design point** `Lw6 Lt6 L21.5` | 1.75 | 30.50 | PASS 1.505 | ✅ PASS 1.846 | ✅ **PASS 1.716** |
+| cand C `Lw8 Lt4 L21.5` | 2.75 | 30.50 | PASS 0.883 | PASS 1.206 | ✅ **PASS 1.138** |
+| cand A `Lw6 Lt5 L22.0` | 3.00 | 31.00 | PASS 0.209 | PASS 0.103 | ✅ **PASS 0.022** |
+| cand B `Lw8 Lt4 L22.0` | 3.00 | 31.00 | PASS 0.680 | PASS 0.187 | ✅ **PASS 0.115** |
+
+- **The 29.50 µm headline is dead on BOTH settled bases** — not a one-basis
+  fluke.
+- **The hybrid design point passes on all three.** Everything built on it —
+  the hybrid-vs-FDTD comparison, the C_TRANS sweep, the stitched field maps —
+  stands.
+- **Candidate A's phase margin improves monotonically as the basis is refined**
+  (0.209 → 0.103 → 0.022°), which is what a genuinely well-centred design
+  looks like, as opposed to the old winner whose 1.696° was basis luck.
+
+##### Final ranking on the most phase-favourable basis (buildable, s ≥ 0.75)
+
+| total µm | Lw | Lt | L | s | IL dB | imb | mdev° | note |
+|---|---|---|---|---|---|---|---|---|
+| 30.50 | 8.0 | 4.0 | 21.5 | 2.75 | 0.3307 | 0.0883 | **1.138** | shortest with real margin |
+| 30.50 | 10.0 | 5.0 | 21.5 | 0.75 | 0.4310 | **0.1369** | 1.697 | imb at the 0.1371 limit |
+| 30.50 | 6.0 | 6.0 | 21.5 | 1.75 | 0.3278 | **0.0115** | 1.716 | incumbent; best imbalance |
+| 30.50 | 8.0 | 6.0 | 21.5 | 0.75 | 0.3691 | 0.1083 | 1.929 | |
+| 31.00 | 6.0 | 5.0 | 22.0 | 3.00 | 0.3655 | 0.0126 | **0.022** | best overall balance |
+| 31.00 | 8.0 | 4.0 | 22.0 | 3.00 | **0.2660** | 0.0991 | 0.115 | best IL in the grid |
+
+68 of 70 passers are buildable. **Shortest buildable stays 30.50 µm = 17.6%**
+shorter than the 37.00 µm control.
+
+📌 **RECOMMENDATION — the design choice is now a real trade, not a search.**
+Spending **0.5 µm more length (31.00 µm, 16.2% instead of 17.6%)** buys
+`Lw6 Lt5 L22.0`: phase deviation **0.022° against the incumbent's 1.716°** —
+a ~78× margin improvement — at comparable imbalance (0.0126 vs 0.0115) and
+0.038 dB more loss. Given phase margin is what killed the old winner and what
+check 4's full-device FDTD independently flagged, that trade looks strongly
+worth taking. `Lw8 Lt4 L22.0` is the alternative if loss dominates: **IL
+0.2660 dB, the best in the grid and within 0.062 dB of full-device FDTD**,
+with mdev 0.115° but 8× worse imbalance.
+⚠ Any switch needs a full-device FDTD confirmation at the new geometry
+(check 4) before it replaces the incumbent — the hybrid sections are frozen
+around s, and every candidate above has a different s.
+
+##### Stage-1 passer shortlist (13×30, superseded by the table above)
+
+| total µm | Ww | Lw | Lt | L | s | IL dB | imb | mdev° | buildable |
+|---|---|---|---|---|---|---|---|---|---|
+| 29.50 | 2.24 | 10.0 | 5.0 | 20.5 | 0.25 | 0.3536 | 0.1156 | 1.714 | **no** |
+| 30.00 | 2.24 | 10.0 | 5.0 | 21.0 | 0.50 | 0.3496 | 0.1280 | 1.515 | **no** |
+| 30.50 | 2.24 | 8.0 | 4.0 | 21.5 | 2.75 | 0.3077 | 0.0893 | 1.206 | yes |
+| 30.50 | 2.24 | 6.0 | 5.0 | 21.5 | 2.75 | 0.4649 | 0.0121 | 1.388 | yes |
+| 30.50 | 2.24 | 6.0 | 6.0 | 21.5 | 1.75 | 0.3017 | **0.0088** | 1.846 | yes (incumbent) |
+| 31.00 | 2.24 | 6.0 | 5.0 | 22.0 | 3.00 | 0.3387 | 0.0124 | **0.103** | yes |
+| 31.00 | 2.24 | 8.0 | 4.0 | 22.0 | 3.00 | **0.2379** | 0.0993 | 0.187 | yes |
+
+68 of the 70 passers are hybrid-buildable. **Shortest buildable is 30.50 µm =
+17.6% shorter than the 37.00 µm control** (not the retracted 20.3%); 29.50 µm
+survives only if buildability is ignored.
+
+**Two candidates stand out well beyond the incumbent**, both at 31.00 µm
+(16.2%) for 0.5 µm more length: `Lw6.0 Lt5.0 L22.0` has mdev **0.103°** with
+imbalance 0.0124, and `Lw8.0 Lt4.0 L22.0` has **IL 0.2379 dB — the best in the
+grid, and within 0.034 dB of the full-device FDTD reference (0.2036)**, which
+is notable given 5b's unexplained ~0.15 dB EME-vs-FDTD offset at the old
+point. Either would buy far more phase margin than the incumbent's 1.846°.
+
+##### ❌ MY PREDICTION OF A NEGATIVE RESULT WAS WRONG — the design space has real margin
+
+Before re-scoring I predicted step 6 would likely close negative, reasoning
+that a ~+0.5° phase correction would wipe out the 56 passers. **Checked
+against the 668 rows already on disk, that is false.** The passer set's
+mean-dev at `N_TAPER=7` is widely distributed (min **0.022°**, 13 points under
+0.25°), not clustered near the 2.0° limit. Applying the measured
+**−0.54°** shift uniformly:
+
+- **53 of 56** passers still clear phase; **50** of those are hybrid-buildable
+  (s ≥ 0.75)
+- 6 previously phase-FAILING points would be promoted UNDER 2.0°
+
+❗ **But the design point every piece of hybrid work used dies, narrowly.**
+`Ww2.24 Lw6.0 Lt6.0 L21.5 s1.75` (30.50 µm) goes **md 1.505 → 2.045** — over
+by 0.045°, i.e. exactly on the bubble. Its replacements at the same 30.50 µm
+have far more phase margin but markedly worse imbalance:
+
+| total µm | Lw | Lt | s | IL dB | imb | md@nt7 | md shifted |
+|---|---|---|---|---|---|---|---|
+| 30.50 | 6.0 | 6.0 | 1.75 | 0.3880 | **0.0127** | 1.505 | **2.045 FAIL** |
+| 30.50 | 8.0 | 6.0 | 0.75 | 0.4226 | 0.0992 | 0.622 | 1.162 |
+| 30.50 | 10.0 | 5.0 | 0.75 | 0.4701 | 0.1275 | 0.692 | 1.232 |
+| 31.00 | 6.0 | 5.0 | 3.00 | 0.4442 | 0.0153 | 0.209 | **0.331** |
+| 31.00 | 8.0 | 4.0 | 3.00 | 0.3517 | 0.0990 | 0.680 | **0.140** |
+
+Shortest surviving buildable candidate is **30.50 µm (17.6% saving)**, not the
+20.3% headline; 29.50 µm survives only if buildability is ignored (its best
+candidate has s=0.25 < 0.75).
+
+❌ **RETRACTED 2026-09-10 by the actual re-score — discard this screen
+entirely, not just its caveats.** The measured `nt7 → nt13/tc30` phase shift
+across all 668 points has median **+0.163°** and ranges **−94.9° to +3.9°** —
+nothing resembling the uniform −0.54° assumed here. Concretely, the screen
+predicted the 30.50 µm incumbent would fail at 2.045°; it actually passes at
+**1.846°**, and the screen's "53 of 56 survive" bears no relation to the real
+churn (46 kept, 10 lost, 24 gained, 70 total). The large shifts are at short
+lengths (L 16.5-18.0) where phase sits near ±180°; `|phase − control|` does
+not wrap, but control is 90° from the wrap boundary so no point can be both
+near control and near wrapping, and those rows fail by 80°+ regardless.
+**Kept as a record of a method that did not work: a single-geometry basis
+shift does not extrapolate across this grid.**
+
+⚠ (original caveat, superseded) The −0.54° shift was
+measured at ONE geometry, and the taper basis interacts with the body's mode
+content, so the shift certainly varies with `Lw`/`Lt`. Extrapolating it across
+the grid is exactly the kind of assumption this study has been burned by. Its
+real value is twofold: it refutes the negative-result expectation, and it shows
+the current design point lands 0.045° over the line — close enough that its
+fate depends on the per-geometry shift, which is precisely why the grid must
+be RECOMPUTED rather than extrapolated. Note also that several strong
+candidates sit at IL 0.42–0.47 dB against a 0.4809 dB threshold, so the
+still-drifting IL axis can flip THEIR verdicts even though phase is settled —
+argues for re-scoring at a high `TAPER_CELLS` (IL falls with cells: 0.3536 at
+15 → 0.3220 at 30).
+
+⚠ **First submission (13058925) was OOM-killed** on rank 4 at 8G/cpu: it asked
+for `--ntasks-per-node=8` + `srun --mpi=pmi2`, but this sweep is mode-solve
+dominated and MPB is rank-redundant, so 8 MPI ranks multiplied the memory
+without buying speed. `run_mmi_2x2_waist_free.batch` — the known-good runner
+for this same script, which already dispatches `--taper-convergence` — uses
+`--ntasks=1 --cpus-per-task=8 --mem-per-cpu=12G` and plain `python`. Resource
+pattern copied from it rather than invented.
+
+#### (original plan text) 5b — `num_modes` through the narrowed section
 
 The body *narrows*, so the guided-mode count **falls** in the waist — the
 opposite of the 1×4-tapered doc's widening case. The binding constraint is
@@ -680,7 +1048,301 @@ are skipped (the FDTD sections must stay identical to the standard device's),
 and candidates at or above the standard device's own `mm_length` are never
 evaluated.
 
-**Step 6 grid running as job 12630600.**
+**Step 6 grid — job 12630600 TIMED OUT at 8 h. Re-running as 12674569
+(2026-09-01).**
+
+#### ⚠ 12630600: the Ww=2.52 half finished and was very nearly lost
+
+The job died at the walltime **after** completing all of `Ww=2.52` and one row
+of `Ww=2.24`. `free_sweep.json` was written only after the loop, so **nothing
+reached disk**. The results survive only as filtered stdout in
+`reports/12630600.out` (passers, plus every 40th row).
+
+**✅ MEASURED — `Ww = 2.52` produces 34 passing candidates, 334/334 points, now
+ON DISK** (job 12674569, 2026-09-01, re-run of the lost half). This is a
+positive trend, not the pre-registered negative. Ranked by total length
+(control 37.00 µm; thresholds IL ≤ 0.48091 dB, imb ≤ 0.1371,
+|phase + 89.750| ≤ 2.0°):
+
+| Ww | Lw | Lt | s | mm_length | total | IL dB | imb | phase° | IL margin |
+|---|---|---|---|---|---|---|---|---|---|
+| 2.52 | 10.0 | 6.0 | 1.00 | 24.000 | **33.00** | 0.4808 | 0.0065 | −90.749 | **9.27e-05** |
+| 2.52 | 10.0 | 6.0 | 1.25 | 24.500 | 33.50 | **0.3197** | 0.0138 | −90.502 | 1.61e-01 |
+| 2.52 | 10.0 | 5.0 | 2.25 | 24.500 | 33.50 | 0.3787 | 0.0176 | −90.434 | 1.02e-01 |
+| 2.52 | 8.0 | 6.0 | 2.25 | 24.500 | 33.50 | 0.4600 | 0.0250 | −90.360 | 2.09e-02 |
+
+**The re-run reproduces the timed-out job exactly**, which retires the question
+of whether the stdout-recovered numbers were trustworthy: on the two rows that
+12630600 printed, |ΔIL| ≤ 1.4e-05 dB, |Δimb| ≤ 3.0e-05, |Δphase| ≤ 4.3e-04° —
+i.e. differences only in the 4th decimal place the old log printed to. The
+whole Ww=2.52 passer sequence also appeared in the same order at the same row
+counts.
+
+⚠ **The shortest passer is grid-edge marginal on loss and must not be quoted as
+the design point.** Its margin to the pre-registered threshold is
+**9.27e-05 dB**. The `L = 24.5, Lw = 10, Lt = 6` point one grid step away costs
+0.5 µm and clears the same threshold by **1.61e-01 dB — 1700× the margin**.
+A criterion is a cliff, and a point sitting 9e-05 dB inside it is not a
+measurement of "passes", it is a measurement of "the grid step landed there".
+The `--confirm` path below re-solves both directly, with neighbours.
+
+#### ✅ Two fixes landed 2026-09-01 before the re-run
+
+1. **Rows now stream to disk.** Every candidate is appended to
+   `free_sweep_rows_<res,nwl,ctrans>_<tag>.jsonl` as it is produced, and a run
+   skips any `(Ww, Lw, Lt, L)` already present in any shard. A timeout now
+   costs only the unfinished points, and the grid can be split across jobs
+   (`MMI2X2_FS_WW` / `MMI2X2_FS_LW` / `MMI2X2_FS_TAG`). `--summarize`
+   aggregates the shards with no solving. The settings fingerprint is in the
+   **filename** so a low-res smoke run cannot be read back as done grid rows.
+
+2. **The "free" evaluation was not actually free — now it is. ✅ MEASURED
+   EXACT, job 12674313.** 69 s/point was the whole reason 384 points did not
+   fit 8 h. `meow.compute_s_matrix` accepts `interfaces_fn`, and
+   `compute_interface_s_matrices(modes)` is a **pure function of the modes** —
+   which are identical at every point of this grid, by the same argument the
+   free sweep itself rests on. It was being recomputed 384 times.
+
+   | piece of one `compute_s_matrix` | time |
+   |---|---|
+   | interfaces (modes only) | 3.07 s |
+   | **propagations (the only length-dependent part)** | **0.01 s** |
+   | cascade/sax remainder | 4.65 s |
+
+   Memoising `interfaces_fn` per `(port, wavelength)`: **0.34 s vs 3.44 s,
+   9.9×, worst |ΔS| = 0.000e+00 — exactly zero**, at three off-reference
+   `(s, Lt, Lw)` points. Not an approximation; the propagation factor is 0.1%
+   of the cost and is still recomputed in full.
+
+   **The speedup self-checks inside the grid job.** Per this repo's standard a
+   10× that is subtly wrong would read as a result, so
+   `selfcheck_iface_cache()` runs cached-vs-uncached at two points **in the
+   same process as the grid** and `SystemExit`s if |ΔS| > 1e-13 — it certifies
+   that job's cache, not a previous job's probe. `MMI2X2_FS_IFCACHE=0` falls
+   back.
+
+   Expected re-run cost: **~2 h for the full grid** (both bases 36 min + ~740
+   points × 7.5 s), against 15 h for the old path.
+
+#### ✅ Smoke PASSED 2026-09-01 (job 12674549) — the machinery, not the physics
+
+res 15 / 3 wl / 3 lengths at `Lw=8, Lt=4`, its own shard fingerprint. All three
+mechanisms confirmed live: the shard file
+`free_sweep_rows_res15_nwl3_ct8_smoke.jsonl` was written **row by row**, the
+resume skip-set loaded, and the in-process cache self-check reported
+**|ΔS| = 0.000e+00**.
+
+Its "NO candidate passes" line is **not** a result and does **not** trigger the
+stop rule: 3 points at res 15 on an `(Lw=8, Lt=4)` line that already failed at
+res 40. Read it as "the script ran", nothing more.
+
+⚠ **Two script-hygiene bugs the smoke exposed, both fixed after 12674569 had
+already started** (so they take effect from the next run, not this one):
+
+1. The self-check's "cached" timing was meaningless — that pass is what
+   *populates* the cache, so it pays the full interface cost exactly like the
+   uncached one (smoke printed `cached 10.3s vs uncached 7.0s`, which reads as
+   a slowdown). The speedup only exists warm, which is the regime the grid loop
+   actually runs in. A warm third pass is now timed and reported.
+2. The end-of-run summary was a fixed `free_sweep.json`, so the **smoke
+   overwrote the grid's own summary file**. It is now
+   `free_sweep_<fingerprint>_<tag>.json`. The smoke-written copy was deleted;
+   12674569 still writes the old fixed name.
+
+#### ✅ STEP 6 GRID COMPLETE 2026-09-01 — job 12674569, `COMPLETED` in 02:14:01
+
+668/668 pre-registered points, **56 passers**, 0 faults, exit 0. Both bases
+self-checked at `|ΔS| = 0.000e+00` **independently** (1124 s and 1143 s) — the
+second Ww's cache is certified against its own mode set, not inherited.
+Measured cost 2267 s of mode solves for the whole grid; the pre-memoisation
+path would have needed ~15 h.
+
+**`Ww = 2.24` — never simulated before this job — is the better profile**, and
+it beats `Ww = 2.52` on length at every comparable point. Shortest passers of
+the whole grid, with each component as a fraction of its pre-registered budget:
+
+| Ww | Lw | Lt | s | L | total | IL% | imb% | Δphase(mean)° | ph% | worst |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2.24 | 8.0 | 6.0 | **0.25** | 20.500 | **29.50** | 81% | 62% | 1.696 | 85% | 85% |
+| 2.24 | 8.0 | 6.0 | 0.50 | 21.000 | 30.00 | 78% | 69% | 1.084 | 54% | 78% |
+| 2.24 | 6.0 | 6.0 | 1.75 | 21.500 | 30.50 | 81% | **9%** | 1.505 | 75% | 81% |
+| 2.24 | 8.0 | 5.0 | 1.75 | 21.500 | 30.50 | 74% | 73% | 1.574 | 79% | 79% |
+
+**29.50 µm vs the 37.00 µm control is −7.50 µm, 20.3%.** The stop rule does
+**not** trigger; the deliverable is a design point, not a negative.
+
+⚠ **No point in this grid has broad headroom** — every one of the top six uses
+78–88% of *some* budget. And the two most attractive points are both
+**constraint-boundary, not interior**: the 29.50 µm winner has `s = 0.25`
+*exactly* on the folded-hybrid stub floor (it cannot shorten along that axis at
+all) and spends 85% of the phase budget. The `Lw=6/Lt=6/L=21.5` point at
+30.50 µm costs 1 µm and is interior on the stub with **9% of the imbalance
+budget against 62%**. That trade is the real decision, and it is the user's.
+
+#### ⚠ FINDING: the phase criterion is scored MORE LENIENTLY than pre-registered
+
+`criterion.json`'s own words: `"phase": "max |bar/cross phase - control phase|
+<= 2.0 deg"`. What the code does (`metrics()`/`score()`): `phase_deg =
+np.mean(dphi)` over the band, compared to `control_phase_deg`, itself a
+`np.mean`. **Excess loss and imbalance are both max-over-band — phase alone is
+a mean.** Equal-and-opposite excursions at the two band edges cancel, so a
+candidate can swing several degrees across the band and still score as
+sub-2°.
+
+This is not academic here: the top candidates spend 75–85% of the phase budget
+**on the lenient reading**.
+
+**The criterion was NOT redefined after the sweep.** `score()` still applies
+exactly what it applied before, and the 56-passer set above stands as scored.
+Two reported-only fields were added (`phase_max_dev_deg`, `phase_spread_deg`).
+
+##### ✅ MEASURED, job 12687020 — 4 of 56 passers fail the strict reading, and the LENGTH RESULT SURVIVES
+
+| Ww | Lw | Lt | L | total | mean-dev° (scored) | **MAX-dev°** | spread° |
+|---|---|---|---|---|---|---|---|
+| 2.24 | 8.0 | 6.0 | 20.500 | 29.50 | 1.696 | **2.244** | 1.419 |
+| 2.24 | 8.0 | 4.0 | 21.500 | 30.50 | **0.883** | **2.076** | 2.198 |
+| 2.24 | 8.0 | 4.0 | 22.500 | 31.50 | 1.954 | **2.239** | 0.889 |
+| 2.52 | 10.0 | 3.0 | 26.000 | 35.00 | 1.988 | **2.014** | 0.089 |
+
+The `Lw=8, Lt=4, 30.50 µm` row is the case that justifies having checked at
+all: its **mean** deviation is 0.883°, a comfortable 44% of budget, while the
+band actually spreads 2.198° and peaks 2.076° — past the limit. Averaging
+converted a failing point into a comfortable-looking one.
+
+**The 20.3% length saving is unaffected by which reading governs.**
+
+> **Shortest passer surviving BOTH readings: `Ww = 2.24, Lw = 10.0, Lt = 5.0,
+> L = 20.500` → 29.50 µm total** — IL 0.4255 dB, imb 0.1095, max-phase-dev
+> **1.516°**. Same 29.50 µm as the mean-reading winner: the strict reading
+> changes *which* point wins, not what it achieves.
+
+It is also the better point on its own terms — mean-dev 0.561° against the
+displaced winner's 1.696°, so it is not surviving by an averaging accident. It
+costs more of the loss and imbalance budgets (88%/80% vs 81%/62%) and, like the
+displaced winner, sits on the stub floor at `s = 0.25`.
+
+**✅ DECIDED by the user, 2026-09-01: the MEAN reading governs.** That is what
+`score()` has always applied, so the 56-passer set and its ranking stand
+unchanged, and the design point is the shortest passer under it:
+
+> ### ⚠️ SUPERSEDED BY STEP 5b (2026-09-02) — SCORED ON AN UNCONVERGED TAPER BASIS
+> Step 5b (job 12780420) measured `N_TAPER=7`, the value every number below was
+> produced at, as **not converged**, and the phase criterion **passes only at
+> 7** — failing at 5, 9, 11 and 13. Check 4's full-device FDTD agrees (2.099°).
+> The point below is retained as the record of what step 6 concluded; it is
+> **not** a validated design point. See step 5b for the full table.
+>
+> ### 📌 DESIGN POINT (as scored at N_TAPER=7) — `Ww = 2.24, Lw = 8.0, Lt = 6.0, L = 20.5` (stub 0.25)
+> **29.50 µm total vs the 37.00 µm straight control — 7.50 µm shorter, 20.3%.**
+> IL 0.3910 dB · imbalance 0.0852 · mean phase dev 1.696° · direct-solve
+> confirmed (job 12687092, `dIL = −1.05e-14` against the analytic grid).
+
+Recorded plainly rather than buried: **this point's max-over-band phase
+deviation is 2.244°**, which would fail the 2.0° tolerance under the max
+reading of the same pre-registered text (job 12687020). The user chose the mean
+reading with that number in hand. The strict-reading survivor
+(`Lw = 10.0, Lt = 5.0, L = 20.5`) reaches the **same 29.50 µm** and remains
+available at no length cost if the reading is ever revisited — see the
+comparison table below, which stands as measured either way.
+
+##### ✅ STEP 6 CLOSED 2026-09-01 — 6/6 direct confirms pass (jobs 12687092, 12692011)
+
+Every candidate re-solved with real per-length mode solves. **All six reproduce
+the analytic grid at 1e-14 and all six pass on a direct solve.**
+
+| Ww | Lw | Lt | s | L | total | IL dB | imb | MAX-dev° | spread° | strict | \|dS\| vs analytic |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2.24 | 8.0 | 6.0 | 0.25 | 20.5 | 29.50 | 0.3910 | 0.0852 | **2.244** | 1.419 | **FAIL** | dIL −1.05e-14 |
+| 2.24 | 8.0 | 6.0 | 0.50 | 21.0 | 30.00 | 0.3728 | 0.0944 | 1.869 | 1.669 | ok | dIL −1.89e-14 |
+| 2.24 | **10.0** | **5.0** | 0.25 | 20.5 | **29.50** | 0.4255 | 0.1095 | 1.516 | 1.732 | **ok** | dIL +1.28e-14 |
+| 2.24 | 10.0 | 5.0 | 0.50 | 21.0 | 30.00 | 0.4486 | 0.1194 | 0.814 | 0.834 | ok | dIL −1.23e-14 |
+| 2.24 | **6.0** | **6.0** | 1.75 | 21.5 | **30.50** | 0.3880 | **0.0127** | 1.640 | **0.237** | **ok** | dIL +2.43e-14 |
+| 2.24 | 6.0 | 6.0 | 2.00 | 22.0 | 31.00 | 0.3591 | 0.0348 | 1.412 | 0.264 | ok | dIL −1.30e-14 |
+
+**The grid-edge test comes back clean for both surviving candidates.** Each
+passes at its own length *and* at its L-neighbour, so both are plateaux rather
+than spikes. The one strict failure is the only point whose neighbour behaves
+differently — further evidence it is an isolated band excursion, not a region.
+
+**Two defensible design points, and the choice is a real engineering trade:**
+
+| | **29.50 µm** `Lw=10, Lt=5, L=20.5` | **30.50 µm** `Lw=6, Lt=6, L=21.5` |
+|---|---|---|
+| saving vs 37.00 µm control | **20.3%** | 17.6% |
+| excess loss | 0.4255 dB (88% of budget) | 0.3880 dB (81%) |
+| imbalance | 0.1095 (**80%**) | 0.0127 (**9%**) |
+| max phase dev | 1.516° | 1.640° |
+| band spread | 1.732° | **0.237°** |
+| stub | **0.25 µm — ON the hybrid floor** | 1.75 µm — interior |
+| passes both phase readings | ✅ | ✅ |
+
+The extra 1 µm buys an order of magnitude of imbalance headroom, an essentially
+flat band, and clearance from the fabrication-relevant stub constraint. **The
+shortest device is not automatically the right one here**, and per this doc's
+own ranking rule (shortest among passers) the 29.50 µm point wins on the
+letter — which is exactly why the trade is being written down rather than
+silently resolved.
+
+⚠ **Filename bug, found and fixed.** Both confirm jobs wrote the same untagged
+`confirm_<fingerprint>.json`, so 12692011 clobbered 12687092's rows. The path
+is now tag-keyed, and the lost rows were recovered from the SLURM log into
+`confirm_res40_nwl11_ct8_job12687092.json`. Same failure mode as the timeout
+that started this session: results with nowhere durable to land.
+
+##### ✅ The analytic fast path is vindicated on a real solve
+
+The first direct confirm (`Ww=2.24, Lw=8, Lt=6, L=20.5`, job 12687092) returned
+**`dIL = −1.05e-14, dphi = +4.26e-14`** against the analytic row — machine
+precision on a genuine per-length solve, not a self-comparison. Every number in
+this section rests on a path that is now checked three independent ways:
+`solve_length_sweep` vs direct (1e-13, 12624884), the multi-axis
+reimplementation vs direct (1e-13, 12627188), the interface cache vs uncached
+(0.000e+00, 12674313 + in-process each run), and now the finished grid vs
+direct (1e-14).
+
+#### ⚠ FINDING: the stop rule could fire off a PARTIAL grid — now guarded
+
+Testing `--summarize` against the 3-row smoke shard printed
+**`** PRE-REGISTERED STOP RULE TRIGGERED **`**. Three low-res smoke points on
+one `(Lw, Lt)` line were enough to produce the sentence that this document
+treats as a publishable mechanism result. Nothing had gone wrong physically —
+the summary block simply never asked whether the grid it was summarising was
+finished.
+
+Fixed: the summary now reconstructs the **literal pre-registered grid** (Ww
+{2.52, 2.24} × Lw {4,6,8,10} × Lt {3,4,5,6} × 24 lengths in [16.0, 27.5], minus
+the stub and length filters) = **668 legal points**, 334 per Ww, and reports
+coverage. Below full coverage it prints "stop rule NOT evaluated: the grid is
+PARTIAL" instead. `grid_complete` / `n_missing` are recorded in the summary
+JSON.
+
+The grid definition used for this check is **literal, not read from
+`MMI2X2_FS_WW`/`_LW`/`_LT`** — a single-Ww shard job would otherwise declare
+the whole grid COMPLETE with the other Ww never simulated. That is the same
+class of bug as the stop rule itself: a narrower run quietly certifying a
+broader claim.
+
+**Revised cost estimate from the real point count:** 334 points/Ww × ~7.5 s
+warm + ~18 min basis + ~5 min in-process self-check ≈ **1 h per Ww**, ~2 h for
+the grid.
+
+#### The direct confirm step 6 owes is now wired, not just noted
+
+`--confirm` (batch: `VALIDATE=confirm`) re-solves the design point **and its
+two L-neighbours** with real per-length mode solves. This is **not** a check on
+the analytic path — that is settled at 1e-13 (12624884) and its interface cache
+at 0.000e+00 (12674313). It is the check the script's own closing warning
+demands: that the quoted point is a real solve and is **not perched on a grid
+edge**, which is exactly the risk the 1e-4 dB margin above flags. If a
+neighbour of a passing point fails, the script says so and refuses to endorse
+it. `--summarize` (`VALIDATE=summarize`) aggregates the shards with no solving,
+so the standing best can be read between jobs.
+
+**Job in flight (2026-09-01):** `12674569` — full grid, both Ww, res 40, 11 wl,
+`-t 08:00:00`, `gts-sr108-gedc_main`, started 09:15. **Not landed. Every
+Ww=2.52 number in the table above is recovered stdout from the timed-out
+12630600 and is superseded by this job's own shard file once it lands.**
 
 ⚠ **BLOCKED ON STEP 5a.** Do not start this grid until the transition slice
 count is converged. Every point here is measured through the transition, and
@@ -713,6 +1375,61 @@ Budget a first grid at a few hours, and **run one smoke point first** — the
 same two-step discipline every expensive job in this repo follows.
 
 ### Step 7 — Field plots at the decisive point (cheap, do this either way)
+
+#### ✅ STEP 7 DONE 2026-09-01 — jobs 12696051 (bar) + 12696052 (cross), res 40
+
+24 PNGs under `example_output/verification/mmi_2x2_waist_fields/fields/`
+(straight/waisted × bar/cross × 6 components), band centre 1.5475 µm, both
+cases from one config so the waist is the only difference. Geometry verified in
+the log: waisted body `in-face 2.800 / mid 2.240 / out-face 2.800`, straight
+uniform at 2.800.
+
+**What the comparison shows** (`eme_Ex_*`, meow's Ex = the device's in-plane
+transverse field, the dominant TE component):
+
+1. **Nothing is shed at the ramps.** The cladding beyond the body edge stays
+   dark through both transition bands (z ≈ 10.7 and 18.8 µm, exactly where the
+   `stub 0.25 / Lt 6 / Lw 8` geometry puts them). Transition radiation — the
+   hypothesised 1×4 failure mechanism — is **visibly absent here**, which is
+   the qualitative counterpart of the measured 0.3910 dB.
+2. **The waist is visible as a boundary pinch**, ±1.4 µm → ±1.12 µm, over
+   exactly the predicted span.
+3. **Self-imaging survives the two ramps intact.** The waisted device completes
+   the same cross-over and reforms two clean lobes at ±0.75 µm at its output,
+   7.5 µm earlier than the control.
+
+Point 3 is the mechanism in a picture, and it is not truncation: **narrowing
+the body raises Δβ₀₁, which contracts L_π, so the self-image forms sooner.**
+First quantitative support the same day — the waist cross-section's
+`L_π = 12.57 µm` against the full-width body's **19.40 µm** (a 35% contraction;
+res-15 smoke, job 12696148, refined by the check-3 run below).
+
+#### (superseded) IN PROGRESS note — `plot_mmi2x2_waist_eme_fields.py`, smoke 12695975
+
+Straight control vs the design point above, one config, only the waist
+differing. Design point overridable via `MMI2X2_WF_WW/LW/LT/L` (e.g. to render
+the strict-reading survivor instead).
+
+**This does NOT copy the 1×4's template, and the reason is structural.**
+`plot_mmi1x4_waist_profile_eme_fields.py` bypasses `_build_cells()` and
+hand-rolls the body segmentation, because the 1×4 sweep declares the body as
+**one** region that `_build_cells()` would divide uniformly, unable to place
+boundaries at the stub/transition/waist edges. Its own docstring warns the two
+files' segment logic must be kept in sync by hand.
+
+The 2×2 free sweep already avoided that problem by declaring the body as
+**nine** regions, each uniform or a single linear ramp — for which an even
+division per region is exactly right. So this script goes through the normal
+solver path and **imports the sweep's own layout shape rather than copying
+it**: the plotted geometry is the swept geometry by construction and cannot
+drift out of sync. That removes the 1×4 script's standing maintenance hazard
+rather than inheriting it.
+
+**One-cell uniform regions render correctly** — `plot_eme_fields()` builds a
+500-point `z` grid over the whole device and `mw.propagate_modes` evaluates
+analytically *within* a cell, so a uniform region needs one cell for the
+S-matrix and still renders at full spatial resolution. No cell-count inflation
+is needed for the plot.
 
 #### ⚠ `plot_hybrid_body_fields()` does NOT apply to this device — use the multi-cell path
 
@@ -775,6 +1492,100 @@ now being tested.
 
 ### Step 8 — The four checks (only if step 6 succeeds)
 
+#### ✅ Check 3 (resolution, EME side) — CLOSED, jobs 12696267 + 12708666
+
+**Why this was gating rather than routine.** The whole step-6 grid ran at
+**res 40**, but this device's straight sibling measured **Δβ₀₁ needing res 100**
+for 0.05% (job 11590785, `resolved/mmi_2x2_validation.md` gap 2). The design
+length is set by phase accumulation — `L_π = π/Δβ` — so an unconverged Δβ moves
+the optimum, and ~1% is ~0.2 µm against a 0.5 µm grid step. The pass/fail
+*comparison* is protected (the control was also measured at res 40); the
+absolute 20.5 µm is not.
+
+`--res-convergence` measures both at once, and states **which cross-section**
+it is asking about — the **uniform waist**, per step 8's own note that a
+waisted body has no single one. Transitions stay covered by step 5a's C_TRANS
+convergence.
+
+**MEASURED so far (2 of 4 blocks):**
+
+| res | n_eff_0 | n_eff_1 | Δβ₀₁ /µm | L_π µm | best-IL L | IL@design | maxdev° |
+|---|---|---|---|---|---|---|---|
+| 40 | 2.832691 | 2.770181 | 0.253805 | 12.3780 | 20.750 | 0.3910 | 2.244 |
+| 60 | 2.831598 | 2.769116 | 0.253691 | 12.3836 | 20.750 | 0.3745 | 2.340 |
+
+**L_π moves 0.045% from res 40 → 60** — the straight body needed res 100 to
+reach 0.05% on the same quantity. The waist's two lowest modes are better
+separated (narrower guide), so **the quantity the design length depends on is
+markedly less resolution-sensitive here than the gating concern assumed.** The
+best-IL length is **stable at 20.750 µm** across both.
+
+The design point stays PASS at both. Loss shifts 0.3910 → 0.3745 dB — 0.017 dB,
+and in the *favourable* direction; imbalance and phase are unchanged to 3-4
+decimals. Max-dev creeps 2.244 → 2.340°, so it would fail the strict phase
+reading at **both** resolutions — consistent, not a new defect, and moot under
+the mean reading the user adopted.
+
+**Res 80 landed and Δβ₀₁ is CONVERGED — it oscillates, it does not trend:**
+12.3780 → 12.3836 → 12.3730, a ±0.09% band. That is the signature of a
+quantity sitting on solver noise rather than one still moving. **The best-IL
+length is 20.750 µm at every resolution tried**, and the design point stays
+PASS throughout with its loss drifting *favourably* (0.3910 → 0.3745 → 0.3601
+dB) — so the res-40 grid was mildly pessimistic about the design point, never
+optimistic.
+
+⚠ **OOM, not a physics problem — job 12696267 was killed at res 100.**
+`OUT_OF_MEMORY` at 4:41 with MaxRSS **100.7 GB** against a 96 GB request. The
+walltime was never the binding constraint (I spent two hours tracking the wrong
+resource). Cause is structural: the loop held the **previous** resolution's
+basis alive through the assignment, so peak memory spanned two resolutions at
+once, and mode-field arrays scale as res² (res 100 is 6.25× res 40 on its own).
+Fixed — the old basis is dropped and `gc.collect()`ed before the next is built.
+
+⚠ **And the JSON wrote only after the loop**, so res 40/60/80 produced no file
+— the same defect that cost job 12630600 its Ww=2.52 half this morning, in a
+code path I had added *after* fixing it in the grid path. The numbers survived
+only because each block was transcribed here as it landed. Both fixed: the mode
+now writes a partial JSON with a `complete` flag after **every** resolution, and
+the three blocks were recovered from the SLURM log into
+`res_convergence_res40-60-80.json` with provenance.
+
+**✅ CHECK 3 CLOSED 2026-09-01 — CONVERGED (res 100 via job 12708666,
+`COMPLETED`, basis 10952 s, MaxRSS 86.0 GB of 128 GB).**
+
+| res | Δβ₀₁ /µm | L_π µm | ΔL_π vs res 100 | best-IL L | IL@design | |
+|---|---|---|---|---|---|---|
+| 40 | 0.253805 | 12.3780 | +0.024% | 20.750 | 0.3910 | PASS |
+| 60 | 0.253691 | 12.3836 | +0.069% | 20.750 | 0.3745 | PASS |
+| 80 | 0.253907 | 12.3730 | −0.016% | 20.750 | 0.3601 | PASS |
+| 100 | 0.253867 | 12.3750 | — | 20.750 | 0.3627 | PASS |
+
+**L_π spans 0.086% across a 2.5× resolution range and oscillates rather than
+trends** — converged, and converged already at res 40. **The res-40 grid that
+produced the design point was sound.** Against this device's straight sibling
+needing **res 100** for 0.05% on the same quantity, the waist converges
+dramatically faster: the narrower guide separates the two lowest modes better,
+so the quantity the design length depends on is far less mesh-sensitive.
+
+**The best-IL length is 20.750 µm at every resolution tried** — the optimum is
+not resolution-dependent, which was the specific risk that made this check
+gating. The design point holds PASS throughout, with loss landing at 0.3627 dB
+at res 100 against 0.3910 dB at res 40: the grid was mildly **pessimistic**
+about it, never optimistic.
+
+Sizing notes for whoever runs this next: basis wall time scales as **res^2.44**
+(1235 / 3103 / 6219 / 10952 s at res 40/60/80/100, both ports, 11 wl, 51
+cells), and a single res-100 basis peaks at **86 GB** — 128 GB is the right
+request, 96 GB is not, and the first attempt's 256 GB only bought queue delay.
+
+📌 **The design point is pinned to a constraint, not to an interior optimum.**
+At `Lw=8, Lt=6` the stub floor `s ≥ 0.25` forbids `L < 20.5` outright, so the
+window is one-sided and 20.5 µm is the shortest length the geometry permits —
+not a resolved minimum. Note also that **20.750 µm is the loss optimum**, beating
+the design point by 0.042 dB; 20.5 wins only on the ranking rule (shortest among
+passers). If a future run wants to go shorter, a different `(Lw, Lt)` is
+required — this one cannot express it.
+
 Standard, per [README](README.md#the-four-checks) — and **not** to be started
 before a design point exists. Two device-specific notes:
 
@@ -787,6 +1598,156 @@ before a design point exists. Two device-specific notes:
   has no single β to calibrate. Decide explicitly what is being calibrated
   before spending it — the 1×4-tapered doc records `calibrate_body_neff`
   being **refused** for exactly this reason.
+
+#### 🏃 Check 4 (full-device FDTD reference) — job 12736252, res 40, 51 wl
+
+**Why this became the load-bearing check rather than a closing formality.**
+`calibrate_body_neff=True` is **hard-refused for a waisted body** —
+`assert_uniform_cross_section()` fires from `HybridSolver._calibrated_neff()`
+(`hybrid.py:1532`): *"a calibrated body propagates on one per-mode beta, which
+only describes a uniform cross-section"*. That flag is precisely what closed
+check 1 elsewhere in this repo (MPB's mode index vs meep's time-stepped phase,
+~2.3%/mode; on the coupler it moved L₅₀ from 5.37% off to **0.11%**). So a
+waisted hybrid necessarily carries an **uncorrected** phase error in the
+quantity this device's criterion scores most tightly. A full-device FDTD run
+depends on neither the cascade nor the calibration, so it is the only available
+way to confirm the design point against something that is not EME.
+
+Config and rank layout are inherited **verbatim** from the straight device's
+own check-4 reference (`mmi_2x2_fdtd.py`, 2 nodes × 24 = 48 ranks, job
+11585844_1) so this is a comparable measurement, and the 51-wavelength grid
+**contains the criterion's 11-point grid exactly** (every 5th point), so the
+comparison is on identical wavelengths rather than interpolated ones. Both
+cases are scored with the same metric functions the EME sweep used.
+
+##### ✅ The STRAIGHT CONTROL lands, and the engines agree better than feared
+
+| quantity | FDTD res 40 | EME (criterion control) | delta |
+|---|---|---|---|
+| excess loss | **0.1398 dB** | 0.3809 dB | **−0.241** |
+| imbalance | 0.0655 | 0.0686 | −0.003 |
+| phase (mean) | −90.461° | −89.750° | **−0.711°** |
+| phase MAX-dev | 1.103° | — | — |
+| band spread | 0.590° | — | — |
+
+**Engine agreement on phase is 0.711°** — inside the 2.0° budget. The
+`calibrate_body_neff` refusal is a real structural limitation but a small
+numerical one on this device, which is the reassuring answer and could not have
+been known without measuring.
+
+⚠ **The one real disagreement is LOSS, and its direction matters: EME
+over-estimates by 0.24 dB.** 0.1398 dB (FDTD) vs 0.3809 dB (EME) on identical
+geometry. That is the expected sign for a truncated 15-mode EME basis shedding
+power a brute-force solve retains. **If the offset carries to the waisted case,
+the design point's true loss is ≈0.13 dB rather than 0.39 dB** — i.e. it has
+far more loss margin than the criterion credits, and the 9.27e-05 dB
+"margin" that made the *other* 29.50 µm candidate look knife-edge was an EME
+artifact. Do not assume it carries; the waisted row will say.
+
+⚠ **A res-15 smoke of this same script reported the straight phase gap as
+−3.70°, and I flagged it as budget-breaking.** It was a coarse-mesh artifact;
+at res 40 it is −0.711°. Recorded because the smoke's numbers are in the log
+and should not be mistaken for a result.
+
+##### 📌 Measured for free: the step-9 cache-hit prediction is CONFIRMED
+
+`[straight] solved in 4s` — a **cache hit**, not a solve. Holding
+`mm_length = 28.0` made the run land on the standard 2×2's own completed
+reference entry, exactly as step 9's cost note predicted but explicitly left
+unverified ("verify the hit before relying on it"). It is now verified, and the
+straight control cost nothing.
+
+⚠ Minor: the script's per-case prints appear **48 times**, once per MPI rank.
+Cosmetic, but prints should be rank-0 guarded.
+
+##### 📌 MEASURED: `decay_tol=1e-11` is ~7 decades stricter than this device needs
+
+The repo inherits `decay_tol=1e-11` everywhere with **no recorded
+justification** (that is a standing note in `decay-tol-has-a-hard-floor`).
+Job 12736252's snapshots settle it for the 2×2, at no extra cost, because DFT
+monitors accumulate: sample *t* equals what a run stopped at *t* would have
+returned.
+
+Band-centre transmission against the energy-ratio axis (waisted, res 40):
+
+| t | energy ratio | T_bar | T_cross | ΔT_bar per 20 t |
+|---|---|---|---|---|
+| 360 | 1.97e-03 | 0.506004 | 0.428740 | 5.04e-02 |
+| 380 | 4.23e-04 | 0.519244 | 0.436904 | 1.32e-02 |
+| 400 | 1.50e-04 | 0.521083 | 0.439559 | 1.84e-03 |
+| 420 | 4.75e-05 | 0.521367 | 0.439845 | **2.84e-04** |
+
+**Transmission stops moving by ~1e-4 at an energy ratio of ~1e-4**, while
+`decay_tol=1e-11` (dft) targets an energy ratio near **1e-13** — about
+**seven decades and several hours of stepping past the point where the answer
+is fixed.** The decay also eased monotonically after t≈360 (0.89 → 0.39
+decades/20 t) with **no growth phase**, i.e. the 1×2's honest-slow-tail
+pattern, not the 4×4's floor-then-diverge instability.
+
+**Consequence, acted on.** 12736252 was cancelled at t≈510 and re-run as
+**`12743476` at `decay_tol=1e-5`** (~1e-7 on the energy axis, two decades past
+settling and already demonstrably reached on this device). The snapshots carry
+only |T|, not complex amplitudes, so a walltime kill would have cost the
+**phase** measurement — the one criterion component under scrutiny — which is
+why waiting for a run projected to overrun its wall was the worse option.
+
+⚠ **The two cases therefore carry different tolerances**: straight control at
+1e-11 (a cache hit on the standard device's own reference), waisted at 1e-5.
+Normally a mismatch to avoid; here the *control* is the stricter one and both
+are converged in transmission far earlier, so the direction is safe. Recorded
+rather than glossed.
+
+---
+
+#### 📌 TODO (user, 2026-09-06): per-section β calibration, AFTER the uncalibrated run lands
+
+**Today the waisted hybrid runs with `calibrate_body_neff=False`, and that is
+forced, not chosen** — `assert_uniform_cross_section()` refuses a calibrated
+body whose cross-section varies (`hybrid.py:1532`). So this cascade carries an
+**uncorrected body β**, i.e. the ~2.3%/mode MPB-vs-meep phase gap that
+`calibrate_body_neff` exists to remove, in the one quantity this device's
+criterion scores most tightly.
+
+**Splitting the body changes what is possible.** With the body decomposed as
+
+```
+stub (uniform) | ramp | waist (uniform) | ramp | stub (uniform)
+```
+
+the **stub and waist sections are uniform**, so they are exactly the kind of
+region calibration is valid for — and at the design point the waist alone is
+6.0 µm of the 21.0 µm body, with the stubs adding 3.0 µm more. Only the two
+ramps genuinely cannot be calibrated.
+
+⚠ **The flag cannot express that today.** `calibrate_body_neff` is a single
+global `bool` (`hybrid.py:400`, `443`) applied to **every** EME section that
+supports `neff_override`, so turning it on would attempt the ramps too and trip
+the assertion. Making it per-section is a small, additive library change —
+accept a bool *or* a collection of section indices, defaulting to today's
+behaviour.
+
+**Order matters and is deliberate**: run the **uncalibrated** cascade first, so
+there is a measured baseline, then calibrate the uniform regions. Doing it the
+other way round would leave no way to attribute the difference.
+
+📌 **The figure of merit is the gap to the FULL-DEVICE FDTD, not internal
+self-consistency** (user, 2026-09-06). The reference already exists — job
+12797278 at this exact geometry:
+
+| quantity | full-device FDTD |
+|---|---|
+| excess loss | **0.2178 dB** |
+| imbalance | **0.0168** |
+| phase (mean) | **−91.661°** |
+
+So the test is: does **\|hybrid − FDTD\|** shrink, per quantity, when the
+uniform stub and waist sections are calibrated? Calibration exists precisely to
+remove the MPB-vs-meep β discrepancy between the EME body and the FDTD sections,
+so if it is doing its job the cascade should move **toward** the brute-force
+answer. If the gap does not shrink, calibration is not buying what it is
+assumed to buy on this device — which would itself be worth knowing, and is the
+kind of claim the straight 2×2 could never test because its body is uniform
+end-to-end and always calibratable.
 
 ### Step 9 — Wiring, only once the physics is settled
 
@@ -832,6 +1793,153 @@ Checked against the stage-1 grid: 2 of 40 points violate it, both with
 by design, and one point (Ww=2.24, Lw=8.0, Lt=6.0 at L*=20.50) sits exactly
 on the 0.25 boundary.
 
+#### ❌ HARD CONSTRAINT, MEASURED 2026-09-03: a hybrid-buildable waist needs `s ≥ 0.75 µm`
+
+Found by trying to build the missing hybrid leg (the straight 2×2 has
+hybrid-vs-FDTD as gap 5, 0.76%/0.59% max|ΔT|; the waisted one never did). The
+library refused the design point outright:
+
+```
+ValueError: Cut/stub at x=-9.5000 falls strictly inside a BODY waist transition
+band ([-10.0000, -4.0000], 2.8 <-> 2.24 µm) — the multimode body's own width
+varies there, so a section boundary cannot sit on a single cross-section.
+```
+
+**Mechanism** (`beef/solvers/fdtd.py`, `solve_section`): every FDTD section is
+its own little simulation with PML on both sides, so it draws its waveguide
+`dpml` **further than the section functionally needs, at both ends** — deliberate,
+so the PML never meets an abrupt core→cladding step that would back-reflect. At
+the *interior* seam that padding reaches `dpml` into the body. With
+`body_stub = 0.25` and `dpml = 0.5` the drawn geometry needs uniform
+cross-section out to **0.75 µm** from the body face:
+
+> **`s = (mm_length − 2·Lt − Lw)/2  ≥  body_stub + dpml = 0.75 µm`**
+
+**This is 3× tighter than step 9's `s ≥ 0.25`**, and it is a *different* claim:
+step 9's bound keeps the FDTD sections **identical** to the standard device's;
+this one is what makes them **constructible at all**. Step 6's grid enforced
+only the loose one.
+
+**Effect on the passer set — measured against the step-6 rows:**
+
+| | count | |
+|---|---|---|
+| step-6 passers | 56 | |
+| clear `s ≥ 0.75` (hybrid-buildable) | **52 (93%)** | |
+| **excluded** | 4 | **including BOTH 29.50 µm candidates** (`s = 0.25`) |
+
+The constraint is not restrictive in general — it bites precisely the points
+step 6 ranked first, because "shortest among passers" drives `s` to its floor.
+The 29.50 µm candidates were already failing phase at a converged taper basis
+(step 5b); they now also cannot be cascaded.
+
+**Shortest hybrid-buildable passers** (all 30.50 µm):
+
+| Ww | Lw | Lt | s | L | IL dB | imb | phase° |
+|---|---|---|---|---|---|---|---|
+| 2.24 | 8.0 | 5.0 | 1.75 | 21.5 | 0.3557 | 0.1002 | −91.323 |
+| 2.24 | **6.0** | **6.0** | **1.75** | **21.5** | 0.3880 | **0.0127** | −91.255 |
+| 2.24 | 8.0 | 4.0 | 2.75 | 21.5 | 0.4185 | 0.0957 | −90.632 |
+
+📌 **`Lw=6, Lt=6, L=21.5` (30.50 µm) is now the candidate on three independent
+grounds**: 9% of the imbalance budget against the 29.50 µm points' 62–80%, a
+band spread of **0.237°** against 1.732°, and constructibility under the
+cascade. It is the geometry the hybrid-vs-FDTD comparison is being run at
+(jobs `12797278` full FDTD → `12797279` hybrid).
+
+Both scripts now carry the bound as an **up-front guard naming the reason**
+rather than failing ~200 frames deep in meep, and the reference S-matrices are
+geometry-keyed so a second design point cannot overwrite the first.
+
+#### ✅ FULL-DEVICE FDTD AT 30.50 µm — job 12797278, and it PASSES where 29.50 µm FAILED
+
+Run at `Ww=2.24, Lw=6.0, Lt=6.0, L=21.5` (`s=1.75`, the shortest
+hybrid-buildable passer), res 40, 51 wl, `decay_tol=1e-5` satisfied at
+t=379.8, `passive=True`, 8078 s on 48 ranks.
+
+| quantity | 29.50 µm (`Lw=8,Lt=6`) | **30.50 µm (`Lw=6,Lt=6`)** | threshold | budget used |
+|---|---|---|---|---|
+| excess loss | 0.2036 dB | **0.2178 dB** | 0.4809 | **45%** |
+| imbalance | 0.0976 | **0.0168** | 0.1371 | **12%** |
+| phase mean-dev | **2.099° FAIL** | **1.911° PASS** | 2.0 | 96% |
+| phase MAX-dev | 2.323° | 2.564° | 2.0 | fails strict |
+| **verdict** | **FAIL (phase)** | **✅ PASS (all four)** | | |
+
+**This is the first candidate to pass the pre-registered criterion on a
+brute-force reference rather than on EME alone.** The extra 1 µm over the
+29.50 µm point buys the phase pass outright, and cuts imbalance use from 71%
+to 12%.
+
+**The engine offsets reproduce, which is what makes them a systematic rather
+than noise** — EME vs FDTD on this geometry: IL 0.3880 → 0.2178 (**−0.17 dB**,
+against −0.19/−0.24 on the other two geometries) and phase −91.255 → −91.661
+(**−0.41°**, against −0.40/−0.71). Same sign, same magnitude, three
+geometries.
+
+⚠ **Phase uses 96% of its budget** (1.911° of 2.0°), and the engine offset
+alone is ±0.4–0.7°. It passes, but with no real margin — and its MAX-dev
+(2.564°) still fails the strict reading of the pre-registered text, as every
+candidate has.
+
+⚠ **Sixth filename collision, same class.** `check4_res40_nwl51.json` carried
+no geometry, so this run overwrote the L=20.5 summary. Recovered from
+`reports/12743476.out` into `check4_Ww2.24_Lw8_Lt6_L20.5_res40_nwl51.json`
+with provenance, and the path is now geometry-keyed — as are the S-matrix and
+decay-snapshot names, which had the same defect.
+
+#### ⚠ FINDING 2026-09-04: `N_MODES = 14` is rank-deficient at the waist — but only for ~6% of cells
+
+**Read the correction below before quoting any count from this section.**
+
+Cells in the waisted body occasionally cannot supply 14 distinct modes:
+
+```
+EMESolver.compute_modes: meow mode 7 duplicates already-accepted mode 6
+  (self-overlap 1.000000 > 0.90) -- skipping it and reaching further up the
+  spectrum. A rank-deficient basis would silently drop one channel of the 14
+  requested.
+EMESolver.compute_modes: only 13 of 14 requested modes were distinct among 14
+  solved -- re-solving with 22 to reach further up the spectrum.
+```
+
+**Extent, measured correctly: ~7 events out of 120 cell-solves (~6%)** in job
+12826121 (40 cells × 3 wavelengths), split as ~2 cells short by two modes and
+~5 short by one.
+
+❌ **CORRECTION — I got this badly wrong three times, and the cause is worth
+recording.** These messages are emitted by **every MPI rank**, so on this
+48-rank job each event appears **48 times** in the log. I counted raw log lines
+and reported 240 / 288 / 336 "re-solves", built a growth rate from them, and
+concluded first that *every* cell was rank-deficient, then corrected to *a
+minority*, then un-corrected. All three readings were artifacts of a 48×
+inflated proxy. **The true number is the line count divided by the rank count.**
+
+⚠ **A decision was made on that bad metric.** Job 12797279 (the 11-wavelength
+hybrid) was CANCELLED at 3:00 because the inflated count projected an overrun
+of the 5 h `-ece` wall by ~15 min. At the true rate (5 events, not 240) that
+projection was meaningless and the run would very likely have completed,
+delivering the full 11-wavelength comparison. The re-run at 3 wavelengths
+(12826121) was an unnecessary cost and a coarser measurement.
+
+**The physics point survives the correction, at reduced scope.** `N_MODES=14`
+is inherited from the STRAIGHT 2×2, where band 14 already sits below the
+cladding index — i.e. 14 is AT the radiation boundary for a **2.8 µm** body.
+The waist is **2.24 µm**, so the narrowest cells genuinely cannot fill a
+14-channel basis and must reach up to 22. That is a real statement about
+sizing the interface basis from the waist rather than the face, and it bears on
+check 2's mode-identity question — but it affects a small minority of cells,
+not the whole body, and it is NOT a significant cost driver.
+
+✅ The guard behaved correctly throughout: it detected each rank deficiency and
+re-solved rather than silently dropping a channel — the
+`fdtd_vs_EME_mode_validation.md` item-0 protection working as designed.
+
+📌 **Lesson for this repo's logs:** any per-rank log line is multiplied by the
+rank count (48 on the 2-node MMI jobs). The same duplication was noticed and
+reported for `[straight] total 36.00 um` a day earlier and then not applied
+here. **Divide by the rank count before treating a log-line count as a
+measurement.**
+
 #### ⚠ Cost finding for the hybrid: identical geometry does NOT by itself give cache reuse
 
 Worth knowing before step 9 is budgeted. The section fingerprint
@@ -861,6 +1969,301 @@ it** (compare fingerprints, or watch for time-stepping in the log) — a
 "should be a cache hit" that silently misses is exactly the failure mode
 `cache-only-probe-still-writes-outputs` and the 1×4's superset-cache probe
 both record.
+
+#### ⚠ FINDING 2026-09-08: the hybrid's own `C_TRANS` is NOT converged by 32 — IL diverges from FDTD past 16
+
+Step 5a converged `C_TRANS=8` for an **EME-only** body (line 610). That is a
+different quantity from `C_TRANS` inside the **hybrid** chain (FDTD stub |
+EME ramp×C_TRANS | EME waist | EME ramp×C_TRANS | FDTD stub), which cascades
+the ramp against real FDTD port sections instead of EME stubs on both ends.
+Single wavelength (index 5, λ=1.5475 µm, band centre), fixed design point
+(Ww=2.24, Lw=6.0, Lt=6.0, L=21.5). Job 12904661 (ct4/6/8/12/16) +
+12962996 (ct24/32, forced onto `gedc_main` — neither fit the `-ece` 5 h cap).
+
+| C_TRANS | IL (dB) | imb | phase (°) | ΔIL | Δimb | Δphase |
+|---|---|---|---|---|---|---|
+| 4 | 0.1699 | 0.0528 | −90.314 | — | — | — |
+| 6 | 0.1688 | 0.0423 | −90.780 | −0.0011 | −0.0106 | −0.466 |
+| 8 | 0.1845 | 0.0333 | −90.987 | +0.0157 | −0.0090 | −0.207 |
+| 12 | 0.2076 | 0.0298 | −91.104 | +0.0231 | −0.0035 | −0.117 |
+| 16 | 0.2120 | 0.0294 | −91.254 | +0.0044 | −0.0004 | −0.150 |
+| 24 | 0.2274 | 0.0274 | −91.372 | +0.0154 | −0.0020 | −0.118 |
+| 32 | 0.2415 | 0.0251 | −91.596 | +0.0141 | −0.0023 | −0.224 |
+
+FDTD reference (full-device, job 12797278): IL 0.2178 dB, imb 0.0168,
+phase −91.661°.
+
+**Phase gap to FDTD shrinks a lot (0.407° → 0.289° → 0.065° from 16→24→32)
+but the step sizes do not monotonically shrink** — Δphase went
+−0.150 (12→16), −0.118 (16→24), −0.224 (24→32), i.e. it got *bigger* on the
+last step rather than continuing to halve. **imbalance is still converging
+monotonically toward FDTD** (gap 0.0126 → 0.0106 → 0.0083 at 16/24/32) but has
+not flattened by 32.
+
+❌ **IL does not converge toward FDTD past C_TRANS=16 — it overshoots and
+keeps climbing away from it.** IL was approaching 0.2178 dB through ct12
+(0.2076, under by 0.010) and ct16 (0.2120, under by 0.0058), then crossed over
+and diverged: ct24 = 0.2274 (over by 0.0096), ct32 = 0.2415 (over by 0.0237).
+Two full extra ramp refinements made the excess-loss match to FDTD *worse*,
+monotonically, in the wrong direction.
+
+**Honest read: `C_TRANS` in the hybrid is not converged at 32, and the IL
+trend rules out simple discretization refinement as the whole story.** A
+quantity that is supposed to be approaching a fixed reference from below and
+instead sails past it and keeps climbing is not consistent with "not enough
+ramp slices yet" — that failure mode saturates, it doesn't overshoot and
+diverge. Candidates worth checking before spending more C_TRANS: mode-order
+drift between adjacent `C_TRANS` values changing which mode the interface
+picks up at the ramp/waist boundary cell-by-cell (this repo's known
+mode-crossing failure mode — see `mode-crossing-correspondence-repair-plan`
+memory), or the `N_MODES=14` rank-deficiency at the waist (line "FINDING
+2026-09-04" above) interacting differently with more, thinner ramp cells.
+**Not diagnosed — flagging so the C_TRANS=8 hybrid-vs-FDTD numbers already
+reported (2.90%/3.22% bar/cross) are read as measured at an unconverged
+setting, and so more C_TRANS is not the next thing to try.**
+
+#### ✅ RESOLVED 2026-09-10: the IL divergence is the STAIRCASE, not the basis — and C_TRANS has an OPTIMUM, not a limit
+
+Two hypotheses for the C_TRANS divergence were tested and **both falsified**,
+which leaves a third that is directly supported by measurement.
+
+**(1) N_MODES=10 does not fix it.** Re-ran the whole ct4..ct32 ladder at the
+rank-clean basis (job 13075410, 7 tasks; 12-17 s per rung because the FDTD
+sections were already cached from the nm10 wavelength run and C_TRANS only
+re-slices the EME body):
+
+| C_TRANS | IL nm10 | IL nm14 | imb nm10 | imb nm14 | phase nm10 | phase nm14 |
+|---|---|---|---|---|---|---|
+| 4 | 0.1750 | 0.1699 | 0.0524 | 0.0528 | −90.259 | −90.314 |
+| 6 | 0.1719 | 0.1688 | 0.0427 | 0.0423 | −90.741 | −90.780 |
+| 8 | 0.1875 | 0.1845 | 0.0339 | 0.0333 | −90.953 | −90.987 |
+| 12 | 0.2035 | 0.2076 | 0.0299 | 0.0298 | −91.157 | −91.104 |
+| 16 | 0.2078 | 0.2120 | 0.0295 | 0.0294 | −91.308 | −91.254 |
+| 24 | 0.2234 | 0.2274 | 0.0275 | 0.0274 | −91.424 | −91.372 |
+| 32 | **0.2415** | **0.2415** | 0.0256 | 0.0251 | −91.609 | −91.596 |
+
+The ladders agree to ~0.004 dB throughout and land on **exactly 0.2415 at
+ct32**. The overshoot past FDTD's 0.2178 is real and reproduces on a
+rank-clean basis. **The ~50-58% rank-deficiency was a genuine defect worth
+fixing — it cost a 15x runtime penalty — but it explains neither the C_TRANS
+divergence nor the hybrid-vs-FDTD gap.**
+
+**(2) The three quantities diverge from each other, which is the actual clue:**
+
+- **phase CONVERGES** — −91.609 against FDTD's −91.661, a gap of **0.052°**,
+  still shrinking
+- **imbalance converges but plateaus short** — 0.0256 vs 0.0168, still moving
+  −0.0019/rung
+- **IL DIVERGES** — crosses FDTD around ct12-16 (0.2035, 0.2078) and then
+  climbs away to 0.2415
+
+**(3) The staircase explains exactly this pattern.** The stitched-field
+measurement above found a **~2% |E|² discontinuity at EVERY ramp cell
+boundary**, flat past 8 modes, i.e. the artificial step itself rather than
+basis truncation. ct4 has 8 such boundaries; ct32 has 64. **Every added cell
+is another artificial discontinuity that sheds power, so refining the ramp
+ADDS spurious loss instead of removing it** — which is why IL climbs without
+saturating, why the ct12-16 agreement with FDTD is a coincidental crossing
+rather than convergence, and why phase (which does not accumulate that way)
+converges cleanly.
+
+📌 **Consequence for practice: `C_TRANS` has an OPTIMUM, not a floor.** Step
+5a's "converged at 8" and the instinct to push it higher are both wrong for
+the hybrid — past ~ct16 more cells make the loss worse. Any future waisted-body
+cascade should treat C_TRANS as a bias/resolution trade to be tuned, not a
+convergence parameter to be maximised. Non-uniform cell placement (the
+`region_cell_lengths` hook already in `EMESolver`) is the principled fix:
+concentrate cells where the width actually changes fastest instead of adding
+boundaries uniformly.
+
+#### ⚠ FOLLOW-UP 2026-09-09: the rank-deficiency rate in the hybrid's ramp is ~50-58%, not ~6%
+
+Chased the mode-order-drift / rank-deficiency candidates above by counting
+`EMESolver.compute_modes: only N of 14 requested modes were distinct ...
+re-solving with 22` events straight from rank 0's own (unprefixed) log lines
+in the ct16/24/32 jobs — no rank-multiplication division needed, exact counts:
+
+| C_TRANS | distinct cell-solves | deficient (re-solved to 22 modes) | fraction |
+|---|---|---|---|
+| 16 | 18 | 9 | 50.0% |
+| 24 | 26 | 15 | 57.7% |
+| 32 | 34 | 19 | 55.9% |
+
+**This is an order of magnitude higher than the "~6%" figure recorded above
+(FINDING 2026-09-04) — and the two are not in conflict, they measure
+different things.** That 6% was the EME-only full body (job 12826121, 40
+uniform cells × 3 wavelengths, no FDTD ports). This count is the hybrid
+chain's ramp/waist cells specifically, at one wavelength. Roughly half of
+every distinct cross-section solved in the ramp cannot fill a 14-mode basis
+and silently re-solves to 22 before the interface stitch — and **the fraction
+holds essentially constant as C_TRANS grows** (50→58→56%), so refining the
+ramp does not shrink the problem, it just multiplies the deficient-cell count
+in step with the total (9→15→19, tracking 18→26→34 almost exactly).
+
+**This is now the leading candidate for the IL divergence**, ahead of
+mode-order drift (which was speculative; this is measured). A basis that is
+14-wide at some interfaces and re-solved to 22-then-truncated at others is an
+inconsistent interface stitch by construction, cell to cell, and there is no
+reason its residual error should shrink monotonically as more such
+inconsistent cells are added — which matches the observed overshoot-and-climb
+IL trend better than a plain discretization-error story does. **Not yet
+proven causal** (would need e.g. a run with `N_MODES` sized to the 2.24 µm
+waist rather than inherited from the 2.8 µm face, per the same FINDING
+2026-09-04 already flagged this as worth trying) — but this is the concrete
+mechanism to test next, not another C_TRANS sweep.
+
+#### ✅ FOLLOW-UP 2026-09-09: the waist's own rank-clean mode count is 10, not 14
+
+Direct diagnostic at the 2.24 µm waist cross-section (res 40, λ=1.5475,
+`guard_duplicate_modes=False` so no escalation masks the result — see
+`self_overlap_diagnostics`-style raw check, `_solve_modes_raw` via
+`compute_modes(..., guard_duplicate_modes=False)`), sweeping requested mode
+count N and reporting the worst off-diagonal self-overlap among the raw N
+modes:
+
+| N | max off-diagonal overlap | clean? |
+|---|---|---|
+| 8 | 0.0794 | yes |
+| 9 | 0.0794 | yes |
+| 10 | 0.0794 | yes |
+| 11 | 1.0000 | **no** |
+| 12 | 1.0000 | no |
+| 13 | 1.0000 | no |
+| 14 | 1.0000 | no |
+| 15 | 1.0000 | no |
+| 16 | 1.0000 | no |
+
+**The waist supports exactly 10 distinct guided/quasi-guided modes at this
+wavelength — mode 11 onward is an EXACT duplicate (overlap 1.000000), not a
+gradual degradation.** `N_MODES=14`, inherited from the 2.8 µm face where
+band 14 sits right at the cladding index, asks the 2.24 µm waist for 4 modes
+past what it can supply — confirming FINDING 2026-09-04's face-vs-waist
+sizing point directly rather than by inference.
+
+**This is the concrete next test the IL-divergence finding called for.**
+Rerunning the hybrid C_TRANS/wavelength sweep at `N_MODES=10` (not 14) is
+the way to check whether the interface-basis inconsistency (14-wide at some
+cells, 22-then-truncated at others, per the follow-up above) was the actual
+driver of the IL overshoot — at N_MODES=10 every ramp/waist cell should
+request a basis it can natively fill, with no escalation and no
+inconsistency to test against. Not yet run at 11 wavelengths; the user
+chose to hold the hybrid rerun for this fix rather than spend more compute
+sweeping an unconverged N_MODES=14 further.
+
+#### ✅ DELIVERABLE 2026-09-09: stitched hybrid field, real multi-cell EME body
+
+Built `stitch_mmi2x2_waist_hybrid_fields.py` -- unlike
+`stitch_mmi2x2_hybrid_fields.py` (the straight device, which propagates the
+body as a single diagonal `exp(2j*pi*neff*x/wl)` per mode, exact only for a
+uniform cross-section), this drives the REAL multi-cell body (stub|ramp
+×C_TRANS|waist|ramp×C_TRANS|stub) with a genuine bidirectional EME cascade:
+the captured FDTD interface field is projected onto the first body cell's
+basis, then propagated cell-to-cell via meow's own
+`compute_propagation_s_matrices`/`compute_interface_s_matrices`/`propagate`
+(the same primitives `mw.propagate_modes()` uses internally), reconstructed
+in beef's device frame via `stack_meow_mode_fields()` per cell. Every
+individual piece is machinery this repo had already validated elsewhere; new
+here is driving it from a real captured excitation across 5 non-uniform
+regions instead of a canonical single-mode one.
+
+Run at production res=40, `C_TRANS=8`, and **`N_MODES=10`** (the rank-clean
+count measured above, not the broken 14) -- job 13026733, ~2.3h on 1 rank:
+
+```
+projected onto 10 body modes; basis accounts for 1.0005 of the interface
+  field's power
+SEAM CONTINUITY at x = -10.500 um
+  integrated |E|^2: FDTD side 3.8136e+03  body side 3.7350e+03  ratio 0.9794
+```
+
+Only ONE rank-deficiency event fired across all 19 distinct cell mode-solves
+(down from the smoke test's 11 out of 11 at N_MODES=8/res=20) -- direct
+confirmation that N_MODES=10 is close to the waist's natural mode count
+everywhere along the ramp, not just at the narrowest cross-section.
+
+**Field plot**: `example_output/verification/mmi_2x2_tapered/
+hybrid_stitched_res40/fields/hybrid_stitched_waisted_res40_ct8_nm10_1.5475um.png`.
+Qualitatively matches the full-device FDTD capture
+(`fdtd_total_field_Ey_res40.png`, from the already-captured
+`captured_full_device_res40_wl1.5475` data, no re-run): power launched on the
+top arm (y=+0.75) crosses to the bottom arm through the body, landing near
+the bottom output by the body's far end in both pictures.
+
+#### ⚠ MEASURED 2026-09-09: ~2% field discontinuity at EVERY ramp cell boundary, and it does NOT shrink with more modes
+
+The user spotted per-cell magnitude variation in the ramp on the stitched
+field map and asked whether it was physical. Chased it properly rather than
+by eye: the reconstruction inputs (per-cell mode slabs, cascade amplitudes,
+n_eff, cell lengths) are now cached to `recon_cache_*.npz` by the stitch
+script, so rendering questions are answerable in seconds instead of re-paying
+the mode solves. Metric = relative jump in the transverse |E|² profile across
+each interior cell boundary,
+`sum|I_right - I_left| / (0.5*sum(I_right+I_left))`.
+
+❌ **Two rendering explanations tested and FALSIFIED.** (1) A
+normalization-convention mismatch (meow normalizes to unit POWER FLUX at
+`meow/fde/meep.py:169`, the script was renormalizing to unit ∫|E|²dA) is real
+and now fixed -- but measured, the per-cell factor is flat to 0.1%
+(0.847→0.846), far too small to be visible. (2) Rendering the OLD and NEW
+variants from IDENTICAL cached physics puts no visible discontinuity at the
+cell boundaries in either; the only genuine rendering defect was texture in
+the long cells, where a fixed 40-samples-per-cell rule gave 0.15 µm quads
+across the 6 µm waist against 0.019 µm in a 0.75 µm ramp slice (now
+60 samples/µm). A per-cell `argmax` slice rule was also wandering (z index 15
+instead of 14 in 4 of 19 cells, all in ramps) -- fixed by pinning, but small.
+
+✅ **What survives is physical**, at res20/N_MODES=8/C_TRANS=8:
+
+| modes kept | max jump | mean jump |
+|---|---|---|
+| 2 | 0.0664 | 0.0455 |
+| 3 | 0.0534 | 0.0396 |
+| 4 | 0.0383 | 0.0270 |
+| 5 | 0.0316 | 0.0214 |
+| 6 | 0.0547 | 0.0204 |
+| 8 | 0.0547 | 0.0201 |
+
+**The jump falls until ~5 modes and then FLATTENS at ~2% mean -- modes 6, 7,
+8 change it by nothing (0.0204, 0.0204, 0.0201).** So the residual is not
+basis truncation; it is the staircase itself, i.e. the real cross-section
+discontinuity between adjacent uniform EME cells. Per-boundary, the ramp
+steps sit at 1-2.5% each, with one outlier: **the boundary between the two
+NARROWEST ramp cells, immediately before the waist, jumps 5.5% -- ~3x
+typical** -- the same place the waist rank-deficiency bites (modes near
+cutoff, natural mode count 10).
+
+**Why this matters beyond the picture.** The production cascade uses the SAME
+cell decomposition and the SAME interface S-matrices, so this ~2%-per-boundary
+staircase mismatch is present in the S-matrix path too -- the field map is a
+picture of the error mechanism, not a separate artifact. It also reframes the
+C_TRANS puzzle: raising C_TRANS shrinks each step but ADDS more steps, and if
+per-step error does not fall faster than the step count grows, the total need
+not converge -- which is exactly the observed IL overshoot-and-climb.
+✅ **Confirmed at production settings** (res40, N_MODES=10, C_TRANS=8; job
+13043451, 2h09m, re-measured from that run's own cache in seconds):
+
+| modes kept | max jump | mean jump |
+|---|---|---|
+| 2 | 0.0613 | 0.0460 |
+| 4 | 0.0389 | 0.0267 |
+| 6 | 0.0520 | 0.0206 |
+| 8 | 0.0510 | 0.0192 |
+| 10 | 0.0510 | 0.0192 |
+
+Mean 0.0192 against 0.0201 at res20/nm8, flat past 8 modes (0.0192 at both 8
+and 10), and the SAME worst boundary -- cell 7→8, the two narrowest ramp
+cells before the waist, at 5.1% against 5.5%. Ramp-internal mean 0.0201.
+**Resolution- and mode-count-independent, so the staircase reading holds and
+this is not a truncation or meshing artifact.**
+
+**Caveat carried forward**: this is `C_TRANS=8`, which the FOLLOW-UP above
+this one shows is not converged (IL still diverging through 32) -- and that
+sweep was itself run at the broken N_MODES=14. The seam-continuity
+improvement (0.9387 at N_MODES=8/res=20 -> 0.9794 at N_MODES=10/res=40) is
+suggestive but confounds N_MODES and resolution in the same comparison, so it
+is not yet a clean before/after. The next real test remains: rerun the
+C_TRANS/wavelength sweep at N_MODES=10 and see whether the IL divergence
+goes away.
 
 ---
 

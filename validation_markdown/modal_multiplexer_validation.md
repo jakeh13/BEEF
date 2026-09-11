@@ -109,9 +109,16 @@ So it has the most ways to be wrong and the fewest ways to find out.
 
 ## Reference design — the author's own (unpublished) mode multiplexer paper
 
-Added 2026-08-05. The user supplied a figure from their own paper
-characterizing a fabricated 2-stage cascaded-MMI mode multiplexer —
-**unpublished as of this writing; citation to be added once it is.**
+Added 2026-08-05; **superseded 2026-09-06, when the user supplied the full
+manuscript** — Hiesener, Kaushalram, Wong, Pesch and Ralph, *"Toward
+Topology-Optimized Foundry PDKs: A Seeded Design Framework for Multimode
+Interferometers"* (Georgia Tech; still unpublished, citation to be added).
+The 2026-08-05 entry below was written from a flattened figure extraction and
+is kept for its reasoning, but **the manuscript supersedes it on every point
+they disagree** — in particular the port mapping, which that entry recorded as
+unverifiable and Fig. 3(a) settles outright (NC / A / B top-to-bottom, so this
+repo's `top` = NC, `mid` = A, `bot` = B). The seed device's own published
+numbers, and this repo's failure to reproduce them, are gap 9.
 Confirmed by the user directly (not inferred): the device is **O-band,
 160 nm silicon** — the same band and material system this repo's device
 already uses (`SOI_160`, `WL_MIN=1.26`/`WL_MAX=1.36 µm` in both
@@ -129,13 +136,14 @@ of these has a same-named counterpart already in
 `between_waveguide_length=3.0`, `top_bot_taper_width=0.725`,
 `middle_taper_width=1.15`, `top_waveguide_width=0.33`,
 `waveguide_width=0.35`, `waveguide_offset=1.0375`) — this is the same
-device family, not a coincidental resemblance. **Not independently
-verified**: the exact correspondence between the figure's three port labels
-(`NC`/`A`/`B`) and this repo's `top`/`mid`/`bot` naming, or which of the
-figure's width labels lands on which specific port — the source image
-doesn't resolve that unambiguously from a flattened text extraction, and it
-was not worth guessing at when the topology-level match is already solid
-from the parameter names alone.
+device family, not a coincidental resemblance. ~~**Not independently verified**: the exact correspondence between the
+figure's three port labels (`NC`/`A`/`B`) and this repo's `top`/`mid`/`bot`
+naming ... not worth guessing at when the topology-level match is already
+solid from the parameter names alone.~~ **RESOLVED 2026-09-06 from the full
+manuscript**: Fig. 3(a) labels the single-mode ports `NC`, `A`, `B` from top
+to bottom, so `top` = NC (drawn but unused), `mid` = A, `bot` = B. Table 2
+also confirms every geometric parameter this repo ships, including the
+`L_taper` = 3.0 that gap 8 had already corrected from the figure.
 
 **⚠️ Critical distinction, confirmed by the user: this repo's device is the
 paper's "Seed" design, NOT the "Optimized" one that was actually fabricated
@@ -837,6 +845,81 @@ before either is attempted, not discovered after the fact.
    **Check 4 (README) is NOT closed by this run.** A completed job with an
    unusable result is not a reference; gap 3 stays open pending root-cause
    investigation.
+
+   **✅ 2026-09-09 — the "spurious slowly-decaying component" mechanism
+   speculated above is now CONFIRMED, and separately, decay_tol/run duration
+   is RULED OUT as an explanation for gap 9's manuscript shortfall.**
+
+   Prompted by a direct question ("is the sim running long enough?") about
+   the res-40/TAPER_L=2.0 FDTD reference (job 12889324, `decay_tol=1e-9`)
+   that gap 9/11 uses for the manuscript comparison. Wrote
+   `verification/python/modal_multiplexer_decaytol_convergence.py`
+   (job 13024445), porting the 1x2/4x4 siblings' `snapshot_every` method to
+   this device: one run, `decay_tol=1e-11` (deliberately tight, past the
+   1e-9 knee), `snapshot_every=100`, TE1 input only (the channel with the
+   larger paper shortfall). Along the way, fixed a real bug this run was
+   the first to hit: `FDTDSolver.solve()`'s snapshot path
+   (`beef/solvers/fdtd.py` `_snap`) hardcoded `in_mode=1` in its
+   `SMatrix.transmission()` calls regardless of the actual `input_mode`
+   argument — silently a `KeyError` for any `input_mode != 1`, never
+   exercised before because every prior `snapshot_every` caller in this repo
+   used the TE0 default. Fixed by passing `in_mode=input_mode` through.
+
+   **Result: T fully converges by t≈1000-1500 and stays flat to 5
+   significant figures for well over 1000 further time units** (TE1→bot at
+   1.31 µm: 0.34409 at t=1000, 0.34426 at t=1700, 0.34426 at t=2400 —
+   effectively unchanged). The snapshot's own `energy_ratio` (current/peak
+   *total field energy in the simulation box*) crosses `1e-9` — the value
+   `decay_tol=1e-9` production actually stops at — around t≈1600-1700, and
+   T at that point is already indistinguishable from every later sample.
+   **decay_tol=1e-9 is not stopping the run early: the physically meaningful
+   value settles roughly 1000+ time units before that tolerance is even
+   satisfied, with generous margin.**
+
+   The run kept going well past `energy_ratio<1e-11` (down to 1.87e-13 by
+   t=2400) without meep's own `stop_when_dft_decayed()` actually
+   terminating the simulation — a real, informative discrepancy, not a
+   stuck job. Meep's own source (`stop_when_dft_decayed()`,
+   `meep/simulation.py`) shows why: its criterion is
+   `|dft_norm(t) - dft_norm(t-dt)| / max_ever_seen(that change) <= tol`,
+   where `dft_norm()` is the L2 norm of the **entire DFT field array across
+   every registered DFT monitor** — not the mode-projected transmission
+   `T` this script (and the production S-matrix) actually reports. A
+   physically negligible, slowly-drifting spatial component anywhere on
+   that monitor plane (near-field content, a PML-adjacent residual) can
+   keep this raw-norm change from settling long after the mode-overlap
+   projection that produces `T` has fully converged — **exactly the
+   mechanism this section already speculated ("some far smaller,
+   slowly-decaying spurious/resonant component") but had not previously
+   traced to source.** This also explains, at least in outline, why job
+   11707932's `decay_tol=1e-11` run needed 24-26x longer than a res-10
+   smoke test to satisfy the same criterion (finer resolution likely
+   resolves more of that same physically-irrelevant near-field content) —
+   though that run's own near-zero *result* is a separate finding from this
+   one and is not re-explained by this alone (this run's diagnostic value,
+   `T`, never showed the same collapse through t=2400, unlike whatever
+   happened to 11707932's TE0 by t=77,197; TE0 itself has not been run
+   through this same diagnostic, so whether it shares this stability or
+   not is still unmeasured).
+
+   **Practical conclusion for gap 9**: run duration does not explain the
+   0.79 dB (TE00) / 1.80 dB (TE01) shortfall against the manuscript. The
+   FDTD reference's `T` values are real, converged numbers well before
+   `decay_tol=1e-9` stops the run, not truncated-early artifacts. The
+   remaining gap needs a different explanation than this one.
+
+   **Methodological note for whoever revisits the 1x2/4x4 siblings'
+   `*_decaytol_convergence.py` scripts**: their own docstrings state
+   "`energy_ratio` IS the decay_tol that would have stopped the run" —
+   this device's data shows that claim is not exactly true. The
+   `energy_ratio` column those scripts compute (current/peak total box
+   energy) is a reasonable, cheap proxy that tracks the same qualitative
+   knee, but it is measurably not identical to meep's actual internal
+   `dft_norm`-based criterion — this run's own `energy_ratio` crossed
+   `1e-11` at t=2100 while the real stopping condition still had not fired
+   by t=2400. Not urgent to fix (the proxy still correctly located the
+   knee for every prior use), but worth knowing before trusting either
+   script's `energy_ratio` column as a literal stand-in for `decay_tol`.
 
 4. **No golden.** Add a `modal_multiplexer_hybrid` target to
    `tests/test_golden_examples.py`'s `TARGETS`. As with the 2×2 MMI, do it after
@@ -1954,6 +2037,565 @@ before either is attempted, not discovered after the fact.
    FDTD reference this device has ever produced, superseding job
    11749963's "closed, but with one flagged point" result.
 
+9. **New, 2026-09-06 — the FDTD reference does NOT match the manuscript's own
+   seed device, and the comparison convention that made it look like it did.**
+
+   The user supplied the full manuscript (Hiesener *et al.*, "Toward
+   Topology-Optimized Foundry PDKs: A Seeded Design Framework for Multimode
+   Interferometers"), which states the seed device's performance outright
+   (lines 268-272):
+
+   > the seeded TO variant achieves a mean measured (simulated) transmission
+   > of -1.01 (-0.70) dB for the TE00 channel and -0.72 (-0.65) dB for the
+   > TE01 channel, with crosstalk of -27.44 (-33.99) dB, compared with
+   > **-2.79 (-3.30) dB, -5.99 (-5.51) dB, and -32.02 (-19.49) dB,
+   > respectively, for the seed**.
+
+   **⚠️ THE NUMBERS ARE TWO PASSES, NOT ONE — and mistaking that makes a
+   mismatch look like agreement.** Lines 263-267: the test structure is a
+   back-to-back pair of identical mirrored multiplexers, so "S13 transmission
+   encapsulates two passes through the device for the TE00 channel, while the
+   S24 transmission encapsulates two passes for the TE01 channel." A single
+   device is therefore **half the dB**: TE00 -1.65, TE01 -2.76 (simulated).
+
+   This was got wrong once already, in this session, and the error is
+   instructive: our full-band single-pass TE00 mean is **-2.71 dB** against
+   the paper's **-2.79 dB** *measured two-pass* figure — 0.07 dB apart, and
+   entirely coincidental. Comparing a single pass to two passes produced an
+   apparent match that does not exist.
+
+   **The real comparison**, over the paper's own measurement band
+   (1285-1325 nm, line 166 — not the full 1260-1360 O-band; our 11-point
+   grid puts 4 samples inside it):
+
+   | channel | this repo, single pass | paper seed simulated, halved | gap |
+   |---|---|---|---|
+   | TE00 -> A (mid) | **-2.68 dB** | -1.65 dB | **1.03 dB worse** |
+   | TE01 -> B (bot) | **-5.65 dB** | -2.76 dB | **2.89 dB worse** |
+   | crosstalk TE01->A | -13.34 dB | -19.49 dB (2-pass) | worse |
+   | crosstalk TE00->B | -9.99 dB | -19.49 dB (2-pass) | worse |
+
+   **Geometry is not the cause — every Table 2 parameter already matches**
+   (re-verified 2026-09-06 against the manuscript's own table, not the
+   earlier figure extraction): `w_wg` 0.35, `w_mmwg` 0.7, `w_in` 1.4,
+   `L_taper` 3.0 (gap 8's fix), `w_ps` 0.33, `L_ps` 3.0, `w_t1` 0.725,
+   `w_t2` 1.150, `w_mm` 2.8, `L_mm1` 16.92, `L_mm2` 34.24. Port naming is
+   confirmed too: Fig. 3(a) labels the three single-mode ports NC / A / B
+   top-to-bottom, so this repo's `top` = NC (unused), `mid` = A, `bot` = B —
+   the mapping gap 8 recorded as "not independently verified" is now
+   verified from the manuscript figure directly.
+
+   **Prime suspect: RESOLUTION.** The manuscript states 40 pixels/µm
+   (lines 152-153: "we optimize with a simulation resolution of 40 pixels/µm
+   and a design parameter resolution of 80 pixels/µm"). This repo's FDTD
+   reference ran at **res 20** — half. Under-resolution costing ~1 dB on the
+   well-guided TE00 channel and ~3 dB on the weakly-guided TE01 channel is
+   the expected direction and ordering.
+
+   **Submitted 2026-09-06, job 12880908**: `MUX_FDTD_RES=40`, the override
+   `modal_multiplexer_fdtd.py` already documents for exactly this purpose.
+   Cost estimate ~9.6 h (res-20 took 35m51s; 3-D FDTD scales ~res^4), inside
+   the batch's own -t 1440. **The res-20 outputs were copied to
+   `example_output/modal_multiplexer/modal_multiplexer_fdtd_res20/` first** —
+   the script writes to a fixed, un-tagged `output_dir`, so the run would
+   otherwise have overwritten the reference that closed gap 3.
+
+   **❌ 2026-09-06, job 12880908 COMPLETED (4:55:20) — res 40 did NOT close
+   the gap, and the resolution hypothesis is falsified.**
+
+   | | TE00 -> A | TE01 -> B | XT(TE01->A) | XT(TE00->B) | tot TE0 | tot TE1 |
+   |---|---|---|---|---|---|---|
+   | res 20 | -2.68 | -5.65 | -13.34 | -9.99 | 0.755 | 0.361 |
+   | **res 40** | **-2.29** | **-5.85** | -15.56 | -12.82 | 0.705 | 0.314 |
+   | paper seed sim, halved | -1.65 | -2.76 | — | — | — | — |
+
+   Doubling resolution bought **0.39 dB on TE00** and made **TE01 0.20 dB
+   WORSE**. TE01 remains **3.09 dB short**. Total power *fell* on both inputs
+   (TE1 0.361 -> 0.314), i.e. the finer mesh resolved MORE radiation loss, not
+   less — the opposite of what an under-resolution explanation predicts.
+   Crosstalk did improve (~2.5 dB on both terms), so res 40 is a better
+   simulation; it is simply not the thing standing between this repo and the
+   manuscript.
+
+   **⚠️ LEADING EXPLANATION, and it is a solver-class difference, not a bug:
+   the manuscript's "simulated" seed numbers are LUMERICAL EME, not FDTD.**
+   Line 96-99: "Because the mode is confined throughout the device, an
+   eigenmode expansion (EME) method can be used to simulate the device and
+   compute its performance relative to a figure of merit (FOM). **We use the
+   Lumerical EME solver** [31] in this work." Line 252-253 confirms it for
+   this device specifically: "The **simulated fields from the EME solver** for
+   the PO variant are shown in Fig. 3b and Fig. 3c."
+
+   An EME solve on a truncated mode basis cannot radiate freely, so it
+   systematically over-predicts transmission — most severely on whichever
+   channel radiates most. This device's FDTD says TE1 loses ~69% of its input
+   power (total 0.314); an EME basis would not see most of that. That is
+   exactly the channel where the disagreement is largest (3.09 dB vs 0.64 dB
+   for TE00), and exactly the ordering the mechanism predicts.
+
+   **TESTABLE PREDICTION, in flight**: this repo's own HYBRID chain
+   (job 12881425, N_WL=11) propagates both MMI bodies in EME. If the
+   solver-class explanation is right, the hybrid should land CLOSER to the
+   manuscript's seed numbers than the full-device FDTD does — and the size of
+   the hybrid-vs-FDTD gap should track the size of the paper-vs-FDTD gap,
+   channel by channel. If instead the hybrid agrees with FDTD and both differ
+   from the paper, the explanation is wrong and something else is going on.
+
+   Note the measured numbers do not rescue it either: measured seed halved is
+   TE00 -1.40 / TE01 -3.00 dB, so this repo is ~2.9 dB short of MEASUREMENT on
+   TE01 as well, not just of the EME simulation.
+
+   **Checked and NOT a discrepancy**: the manuscript's prose calls the device
+   64 µm (line ~246) while this repo builds 66.16 µm. Table 2's own parameters
+   sum to exactly 66.16 (L_mm1 16.92 + L_mm2 34.24 + L_ps 3.0 + 4 x L_taper
+   3.0), so the repo reproduces the table exactly and the prose figure is
+   approximate or excludes the access tapers. Table 2 is authoritative.
+
+   **The res-20 reference is preserved** at
+   `example_output/modal_multiplexer/modal_multiplexer_fdtd_res20/`; res 40
+   now occupies the canonical `modal_multiplexer_fdtd/` path.
+
+   **Related, unexplained, and possibly the same thing**: TE1's total output
+   power in the res-20 reference collapses from 0.583 at 1.26 µm to 0.169 at
+   1.34-1.35 µm — 83% of the input unaccounted for, and NOT going to the NC
+   port (TE1->top stays 0.002-0.075). TE0's total holds a steady 0.68-0.78
+   over the same band. Either genuine radiation from a weakly-guided
+   antisymmetric mode, or a monitor/normalization gap of the kind gap 3
+   already found five of.
+
+   **Also measured 2026-09-06, worth recording as device physics**: the bot
+   (B) channel **inverts** at 1.34-1.36 µm — crosstalk goes negative
+   (-1.2, -2.4, -3.4 dB), i.e. port B receives more TE0 than TE1. The device
+   only works near the short-wavelength band edge, best at 1.26 µm
+   (TE00 1.45 dB IL / 18.9 dB extinction; TE01 2.62 dB / 15.4 dB) and
+   degrades monotonically across the band. For a seed device this is
+   unremarkable in itself — the manuscript's whole point is what seeded TO
+   does to it — but it is worth knowing that **the device's best operating
+   point (1.26 µm) is exactly the wavelength where the hybrid chain disagrees
+   with this FDTD reference on TE1** (gap 7's still-open discrepancy).
+
+11. **New, 2026-09-06 — 🔴 THE FABRICATED GDS CONTRADICTS THE PAPER'S OWN
+    TABLE 2, AND GAP 8's `TAPER_L` "FIX" WAS WRONG. Every FDTD and hybrid
+    result since 2026-08-07 was computed on the wrong geometry.**
+
+    The user supplied `mux_MMI_2.gds` — the actual seed-device layout (18
+    polygons, all 4-vertex rectangles/trapezoids, i.e. the parameterized
+    seed, not the free-form TO variant). Parsed with `gdstk`, it resolves
+    every dimension unambiguously, and its segment lengths sum to **exactly
+    64.000 µm**, the length the manuscript's prose states:
+
+    ```
+    0.920 (in wg, w=0.70) + 2.000 (taper 0.70->1.40) + 16.920 (L_mm1, w=2.80)
+      + 2.000 (tapers 0.725/1.150/0.725 -> 0.35/0.35/0.33)
+      + 3.000 (L_ps arms) + 2.000 (tapers back up)
+      + 34.240 (L_mm2, w=2.80) + 2.000 (out tapers) + 0.920 (out wgs) = 64.000
+    ```
+
+    **`L_taper` = 2.0 µm on all five tapers, NOT 3.0.** Gap 8 changed
+    `TAPER_L` 2.0 -> 3.0 on the strength of the manuscript's Table 2, calling
+    the original value "never measured/derived, just wrong" and noting it was
+    "not independently re-verified against a real run yet." It is now
+    verified — against the fabricated layout — and **the original 2.0 was
+    correct**. Table 2's `L_taper` = 3.0 disagrees with the device that was
+    actually built; the 3.0 there is either a typo or denotes something other
+    than the drawn taper length. The GDS is authoritative.
+
+    Arithmetic confirms which is right: with 2.0 the segments total exactly
+    64.000 (the manuscript's own stated device length); with 3.0 they total
+    66.16, which is what this repo currently builds. **This also retracts gap
+    9's dismissal of the 64-vs-66.16 µm discrepancy as "prose approximate,
+    Table 2 authoritative" — that reasoning was backwards.**
+
+    **Consequences.** `TAPER_L = 3.0` was in force for the res-20 FDTD
+    reference (job 11749963, which closed gap 3), the res-40 reference
+    (job 12880908), every hybrid run since 2026-08-07, and job 12881425
+    in flight. All are self-consistent with each other and remain valid as
+    *engine-vs-engine* comparisons, but none can be compared to the
+    manuscript.
+
+    **Plausibly the missing 3.09 dB.** Taper length sets how the input mode
+    couples into the MMI body's supermode basis, which sets the interference
+    at MMI 2 — exactly the mechanism the TE01 channel depends on. Five tapers
+    each 1.0 µm too long is not a small perturbation. This is now a better
+    candidate than gap 9's EME-vs-FDTD solver-class hypothesis, though the two
+    are not exclusive and the EME prediction is still worth testing.
+
+    **Two smaller GDS findings, both real:**
+
+    - **The branch pitch is ASYMMETRIC.** The phase-shift arms sit at
+      **-1.0380 / 0.0000 / +1.0480** (bottom/mid/top), not the symmetric
+      `WO = 1.0375` this repo uses for all three. The taper MMI-side ends ARE
+      at exactly ±1.0375; it is the waveguide-side ends that differ, so the
+      top taper is slightly slanted. The +0.0105 µm outward shift pairs with
+      the top arm's 0.33 µm width — together they are the deliberate
+      symmetry-breaking gap 7 already inferred from the width alone.
+    - **The NC port has a taper but NO output waveguide.** Only two output
+      waveguides are drawn (centres 0.0000 and -1.0380); the top output taper
+      ends at x = +31.080, width 0.350, centre +1.0380, and stops. Gap 8
+      recorded the NC port as "taper + waveguide drawn" — the taper is, the
+      waveguide is not. Also note the top OUTPUT taper narrows to 0.350, not
+      0.33: the 0.33 width belongs to the inter-stage phase-shift arm only.
+
+    **✅ 2026-09-06 — `TAPER_L` reverted to 2.0 in both scripts and both
+    engines re-run. The fix is real and material, but does NOT close the gap.**
+
+    Job 12889324 (FDTD, res 40, TAPER_L=2.0, 5:33:13). Mean over the paper's
+    own measurement band (1285-1325 nm):
+
+    | run | TE00->A | TE01->B | XT(01->A) | XT(00->B) | tot TE0 | tot TE1 |
+    |---|---|---|---|---|---|---|
+    | res 20, TAPER_L 3.0 | -2.68 | -5.65 | -13.34 | -9.99 | 0.755 | 0.361 |
+    | res 40, TAPER_L 3.0 | -2.29 | -5.85 | -15.56 | -12.82 | 0.705 | 0.314 |
+    | **res 40, TAPER_L 2.0** | **-2.44** | **-4.56** | **-16.24** | **-15.52** | 0.621 | 0.436 |
+    | paper seed sim, halved | -1.65 | -2.76 | — | — | — | — |
+    | paper seed meas, halved | -1.40 | -3.00 | — | — | — | — |
+
+    **TE01 improved 1.29 dB** (shortfall 3.09 -> 1.80 dB), both crosstalk
+    terms improved, and TE1's recovered power rose 0.314 -> 0.436 — the
+    correct taper length couples measurably more of the antisymmetric input
+    into its intended output. **TE00 moved slightly the WRONG way**
+    (-2.29 -> -2.44, shortfall 0.64 -> 0.79 dB).
+
+    **Remaining shortfall: 0.77 dB (TE00), 1.85 dB (TE01), updated
+    2026-09-10** (was 0.79/1.80 before the branch-pitch/width fix below;
+    the change is noise-level, not progress — see item 2). The geometry
+    is now verified against the fabricated layout not just segment-for-
+    segment but polygon-vertex-for-polygon-vertex (15/15 exact match to
+    the GDS's own 1nm grid — item 2), so geometry is no longer a credible
+    candidate for what is left at all, not merely "verified so far."
+    **All five ranked candidates below are now closed** (solver class:
+    falsified; branch pitch/width: fixed, adopted, measured inert; run
+    duration: ruled out; material dispersion: ruled out) **and none of
+    them explains the gap** — the remaining ~0.8/1.9 dB is unexplained by
+    everything this repo has tested against it so far. Ranked by
+    remaining plausibility (now historical — nothing left unranked):
+
+    1. **Solver class (gap 9's hypothesis) — TESTED 2026-09-08, FALSIFIED.**
+       The manuscript's simulated numbers are Lumerical EME; ours are FDTD.
+       The reasoning was: an EME solve on a truncated basis cannot radiate
+       power away and should over-predict transmission relative to FDTD,
+       pulling the hybrid (EME bodies + FDTD connector/tapers) toward the
+       paper's numbers and *between* this repo's FDTD and the manuscript.
+
+       Jobs 12963254 (array, ports mid/bot, ~54 min each once running) +
+       12963256 (merge) completed the N_WL=11 hybrid at the corrected
+       TAPER_L=2.0 geometry — the first hybrid result at matched wavelength
+       count and matched geometry with the FDTD reference.
+       `verify_modal_multiplexer_hybrid_vs_fdtd.py` run on the result:
+
+       | channel (mean, 1285-1325 nm) | FDTD | hybrid | paper sim (halved) | F-gap | H-gap |
+       |---|---|---|---|---|---|
+       | TE00 -> A (mid) | -2.44 | -2.81 | -1.65 | -0.79 | -1.16 |
+       | TE01 -> B (bot) | -4.56 | -21.59 | -2.75 | -1.80 | -18.84 |
+
+       **The hybrid does not sit between FDTD and the paper on either
+       channel — it is worse than FDTD on both, and on TE01 catastrophically
+       so** (-21.6 dB vs FDTD's -4.6 dB vs the paper's -2.75 dB). The
+       solver-class hypothesis predicted the hybrid would move *toward* the
+       paper; it moved sharply *away*. **Falsified.**
+
+       The mechanism is visible in recovered power, not just IL: FDTD keeps
+       0.436 of TE1's input power in-band (the already-known 56% loss);
+       the hybrid keeps only **0.228** — roughly half again as much lost.
+       The NC (top) port explains only part of it (FDTD sends 0.056 of TE1
+       there, the hybrid 0.172 — a real increase, but +0.116 against a
+       0.208 total deficit). **The remaining ~0.09 is going somewhere the
+       S-matrix's four named ports don't account for** — radiation at an
+       FDTD/EME seam, a truncated-basis leak in one of the two EME body
+       solves, or a genuine mode-identity problem carried over from the
+       basis-incompleteness already flagged at the 1.26 µm band edge
+       ([[modal-mux-n-modes-14-basis-incomplete-at-1p26um]]). Not yet
+       isolated — this is now the lead open question for gap 9, replacing
+       the solver-class hypothesis it disproved.
+
+       TE00 is a smaller, same-direction move (FDTD -2.44 -> hybrid -2.81,
+       0.79 -> 1.16 dB short) — consistent with ordinary EME-body-vs-FDTD
+       discretization differences (this repo's own MMI devices already show
+       an uncalibrated n_eff bias between MPB/EME and meep FDTD on a shared
+       cross-section; see the 2x2 splitter's own field-reconstruction work),
+       not with anything paper-specific.
+    2. **The asymmetric branch pitch — ADOPTED 2026-09-09** (previously
+       documented above and deliberately not adopted, "MMIPort cannot
+       express a slanted taper; 0.42 px at res 40"). Picked up after run
+       duration and TAPER_L were both ruled out (items 4 and above), at
+       the user's explicit direction to keep pushing on FDTD-vs-paper
+       geometry fidelity, and after the user separately asked for the
+       simulated geometry to be checked EXACTLY against the GDS, not just
+       at the constant/table level this repo had used until now.
+
+       **`MMIPort` gained a `y_far` field** (`beef/geometry/mmi.py`) — the
+       taper's y-position at the access-waveguide end, independent of `y`
+       (the MMI-body-face end); `None` (default) means "same as `y`", a
+       straight taper, bit-identical to every device this repo has ever
+       built. `Taper` (`beef/geometry/taper.py`) gained matching
+       `y_start`/`y_end` to actually draw the slant, and `center_at()` on
+       both classes now interpolates through the taper band instead of
+       returning a single constant — needed because `MMI.
+       source_aperture_at()` (live on this device: `mmi2` sets
+       `use_neighbor_aperture=True`) resolves each neighboring port's
+       *actual* y at the query point, not its body-face `.y`. 108/108
+       `test_geometry.py` tests pass unchanged; full fast suite 807
+       passed, only a pre-existing, unrelated 4x4-90-hybrid design-point
+       drift failure (a different device, already in progress elsewhere).
+
+       **A second, more precise measurement than the earlier "0.0105 µm
+       slant" summary, found while building the check the user asked for
+       (comparing simulated geometry directly against GDS polygons, not
+       just constants):** re-measuring every one of the 9 inner-branch
+       taper polygons' exact vertices (not just their y bounding range)
+       shows the earlier note was ALSO missing a width discrepancy. The
+       top branch's inner tapers (mmi1's own output, mmi2's own input —
+       the ones flanking the phase-shift arm) narrow to width 0.33 and
+       y=1.0480 at their connector-facing end, exactly as before; but
+       mmi2's own OUTPUT-facing top taper (to the outside world, where
+       gap 8/11 already established there is no actual output waveguide
+       — the NC port) narrows to width **0.35**, not 0.33 — this repo's
+       `BRANCH_SPECS`/`_branch_ports()` had been applying the 0.33 value
+       to that taper too, which the GDS does not support. Fixed via a new
+       `TOP_OUTPUT_WW = 0.35` override, used only for that one taper.
+       Separately, bot's own inter-stage tapers and BOTH branches' true
+       output tapers show a consistent ±0.0005 µm offset from the ideal
+       ±1.0375/0 pitch (e.g. bot's far end lands at -1.0380, not -1.0375)
+       — traced to GDS 1nm-database-unit rounding of 1.0375 (which is
+       exactly half a nm off-grid), not a real design asymmetry, and
+       correctly left unmodeled (2% of one pixel at this device's own
+       res 40, no simulation here resolves it).
+
+       **Verified against the actual GDS, polygon-for-polygon, not just
+       by re-checking constants**: constructed `mux.polygons()` from the
+       fixed geometry and diffed every vertex against `mux_MMI_2.gds`'s
+       own polygons directly (`gdstk`, excluding the 3 outer 0.92 µm
+       access-waveguide stubs that live outside `mux`'s own geometry
+       object). **15/15 exact match**, rounded to the GDS's own 1nm grid.
+       This is the strongest verification this repo has ever done against
+       this GDS — every previous check compared constants or a segment-
+       length sum, never actual drawn polygon vertices.
+
+       Both `modal_multiplexer_hybrid.py` and `modal_multiplexer_fdtd.py`
+       updated identically (`WO_ARM = 1.0480`, `TOP_OUTPUT_WW = 0.35`,
+       `_branch_ports(slanted: bool)`), and both construct cleanly with
+       the new geometry (checked directly, login-node, no FDTD physics —
+       `mmi1.outputs`/`mmi2.inputs`/`mmi2.outputs`/`connector.ports` all
+       print the exact GDS-measured values).
+
+       **✅ Re-run at res 40 completed 2026-09-10 (smoke test job 13042395
+       at res=10 first, per this repo's own two-step discipline; real
+       production run job 13046179, 5:49:12 wall time) — RULED OUT as a
+       fix for gap 9's shortfall.** Mean over the paper's own measurement
+       band (1285–1325 nm):
+
+       | run | TE00->A | TE01->B |
+       |---|---|---|
+       | pre-fix (WO symmetric, TAPER_L=2.0) | -2.44 (0.79 dB short) | -4.56 (1.80 dB short) |
+       | **post-fix (WO_ARM/TOP_OUTPUT_WW)** | **-2.42 (0.77 dB short)** | **-4.60 (1.85 dB short)** |
+
+       TE00 improved by 0.02 dB, TE01 got 0.05 dB WORSE — both changes an
+       order of magnitude smaller than the remaining shortfall, and in
+       OPPOSITE directions from each other, consistent with what a
+       genuinely sub-pixel geometry correction (0.0105 µm slant, 0.02 µm
+       width change, both a fraction of res 40's 0.025 µm pixel) should
+       produce: real, GDS-exact, and essentially inert on this device's
+       reported transmission. **The 0.77/1.85 dB gap is unchanged in any
+       practical sense.** This closes item 2 as tested — a real fidelity
+       improvement worth keeping (the simulated geometry now matches the
+       fabricated device exactly, not approximately), but not the
+       explanation for gap 9's manuscript discrepancy. The hybrid side
+       has NOT been re-run with this geometry yet — the H-gap numbers in
+       this section's own comparison table are now stale relative to the
+       FDTD column and should not be read together until it is.
+
+       Also noticed and fixed in
+       passing, unrelated to the geometry itself: `measure_mux_connector_
+       mode_cost.py`'s own construction-prologue marker (`"# 4. Geometry
+       plot"`) had gone stale after this file's section numbering shifted
+       to `"# 3."` at some earlier point (the script's own guard would
+       have caught this safely — hard `SystemExit`, not silent misbehavior
+       — the next time it ran; fixed anyway now that it was noticed).
+
+       **Small process mistake, owned rather than hidden**: after the
+       smoke test (`MUX_FDTD_RES=10`, job 13042395) completed, it wrote
+       to `modal_multiplexer_fdtd/smatrix.pkl` — this script has no
+       resolution-specific output path — which is the SAME path job
+       12889324's pre-fix res-40 reference lived at. The archive step
+       meant to preserve that pre-fix result ran too late, after the
+       smoke test had already overwritten it, and got the smoke test's
+       own res=10 output instead (mislabeled at first as the res-40
+       reference; caught and renamed to
+       `modal_multiplexer_fdtd_res10_smoke_wo_arm_fix/`). **The pre-fix
+       res-40 raw `smatrix.pkl` itself is gone**, but its actual numbers
+       are not lost: `reports/12889324.out` still has the printed 1.31 µm
+       summary, and this section's own table above (mean over the
+       measurement band) already recorded the full comparison before this
+       happened. The real res-40 WITH-fix re-run (job 13046179) is
+       in flight — see below.
+
+    3. Residual radiation the seed genuinely has and the paper's EME does not
+       model — in which case this repo's FDTD is the more physical number and
+       the "gap" is the paper's, not ours. Weakened by the finding above:
+       the hybrid's *own* EME bodies do not reproduce the paper either, so a
+       generic "EME transmits more" story is no longer sufficient on its own.
+    4. **Run duration / decay_tol — TESTED 2026-09-09, RULED OUT.** Direct
+       response to "is the FDTD sim running long enough?" A
+       `snapshot_every`-based convergence run (TE1, job 13024445 — full
+       account in gap 3) shows `T` converges to 5 significant figures by
+       t≈1000-1500 and stays flat past t=2400, more than 1000 time units
+       before `decay_tol=1e-9` (production's actual setting) is even
+       satisfied. The FDTD reference's numbers are real, settled values,
+       not truncated-early artifacts — this is not where the remaining
+       0.79/1.80 dB is hiding.
+    5. **Material dispersion model — NEW 2026-09-10, IN FLIGHT, the
+       strongest untested candidate found yet.** At the user's direction,
+       compared this script's FDTD methodology against `archive/mux_sim/
+       *.py` (a different device — a 2x1 TO-optimized mode mux by a
+       different author, not this manuscript's phase-shifter mux — but
+       the same lab's established FDTD conventions, which is what was
+       actually being compared). All 6 variants there build silicon's
+       permittivity from the same Sellmeier/Lorentzian model this repo
+       uses, but evaluate it ONCE at the sweep's center frequency and
+       freeze that into a plain, non-dispersive `mp.Medium(epsilon=
+       <constant>)` for the entire broadband run — exactly this repo's
+       own `dispersive=False` ("frozen-band") mode. Neither mux script
+       has ever overridden `SOI_160`'s default, which has been
+       `dispersive=True` (a re-parameterized, genuinely frequency-
+       dependent Lorentzian) since 2026-08-01.
+
+       **Why this outranks everything above**: `beef/materials/stack.py`'s
+       own `core_medium()` docstring already measured this choice's size
+       on a comparable SOI device (450x220 nm strip, res 40, 1.55 µm):
+       non-dispersive n_eff=2.313398 vs dispersive n_eff=2.363038, a
+       **0.0496 (2.1%) difference** — over 20x larger than item 2's
+       measured <0.1 dB effect on this device's own gap-9 numbers, and
+       comfortably the right order of magnitude to produce a dB-level
+       transmission shift. If the manuscript's own FDTD reference used a
+       frozen-band index the way this lab's other scripts do, that is a
+       real, unexplored, physically well-motivated candidate.
+
+       Added `MUX_FDTD_DISPERSIVE` (default `true`, unchanged shipped
+       behaviour) to `modal_multiplexer_fdtd.py`, matching the file's own
+       `DECAY_TOL`/`RESOLUTION` override pattern — a methodology
+       experiment, not a default change, same discipline as item 4's own
+       `DECAY_TOL` history. Smoke test (`MUX_FDTD_RES=10,
+       MUX_FDTD_DISPERSIVE=false`, job 13060870) **completed cleanly,
+       5m13s** — faster than the dispersive=True smoke's 8m33s, consistent
+       with no auxiliary Lorentzian ODE to time-step; sane res=10 numbers,
+       `check_passive()` held.
+
+       **Same archiving mistake repeated, owned again**: submitting this
+       smoke test overwrote `modal_multiplexer_fdtd/smatrix.pkl` before
+       the dispersive=True/post-geometry-fix res-40 reference (job
+       13046179) was archived — exactly the item-2 mistake from
+       2026-09-09, not learned from in time. That raw pkl is gone too, but
+       its numbers are not: `reports/13046179.out`'s own printed summary
+       and item 2's table above (band-averaged, from
+       `verify_modal_multiplexer_hybrid_vs_fdtd.py`'s actual run against
+       it) already have everything needed. The smoke result itself is
+       correctly archived at `modal_multiplexer_fdtd_res10_smoke_
+       dispersiveFalse/`. **Going forward this session: archive
+       `modal_multiplexer_fdtd/` immediately after a production run
+       completes, before submitting anything else that shares the path —
+       not "when convenient."**
+
+       **✅ Real res-40 comparison completed 2026-09-10 (job 13061512,
+       3:29:43 wall time — notably faster than the dispersive=True run's
+       5:49:12, consistent with no auxiliary Lorentzian ODE to time-step;
+       step rate 0.037 s/step vs 0.06 s/step, confirmed live in both the
+       smoke test and this run) — RULED OUT.** Mean over both the paper's
+       measurement band and the full O-band:
+
+       | | meas. band (1285-1325 nm) | full O-band (1260-1360 nm) |
+       |---|---|---|
+       | | TE00->A / TE01->B | TE00->A / TE01->B |
+       | dispersive=True | -2.42 (0.77 short) / -4.60 (1.85 short) | -2.15 (0.50 short) / -5.34 (2.58 short) |
+       | **dispersive=False** | **-2.41 (0.76 short) / -4.62 (1.87 short)** | **-2.16 (0.51 short) / -5.31 (2.55 short)** |
+
+       **Maximum difference anywhere: 0.03 dB — even at the O-band edges,
+       far from the 1.31 µm center where a frozen medium should be most
+       wrong.** In hindsight, the reasoning that ranked this candidate so
+       highly over-read the 0.0496 n_eff figure: that number describes the
+       FIRST, since-abandoned dispersive attempt (`eps_inf=1` +
+       Lorentzians, killed subpixel smoothing, reverted per this stack's
+       own docstring). The CURRENT `dispersive=True` is the fix for that
+       — a re-parameterized medium specifically engineered to track the
+       correct index at any given wavelength while staying smoothable —
+       so of course it closely matches a frozen evaluation; that was the
+       point of building it that way. This test confirms the fix works
+       as designed, not that dispersion was the missing mechanism.
+       **Material dispersion model is ruled out, joining run duration and
+       geometry.**
+
+    Archived: `modal_multiplexer_fdtd_res20/` (res 20, TAPER_L 3.0) and
+    `modal_multiplexer_fdtd_res40_taperL3.0/`. The canonical
+    `modal_multiplexer_fdtd/` now holds res 40 / TAPER_L 2.0.
+
+10. **New, 2026-09-06 — connector EME mode-solve cost and MPI scaling, the
+    number gating every remaining hybrid run. DONE 2026-09-06.**
+
+    The hybrid chain has only ever run at `N_WL=2`; the FDTD reference has 11.
+    Every remaining comparison needs them matched, and 2 -> 11 multiplies
+    exactly one thing: the EME mode solves. FDTD launch count does not depend
+    on wavelength count (one broadband run captures the whole spectrum by
+    DFT), but **every EME mode solve is per wavelength point**.
+
+    The connector cross-section is the suspect. This device's own
+    `CONN_MODES` comment records **5050 s (~84 min) for ONE wavelength** on a
+    single rank — three separated, tightly-pitched silicon islands with no
+    exploitable mirror symmetry, a far harder MPB target than an MMI slab.
+    `run_modal_multiplexer_hybrid_SMOKE.batch` then says plainly that "how
+    much real MPI parallelism brings that down is completely unmeasured".
+
+    **Why it is worth measuring rather than assuming**: this repo has already
+    measured that **MPB is rank-redundant** while FDTD stepping scales ~98%.
+    The hybrid batch allocates 96 ranks — right for the FDTD sections,
+    possibly worth nothing for the mode solves. If the connector inherits that
+    redundancy, 11 wavelengths x 84 min = **15.4 h for the connector alone**,
+    before either MMI body, at any node count — and the fix is more array
+    tasks, not more ranks.
+
+    `examples/verification/python/measure_mux_connector_mode_cost.py` times the
+    same `section_modes()` call the cascade makes, on the same cross-section,
+    plus an MMI-1-body solve in the same job as a control (so a slow connector
+    is attributable to the cross-section rather than the machine). Submitted
+    at **1 / 8 / 24 / 96 ranks** (jobs 12880845-48).
+
+    **Result: both the connector and the MMI body are rank-redundant, and
+    the connector is the CHEAP one, not the expensive one.**
+
+    | ranks | connector (s) | MMI-1 body (s) |
+    |---|---|---|
+    | 1  | 78.9 | 1301.5 |
+    | 8  | 65.3 | 1294.1 |
+    | 24 | 69.1 | 1276.1 |
+    | 96 | 72.1 | 1305.5 |
+
+    Flat to within run-to-run noise across a 96x rank range on both
+    cross-sections — MPB's rank redundancy (already known from
+    [[mpi-ranks-calibration-vs-fdtd]]) extends to this connector geometry too.
+    Ranks buy nothing here at any count; wavelengths must be parallelized as
+    independent array tasks, which is what the N_WL=11 hybrid batch does.
+
+    The connector is **~70 s/wavelength, not 5050 s**. The `CONN_MODES`
+    comment's login-node figure was off by **~70x** and had been driving the
+    cost model in the wrong direction — it made the connector look like the
+    bottleneck when the MMI body is **~18x more expensive** (1290 s vs 70 s).
+    At 11 wavelengths the connector costs ~13 min total, negligible next to
+    either MMI body's ~4 h.
+
+    This measurement changed nothing about the batch's node/rank shape (96
+    ranks is still right, for the FDTD sections, not for these mode solves)
+    but corrected the cost estimate that had been used to justify it, and
+    confirmed the real driver of the N_WL=11 hybrid's ~21.5 h wall time
+    (job 12889325 port 0) was the mode-solve *retry* path — 10 events of
+    "only 14 of 15 requested modes were distinct — re-solving with 23" per
+    wavelength on that port's log, not per-rank cost, which this measurement
+    does not include.
+
+    ⚠ **The script must NOT import `modal_multiplexer_hybrid`** — that script
+    has no `if __name__ == "__main__"` guard, so `hybrid.solve()` runs at
+    module scope and an import would launch the entire cascade inside a timing
+    harness. It execs only the construction prologue, cut at the
+    "4. Geometry plot" banner, and raises if that marker ever moves.
+
+
 ## Order
 
 **1** first and by a wide margin — cheap, and it tests the property this device
@@ -2029,3 +2671,53 @@ still not submitted, so check 4 itself is not yet closed. Net effect on the
 `N_MODES`/`RESOLUTION` decision this doc keeps flagging as open: `N_MODES
 =14` is now solid; `RESOLUTION` still has no clean answer, and that
 decision remains deliberately unmade.
+
+**Re-ordered again 2026-09-06, at the user's direction — two new items now
+lead, and both are prerequisites rather than campaigns.**
+
+The manuscript arrived in full, which changed what "done" means for this
+device: it is no longer enough for the FDTD reference to be self-consistent,
+it has to reproduce the paper's own seed numbers. It currently does not
+(gap 9: 1.03 dB short on TE00, 2.89 dB on TE01, once the two-pass convention
+is accounted for). So:
+
+1. **Gap 10 first — connector mode-solve cost and rank scaling** (jobs
+   12880845-48). Cheap, and it decides the shape of every remaining hybrid
+   run: whether N_WL=11 is a 6-hour job or a 30-hour one, and whether ranks
+   or array tasks are the right lever. Nothing else about the hybrid side
+   can be planned until this number exists.
+2. **Gap 9 in parallel — the res-40 FDTD rerun** (job 12880908). Independent
+   of gap 10, already submitted, and it is the thing that decides whether
+   this repo's device reproduces the manuscript at all.
+3. **Then the hybrid at N_WL=11**, resourced from gap 10's measurement.
+4. **Then `verify_modal_multiplexer_hybrid_vs_fdtd.py`** — the comparison
+   script that still does not exist. The 2026-08-09 cross-check was done by
+   hand at 2 wavelengths; with both sides at 11 it becomes a real
+   gap-5-style check across the band, including whether the TE1 discrepancy
+   at 1.26 um is a band-edge artifact or a wide feature.
+
+**4 (golden) stays last and stays gated** on the `RESOLUTION` decision, which
+gap 9 may finally settle: if res 40 is what reproduces the paper, that is the
+resolution to pin a golden at, and the decision this doc has flagged as open
+since 2026-07-30 stops being a judgment call.
+
+**All four steps above are now done, 2026-09-08.** Gap 10 (step 1): rank
+scaling measured, connector cost corrected from a bad 5050 s figure to ~70
+s/wavelength — see gap 10. Gap 9's FDTD rerun (step 2) and the geometry
+correction that followed it are recorded in gap 9. The N_WL=11 hybrid
+(step 3, jobs 12963254 array + 12963256 merge, after job 12889325's port-0
+array task alone took 21.5 h and required a follow-up submission — see gap
+9's write-up for why array tasks don't write an S-matrix by themselves) is
+complete. `verify_modal_multiplexer_hybrid_vs_fdtd.py` (step 4) exists and
+has been run on the matched-wavelength result: **it falsifies the
+solver-class hypothesis** rather than confirming it (see gap 9). TE1's
+"missing" power is now a hybrid-specific effect, not explained by
+NC-port leakage alone, and is the new lead item for this device — not yet
+isolated to a specific interface or mode.
+
+The `RESOLUTION` decision (gap 4, golden) is therefore **still open**: res
+40 does not reproduce the manuscript on either engine, so nothing in this
+round of work provides grounds to pin a golden there or anywhere else. It
+remains a deliberate non-decision.
+
+
