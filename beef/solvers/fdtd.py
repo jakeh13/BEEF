@@ -33,11 +33,29 @@ _KPOINT_SEED_NEFF = 2.5
 # 0.9999999999+; every genuinely distinct band pair on the same cross-section
 # overlapped <= 0.1257. 0.9 sits with wide margin on both sides of that gap.
 _DUP_BAND_OVERLAP_THRESHOLD = 0.9
-# Diagnostic-only grid for the duplicate check -- deliberately small and fixed,
-# independent of self.res or any caller-requested field grid, since it only
-# needs to distinguish "same eigenvector" from "different eigenvector".
-_DUP_BAND_DIAG_NY = 16
-_DUP_BAND_DIAG_NZ = 8
+# Diagnostic-only grid for the duplicate check -- independent of self.res or
+# any caller-requested field grid, since it only needs to distinguish "same
+# eigenvector" from "different eigenvector". FIXED-COUNT until 2026-09-11
+# (16x8, chosen once, never revisited): confirmed a FALSE-POSITIVE generator
+# on a wide multimode cross-section -- validation_markdown/
+# mmi_4x4_90_hybrid_validation.md Step 8 Check 2 (mm_width=8.5 um, 16 modes
+# requested). 16 samples across a real caller's full monitor width (e.g.
+# 11.5 um there) is ~0.72 um spacing, well past Nyquist for that
+# cross-section's higher-order mode lobes -- confirmed directly: a same-run
+# comparison against a fine 231x41 (0.05 um-spaced) grid on the IDENTICAL
+# live eigenmodes found the coarse grid flagging 22 of 27 bands as
+# "duplicates" (overlap up to 0.996) that the fine grid measured at
+# <=0.017 -- a clean (i, 24-i) mirror-aliasing pattern, not scattered noise.
+# That fine grid is now the floor for the SAME reason it was chosen there:
+# it found zero false positives on the device that broke the fixed count.
+# FIXED-SPACING instead: the grid now targets <= _DUP_BAND_DIAG_SPACING
+# regardless of the caller's cross-section size, with the original 16x8
+# kept as a floor so no existing device (coupler, mmi_1x2/2x2/1x4, modal
+# multiplexer -- all narrower and/or fewer-mode than this one) gets a
+# coarser grid than it was already validated at.
+_DUP_BAND_DIAG_SPACING = 0.05   # um
+_DUP_BAND_DIAG_NY_MIN = 16
+_DUP_BAND_DIAG_NZ_MIN = 8
 # Extra get_eigenmode() calls tolerated beyond n_modes before giving up.
 # get_eigenmode() is a "seconds" operation (see section_mode_neff()'s
 # docstring) and every duplicate seen in practice needed only one retry, so
@@ -1039,6 +1057,8 @@ class FDTDSolver:
         eps_averaging: bool = True,
         subpixel_tol: float = 1e-4,
         subpixel_maxeval: int = 100000,
+        geometry_mode: str = "prism",
+        design_grid_resolution_factor: float = 6.0,
     ):
         self.res = res
         self.sim_width = sim_width
@@ -1064,8 +1084,40 @@ class FDTDSolver:
         self.eps_averaging = eps_averaging
         self.subpixel_tol = subpixel_tol
         self.subpixel_maxeval = subpixel_maxeval
+        if geometry_mode not in ("prism", "materialgrid"):
+            raise ValueError(
+                f"FDTDSolver: geometry_mode must be 'prism' or 'materialgrid', "
+                f"got {geometry_mode!r}."
+            )
+        self.geometry_mode = geometry_mode
+        # EXPERIMENTAL, see modal_multiplexer_validation.md gap 9 item 6:
+        # "materialgrid" swaps the analytic-Prism geometry construction for
+        # a gdstk.inside()-rasterized mp.MaterialGrid, matching how the
+        # modal multiplexer manuscript's own reference FDTD script builds
+        # its geometry -- everything else (solver, stopping criterion,
+        # dispersion model, eps_averaging) is unchanged. "prism" (default)
+        # is this solver's original, unchanged behavior.
+        self.design_grid_resolution_factor = design_grid_resolution_factor
+        # Density (relative to self.res) of the MaterialGrid's own internal
+        # rasterization grid, only used when geometry_mode="materialgrid".
+        # 6.0 matches mux_sim_test.py's own `resolution = 6 * sim_res`.
         # Derived: stub long enough that source + monitors sit in physical waveguide
         self.waveguide_length = max(source_margin, monitor_margin) + 0.25
+
+    def _build_geometry(self, geometry, si_med, sio2_med, Sx, Sy, stub_length):
+        """The one branch point between this solver's two geometry-
+        construction modes -- see geometry_mode's own docstring in
+        __init__. Both modes consume the same geometry.polygons() and
+        produce a `geometry=[...]` list ready for mp.Simulation()."""
+        if self.geometry_mode == "materialgrid":
+            return geometry.to_meep_material_grid(
+                sio2_med, si_med, (Sx, Sy),
+                self.res * self.design_grid_resolution_factor,
+                stub_length=stub_length, wg_height=self._wg_height,
+            )
+        return geometry.to_meep_prisms(
+            si_med, stub_length=stub_length, wg_height=self._wg_height,
+        )
 
     def _stop_condition(self):
         """The early-stop condition every `sim.run()` call in this solver
@@ -1324,9 +1376,9 @@ class FDTDSolver:
         mon_freqs, wl_order = monitor_freq_grid(wavelengths)
         check_source_coverage(fcen, fwidth, wavelengths)
 
-        geometry_meep = geometry.to_meep_prisms(
-            si_med, stub_length=self.waveguide_length + self.dpml,
-            wg_height=self._wg_height,
+        geometry_meep = self._build_geometry(
+            geometry, si_med, sio2_med, Sx, Sy,
+            stub_length=self.waveguide_length + self.dpml,
         )
 
         # Source position: centered on the actual input waveguide via
@@ -1701,8 +1753,8 @@ class FDTDSolver:
         mon_freqs, wl_order = monitor_freq_grid(wavelengths)
         check_source_coverage(fcen, fwidth, wavelengths)
 
-        geometry_meep = geometry.to_meep_prisms(
-            si_med, stub_length=stub_length, wg_height=self._wg_height,
+        geometry_meep = self._build_geometry(
+            geometry, si_med, sio2_med, Sx, Sy, stub_length=stub_length,
         )
 
         input_ys = getattr(geometry, "input_ys", [0.0])
@@ -2066,8 +2118,7 @@ class FDTDSolver:
         `HybridSolver`'s index-*i*-to-index-*i* contraction loses that
         channel entirely, not just mis-indexes it.
 
-        The duplicate check uses its own small, fixed diagnostic grid
-        (`_DUP_BAND_DIAG_NY` x `_DUP_BAND_DIAG_NZ`), independent of
+        The duplicate check uses its own diagnostic grid, independent of
         `self.res` or any caller-requested grid — it only needs to tell
         "same eigenvector" from "different eigenvector" (0.9999... vs
         ≤ 0.13 in the case this was found on), not resolve mode shape
@@ -2076,6 +2127,24 @@ class FDTDSolver:
         `field_overlap_matrix()`'s `dy`/`dz` cancel exactly in its
         normalized ratio, so passing 1.0 for both here (rather than this
         grid's real spacing) gives the identical answer.
+
+        **2026-09-11 — grid now targets a fixed SPACING
+        (`_DUP_BAND_DIAG_SPACING`), not a fixed COUNT.** The original fixed
+        16×8 count aliased on a wide multimode cross-section (mm_width=
+        8.5 µm, 16 modes requested — validation_markdown/
+        mmi_4x4_90_hybrid_validation.md Step 8 Check 2): 16 samples across
+        an 11.5 µm real monitor width is ~0.72 µm spacing, well past
+        Nyquist for that device's higher-order mode lobes, and a same-run
+        comparison against a fine 0.05 µm grid on the SAME live eigenmodes
+        found the coarse grid false-flagging 22 of 27 bands as duplicates
+        (overlap up to 0.996, in a clean (i, 24−i) mirror-aliasing pattern)
+        that the fine grid measured at ≤0.017. The fine grid is now the
+        floor for the same reason it was chosen there — it found zero
+        false positives on the device that broke the old fixed count.
+        `_DUP_BAND_DIAG_NY_MIN`/`_DUP_BAND_DIAG_NZ_MIN` (the old 16/8
+        values) are kept as a floor so no already-validated device
+        (narrower and/or fewer-mode than the one that broke this) gets a
+        coarser grid than it ran the original check at.
 
         **2026-07-31 — two more failure modes closed**
         (`fdtd_vs_EME_mode_validation.md` items 12 and 14), both verified
@@ -2119,9 +2188,15 @@ class FDTDSolver:
 
         from ..mode_identity import field_overlap_matrix
 
-        diag_y_edges = np.linspace(mea_c - mea_w / 2, mea_c + mea_w / 2, _DUP_BAND_DIAG_NY + 1)
+        # Fixed SPACING, not fixed count -- see this method's own docstring
+        # (2026-09-11 entry) for why a fixed 16x8 count aliased on a wide
+        # multimode cross-section. Floors keep every already-validated
+        # device's grid at least as fine as it was originally checked at.
+        diag_ny = max(_DUP_BAND_DIAG_NY_MIN, int(np.ceil(mea_w / _DUP_BAND_DIAG_SPACING)))
+        diag_nz = max(_DUP_BAND_DIAG_NZ_MIN, int(np.ceil(self._mon_sz / _DUP_BAND_DIAG_SPACING)))
+        diag_y_edges = np.linspace(mea_c - mea_w / 2, mea_c + mea_w / 2, diag_ny + 1)
         diag_y = 0.5 * (diag_y_edges[:-1] + diag_y_edges[1:])
-        diag_z_edges = np.linspace(-self._mon_sz / 2, self._mon_sz / 2, _DUP_BAND_DIAG_NZ + 1)
+        diag_z_edges = np.linspace(-self._mon_sz / 2, self._mon_sz / 2, diag_nz + 1)
         diag_z = 0.5 * (diag_z_edges[:-1] + diag_z_edges[1:])
 
         accepted_ey: List[np.ndarray] = []

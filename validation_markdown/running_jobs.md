@@ -1,5 +1,171 @@
 # Active SLURM jobs — snapshot
 
+> **TWO independent handoffs are live in this file, written by two different
+> sessions on 2026-09-14. Read the one for your device:**
+> * **1×4 SiN300** — immediately below. One array job RUNNING (13169522).
+> * **4×4 90° hybrid** — under the THIRTY-FIRST SNAPSHOT further down.
+>   Nothing running; the campaign has landed and the device now meets spec.
+>
+> Each says "no other job of mine is running" — true from that session's own
+> scope, not a statement about the whole queue.
+
+> ## 🏃 HANDOFF — ONE JOB CURRENTLY RUNNING, 2026-09-14
+>
+> **Job 13169522** (array, 4 tasks: `13169522_0..3`), submitted 2026-09-14
+> ~00:00, `-t 6-00:00:00`. As of this write-up: tasks 0/1/2 `RUNNING` at
+> 12h00m, task 3 still `PENDING`. Check with:
+> `sacct -j 13169522 -n -P -X --format=JobID,State,Elapsed,ExitCode`
+>
+> **What it is:** `beef_prewarm_1x4_cband21_n24` —
+> `_prewarm_mmi_1x4_hybrid.py`, one output branch per task, N_MODES=24,
+> uncalibrated, `monitor_size` pinned, on a C-band sub-grid (1.530–1.565 µm,
+> 21 pts, 1.75 nm spacing). Batch file:
+> `batch/verification/run_prewarm_mmi1x4_hybrid_cband21_n24.batch`. Full
+> context: `mmi_1x4_sin300_validation.md`'s "✅ 9d RESULT" section, last
+> paragraph before "Two operational findings."
+>
+> **This is attempt 2.** Attempt 1 (job 13092670) TIMEOUT'd at 2d12h with
+> **zero cached progress** on any of the 4 branches (confirmed via a direct
+> `cache_only=True` probe, not assumed) — no duplication bug found (two
+> "Computational cell" log blocks that looked suspicious are legitimately
+> the input and output sections, confirmed via differing prism geometry),
+> just genuinely more expensive than the 2d12h budget allowed for. Root
+> cause of *why* N_MODES=24 costs this much more than 16 did (which
+> finished in 14–16h on the coarse 1.50–1.60 grid) was **not** confirmed —
+> plausibly more MPB iterations near cutoff at higher mode counts, not
+> verified further. **Attempt 2 uses `-t 6-00:00:00` as a real budget
+> increase, not a confident estimate — the true cost is still unmeasured.**
+>
+> **On completion (COMPLETED, all 4 tasks):** cascade the 4 branches'
+> SMatrices against the already-completed whole-device FDTD C-band
+> reference (`example_output/mmi_1x4/mmi_1x4_fdtd_CBAND21/smatrix.pkl`,
+> job 13092669, done) and update the "still running" line in
+> `mmi_1x4_sin300_validation.md`'s 9d-RESULT section with the real numbers.
+>
+> **On failure (FAILED, `os.getcwd()`/meow-import signature):** this would
+> be the **4th** occurrence of the same dmesg-confirmed Lustre client error
+> across this campaign (previously hit 3 times, 7 different nodes, not one
+> bad node). **Escalate to PACE support rather than retrying a 3rd time on
+> this job** — that threshold was already crossed once on a sibling job
+> (the 16-mode calibrated prewarm, dropped after 2 losses) and a 4th
+> instance overall is enough evidence for a ticket, not another blind
+> resubmit. If it TIMEOUTs again instead, re-check with a `cache_only=True`
+> probe before deciding whether to extend further — do not assume progress
+> without checking, both prior assumptions on this exact question turned
+> out wrong before direct verification.
+>
+> No other job of mine is running as of this snapshot — this is the only
+> one to track. (Other users'/sessions' jobs sharing this cluster and cache
+> — `beef_bo_*`, `beef_mux_*`, `beef_mmi4x4_*`, `beef_mmi2x2_*`, `sbend-*` —
+> are unrelated to this device and not mine.)
+
+**★ THIRTY-FIRST SNAPSHOT — 2026-09-14, verified against `squeue -u jhiesener3`.
+This is the current one.** Everything below the next rule is the thirtieth
+snapshot (2026-09-01), not reverified this pass.
+
+> **Convention:** every snapshot in this file says "This is the current one"
+> — each was written when it WAS. Only the topmost is current; the rest are
+> a historical log, newest first. Do not read an older snapshot's own claim
+> as a live statement.
+
+## 4×4 90° hybrid — NOTHING OF THIS DEVICE'S IS RUNNING
+
+The whole calibration / weighted-phase campaign has landed. All COMPLETED,
+none failed:
+
+| job | what | elapsed | outcome |
+|---|---|---|---|
+| 13102582–589 | calibration probes, steps 3/4/5 | 0:40–3:41 | grid dispersion confirmed; group index + bandwidth ruled out |
+| 13110658 (×16) | 16-mode calibration at **res = 60** | 1:02–2:44 | β fit 44× better, agreement 18× WORSE — resolutions must match |
+| 13110659 | L=15 FDTD at **decay_tol = 1e-5** | 4:00:49 | reference phase noise 0.029° — not the limit |
+| 13152193 (×4) | input sections at **24-mode** basis, L=15 | 2:43:52 | power leak 0.7% → 0.25% |
+| 13152194 (×24) | **24-mode** calibration at res = 40 | 2:33–2:45 | mode 24 offset is an outlier (+0.0796) |
+| 13162199 | 24-mode cascade vs FDTD, L=15 | 4:04:01 | **null** — out8 unchanged at 2.2° |
+
+Results and full reasoning: `mmi_4x4_90_hybrid_validation.md`, the dated
+entries at the end of the file, and the CURRENT STATE banner at its top.
+
+### ⚠️ Two zombie jobs in the queue — will NEVER run, safe to cancel
+
+`13092912` (`beef_mmi4x4_calib2cmp`, PENDING/Dependency) and `13092882`
+(`beef_mmi4x4_calib2agg`, PENDING/DependencyNeverSatisfied) are left over from
+job **13092881**, the 16-task calibration array that FAILED on the duplicate-
+eigenmode guard before that guard was fixed. Their `afterok` dependency can
+never be satisfied. The work they were waiting on was redone and completed by
+jobs 13098452/453, so nothing is lost by cancelling them. They have been left
+in place rather than cancelled unilaterally — they cost nothing while pending.
+
+### Not this device — but note the billing block
+
+`13169522` (`beef_prewarm_1x4_cband21_n24`, 6-day limit) is the 1×4 C-band
+prewarm from **concurrent session activity, not this campaign** — recorded
+only so it is not mistaken for it. State as of 2026-09-14: tasks 0/1/2
+RUNNING (~12:00 in), **task 3 PENDING on `AssocGrpBillingMinutes`**. That is
+the recurring account-quota block on `gts-sr108-ece`, not a fault in the job;
+the usual remedy is resubmitting the blocked task under a different account
+(`sshare` first — headroom shifts, do not hardcode which account has it).
+**Whoever owns that 1×4 session should decide — do not move another session's
+task without asking.**
+
+---
+
+## 🤝 HANDOFF — 4×4 90° hybrid, state as of 2026-09-14
+
+**Nothing of this device is running, and nothing needs babysitting.** A new
+session can pick this up cold. Verified against `squeue` and a `pgrep` for
+stray login-node processes: both clean.
+
+**Where the device stands:** it MEETS the CMRR spec — `mm_length = 158.80 µm`,
+min CMRR 20.326 dBe (≥ 20), max |Δφ| 3.664° (≤ 5), excess loss 2.444 dB. That
+is the calibrated re-score; it supersedes every earlier CMRR number in
+`mmi_4x4_90_hybrid_validation.md`. Read that file's **CURRENT STATE banner at
+the top** first — the file is ~6000 chronological lines and most of it is
+superseded.
+
+**What is closed, by measurement, so nobody re-runs it:**
+
+| closed | verdict |
+|---|---|
+| calibration at higher resolution (knob 1) | ❌ NEGATIVE — a res=60 calibration against a res=40 reference is 18× worse. Resolutions must MATCH. |
+| interface mode count 16 → 24 (knob 3) | ❌ NULL — recovered ⅔ of the leaked power, dominant arm moved 0.0° |
+| FDTD reference `decay_tol` (knob 4) | ✅ NOT the limit — reference phase noise is 0.029° |
+| group index / pulse bandwidth | ❌ ruled out — offset identical to 6 decimals across bw 1.5/2.0/4.0 |
+| `waveguide_offset` | ❌ closed earlier — W/4 is near-optimal independent of ΔL |
+
+**The one live thread, and the cheapest next move.** Power-weighted
+hybrid-vs-FDTD phase agreement is 2.12°; the target (1.5% of the 90°
+quadrature spacing) is 1.35°. The residual is a systematic Δn_eff ≈ 3.0e-4,
+and the leading candidate is now the **number and span of the CALIBRATION
+LENGTHS** — currently three, spaced by `max_safe_spacing/2` from the
+branch-safety formula. The arithmetic: the β-fit residual at res=40 is
+5.58e-3, which over the fit's own 0.84–2.53 µm baseline implies Δn ≈ 4.7e-4 —
+the same order as the 3.0e-4 observed. A longer/denser baseline determines β
+more precisely, and β precision is what the residual is made of. This knob was
+NOT on the original list (it is not in the knobs table in the device doc,
+which is marked superseded) and has not been tried.
+
+**Do NOT just raise `res` to fix this** — that is knob 1, already closed
+negative, unless the full-device FDTD reference moves with it (~5× cost in 3D).
+
+**Two loose ends:**
+1. **Mode 24's calibrated offset is +0.0796** against a smooth +0.0457→+0.0486
+   trend across modes 1–23 — the familiar "topmost band of N is unreliable"
+   signature. It was NOT excluded from `aggregated_n24res40_n24.npz`. The
+   24-mode result was a clean null so it probably did not matter, but drop or
+   re-measure mode 24 before reusing that file.
+2. **The 42 cached campaign points under `wg_ygap_opt/` cannot be re-scored
+   as-is** — calibration is per-cross-section and none of them have one.
+   Applying the single measured offset as a uniform shift is a plausible
+   shortcut but is UNTESTED; validate on two geometries bracketing the current
+   `mm_width` before trusting it, and expect the offset to grow for narrower
+   bodies (fewer cells across the field).
+
+**Standing directives that still apply:** if a long run crashes or times out,
+report and wait — do not auto-resubmit. Never `git checkout`/`stash` the
+`beef/` tree; a concurrent agent may be editing shared library files.
+
+---
+
 **★ THIRTIETH SNAPSHOT — 2026-09-01, verified against `squeue -u jhiesener3`
 immediately after submitting. This is the current one.** It covers only the
 4×4 90° hybrid BO round; two other jobs in the queue at snapshot time
@@ -35,6 +201,36 @@ collapse was invisible until a job had already been submitted.
 One job was cancelled by hand this pass: **12674307** (`beef_bo_W6.00_y0.52`)
 — round 6's single surviving candidate, 0.01-0.02 µm from two points already
 measured at objective ≈1.006. Not resubmitted, deliberately.
+
+## 1×4 MMI SiN — hybrid-vs-FDTD campaign, 2026-09-05 → 2026-09-14 (1 job still running)
+
+See `mmi_1x4_sin300_validation.md`'s "✅ 9d RESULT" section for the full
+writeup; this is the job ledger.
+
+| job | what | outcome |
+|---|---|---|
+| 12797780 (×2) | `N_MODES` downward probe, no `monitor_size` pin | TIMEOUT, both tasks — confirmed the pin was missing, motivated the fix below |
+| 12824996 (×5) + stage B | `body_stub` cut-position sweep, `measure_margins`, all 4 ports | ✅ COMPLETE — gate passed 0.12% vs shipped; cut position ruled out (0.07% effect) |
+| 12853535 (×4) | 16-mode **calibrated** prewarm, attempt 1 | CANCELLED by hand at 1d09h (4/16 calib runs done, projected 5+ days) — switched to uncalibrated |
+| 12893611 (×4) | 16-mode **uncalibrated** prewarm, `monitor_size` pinned | ✅ COMPLETE, 14h35m–16h15m/branch — the pin's first real test, worked |
+| 12909417 (×5) | `interface_modes` sweep, 16/14/12/10/8 | ✅ COMPLETE, 25–32 s/task — superset slicing verified working, 0.000% vs an independent 12-mode run |
+| 12963023 (×4) | 24-mode uncalibrated prewarm | branches 0 and 3 **FAILED** (`os.getcwd()` inside meow's import, dmesg-confirmed Lustre error, same node `atl1-1-02-002-26-2` both times) |
+| 13019844, 13020152, 13019542 | resubmits of the 3 failed 24-mode branches above (one more failure mid-sequence, branch 2, on a *different* node — 3 distinct nodes total across the retries) | ✅ all COMPLETE — no compute lost, each failure hit before that branch's own expensive stage |
+| 13058948 (×8) | extended `interface_modes` sweep, 24/22/20/18/16/14/12/10 | ✅ COMPLETE, 23–26 s/task — confirmed TE12 at basis index 21 exactly where a two-family fit predicted |
+| 12962990 (×4) | 16-mode **calibrated** prewarm, attempt 2 (resumed after the cancel above) | **FAILED**, all 4 branches, 2d21h — same `os.getcwd()`/Lustre signature, 4 *different* nodes. All 16 calibration time-steppings had completed and it was decomposing the last band when it died; `solve_section()` only calls `save_run()` once the full result returns, so **nothing was recoverable**. **Dropped, not retried a 3rd time** — see the doc's operational-findings note |
+| 13092669 | whole-device FDTD reference, C-band 1.530–1.565 µm, 21 pt | ✅ COMPLETE, 2d13h — real beat structure in split shape the coarse 11-pt grid was aliasing by luck, no hidden pathology |
+| 13092670 (×4) | hybrid 24-mode uncalibrated prewarm, same C-band grid, attempt 1 | TIMEOUT, all 4 branches, 2d12h — initially misread as a duplicate-run bug (it wasn't: two distinct sections, input then output, confirmed via differing prism geometry); direct `cache_only=True` probe confirmed **zero** cached progress on any branch |
+| 13169522 (×4) | same, attempt 2, resubmitted at `-t 6-00:00:00` | 🏃 **RUNNING** — true cost at N_MODES=24/N_WL=21 still unmeasured, this is a real budget increase not a confident estimate |
+
+**Two library changes, both additive/default-unchanged, that made the fast
+part of this possible:** `MMI1X4_PIN_MONITOR` (default on) on
+`mmi_1x4_hybrid.py`/`_prewarm_mmi_1x4_hybrid.py`, pinning
+`monitor_center`/`monitor_size` on sections 0 and 2 only — this is what
+unlocks `solve_section()`'s mode-count superset cache family; and
+`MMI1X4_FDTD_WL_MIN/MAX/NWL` + matching `HPREWARM_` knobs +
+`MMI1X4_OUTPUT_SUFFIX` on both scripts, for the C-band sub-sweep without
+touching the production 1.50–1.60/11-pt outputs. New verification script:
+`mmi_1x4_body_stub_sweep.py`.
 
 ---
 

@@ -13,6 +13,32 @@ output access tapers**, reproducing the device topology of
 Full citation and the two papers it in turn cites that matter here are in
 [References](#references) at the bottom.
 
+> ## ⚠️ CURRENT STATE — read this before any older section (2026-09-13)
+>
+> This document is ~6000 lines and largely chronological, so **most CMRR
+> numbers in it are superseded.** The short version:
+>
+> * **The device MEETS the CMRR spec.** `mm_length = 158.80 µm`, min CMRR
+>   **20.326 dBe** (spec ≥ 20), max |Δφ| 3.664° (spec ≤ 5), excess loss
+>   2.444 dB. Every earlier figure — 18.482 dBe, 15.615 dBe, and the long
+>   "fails both specs" era before that — was computed with a body propagation
+>   constant 0.0458 too low, at a length chosen for that wrong constant.
+> * **n_eff calibration is MANDATORY here, not a refinement.** The mode solver
+>   and meep's time-stepper realise different β on the same cross-section, and
+>   the gap only closes as ~res^-1.45 — reaching 0.005 would need res ≳ 180,
+>   infeasible in 3D.
+> * **A calibration's resolution must MATCH the simulation it reproduces.**
+>   Calibrating at res=60 against a res=40 reference made agreement 18× WORSE,
+>   by exactly the predicted amount. Never mix.
+> * **Hybrid vs full-device FDTD now agrees to 2.12° power-weighted**, and the
+>   FDTD reference's own phase noise is 0.029°, so that is a real number and
+>   not a floor artifact.
+> * Closed by measurement: calibration resolution (negative), interface mode
+>   count 16→24 (negative), reference `decay_tol` (not the limit). Leading open
+>   candidate: the number and span of the **calibration lengths**.
+>
+> Jump to the dated entries at the END of this file for the full trail.
+
 > **This doc is a PLAN, not a gap list** — same convention as
 > `mmi_1x4_sin300_validation.md` and
 > `high_contrast_grating_fabry_perot_validation.md`, the two other build
@@ -5228,3 +5254,840 @@ root cause for the sign/direction mismatch above. The full-device FDTD
 field capture (the `solve()` `capture_fields_dir` addition) is unaffected
 and ready to use independently. Not attempted further without new
 direction, per the user's own explicit instruction after this result.
+
+### ❌ n_eff re-calibration at the CURRENT geometry BLOCKED by the same Check 2 guard bug (job 13092881, ALL 16 TASKS FAILED, 2026-09-11)
+
+Attempted to re-measure this device's only prior n_eff calibration (job
+12078959, "does not rescue this device") at the CURRENT optimised design
+point (mm_width=8.5, N_MODES=16, mm_length=159.30) — the old result was
+measured at the superseded mm_width=6.0 geometry and has never been
+checked against the point actually being validated. Reused the proven
+one-process-per-mode architecture from the 2026-08-20 campaign
+(`mmi_4x4_90hybrid_calib2_mode_worker.py`, a 16-task SLURM array +
+`..._calib2_aggregate.py`, adapted only for the new geometry constants and
+`decay_tol=1e-4`).
+
+**All 16 array tasks FAILED identically, ~50 min each**, before reaching
+any real FDTD calibration work at all — in `section_mode_neff()`'s own
+16-mode seed step (called once per task, `solver.section_mode_neff(mmi,
+wl_seed, ..., n_modes=16, ...)`):
+
+```
+RuntimeError: FDTDSolver: could not find 16 distinct eigenmodes within 24
+band_num attempts at this cross-section -- meep/MPB returned a duplicate
+more times than this guard tolerates.
+```
+
+This is the **identical failure mode** diagnosed under Step 8 Check 2
+above (job 13060190) — and the identical walk shape: band_num 13 through
+23 (11 consecutive attempts) were rejected as duplicates in every one of
+the 16 tasks, deterministically (all 16 solve the same seed cross-section),
+before band_num=24 (the last allowed attempt) also failed to close out 16
+accepted bands. This is strong independent confirmation that the false
+positives found in the Check 2 diagnostic (the guard's fixed 16×8
+diagnostic grid aliasing this wide 8.5 µm slab's higher-order mode lobes)
+are not an audit-tool-only problem — **the same guard blocks any
+`section_mode_neff()`/`section_mode_beta()` call requesting 16 modes at
+this cross-section, including calibration**, which calls it internally via
+`section_mode_beta_details()`'s own seed step.
+
+**Consequence: the n_eff re-calibration cannot proceed at the current
+geometry until the shared-library fix already flagged under Check 2 is
+made** (scaling `_DUP_BAND_DIAG_NY`/`_DUP_BAND_DIAG_NZ` to the requested
+mode count / cross-section width, rather than a fixed 16×8 constant). The
+downstream aggregator (job 13092882) and with/without comparison table
+(job 13092912) never ran — both were queued on `--dependency=afterok` and
+that condition cannot be satisfied by a failed array.
+
+**Status.** The only calibration data this device has is still the
+2026-08-20 result at the superseded mm_width=6.0 geometry ("calibration
+does not rescue this device": phase +0.150° worse, CMRR +2.547 dBe better
+but 16 dBe short of spec either way). Whether that conclusion holds at the
+current mm_width=8.5 design remains genuinely unknown, and re-checking it
+is now blocked on the same shared-library item Check 2 already surfaced —
+fixing that guard would unblock both.
+
+### ✅✅ Shared-library fix VERIFIED — Check 2 now passes cleanly, calibration pipeline unblocked (job 13096902, COMPLETED 38:47, 2026-09-11)
+
+The `beef/solvers/fdtd.py` `_iter_distinct_bands()` fix (fixed-spacing
+0.05 µm diagnostic grid, replacing the fixed 16×8 count that produced the
+false positives documented above) was verified against the exact audit
+that originally failed as job 13060190.
+
+**Result: `audit_interface_modes.py mmi_4x4_90hybrid` now completes
+cleanly.**
+
+```
+guided modes: 16/16
+correspondence (guided, matched res): [0, 1, 2, ..., 15]   -- identity
+ORDER PRESERVED: True
+worst guided |dn_eff|: 0.0000
+```
+
+**Zero duplicate-skip warnings occurred anywhere in the run** — not just
+"below threshold," but none at all, across all 16 meep bands. This is a
+stronger result than merely "the guard no longer trips": the underlying
+n_eff agreement between meep and meow at this cross-section is essentially
+exact (worst |dn_eff| rounds to 0.0000 at the printed precision), matching
+the clean picture the fine-grid field dump already established (Step 8
+Check 2's earlier sections) — this device's real interface basis was never
+the problem; the audit tool's own coarse grid was.
+
+**Step 8 Check 2: fully CLOSED**, both device side and tool side. No open
+items remain for mode identity/ordering on this device.
+
+**Consequence for calibration**: the n_eff re-calibration pipeline (jobs
+13092881/13092882/13092912, blocked by this exact bug in the previous
+section) is now unblocked — the same `section_mode_neff()` 16-mode seed
+call that failed there uses the identical, now-fixed guard. Not
+relaunched yet; ready whenever wanted.
+
+**One earlier data point revised in light of this**: job 13096233 (an
+interim resubmit attempt) completed in 8 s with zero output — traced to a
+one-off scheduling/node anomaly (a second resubmit, job 13096902, above,
+ran normally), not a code problem. Noted here only so a future reader
+doesn't mistake it for a real regression.
+
+### ✅✅ n_eff calibration at the CURRENT geometry: RE-MEASURED, and it makes CMRR WORSE (jobs 13098452/453/454, all COMPLETED, 2026-09-11)
+
+With the shared-library duplicate-guard fix verified (previous section),
+relaunched the identical calibration pipeline that failed pre-fix (jobs
+13092881/882/912). All 16 array tasks completed cleanly this time
+(~1:17-1:38 h each for modes 1-15, 2:07 h for mode 16 — slower, more MPB
+iterations per solve as expected for the mode closest to the guided-mode
+cutoff, but no instability recurrence: its own FDTD decay converged
+cleanly to ratio 1.3e-9, nothing like the old undamped-Lorentzian blow-up).
+Zero duplicate-mode warnings across all 16 tasks.
+
+**Aggregator guards passed cleanly**: worst residual 5.923e-3 rad (guard
+0.1), worst branch margin 0.063 (guard 0.9), worst seed excess +1.71%
+(warn 10%) — the calibration is real and usable, not a guard-bypassed
+artifact.
+
+**With-vs-without comparison, all 4 lengths this session has probed:**
+
+| L (µm) | max\|Δφ\| uncal | max\|Δφ\| cal | min CMRR uncal | min CMRR cal | max XL uncal | max XL cal | max imb uncal | max imb cal |
+|---|---|---|---|---|---|---|---|---|
+| 5.00 | 119.052° | 118.968° | 0.000 dBe | 0.000 dBe | 3.477 dB | 3.488 dB | 73.529 dB | 73.509 dB |
+| 10.00 | 176.296° | 179.098° | 0.000 dBe | 0.000 dBe | 4.293 dB | 4.295 dB | 52.214 dB | 52.308 dB |
+| 15.00 | 143.328° | 143.943° | 0.014 dBe | 0.014 dBe | 5.095 dB | 5.091 dB | 30.890 dB | 30.811 dB |
+| **159.30 (production)** | **3.933°** | **3.958°** | **18.482 dBe** | **15.615 dBe** | **2.706 dB** | **1.924 dB** | **1.972 dB** | **2.064 dB** |
+
+The three short lengths (5/10/15 µm) are off-self-imaging probe points, not
+device operating conditions (established earlier this session) — their
+huge phase/imbalance numbers either way are expected and calibration moves
+them by only a few tenths of a degree/dB, noise-level next to numbers that
+large.
+
+**The number that matters is L=159.30, the production design point.**
+Calibration there:
+- max|Δφ| 3.933° → 3.958° (+0.025°, essentially unchanged, still meets
+  the ≤5° spec either way)
+- **min CMRR 18.482 → 15.615 dBe (−2.867 dBe, WORSE)** — moves further
+  from the ≥20 dBe spec, not closer
+- max excess loss 2.706 → 1.924 dB (better)
+- max imbalance 1.972 → 2.064 dB (slightly worse)
+
+**This both confirms and sharpens the 2026-08-20 old-geometry finding.**
+At the superseded mm_width=6.0 point, calibration *improved* CMRR (+2.547
+dBe, still 16 dBe short) while making phase slightly worse. At the
+CURRENT mm_width=8.5 optimized point, calibration makes CMRR **worse**
+while phase stays flat — the opposite CMRR direction from before. Taken
+together, the two results agree on the one thing that matters for this
+device's verdict: **calibration does not rescue it, at either geometry,
+and the CMRR/phase shortfall is real physics of the design, not a
+calibration artifact of the uncalibrated MPB-derived n_eff.** The
+CMRR-direction reversal between the two geometries is itself informative:
+it shows the calibration correction's sign/magnitude is geometry-specific
+and not a fixed, predictable nudge — reinforcing that it should be
+re-measured per design point rather than assumed to transfer, exactly as
+was done here.
+
+**Status: this device's n_eff calibration question is now CLOSED at the
+current design point**, superseding the 2026-08-20 old-geometry-only
+result as the operative answer for anything referencing "has this device
+been calibrated."
+
+### ⚠⚠⚠ ROOT CAUSE FOUND — the hybrid-vs-FDTD phase drift is the body's propagation constant, and it is fully quantified (2026-09-11)
+
+**The observation.** Comparing per-arm `phase(S)` between the hybrid
+cascade and the full-device FDTD for the top port (paper port 4) at
+mm_length = 5/10/15 µm — data from jobs 13069782-787, already tabulated
+above — the phases do NOT match, and the mismatch is not noise:
+
+| L (µm) | hybrid − FDTD phase offset, out8 (dominant arm) | all four arms? |
+|---|---|---|
+| 5 | −56.4° / −57.8° / −51.7° | scattered, out8 tightest |
+| 10 | −120.0° / −118.0° / −114.7° | **yes — all 4 arms cluster −100° to −121°** |
+| 15 | +173.2° / −178.7° / −174.9° | **yes — all 4 arms cluster near ±180°** |
+
+Two features make this diagnostic rather than merely noisy: the offset is
+nearly **wavelength-independent** at fixed length (spread ~5° across
+1.29-1.33 µm), and at L=10/15 it appears **coherently on all four output
+arms at once**. Random per-arm error cannot do that.
+
+**The mechanism, confirmed quantitatively.** A wavelength-independent
+offset growing linearly with length is the signature of a constant
+propagation-constant mismatch, `Δφ = Δβ·L`. Back-solving the ~−13.6°/µm
+slope gave Δn_eff ≈ 0.05. That prediction was then confirmed against data
+already on disk, with no new simulation: **the calibration (jobs
+13098452/453) measures n_eff +0.0458 higher than the MPB/meow mode
+solver**, and — critically — that offset is essentially **mode-independent**
+(+0.04558 to +0.04604 across all 16 modes; spread 0.00046, under 1%):
+
+| mode | mode solver n_eff (1.31) | calibrated n_eff (1.31) | Δ |
+|---|---|---|---|
+| 1 | 2.963353 | 3.009390 | +0.04604 |
+| 8 | 2.899712 | 2.945469 | +0.04576 |
+| 16 | 2.696700 | 2.742437 | +0.04574 |
+
+Closing the loop arithmetically, with `L_body = L − 2·body_stub`:
+
+| L (µm) | L_body | predicted Δφ = (2π/λ)·0.0458·L_body | observed | ratio |
+|---|---|---|---|---|
+| 5.00 | 4.50 | 56.6° | 55.3° | **0.977** |
+| 10.00 | 9.50 | 119.5° | 117.6° | **0.984** |
+| 15.00 | 14.50 | 182.4° | 184.4° | **1.011** |
+
+**Agreement within 2.3% at every length.** The phase discrepancy is not
+partially explained or plausibly attributed — it is *fully accounted for*,
+to the precision of the measurement, by the difference between the n_eff
+the mode solver reports and the n_eff meep's own time-stepper actually
+realizes.
+
+**Why this does NOT contradict Check 2.** Check 2 found meep-vs-meow
+*mode-solver* agreement to be essentially exact (worst |dn_eff| 0.0000).
+That is a statement about two EIGENSOLVERS agreeing with each other. The
++0.0458 here is a different comparison entirely: eigensolver-vs-
+time-stepper. Both can be true at once, and both are. The uncalibrated
+hybrid propagates its body at the eigensolver's index; the full-device
+FDTD propagates at the time-stepper's. Nothing in Check 2 could have
+caught this.
+
+**Leading mechanism for the +0.0458 itself: Yee-grid numerical
+dispersion.** Sign is right (discrete phase velocity runs slow, so the
+realized index reads HIGH), mode-independence is right (a grid property,
+not a mode property), and the magnitude is the right order: 0.0458/2.96 =
+1.55% at ~15 points per wavelength in-material (res=40, λ/n ≈ 0.374 µm).
+Second-order Yee dispersion predicts ~0.7% there — same order, factor ~2
+short, with the gap plausibly from subpixel averaging and the real
+3-D dielectric structure. NOT yet confirmed; see the debug plan below.
+
+**Implication.** `calibrate_body_neff` exists to measure exactly this
+quantity, and the numbers say it should very nearly eliminate the drift.
+That is being tested directly (job 13102478, cascade arithmetic on cached
+inputs only). Note the tension with the calibrated production-length
+result recorded above (CMRR 18.482 → 15.615 dBe, worse): if calibration is
+the physically correct propagation constant, the calibrated number is the
+more trustworthy one, and the *uncalibrated* 18.482 dBe would be the
+artifact — which would make the device's real CMRR worse than the headline
+figure this campaign has been quoting. That question is now the single
+highest-value open item on this device.
+
+### ✅✅✅ CONFIRMED — calibration collapses the phase drift, and that forces a downgrade of the device's headline CMRR (job 13102478, 2026-09-11)
+
+Debug-plan step 1, run on cached inputs only (cascade arithmetic, 5.7 s of
+actual work). Re-ran the top-port cascade at L=5/10/15 with
+`neff_override=neff_calibrated` and compared per-arm `phase(S)` against the
+full-device FDTD reference:
+
+| L (µm) | mean \|Δφ\| uncalibrated | mean \|Δφ\| **calibrated** |
+|---|---|---|
+| 5 | 46.71° | 32.40° |
+| 10 | 111.01° | **15.02°** |
+| 15 | 167.02° | **11.03°** |
+
+Per-arm, the arms that actually carry power are fixed almost exactly:
+
+| arm | L=5 | L=10 | L=15 |
+|---|---|---|---|
+| **out8** (dominant) | 55.3° → **1.9°** | 117.6° → **1.8°** | 175.6° → **2.2°** |
+| **out7** | 51.0° → 11.8° | 117.0° → **1.9°** | 177.0° → **2.3°** |
+| out6 | 48.0° → 55.6° | 102.6° → 15.5° | 171.8° → 5.8° |
+| out5 | 32.6° → 60.2° | 106.8° → 40.8° | 143.8° → 33.7° |
+
+**Up to an 80x improvement on the dominant arm** (175.6° → 2.2° at L=15).
+
+The residual tracks arm POWER, not arm index. Pairing each phase error with
+the full-device FDTD |T|² actually measured in that arm (mean over
+1.29/1.31/1.33 µm; jobs 13069782/783/784) makes the pattern unambiguous:
+
+| L (µm) | arm | FDTD \|T\|² | \|Δφ\| uncal | \|Δφ\| **cal** |
+|---|---|---|---|---|
+| 5 | out5 | 4.60e-05 | 32.6° | 60.2° |
+| 5 | out6 | 8.70e-05 | 48.0° | 55.6° |
+| 5 | out7 | 5.83e-03 | 51.0° | 11.8° |
+| 5 | out8 | 4.51e-01 | 55.3° | **1.9°** |
+| 10 | out5 | 8.05e-05 | 106.8° | 40.8° |
+| 10 | out6 | 9.05e-04 | 102.6° | 15.5° |
+| 10 | out7 | 5.96e-02 | 117.0° | **1.9°** |
+| 10 | out8 | 5.53e-01 | 117.6° | **1.8°** |
+| 15 | out5 | 3.36e-04 | 143.8° | 33.7° |
+| 15 | out6 | 1.75e-02 | 171.8° | **5.8°** |
+| 15 | out7 | 3.75e-02 | 177.0° | **2.3°** |
+| 15 | out8 | 3.62e-01 | 175.6° | **2.2°** |
+
+Sorted by power the residual is monotone: every arm above |T|² ≈ 1e-2
+lands at 1.8-5.8°, every arm below 1e-3 stays at 33-60°, and the one
+in-between arm (out7 at L=5, 5.8e-3) lands in between at 11.8°. out5 at
+L=5 getting "worse" (32.6° → 60.2°) is not a counterexample: at |T|²
+= 4.6e-5, ~4 orders below the dominant arm, both numbers are the phase of
+a near-zero field and neither is a physical quantity. **Every arm carrying
+real power agrees to ~2°.** Note this corrects a looser earlier reading of
+this data — out6 at L=15 is at 1.75e-2, NOT down in the noise, and it is
+fixed to 5.8°, so "the residual is all in out5/out6" was the wrong framing;
+"the residual is all in the low-power arms" is the right one.
+
+Figure: `example_output/verification/mmi_4x4_90hybrid_calib2_phase_check/calib_phase_vs_power.png`
+(script: `examples/verification/python/plot_mmi4x4_90hybrid_calib_phase_vs_power.py`)
+— per-length grouped bars plus the error-vs-power scatter on a log power axis.
+
+**This closes the mechanism completely.** The hybrid-vs-FDTD phase
+disagreement at reduced lengths was never a cascade/interface/sectioning
+problem, and never a group-index problem. It was one number: the body's
+propagation constant, where the uncalibrated hybrid used the mode solver's
+n_eff and the full-device FDTD used what meep's time-stepper actually
+realizes on its grid, 0.0458 higher. Correct that one number and the two
+methods agree to ~2° over 15 µm of propagation.
+
+**The consequence is NOT good news for the device.** Calibration is now
+demonstrated to be the physically correct propagation model on this
+cross-section — it is the setting that reproduces the full-device FDTD,
+which is the most complete simulation available. That makes the
+*calibrated* production-length numbers the trustworthy ones:
+
+| metric | uncalibrated (previously reported) | **calibrated (now the defensible figure)** | spec |
+|---|---|---|---|
+| min CMRR | 18.482 dBe | **15.615 dBe** | ≥ 20 dBe |
+| max \|Δφ\| | 3.933° | 3.958° | ≤ 5° |
+
+**The device's real CMRR shortfall is ~4.4 dBe, not ~1.5 dBe.** Every
+CMRR number this campaign has quoted at the optimised design point —
+including the headline "18.482 dBe, 1.52 short of spec" that the whole
+rounds-8-10 optimisation was steered by — was computed with a body index
+0.0458 too low. The phase spec still passes either way (3.933° vs 3.958°,
+both under 5°), so the *phase* conclusions survive; the *CMRR* conclusions
+do not.
+
+**What this does NOT yet establish**: whether the +0.0458 is genuine
+physics of a correctly-converged simulation or an artifact of running at
+res=40 (leading hypothesis: Yee-grid numerical dispersion, which would
+shrink as ~1/res² and vanish in a converged run). If it is grid
+dispersion, then BOTH methods are wrong at res=40 and the true device CMRR
+is neither 18.482 nor 15.615 — it is whatever the res→∞ limit gives, and
+the calibrated number is merely the one that correctly reproduces the
+res=40 FDTD. Debug-plan step 3 (resolution sweep, jobs 13102582/583/584)
+is what settles this, and it is now the single highest-value open item on
+this device.
+
+**Optimisation-campaign caveat, stated explicitly.** The rounds 8-10
+(mm_width, taper_width, taper_length, mm_length) campaign that produced
+the current design point evaluated ~45 points through the UNCALIBRATED
+hybrid path. If the calibration offset shifts CMRR by ~-2.9 dBe
+non-uniformly across geometry, the campaign's ranking of candidate points
+is not guaranteed to survive re-scoring. Whether the chosen optimum is
+still the optimum under the corrected propagation constant is an open
+question this finding raises and does not answer.
+
+---
+
+### ✅ ANSWERED — that open question, answered the same day: the optimum DOES move, and the device MEETS the CMRR spec at the moved optimum (2026-09-11)
+
+The paragraph immediately above asks whether the campaign's chosen optimum
+survives re-scoring under the corrected propagation constant. It does not —
+and the correction is in the device's **favour**.
+
+`examples/verification/python/mmi_4x4_90hybrid_calibrated_length_rescore.py`
+re-scores the entire `mm_length` axis (7601 points, 20.00–400.00 µm @ 0.05 µm,
+3 wavelengths) through both the uncalibrated and the calibrated body index,
+with the scoring code replicating `mmi_4x4_90hybrid_hybrid.py` exactly (same
+`SMatrix` methods, same A11 phase convention, same Eq. 15 targets).
+
+**This cost zero new simulations.** The calibration is a property of the body
+CROSS-SECTION, not its LENGTH, so everything needed was already cached: `M_in`
+for all four ports (length-independent — the taper/stub geometry does not
+change when the body grows) and the calibrated body length-sweep grid solved
+by job 13098454. Total runtime 13.7 s, of which 11.2 s was loading the two
+93 MB body grids off disk.
+
+| | uncalibrated | **calibrated** |
+|---|---|---|
+| optimal `mm_length` | 159.30 µm | **158.80 µm** |
+| min CMRR | 18.482 dBe | **20.326 dBe** |
+| max \|Δφ\| | 3.933° | **3.664°** |
+| excess loss | 2.706 dB | **2.444 dB** |
+| meets CMRR ≥ 20 dBe | ✗ | **✓** |
+
+**The script validates itself against production on two independent points:**
+the uncalibrated path reproduces the campaign's headline 18.482 dBe / 3.933° /
+2.706 dB at 159.30 µm exactly, and the calibrated path reproduces the 15.615
+dBe / 3.958° reported in the section above at that same length. Identical to
+three decimals on both, so the re-scoring machinery is provably the same
+scoring the campaign used.
+
+**The 4.4 dBe "shortfall" was a wrong LENGTH, not a worse device.** Scoring the
+calibrated device at the *uncalibrated* optimum (159.30 µm) gives 15.615 dBe;
+moving 0.50 µm to the calibrated optimum gives 20.326 dBe. The earlier
+"calibration downgrades the device" reading in the section above was correct
+about the number but wrong about the cause — it compared a calibrated device
+to a length chosen for an uncalibrated one. **Every headline CMRR figure in
+this document that predates this entry should be read as superseded.**
+
+The shift direction was predictable but its MAGNITUDE was not. To first order
+the optimum should move to hold `β·L` invariant, giving
+`159.30 × 2.9632/3.0094 ≈ 156.85 µm`, a −2.4 µm shift. The measured shift is
+−0.50 µm, about **5× smaller** than that estimate. The naive scaling treats
+the body as a single-mode phase accumulator; the self-imaging condition
+actually depends on *beat lengths between mode pairs*, i.e. on
+`Δβ_mn`, and the calibration offset is nearly uniform across modes (spread
+0.00046 over 16 modes) so it largely cancels in the differences. That near-
+cancellation is why the device survives at all — a mode-DEPENDENT offset of
+the same size would have moved the optimum ~5× further and degraded it.
+
+Figure: `example_output/verification/mmi_4x4_90hybrid_calibrated_length_rescore/calibrated_length_rescore.png`
+
+**Caveat that governs this entire entry: this is res = 40, and res = 40 is not
+converged** — see the resolution entry below. The 20.326 dBe figure is "the
+number that reproduces the res = 40 full-device FDTD", which is the best
+available reference but not yet the converged answer.
+
+---
+
+### ✅ POWER-WEIGHTED phase agreement: 2.12°, and out8 alone owns ~85% of it (2026-09-11)
+
+`examples/verification/python/mmi_4x4_90hybrid_weighted_phase_metric.py`.
+The unweighted mean over the four arms is the wrong figure of merit at the
+reduced probe lengths, because two of the four arms sit 3–4 decades down in
+power and contribute the phase of numerical noise. Weighting each arm by its
+share of output power, `Σ_j (|T_j|²/Σ|T|²)·|Δφ_j|`:
+
+| L (µm) | uncal | **calibrated** | % of 360° | % of 90° |
+|---|---|---|---|---|
+| 5 | 55.25° | **2.08°** | 0.578 | 2.31 |
+| 10 | 117.49° | **1.86°** | 0.517 | 2.07 |
+| 15 | 175.49° | **2.43°** | 0.674 | 2.69 |
+| **all** | **116.08°** | **2.12°** | **0.590** | **2.36** |
+
+Against a "below 1.5%" target the answer depends entirely on the denominator,
+which must therefore be stated: **1.5% of 360° = 5.40°, already met with 2.5×
+margin; 1.5% of 90° = 1.35°, NOT met (2.12°).** The 90° reading is the
+meaningful one for a quadrature hybrid — it is the scale the ≤ 5° spec is
+implicitly set against — so the target is read here as **1.35°**, and the gap
+to close is 2.12° → 1.35°, a factor of 1.6.
+
+**Where the residual lives — the residual budget, after weighting:**
+
+| L (µm) | out5 | out6 | out7 | **out8** |
+|---|---|---|---|---|
+| 5 | 0.3% | 0.6% | 7.1% | **92.0%** |
+| 10 | 0.2% | 1.2% | 10.3% | **88.3%** |
+| 15 | 1.0% | 11.0% | 8.6% | **79.3%** |
+
+This inverts the priority implied by the raw per-arm table. The 33–60°
+residuals in out5/out6 are **irrelevant to the weighted metric** — they
+contribute under 1.5% combined at two of three lengths. **Reaching 1.35°
+means improving out8 from ~1.9° to ~1.4°, and nothing else matters.** Any
+effort spent on the low-power arms is wasted against this target.
+
+---
+
+### ✅ STEPS 3/4/5 COMPLETE — grid dispersion CONFIRMED as the mechanism, group index and bandwidth RULED OUT (jobs 13102582–589, 2026-09-11)
+
+All eight parameterised probes (`mmi_4x4_90hybrid_calib_probe.py`) landed.
+Mode 1, n_eff at 1.31 µm.
+
+**Step 5 — pulse bandwidth: RULED OUT, definitively.**
+
+| bandwidth factor | 1.5 | 2.0 | 4.0 |
+|---|---|---|---|
+| offset | +0.046181 | +0.046181 | +0.046181 |
+
+Identical to **six decimal places**. The fitted β does not depend on pulse
+bandwidth at all, so envelope/group-velocity contamination of the phase fit
+is not merely small — it is absent. Combined with the magnitude argument
+(n_g − n_eff = 0.89, 20× the offset), **the group index is definitively not
+involved**. This closes the "do we need to incorporate the group index"
+question with a measured null.
+
+**Step 4 — source band and centre: a real but SECOND-ORDER effect.**
+
+| band (µm) | 1.29–1.33 | 1.26–1.36 | 1.25–1.31 | 1.31–1.37 |
+|---|---|---|---|---|
+| centre | 1.31 (on) | 1.31 (on) | 1.28 (off) | 1.34 (off) |
+| offset | +0.046181 | +0.044989 | +0.044507 | +0.044964 |
+
+Spread 0.0017, i.e. **3.6% of the offset** — so band choice is not the
+mechanism. But it is not negligible in absolute terms either: 0.0017 of n_eff
+over a 159 µm body is ≈ 74° of accumulated phase at 1.31 µm. **The full-device
+FDTD and the hybrid's calibration therefore have to agree on their source
+band, and nothing in the code enforces that** — they happen to both use
+1.29–1.33 today. This is an unguarded assumption and should become an assert
+(see open items). Notably, moving the band centre OFF the monitored
+wavelength changes the offset by less than widening the band does, so the
+`dispersive=False` band-centre material freeze is not the dominant term.
+
+**Step 3 — resolution: the mechanism, CONFIRMED, and it is not cheap to escape.**
+
+| res | n_eff mode solver | n_eff calibrated (FDTD) | offset | β-fit resid |
+|---|---|---|---|---|
+| 20 | 2.916967 | 3.037510 | +0.120543 | 5.72e-02 |
+| 40 | 2.963209 | 3.009390 | +0.046181 | 5.58e-03 |
+| 60 | 2.974730 | 2.998948 | +0.024218 | 1.43e-04 |
+
+The offset falls monotonically and fast: ratio 2.61 over 20→40 and 1.91 over
+40→60, giving pairwise exponents p = 1.38 and 1.59 and a three-point power-law
+fit of **p ≈ 1.45** for `offset ∝ res^-p`. Not the clean p = 2 a pure Yee
+second-order argument predicts, but unambiguously a discretisation error
+converging to zero.
+
+**The most important detail is that BOTH engines move, in OPPOSITE
+directions.** The mode solver climbs (2.9170 → 2.9632 → 2.9747) while the FDTD
+time-stepper falls (3.0375 → 3.0094 → 2.9989). This is **not** a case of one
+engine being right and the other wrong, and the earlier framing in this
+document — "the FDTD realises a different index than the mode solver" — was
+half the story. They are both under-resolved at res = 40 and are converging
+toward each other from opposite sides, somewhere near n_eff ≈ 2.98–2.99.
+
+Richardson extrapolation is offered with explicit low confidence: the mode
+solver's three points fit p = 1.50 almost exactly and extrapolate to
+n_∞ ≈ 2.9885; the FDTD's fit a much softer p ≈ 0.82 and extrapolate to
+n_∞ ≈ 2.9727. **These do not meet** (0.016 apart), but a three-parameter fit
+to three points cannot distinguish a genuine exponent from a stalling ratio —
+exactly the failure mode recorded for the HCG work. Treat the extrapolation
+as a hypothesis needing a res = 80 point, not a result.
+
+**The practical consequence is decisive: brute-force resolution convergence is
+not reachable for this device.** Extrapolating `offset ≈ 9.7·res^-1.45`,
+driving the offset below 0.005 needs **res ≳ 180** — in a 3D simulation of an
+8.5 × 159 µm body that is far beyond feasible. **Calibration is therefore not
+a stopgap to be removed once resolution improves; it is the mechanism by which
+this device can be simulated at all at achievable resolution.** That upgrades
+n_eff calibration from "a correction we discovered we needed" to "a required
+part of the method for any wide multimode body", and it applies to every other
+MMI in this repo, not just this one.
+
+---
+
+### 📋 PLAN — driving the power-weighted phase error from 2.12° to below 1.35°
+
+**The residual is systematic, not noise — measured, not assumed.** Signed
+calibrated residual on out8 (the arm that owns ~85% of the weighted metric):
+
+| L (µm) | 1.29 | 1.31 | 1.33 | mean | std |
+|---|---|---|---|---|---|
+| 5 | +1.68 | −0.89 | +3.26 | **+1.35** | 1.71 |
+| 10 | +2.28 | +1.96 | +1.22 | **+1.82** | 0.44 |
+| 15 | −0.09 | +4.49 | +2.12 | **+2.18** | 1.87 |
+
+The mean is positive at all three lengths and **grows monotonically with
+length** — the signature of a residual Δβ, not of random error. Slope
+≈ 0.083°/µm, i.e. a **residual Δn_eff ≈ 3.0e-4**. Calibration removed
+0.0458 − 0.0003, or **99.3% of the original offset**; what is left is 0.66% of
+it. Superimposed is a per-wavelength scatter of ~0.4–1.9° std, comparable in
+size to the mean and estimated from only three wavelengths, so it is itself
+poorly determined.
+
+**Both components must be attacked, and only out8 matters.** The residual
+budget shows out5/out6 contribute under 1.5% combined at two of three lengths;
+their 33–60° errors are irrelevant to this target.
+
+**Knobs, ranked by measured leverage** — ⚠️ **this ranking has since been
+OVERTAKEN BY MEASUREMENT; read the dated entries below before acting on it.**
+Knobs 1, 3 and 4 have all been run and closed (1 and 3 negative, 4 clearing
+the way), and the leading candidate is now one that is not in this table at
+all — the number and span of the CALIBRATION LENGTHS. The table is kept as the
+record of what was believed before the runs, not as current guidance:
+
+| # | knob | expected effect | evidence | cost |
+|---|---|---|---|---|
+| 1 | **calibration at res = 60** | attacks the systematic 3e-4 | β-fit residual falls 5.58e-3 → 1.43e-4, **39×**, measured in the res probe | 16 modes × the res-60 probe |
+| 2 | **more calibration wavelengths (3 → 5/7)** | attacks the scatter; 3 points fit a quadratic with zero residual, so any real dispersion curvature is invisible | scatter std 0.4–1.9° estimated from 3 samples — statistically meaningless | 16 modes, ~2× the 3-λ cost |
+| 3 | **N_MODES 16 → 20/24** | basis truncation at the taper→body interface; never tested at this geometry | untested — this is the largest *unmeasured* term | new EME body grid + new calibration |
+| 4 | **FDTD reference `decay_tol` 1e-4 → tighter** | lowers the REFERENCE's own noise floor, which bounds what any hybrid-side fix can achieve | not yet bounded; note `decay_tol` has a measured hard floor well above 1e-11 | re-run 3 full-device FDTDs |
+| 5 | **`BODY_STUB` 0.25 µm** | interface placement between FDTD and EME | untested sensitivity | cheap sweep on cached inputs |
+| 6 | **assert band match** | correctness guard, not accuracy | band spread 0.0017 ≈ 74° over 159 µm; nothing currently enforces that calibration and production share a band | trivial |
+
+Knob 1 is first because it is the only one whose benefit is already measured
+rather than hypothesised, and it targets the component proven to be
+systematic. Knob 4 must be done early regardless: **if the reference's own
+phase noise is ~1°, then 1.35° is at or below the measurement floor and the
+target is unachievable as stated** — that has to be known before spending on
+knobs 1–3.
+
+**Re-optimisation status.** `mm_length` is the ONE geometry axis that
+re-optimises for free under calibration (done — see the rescore entry above:
+158.80 µm, 20.326 dBe, spec met). Every other axis — `mm_width`,
+`taper_width`, `taper_length`, `waveguide_width`, `waveguide_offset` — changes
+the body CROSS-SECTION and therefore invalidates the calibration, so each
+candidate point needs its own 16-mode calibration run before it can be scored
+honestly. 42 evaluated campaign points exist under `wg_ygap_opt/`, but they
+cannot simply be re-scored: the calibration is per-cross-section and none of
+them have one.
+
+The cheap path worth testing, stated as the approximation it is: the offset is
+a **discretisation artifact** (confirmed by the res sweep) and is nearly
+uniform across modes (spread 0.00046 over 16). If it is also weakly dependent
+on cross-section geometry, a **single measured offset could be applied as a
+uniform shift** to the mode-solver n_eff of other geometries, making the whole
+campaign re-scorable for the cost of validating that assumption on two points.
+**This is an untested hypothesis, and a plausible failure mode is specific:**
+the offset should scale with how many grid cells span the guided field, so a
+narrower body would show a larger offset. Validate by running the full 16-mode
+calibration at two campaign geometries bracketing the current `mm_width` and
+comparing against the uniform-shift prediction; only adopt the shortcut if
+those agree.
+
+**Queued 2026-09-11 — knobs 1 and 4, the two that gate the rest:**
+
+| job | what | budget | batch file |
+|---|---|---|---|
+| **13110658** (array 1-16) | knob 1 — full 16-mode calibration at **res = 60** | 12 h/task | `run_mmi_4x4_90hybrid_calib_res60.batch` |
+| **13110659** | knob 4 — L=15 top-port full-device FDTD at **decay_tol = 1e-5** | 15 h | `run_mmi_4x4_90hybrid_fdtd_tol1e5.batch` |
+
+Knob 4 is queued alongside knob 1 rather than after it because it can
+*invalidate the target*: `decay_tol = 1e-4` was selected on a `|T|²`
+AMPLITUDE criterion (0.015 dB), which says nothing about phase. If the
+reference's own phase noise turns out to be ~1°, then 1.35° is at or below the
+measurement floor and knobs 1–3 cannot reach it no matter what they cost. L=15
+is the probe case deliberately — largest calibrated residual (2.43° weighted)
+and the longest propagation, so reference noise has the most room to show up.
+
+**One real hazard fixed before submitting.** `MMI4X4_FDTD_DECAY_TOL` was
+already an env override in `mmi_4x4_90hybrid_fdtd.py`, but `output_dir` was
+tagged only by `mm_length` and the driven-port set — so a tolerance probe
+would have written straight over job 13069784's reference results, the exact
+failure this device already had a near-miss on when coarse smoke runs landed
+in the official `output_dir`. Added `_decay_tol_tag` (empty at the 1e-4
+default, so no existing path changes); the probe now lands in
+`mmi_4x4_90hybrid_fdtd_L15.00_p4_tol1e-05`.
+
+Aggregation for the res=60 family is
+`examples/verification/python/mmi_4x4_90hybrid_calib_probe_aggregate.py`
+(`MMI4X4_CALIB_TAG=res60cal`). It refuses to run on a partial set, and writes
+to `calib_probe/aggregated_res60cal_n16.npz` rather than into
+`calib2_per_mode/` — the res=40 calibration is what every current result was
+produced with, and replacing it has to be a deliberate act, not a file landing
+in the right place. Per-mode independence makes the split exact: the library's
+own post-fit step fits each mode from only that mode's data.
+
+Standing directive applies to both: **if either times out, report and wait —
+do not auto-resubmit.**
+
+---
+
+### ✅ KNOB 4 ANSWERED — the FDTD reference's own phase noise is 0.029°, so the 1.35° target is NOT floor-limited (job 13110659, 2026-09-12)
+
+L=15, top port, `decay_tol` 1e-4 → 1e-5 (4:00:49). Per-arm phase shift:
+
+| arm | \|T\|² | Δphase 1.29 / 1.31 / 1.33 |
+|---|---|---|
+| **out8** | 3.6e-01 | −0.043 / −0.011 / −0.005 |
+| out7 | 3.8e-02 | +0.123 / +0.041 / −0.076 |
+| out6 | 1.7e-02 | −0.307 / +0.054 / −0.005 |
+| out5 | 3.4e-04 | +1.237 / +0.028 / −0.728 |
+
+**Power-weighted reference phase uncertainty: 0.029°.** Worst among arms
+carrying real power: 0.307°. The dominant arm out8 — which owns ~85% of the
+weighted metric — moves by at most 0.043°.
+
+**The 1.35° target sits ~46× above the reference's own noise floor, so it is
+not floor-limited and knobs 1–3 are worth spending on.** This also extends the
+earlier `decay_tol` finding: 1e-4 was selected on a `|T|²` AMPLITUDE criterion
+(0.015 dB) and is now confirmed adequate for PHASE as well, which had never
+been checked. (out5's 1.2° swing at 1.29 µm is a 6e-5-power arm — noise, and
+weighted to irrelevance.)
+
+---
+
+### ❌ KNOB 1 ANSWERED, NEGATIVELY — a BETTER-converged calibration makes agreement WORSE, and the amount is exactly predictable (job 13110658, 2026-09-12)
+
+All 16 tasks COMPLETED (1:02–2:44 each, far under the 12 h budget — the res=60
+mode-solver seed was already cached from the single-mode probe). The
+calibration itself is excellent, exactly as the probe predicted:
+
+| | res = 40 | **res = 60** |
+|---|---|---|
+| offset vs mode solver @1.31 | +0.0462 | **+0.0244** |
+| offset spread over 16 modes | 0.00046 | 0.00057 |
+| β-fit residual (mean) | 5.58e-03 | **1.27e-04** |
+
+**A 44× better β fit — and the measured hybrid-vs-FDTD agreement got 18×
+WORSE:**
+
+| arm | L=5 | L=10 | L=15 |
+|---|---|---|---|
+| out8, res=40 calibration | 1.9° | 1.8° | 2.2° |
+| out8, **res=60 calibration** | **11.6°** | **25.0°** | **39.0°** |
+
+**This is not a failure, it is the mechanism confirming itself.** The
+full-device FDTD reference is at **res = 40**. A res=60 calibration measures
+what a res=60 time-stepper would propagate — a *different, better* simulation
+than the one being compared against. The residual is therefore the res=40 →
+res=60 difference in calibrated n_eff, which the aggregate puts at 0.009594:
+
+| L (µm) | predicted 360·Δn·L/λ | observed (out8) | ratio |
+|---|---|---|---|
+| 5 | 13.2° | 11.6° | 0.880 |
+| 10 | 26.4° | 25.0° | 0.948 |
+| 15 | 39.5° | 39.0° | 0.986 |
+
+Predicted from an independently-measured n_eff difference, with no fitting.
+The agreement is as good as the original +0.0458 prediction was.
+
+**THE RULE THIS ESTABLISHES: the calibration's resolution must MATCH the
+resolution of the simulation it is meant to reproduce.** Calibration is not a
+move toward absolute truth — it is a measurement of *what a particular
+discretisation propagates*. Improving the calibration's own convergence while
+leaving the reference at res=40 is not a refinement; it is a mismatch, and it
+degrades agreement in direct proportion to how much better-converged it is.
+Benefiting from a res=60 calibration requires a res=60 full-device FDTD too,
+which in 3D costs roughly (60/40)⁴ ≈ 5× the reference run.
+
+**Knob 1 is therefore CLOSED for the stated goal.** The 2.12° weighted error
+cannot be reduced by calibrating harder. The res=40 calibration's residual
+against its own matched res=40 reference is Δn ≈ 3.0e-4 — 32× smaller than the
+0.0096 res-convergence difference — and *that* is the real remaining term.
+Remaining live knobs: 2 (more calibration wavelengths), 3 (`N_MODES`), 5
+(`BODY_STUB`). Knob 3 is now the largest unmeasured one.
+
+Guard added while running this: `MMI4X4_CALPATH` selects a non-default
+calibration, and when set the output npz is tagged with that calibration's
+name, so a probe can never overwrite the res=40 result the published figures
+are built from.
+
+---
+
+### 🔬 KNOB 3 QUEUED — the 16-mode interface basis leaks 0.7–0.8% of the input power (2026-09-13)
+
+Free check first, from the cached 16-mode `M_in`, before committing to any
+new solves. Top port, modal power fractions at 1.31 µm:
+
+| mode | 1 | 2 | 3 | 4 | 5 | 6 | 7 | **8** |
+|---|---|---|---|---|---|---|---|---|
+| frac | 3.72% | 12.27% | 19.70% | 21.09% | 15.99% | 8.08% | 1.95% | **0.0014%** |
+
+| mode | 9 | 10 | 11 | 12 | 13 | 14 | 15 | **16** |
+|---|---|---|---|---|---|---|---|---|
+| frac | 1.45% | 3.76% | 4.75% | 3.94% | 2.28% | 0.86% | 0.15% | **0.0010%** |
+
+**Total captured power: 0.9932 / 0.9926 / 0.9919 at 1.29/1.31/1.33 µm** — so
+**0.68–0.81% of the input power is not represented in the basis at all.** As a
+field amplitude that is √0.007 ≈ 8.4e-2, i.e. of order **4.8°** of phase if it
+re-enters coherently — the same order as the ~2° residual being chased. Knob 3
+is therefore worth the cluster time, unlike knob 1.
+
+**The tail is NOT simply converged.** Modes 8 and 16 sit at ~1e-5 while their
+neighbours carry 1.5–4.8% each — a clean every-8th-mode symmetry suppression,
+not a decaying tail. Reading "mode 16 ≈ 0, so 16 is enough" off the last entry
+would be exactly wrong: it is a suppression node, and modes 17+ above it can
+carry real power again. This is also why the test goes to **24, not 20** — 24
+clears the next node.
+
+| job | what | budget |
+|---|---|---|
+| **13152193** (array 0–3) | input sections at a 24-mode basis, L=15, one port per task | 10 h/task |
+| **13152194** (array 1–24) | full 24-mode calibration **at res = 40** | 8 h/task |
+
+**res = 40 is load-bearing here, not incidental.** Job 13110658 established
+that a calibration's resolution must match the reference's; this knob varies
+the MODE COUNT only, holding resolution at the reference's own 40. And a
+24-mode calibration is not the 16-mode one plus 8 more — raising `N_MODES`
+re-seeds the whole band solve, so all 24 are re-measured.
+
+L=15 is the single probe length used: largest calibrated residual (2.43°
+weighted) and longest propagation, so the most sensitive test per CPU-hour.
+
+Plumbing added, with the production path regression-checked afterwards
+(re-ran the default configuration and reproduced 2.2 / 2.3 / 5.8 / 33.7° at
+L=15 exactly, writing to the untagged filename):
+- `MMI4X4_CALIB_NMODES` on `mmi_4x4_90hybrid_calib_probe.py`, and `n_modes`
+  now saved into each probe npz.
+- `MMI4X4_NMODES` on `mmi_4x4_90hybrid_calib2_phase_check.py`, plus a
+  `_PRODUCTION` flag (default calibration **and** 16 modes) that gates
+  `cache_only`, the full-length grids, and the output filename. A probe at a
+  different basis can therefore neither fail on a cache miss it was always
+  going to have, nor overwrite the production result.
+- New `mmi_4x4_90hybrid_input_presolve.py` — going 16 → 24 modes is a genuine
+  re-solve, since the cache's `lookup_superset()` tier slices a stored result
+  DOWN to fewer modes but never up.
+
+---
+
+### ❌ KNOB 3 ANSWERED, NEGATIVELY — a 24-mode basis recovers the missing power and changes the phase agreement by NOTHING (jobs 13152193/194/13162199, 2026-09-13)
+
+All 28 tasks COMPLETED clean (4 input pre-solves at 2:43:52; 24 calibration
+tasks at 2:33–2:45; final cascade 4:04:01).
+
+**The premise was confirmed — the basis really was leaking power.** Captured
+input power at L=15, top port:
+
+| basis | 1.29 µm | 1.31 µm | 1.33 µm | leak |
+|---|---|---|---|---|
+| 16 modes | 0.9932 | 0.9926 | 0.9919 | 0.68–0.81% |
+| **24 modes** | 0.9977 | 0.9973 | 0.9969 | **0.23–0.31%** |
+
+Modes 17–24 carry 0.48–0.64%, so the every-8th-mode suppression argument was
+right: the tail was NOT converged at 16, and going past the mode-16 node found
+real power. **Roughly two thirds of the missing power was recovered.**
+
+**And it bought nothing.** Same res=40 reference, same L=15, same resolution,
+only the basis changed:
+
+| arm | 16 modes | 24 modes |
+|---|---|---|
+| **out8** (79% of the weighted metric) | **2.2°** | **2.2°** |
+| out7 | 2.3° | 2.4° |
+| out6 | 5.8° | 6.3° |
+| out5 | 33.7° | 35.9° |
+| **power-weighted** | **2.425°** | **2.468°** |
+
+The dominant arm did not move at all, and the aggregate got marginally worse
+(+1.8%, within the per-wavelength scatter). **Basis truncation is RULED OUT as
+the source of the ~2° residual.** Recovering two thirds of the leaked power
+moved the dominant arm by 0.0°, which is only consistent with that power never
+having been the mechanism — it leaves as radiation/continuum rather than
+re-entering the guided cascade coherently.
+
+**Knob 3 is CLOSED. So are knobs 1 and 4.** Of the original list only knob 2
+(calibration wavelengths) and knob 5 (`BODY_STUB`) remain — and the arithmetic
+below suggests neither is the real target either.
+
+**WHERE THE RESIDUAL ACTUALLY LIVES — a new candidate, from the numbers now in
+hand.** The residual is a systematic Δn_eff ≈ 3.0e-4 (it grows linearly with
+body length). The calibration's own β-fit residual at res=40 is 5.58e-3. Over
+the fit's own baseline (lengths 0.84–2.53 µm), a phase residual of that size
+implies Δβ ≈ 5.58e-3/2.53 ≈ 2.2e-3 rad/µm, i.e.
+
+    Δn_eff ≈ 2.2e-3 × 1.31 / 2π ≈ 4.7e-4
+
+**the same order as the 3.0e-4 actually observed.** That points at the
+**number and SPAN of the calibration lengths** — currently three, with spacing
+set by the branch-safety formula `max_safe_spacing/2` — rather than at
+anything in the cascade. A longer baseline determines β more precisely, and β
+precision is what the residual is made of. This is a knob that was not on the
+original list and is now the leading candidate; it is also cheap relative to
+knobs 1 and 3, since it changes only the calibration's own geometry.
+
+Corroborating: at res=60 the β-fit residual fell to 1.27e-4 (44×), which by the
+same arithmetic would give Δn_eff ≈ 1.1e-5 — but that gain is unusable because
+a res=60 calibration must be paired with a res=60 reference (job 13110658).
+Improving the FIT at fixed resolution is the way to get the same benefit
+without moving the reference.
+
+**One anomaly recorded, not yet resolved.** Mode 24's calibrated offset is
+**+0.0796** against a smooth +0.0457 → +0.0486 trend across modes 1–23 — a 1.7×
+outlier that single-handedly takes the mode-spread from 0.00046 (16 modes) to
+0.0338. This is the familiar "topmost requested band of N is unreliable"
+signature this device already hit at mode 16 of 16. It was NOT excluded from
+the 24-mode calibration used above. Given the result was a clean null on the
+dominant arm, it is unlikely to have changed the conclusion, but any future
+use of `aggregated_n24res40_n24.npz` should either drop mode 24 or re-measure
+it at a larger `N_MODES` so it is no longer the top band.
+
+**Method note worth carrying:** at 16 modes this comparison is cached
+arithmetic (~19 s); at 24 it is a fresh EME mode solve and took 4:04:01. A
+first attempt on a login node produced no output in ~4 minutes and was killed
+rather than left to contend with other users. `MMI4X4_LENGTHS` was added so a
+non-16 basis cannot request a length whose input sections were never
+pre-solved — `M_in` is fetched `cache_only`, so that would fail rather than
+silently start a multi-hour FDTD in the wrong place.

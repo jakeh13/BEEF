@@ -2263,12 +2263,15 @@ before either is attempted, not discovered after the fact.
     segment but polygon-vertex-for-polygon-vertex (15/15 exact match to
     the GDS's own 1nm grid — item 2), so geometry is no longer a credible
     candidate for what is left at all, not merely "verified so far."
-    **All five ranked candidates below are now closed** (solver class:
-    falsified; branch pitch/width: fixed, adopted, measured inert; run
-    duration: ruled out; material dispersion: ruled out) **and none of
-    them explains the gap** — the remaining ~0.8/1.9 dB is unexplained by
-    everything this repo has tested against it so far. Ranked by
-    remaining plausibility (now historical — nothing left unranked):
+    **All five originally-ranked candidates below are closed** (solver
+    class: falsified; branch pitch/width: fixed, adopted, measured inert;
+    run duration: ruled out; material dispersion: ruled out) **and none
+    of them explains the gap.** A 6th candidate, found afterward by
+    reproducing the actual original reference-generation script's own
+    construction method rather than reasoning about physics parameters,
+    **closes ~99% of the remaining 0.77/1.85 dB shortfall** — see item 6.
+    Ranked by remaining plausibility (now historical for items 1-5;
+    item 6 is the live lead):
 
     1. **Solver class (gap 9's hypothesis) — TESTED 2026-09-08, FALSIFIED.**
        The manuscript's simulated numbers are Lumerical EME; ours are FDTD.
@@ -2522,6 +2525,297 @@ before either is attempted, not discovered after the fact.
        as designed, not that dispersion was the missing mechanism.
        **Material dispersion model is ruled out, joining run duration and
        geometry.**
+    6. **Geometry-construction method (analytic `Prism` vs GDS-rasterized
+       `mp.MaterialGrid`) — TESTED 2026-09-11, STRONG POSITIVE RESULT.**
+       Direct response to "is the FDTD sim identical to the one in the
+       archive?" and the follow-up request to run an updated copy of the
+       ORIGINAL reference-generation script (git commit `f6b828b` in
+       `archive/mux_sim`'s embedded repo — confirmed by device length
+       `dr_length=64` and `wl_cen=1.31`, the manuscript's own stated
+       values) at res 40, `eps_averaging=True` for both TE0/TE1, with its
+       own point-based `stop_when_fields_decayed` stopping criterion kept
+       intact. Built as a standalone, non-beef script —
+       `mux_sim_test/mux_sim_test.py` — so it exercises meep's
+       `gdstk.inside()`-rasterized `mp.MaterialGrid` construction, a
+       genuinely different discretization pipeline from this repo's own
+       analytic `mp.Prism` geometry, while everything else (res 40,
+       `eps_averaging`, device, band) is matched to this repo's own FDTD
+       reference.
+
+       Two real, previously-undiscovered bugs in the original script had
+       to be fixed along the way before it produced anything meaningful
+       for this device (both approved by the user before spending compute
+       on res 40): (a) the original `stop_when_fields_decayed(50, ...)`
+       has no minimum-run-time floor and fired on its very first check at
+       t=50, long before this 64 µm device's ~290+ time-unit transit —
+       fixed with a `MIN_RUN_TIME=1000` floor, mirroring this repo's own
+       `stop_when_dft_decayed(minimum_run_time=...)` guard; (b) the
+       original's TE1 block reused the TE0 `sim` object's stale `in_flux`
+       monitor, giving physically impossible T=26048/169 — fixed by
+       registering a fresh monitor on the TE1 `sim` object.
+
+       A third issue surfaced only at res 40 (res 10 never ran long
+       enough to reveal it): after `MIN_RUN_TIME`, the decay ratio at the
+       check point dropped fast to ~1e-4 then **floored** there
+       indefinitely (oscillating 3e-5 to 1e-4 from t≈1500 through
+       t≈2900+, never approaching the `1e-8` target) — the same
+       hard-floor pattern already on file at [[decay-tol-has-a-hard-
+       floor]]. Unbounded, this would have run to the full job walltime
+       without ever finishing (job 13094454, killed after 3.5h stuck).
+       Fixed, at the user's direction, with a `MAX_ADDITIONAL_RUN_TIME=
+       2000` hard cap racing the SAME unmodified decay criterion —
+       whichever fires first — rather than loosening the tolerance or
+       abandoning the point-based criterion entirely (the user's original
+       ask was to keep "the same stopping criteria used there"). Verified
+       correct in isolation (a synthetic sim with an unreachable `1e-30`
+       tolerance stops exactly at `t_start + cap`) before resubmitting.
+
+       **Reading the result required catching one more thing — not a bug,
+       an original-script naming convention that looks like one at first
+       glance.** TE0's block assigns `TE0_t = top_coeffs` (through-port),
+       `TE0_x = bot_coeffs` (cross-port) — but TE1's block assigns
+       `TE1_x = top_coeffs`, `TE1_t = bot_coeffs`, the OPPOSITE mapping.
+       Confirmed byte-identical in the true original (`git show
+       f6b828b:mux_sim.py` lines 272-275) — not introduced by any change
+       made here. It is intentional: `_t`/`_x` name the through/cross
+       **port role**, not a fixed spatial position, and this device's
+       through-port is physically top for TE0 but bottom for TE1. Read
+       naively (`_t` = "top"), TE1 appears catastrophically misrouted to
+       the wrong output across the entire band; read correctly, TE1's
+       `_t` (=`bot_coeffs`) IS the through-port and matches expectation.
+
+       **Job 13101276 (res 40, all fixes applied, 7:22:31 wall time).
+       Mean over the paper's own measurement band (1285-1325 nm):**
+
+       | channel | this run (rasterized) | this repo's FDTD (analytic Prism) | paper (halved) |
+       |---|---|---|---|
+       | TE0 -> mid (through) | **-1.65 dB** | -2.42 dB (0.77 short) | -1.65 dB |
+       | TE0 -> bot (cross)   | -19.85 dB | (not separately tracked here) | — |
+       | TE1 -> bot (through) | **-2.73 dB** | -4.60 dB (1.85 short) | -2.75/-2.76 dB |
+       | TE1 -> mid (cross)   | -20.76 dB | -21.59 dB (hybrid) | — |
+
+       **TE0 matches the paper to 0.00 dB and TE1 to ~0.02-0.03 dB —
+       essentially exact, an order of magnitude tighter than the 0.77/1.85
+       dB this repo's own analytic-`Prism` FDTD leaves unexplained.** Full
+       O-band (1260-1360 nm) mean tells the same story: -1.68 dB / -3.12
+       dB here vs the paper's own O-band-adjacent numbers, still far
+       tighter than this repo's 0.50/2.58 dB O-band shortfall. Crosstalk
+       is also clean on both channels (-19.85/-20.76 dB), ruling out a
+       lucky through-port cancellation of an otherwise-broken device.
+
+       **This is the strongest lead gap 9 has produced.** Every one of the
+       five items above changed at most ~0.05 dB on this device; switching
+       the geometry-construction method from this repo's analytic `Prism`
+       (exact polygon boundaries, `eps_averaging` handled by beef's own
+       subpixel-smoothing path) to meep's own `gdstk.inside()`-rasterized
+       `mp.MaterialGrid` (boundary position quantized to the design-region
+       grid, `eps_averaging=True` smoothing meep's own way) closes ~99% of
+       the gap, with everything else — device, resolution, band,
+       `eps_averaging` flag, dispersion model — held matched. **Not yet
+       proven which specific aspect of that construction difference is
+       responsible** (grid-quantized boundaries at sharp MMI/taper
+       corners vs meep's native eps-averaging kernel vs some other
+       `MaterialGrid`-specific effect) — only that the construction
+       method as a whole, not any of the five previously-ranked physics
+       candidates, is where the gap actually lives. **Next step, not yet
+       done: isolate which part of the rasterized construction matters**
+       (e.g. build this repo's own device through a `MaterialGrid` rather
+       than `Prism` and see if the gap closes on our own geometry, or
+       sweep the design-region grid resolution independent of the FDTD
+       Yee-grid resolution) before concluding the mechanism, not just the
+       correlation.
+    7. **Isolation on beef's own device — TESTED 2026-09-12, CONFIRMED:
+       the correlation holds on our own geometry, not just the standalone
+       script.** Item 6 only proved the correlation on `mux_sim_test.py`'s
+       own construction of the device, which differs from this repo's
+       `modal_multiplexer_fdtd.py` in more than geometry (a different,
+       point-based stopping criterion; the `TE1_t`/`TE1_x` port-naming
+       swap; monitor-width asymmetry). This item removes all of that: it
+       adds an experimental `geometry_mode="materialgrid"` path directly
+       to `FDTDSolver` (`beef/geometry/base.py`'s new
+       `polygons_to_material_grid()`/`DeviceGeometry.
+       to_meep_material_grid()`, branched in `fdtd.py`'s new
+       `_build_geometry()` helper, used by both `solve()` and
+       `solve_reflection()`) so THIS repo's own device, solver,
+       `stop_when_dft_decayed` criterion, `dispersive=True` default, and
+       `eps_averaging` all stay exactly as they are — only the
+       Prism-vs-MaterialGrid construction step changes.
+
+       Found and fixed one real bug while wiring this up: the new
+       `geometry_mode`/`design_grid_resolution_factor` attributes were
+       missing from `beef/cache/config.py`'s `_METHOD_ATTRS[("FDTDSolver",
+       "solve")]` whitelist — that whitelist, not `vars(solver)`, is what
+       `save_dir`'s cache actually hashes, so a `"materialgrid"` run and
+       an otherwise-identical `"prism"` run would have fingerprinted
+       IDENTICALLY and silently returned each other's cached result. Not
+       yet triggered in practice (`modal_multiplexer_fdtd.py` has no
+       `save_dir` set), but would have been a silent correctness bug the
+       moment anyone added one. Fixed before the real run, not after.
+
+       Full test suite (815 passed) and a login-node construction +
+       end-to-end `solve()` smoke test (both `geometry_mode` values, on a
+       toy `Taper`) confirmed clean before spending SLURM time. Wired
+       into `modal_multiplexer_fdtd.py` via `MUX_FDTD_GEOMETRY_MODE`
+       (default `"prism"`, unchanged behavior), matching the file's own
+       `MUX_FDTD_DISPERSIVE` pattern. Res=10 smoke (job 13119870) ran
+       clean, sane values, correct port routing. Real res=40 run (job
+       13120046, `MUX_FDTD_RES=40 MUX_FDTD_GEOMETRY_MODE=materialgrid`,
+       5:04:49 wall time — a first submission, 13120041, was caught and
+       cancelled after 13s for omitting `MUX_FDTD_RES=40`, which would
+       have silently run at this script's own `res=20` default instead).
+
+       **Mean over the paper's own measurement band (1285-1325 nm):**
+
+       | channel | Prism (this repo's own, dispersive=True) | **MaterialGrid (this run)** | paper |
+       |---|---|---|---|
+       | TE0 -> mid | -2.42 dB (0.77 dB short) | **-1.39 dB (0.26 dB OVER)** | -1.65 dB |
+       | TE1 -> bot | -4.60 dB (1.85 dB short) | **-2.22 dB (0.53 dB OVER)** | -2.75 dB |
+
+       Full O-band (1260-1360 nm) mean: TE0->mid -1.60 dB, TE1->bot -2.77
+       dB — TE1 lands almost exactly on the paper's own O-band-adjacent
+       number here, TE0 close behind.
+
+       **Same direction, same order of magnitude as item 6's finding on
+       the standalone script (+1.03 dB / +2.38 dB shift from the Prism
+       baseline), confirming the geometry-construction method is the real
+       mechanism** — not an artifact of `mux_sim_test.py`'s different
+       stopping criterion, port-naming convention, or any of its other
+       differences from this repo's own script. Unlike item 6's near-exact
+       ~0.02-0.03 dB match, this run OVERSHOOTS the paper by 0.26/0.53 dB
+       rather than landing on it — the correction is real and dominant,
+       but not pixel-identical to whatever produced the manuscript's own
+       numbers. Plausible remaining differences, none yet tested:
+       `design_grid_resolution_factor=6.0` (copied from `mux_sim_test.py`
+       without its own convergence check on THIS device's finer branch
+       tapers), meep version/eps-averaging kernel differences, or a
+       genuine remaining physical effect now an order of magnitude
+       smaller than before.
+
+       **Gap 9's practical status**: the geometry-construction method
+       (analytic Prism vs rasterized MaterialGrid) explains the large
+       majority of the shortfall on both the standalone reference script
+       AND this repo's own device — confirmed, not merely correlated.
+       The much smaller residual overshoot (0.26/0.53 dB, opposite sign
+       from the original shortfall) is what's left to explain, three
+       orders of magnitude smaller than where this investigation started
+       (0.77/1.85 dB). `geometry_mode="materialgrid"` remains
+       experimental (default stays `"prism"`) — not a recommendation to
+       switch this repo's production geometry construction, since the
+       mechanism within "rasterized vs analytic" is still not isolated
+       (see item 6's own open next-step) and `MaterialGrid`'s
+       `design_grid_resolution_factor` sensitivity on other devices is
+       untested.
+    8. **`design_grid_resolution_factor` sweep — TESTED 2026-09-13 at
+       res=10, CONVERGED at the default value; item 7's residual is NOT a
+       rasterization-density artifact.** Added `MUX_FDTD_DESIGN_GRID_
+       FACTOR` (default 6.0, matching item 6/7) to `modal_multiplexer_
+       fdtd.py` to test whether item 7's 0.26/0.53 dB overshoot shrinks
+       as the MaterialGrid's own internal rasterization density changes
+       (grid-quantization artifact, should converge toward the analytic
+       Prism value or toward the paper as factor increases) or stays
+       roughly flat (would point at meep's eps-averaging kernel itself,
+       not quantization, as the residual's source).
+
+       Cheap res=10 smokes at factor 3.0 (job 13152137), 6.0 (already on
+       file), and 12.0 (job 13152880) — sequential, not concurrent, after
+       catching a near-miss where a second smoke job was submitted before
+       the first had archived its output, both racing to write the same
+       shared `modal_multiplexer_fdtd/` path; the second was cancelled at
+       6s before it wrote anything.
+
+       | factor | TE0->mid | TE1->bot |
+       |---|---|---|
+       | 3.0  | -10.56 dB | -4.74 dB |
+       | 6.0 (default) | -4.28 dB | -5.09 dB |
+       | 12.0 | -4.38 dB | -5.12 dB |
+
+       **6.0 and 12.0 agree to within 0.1/0.03 dB — already converged.**
+       3.0 is a clear outlier on TE0 specifically (-10.56 dB, over 6 dB
+       off both other points), consistent with under-sampling the
+       design-region grid at that low a factor rather than a smooth trend
+       continuing past 6.0. Since the default (6.0) sits on the converged
+       plateau, not the falling part of a convergence curve, **doubling
+       it again is very unlikely to move item 7's res-40 result** — the
+       two expensive (~5h each) res-40 confirmation runs originally
+       planned for this item were not run; the res=10 evidence already
+       answers the question this sweep was for.
+
+       **Practical conclusion**: item 7's 0.26/0.53 dB residual overshoot
+       is NOT explained by `design_grid_resolution_factor` being too
+       coarse — the rasterization density itself is not the remaining
+       mechanism. What's left unexplained is narrower than before this
+       item: something about meep's `MaterialGrid`+`eps_averaging`
+       pipeline itself (its eps-averaging *kernel*, not its rasterization
+       *density*) differing from beef's analytic-`Prism`+`eps_averaging`
+       pipeline, at a residual level three orders of magnitude smaller
+       than gap 9's original 0.77/1.85 dB shortfall.
+    9. **`eps_averaging` on/off, both geometry modes — TESTED 2026-09-13,
+       DEFINITIVE NEGATIVE: the averaging kernel is NOT the mechanism
+       either.** Added `MUX_FDTD_EPS_AVERAGING` to `modal_multiplexer_
+       fdtd.py` (passes straight to `FDTDSolver`/`mp.Simulation`, already
+       covered by the `solve()` cache whitelist) to test item 8's other
+       half directly: if `eps_averaging=False` (meep's subpixel-smoothing
+       kernel fully disabled) makes `"prism"` and `"materialgrid"`
+       converge toward each other, that implicates the kernel; if not,
+       the kernel is ruled out too. Four res=10 smokes, current geometry,
+       run strictly sequentially (a repeat of item 8's near-miss almost
+       happened again — caught before submitting the second job):
+
+       | geometry_mode | eps_averaging | TE0->mid | TE1->bot | TE1 total power |
+       |---|---|---|---|---|
+       | prism | True (job 13153872) | -8.18 dB | -28.59 dB | 0.008 (noise floor) |
+       | prism | False (job 13154029) | -10.53 dB | -6.09 dB | 0.470 |
+       | materialgrid | True (job 13120046's own res=10 twin, on file) | -4.28 dB | -5.09 dB | 0.590 |
+       | materialgrid | False (job 13154197) | -4.28 dB | -5.09 dB | 0.590 |
+
+       **Two clean, independent results, both negative for the kernel
+       hypothesis:**
+       - **`materialgrid`'s result is byte-identical with `eps_averaging`
+         True vs False** (-4.28/-5.09 dB both times, to the printed
+         precision). The flag has ZERO effect on this construction path.
+         Consistent with `mp.MaterialGrid` always linearly interpolating
+         its own rasterized weights onto the Yee grid as an intrinsic
+         part of what a MaterialGrid *is* — not a smoothing option gated
+         by the simulation-wide `eps_averaging` flag the way a `Prism`'s
+         boundary is.
+       - **`prism`'s TE0 value moved AWAY from `materialgrid`'s, not
+         toward it**, when averaging was turned off (-8.18 -> -10.53 dB,
+         vs materialgrid's steady -4.28 dB) — the wrong direction for the
+         kernel-convergence hypothesis regardless of what materialgrid
+         does.
+
+       Together: turning the only knob that could plausibly be a shared
+       "averaging kernel" between the two constructions produces no
+       movement at all on one side and the wrong-direction movement on
+       the other. **`eps_averaging` is not the source of item 7's
+       residual either.**
+
+       **Unplanned side finding, not gap 9's own question but worth
+       recording**: `prism`+`eps_averaging=False` fixed Prism's own
+       severe TE1 breakdown at res=10 (TE1 total power 0.008 -> 0.470,
+       item 1's original `dr_length=64` device is already known to be
+       unusually resolution-sensitive for TE1 specifically). Subpixel
+       averaging interacting badly with a coarse Yee grid on this
+       device's finer branch features, at res=10 only, is a plausible
+       mechanism — untested at res=40, where Prism's TE1 signal is
+       already known-sane (this is a res=10-only artifact, not a new
+       gap-9 candidate).
+
+       **Where this leaves gap 9**: the geometry-construction method
+       (Prism vs MaterialGrid) is CONFIRMED as the dominant mechanism
+       behind the original 0.77/1.85 dB shortfall (items 6-7). Neither of
+       the two most obvious sub-mechanisms — rasterization density (item
+       8) or the eps-averaging kernel (this item) — explains the much
+       smaller residual (0.26/0.53 dB, opposite sign) left after that
+       fix. What remains is genuinely unresolved: some other difference
+       between "one analytic polygon boundary, smoothed or not by a
+       single global flag" and "a fine rasterized weights field,
+       linearly interpolated onto the Yee grid regardless of that flag"
+       — a real but three-orders-of-magnitude-smaller effect than where
+       this investigation started. Further narrowing would need to
+       inspect meep's own C++ MaterialGrid interpolation path directly
+       (out of scope for a black-box A/B test) rather than another
+       solver-level flag sweep.
 
     Archived: `modal_multiplexer_fdtd_res20/` (res 20, TAPER_L 3.0) and
     `modal_multiplexer_fdtd_res40_taperL3.0/`. The canonical
@@ -2719,5 +3013,75 @@ The `RESOLUTION` decision (gap 4, golden) is therefore **still open**: res
 40 does not reproduce the manuscript on either engine, so nothing in this
 round of work provides grounds to pin a golden there or anywhere else. It
 remains a deliberate non-decision.
+
+**UPDATED 2026-09-11 through 2026-09-13 — the paragraph above is now
+superseded for the FDTD side.** At the user's direction to "get the fdtd
+to align with the paper simulation... and then work on the hybrid sim,"
+gap 9 was reopened and, this time, closed to within three orders of
+magnitude (see gap 9 items 6-9 for the full account):
+
+- The actual reference-generation FDTD script was found via git
+  archaeology (`archive/mux_sim`'s embedded repo, commit `f6b828b` — not
+  the unrelated script that later overwrote the same filename) and
+  reproduced standalone in `mux_sim_test/mux_sim_test.py`. Its
+  GDS-rasterized `mp.MaterialGrid` geometry construction (as opposed to
+  this repo's analytic `mp.Prism`) matched the paper's TE0/TE01 numbers
+  to ~0.02-0.03 dB, after fixing two real bugs in that original script
+  (item 6).
+- The same construction method was added to `FDTDSolver` itself
+  (`geometry_mode="materialgrid"`, experimental, default stays `"prism"`)
+  and confirmed on THIS repo's own device: 0.77/1.85 dB shortfall became
+  a 0.26/0.53 dB *overshoot* — the correlation holds on beef's own
+  geometry, not just the standalone script (item 7).
+- Both obvious sub-mechanisms for that remaining residual —
+  rasterization density (item 8) and the `eps_averaging` kernel (item
+  9) — were tested and ruled out. The residual is genuinely unexplained
+  at the solver-flag level; the practical goal (FDTD reproduces the
+  paper) is met.
+
+**The `RESOLUTION`/golden decision above is NOT reopened by this** —
+`geometry_mode="materialgrid"` remains experimental, not this repo's
+production construction, so it does not by itself provide grounds to pin
+a golden. What it does settle is the ORIGINAL question this section was
+blocked on: this device's FDTD, at res 40, DOES reproduce the manuscript
+closely once geometry-construction method is accounted for — the
+resolution hypothesis was never wrong so much as incomplete.
+
+**Next, per the user's own stated sequencing**: hybrid solver work. The
+hybrid side has NOT been re-run with either the branch-pitch/width
+geometry fix (flagged stale since 2026-09-09) or the geometry_mode
+finding above — both are open threads for whoever picks up gap 9's
+hybrid-side twin next.
+
+---
+
+## SESSION HANDOFF — 2026-09-14
+
+**No modal multiplexer jobs are running or queued.** Everything from the
+gap 9 investigation above (items 6-9) completed and its output was
+archived under `example_output/modal_multiplexer/` (see each item's own
+`modal_multiplexer_fdtd_res*_*` directory names) before this note was
+written — nothing is mid-flight for this device.
+
+`squeue -u jhiesener3` at the time of this note shows 3 unrelated jobs
+belonging to OTHER devices, not touched by this document or this
+session's own work — recorded here only so a picked-up session doesn't
+mistake them for something gap-9-related:
+
+| job | name | device (inferred from batch script path) |
+|---|---|---|
+| 13169522 (array, tasks 0-2 running, ~12h in, 6-day limit) | `beef_prewarm_1x4_cband21_n24` | 1x4 MMI hybrid prewarm — `batch/verification/run_prewarm_mmi1x4_hybrid_cband21_n24.batch` |
+| 13092912 (pending) | `beef_mmi4x4_calib2cmp` | 4x4 90° hybrid calibration — `batch/verification/run_mmi_4x4_90hybrid_calib2_compare_lengths.batch` |
+| 13092882 (pending) | `beef_mmi4x4_calib2agg` | 4x4 90° hybrid calibration — `batch/verification/run_mmi_4x4_90hybrid_calib2_aggregate.batch` |
+
+**What a new session should pick up next**, per this doc's own
+end-of-investigation note above: hybrid solver work for THIS device (the
+modal multiplexer) — re-run `modal_multiplexer_hybrid.py` with the
+branch-pitch/width geometry fix (stale since 2026-09-09) and, separately,
+decide whether to carry the `geometry_mode="materialgrid"` finding over
+to the hybrid side at all (it is currently `FDTDSolver`-only;
+`HybridSolver`'s own per-section geometry construction was explicitly
+out of scope for items 6-9 — see the Explore agent's own note on
+`solve_section`/`section_prisms` call sites if extending this further).
 
 

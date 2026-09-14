@@ -109,6 +109,14 @@ _RU = "" if SYMMETRIC_MODE_REUSE else "_noreuse"
 # Empty when the seam count equals N_MODES, so every existing file keeps
 # its name; only a genuine per-interface run gets a new one.
 _SM = "" if SEAM_MODES == N_MODES else f"_sm{SEAM_MODES}"
+# Path to a beta(width) curve from measure_beta_width_curve.py. When set,
+# the tapered body is calibrated CELL BY CELL -- the thing
+# calibrate_body_neff cannot do, because it collapses a section to a
+# diagonal and because an intermediate ramp width has no neighbouring FDTD
+# section to take beta from. Empty (default) leaves every path and every
+# filename exactly as before.
+CELL_CAL = os.environ.get("MMI2X2_HY_CELLCAL", "")
+_CAL = "_cellcal" if CELL_CAL else ""
 
 # design point (step 6, as scored at N_TAPER=7 -- see step 5b: its phase PASS
 # is an artifact of that value. The geometry is still the right one to compare
@@ -185,7 +193,7 @@ if MERGED:
     pat = os.path.join(output_dir,
                        f"shard{_DRY}_wl*_Ww{WW:g}_Lw{LW:g}_Lt{LT:g}_L{L_WAIST:g}"
                        f"_res{RES:g}_nwl{N_WL}_ct{C_TRANS}"
-                       f"_nm{N_MODES}{_SM}{_RU}.json")
+                       f"_nm{N_MODES}{_SM}{_CAL}{_RU}.json")
     shards = []
     for f in sorted(glob.glob(pat)):
         try:
@@ -412,8 +420,22 @@ print(f"  body regions: stub {stub_in_len:.2f}um(1) | ramp {LT:g}um({C_TRANS}) "
       f"{stub_in_len:.2f}um(1)  = {n_cells_total} cells, "
       f"{C_TRANS + 2} distinct after the memo")
 
+_cell_neff_fn = None
+if CELL_CAL:
+    import beta_width_curve as _bwc
+    _curve = _bwc.load_curve(CELL_CAL)
+    # Only the BODY sections (1..5) -- the FDTD port sections have no
+    # num_cells and make_cell_neff_fn returns None for them anyway, but naming
+    # the set makes the intent explicit and survives a chain reshuffle.
+    _cell_neff_fn = _bwc.make_cell_neff_fn(
+        _curve, solvers, calibrate_sections=set(range(1, N_SECTIONS - 1)))
+    print(f"  per-cell calibration ON from {os.path.basename(CELL_CAL)} "
+          f"({len(_curve['widths'])} widths "
+          f"{_curve['widths'][0]:.2f}..{_curve['widths'][-1]:.2f} um)")
+
 _shared = dict(solvers=solvers,
                boundaries=boundaries,
+               cell_neff_fn=_cell_neff_fn,
                # PER-INTERFACE mode counts, not one number for all six.
                #
                # The six section-to-section interfaces sit at DIFFERENT widths:
@@ -530,7 +552,7 @@ if SHARD != "":
     sp = os.path.join(output_dir,
                       f"shard{_DRY}_wl{int(SHARD)}_Ww{WW:g}_Lw{LW:g}_Lt{LT:g}"
                       f"_L{L_WAIST:g}_res{RES:g}_nwl{N_WL}_ct{C_TRANS}"
-                      f"_nm{N_MODES}{_SM}{_RU}.json")
+                      f"_nm{N_MODES}{_SM}{_CAL}{_RU}.json")
     # ATOMIC: write to a temp file and rename. A crash between open() and dump()
     # otherwise leaves a ZERO-BYTE file that looks like a shard -- exactly what
     # job 12877872_0 left behind when it died on the SMatrix bug, and what a
@@ -644,8 +666,17 @@ path = os.path.join(output_dir,
                     # filename-collision in this study -- the standing rule is
                     # that an output name must carry every parameter the run
                     # is fingerprinted on.
-                    f"hybrid_vs_fdtd{_DRY}_res{RES:g}_ct{C_TRANS}"
-                    f"_nm{N_MODES}{_SM}{_RU}.json")
+                    # GEOMETRY in the name. Without it the 30.50 um and
+                    # 31.00 um design points both land on
+                    # hybrid_vs_fdtd_res40_ct8_nm10.json and the second merge
+                    # silently overwrites the first -- which is exactly what
+                    # happened on 2026-09-13. Same defect class the check4
+                    # reference names were fixed for: an output filename must
+                    # carry every parameter the result depends on, and the
+                    # geometry is the first of those.
+                    f"hybrid_vs_fdtd{_DRY}_Ww{WW:g}_Lw{LW:g}_Lt{LT:g}"
+                    f"_L{L_WAIST:g}_res{RES:g}_ct{C_TRANS}"
+                    f"_nm{N_MODES}{_SM}{_CAL}{_RU}.json")
 with open(path, "w") as fh:
     json.dump({"config": {"res": RES, "n_wl": N_WL, "c_trans": C_TRANS,
                           "decay_tol": DECAY_TOL, "n_modes": N_MODES,

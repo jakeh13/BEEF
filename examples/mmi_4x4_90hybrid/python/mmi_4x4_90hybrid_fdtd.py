@@ -171,7 +171,16 @@ _ports_tag = "" if set(_driven_ports) == {1, 3} else (
     "_p" + "".join(str(p) for p in _driven_ports))
 
 _mm_length_tag = "" if abs(MM_LENGTH - _MM_LENGTH_DEFAULT) < 1e-9 else f"_L{MM_LENGTH:.2f}"
-output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_4x4_90hybrid", "mmi_4x4_90hybrid_fdtd" + _mm_length_tag + _ports_tag))
+
+# 2026-09-11: decay_tol must tag the output directory for the same reason
+# mm_length and the driven-port set do. MMI4X4_FDTD_DECAY_TOL was already
+# overridable, but the results path was NOT tagged by it, so a convergence
+# probe at a tighter tolerance would silently overwrite the production
+# reference results at the same (mm_length, ports) -- exactly the near-miss
+# this device already hit once when coarse smoke runs landed in the official
+# output_dir. Empty at the 1e-4 default, so no existing path changes.
+_decay_tol_tag = "" if abs(DECAY_TOL - 1e-4) < 1e-12 else f"_tol{DECAY_TOL:.0e}"
+output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_4x4_90hybrid", "mmi_4x4_90hybrid_fdtd" + _mm_length_tag + _ports_tag + _decay_tol_tag))
 os.makedirs(output_dir, exist_ok=True)
 
 mmi = MMI(

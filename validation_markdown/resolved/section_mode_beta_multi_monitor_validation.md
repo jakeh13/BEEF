@@ -2049,3 +2049,68 @@ contribute.
 stalling part". Uncached it took **51 minutes** here. The claim is true
 only *because* it is normally a cache hit; it is not cheap in itself, and
 nothing in that comment says so.
+
+---
+
+## ⚠️ A CALIBRATION'S RESOLUTION MUST MATCH THE SIMULATION IT REPRODUCES (measured 2026-09-12, 4×4 90° hybrid, job 13110658)
+
+Cross-cutting result about what `section_mode_beta()` actually measures.
+Recorded here rather than only in the device doc because it constrains every
+caller, and the natural instinct it contradicts — "calibrate at higher
+resolution to get a better answer" — is a mistake anyone will make once.
+
+**What was run.** A full 16-mode calibration of the 4×4's body cross-section
+at **res = 60** instead of the production res = 40, then the same hybrid
+cascade scored against the same full-device FDTD reference (which is at
+res = 40).
+
+**The calibration got dramatically better:**
+
+| | res = 40 | res = 60 |
+|---|---|---|
+| offset vs mode solver @ 1.31 µm | +0.0462 | +0.0244 |
+| β-fit residual (mean) | 5.58e-03 | **1.27e-04** (44× better) |
+
+**Agreement with the reference got 18× WORSE:** the dominant output arm went
+from 1.9 / 1.8 / 2.2° to 11.6 / 25.0 / 39.0° at body lengths 5 / 10 / 15 µm.
+
+**This is not a bug and not a regression — it is the definition of the
+quantity asserting itself.** `section_mode_beta()` measures *what a particular
+discretisation propagates*, not a converged physical β. A res = 60 calibration
+correctly describes a res = 60 time-stepper, which is a **different simulation**
+from the res = 40 reference it was being compared against. The residual is
+exactly the res40→res60 difference in calibrated n_eff (0.009594), predicted
+with no fitting:
+
+| L (µm) | predicted 360·Δn·L/λ | observed | ratio |
+|---|---|---|---|
+| 5 | 13.2° | 11.6° | 0.880 |
+| 10 | 26.4° | 25.0° | 0.948 |
+| 15 | 39.5° | 39.0° | 0.986 |
+
+**Rules for callers:**
+
+1. **Never mix a calibration and the run that consumes it at different `res`.**
+   The `neff_override` must come from a calibration at the production
+   resolution, whatever that is.
+2. **Do not treat a smaller β-fit residual as a better result in isolation.**
+   It measures how well one β describes propagation *on that grid*; it says
+   nothing about agreement with a run on a different grid.
+3. **Improving resolution is not a free upgrade.** Benefiting from a res = 60
+   calibration requires moving the reference to res = 60 too — roughly
+   (60/40)⁴ ≈ 5× the cost in 3D.
+
+**Why calibration is nonetheless mandatory for wide multimode bodies**
+(measured on the same device): the mode-solver/FDTD n_eff gap falls only as
+~`res^-1.45` (0.1205 / 0.0462 / 0.0242 at res 20 / 40 / 60), so driving it
+below 0.005 would need **res ≳ 180** — unreachable in 3D. Both engines move,
+in opposite directions, converging toward each other rather than one being
+right. Calibration is the only practical route to a hybrid that reproduces a
+full-device FDTD at achievable resolution.
+
+**Also measured, and relevant to anyone choosing a tolerance for a calibration
+reference:** the full-device FDTD's own *phase* noise at `decay_tol = 1e-4` is
+**0.029° power-weighted** (worst real-power arm 0.307°), from a 1e-4 vs 1e-5
+comparison. `decay_tol = 1e-4` was originally selected on a `|T|²` AMPLITUDE
+criterion (0.015 dB, `mmi_1x2_decay_tol_measurement.md`) and had never been
+checked for phase; it is adequate for both.

@@ -229,3 +229,61 @@ def test_capability_probe_distinguishes_the_two_solvers():
                       material_stack=SIN_300)
     assert _supports_cell_neff_override(eme.solve_section)
     assert not _supports_cell_neff_override(fdtd.solve_section)
+
+
+@pytest.mark.slow
+def test_nan_entries_leave_those_modes_uncalibrated():
+    """NaN means "keep this mode's solved n_eff".
+
+    Exists because mode IDENTITY is not stable across a calibration curve: the
+    eigensolver sorts by n_eff, so modes that cross as width changes swap
+    indices and an interpolated beta for such a mode blends two different
+    physical modes. All-NaN must therefore be an exact no-op, and a partial
+    array must calibrate only the non-NaN modes.
+    """
+    solver = _solver(3)
+    geom = _mmi(body_waist_width=2.0, body_waist_length=0.6,
+                body_transition_length=0.5)
+    kw = dict(n_modes_in=3, n_modes_out=3)
+    plain = solver.solve_section(geom, _WL, -1.0, 1.0, **kw)
+
+    all_nan = np.full((1, 3, 3), np.nan, dtype=complex)
+    assert np.allclose(
+        plain, solver.solve_section(geom, _WL, -1.0, 1.0,
+                                    cell_neff_override=all_nan, **kw),
+        rtol=0, atol=1e-12), "an all-NaN override must be an exact no-op"
+
+    # Calibrate mode 0 only; modes 1-2 NaN. Must differ from plain, proving the
+    # non-NaN entry took effect while the NaN ones passed through.
+    partial = np.full((1, 3, 3), np.nan, dtype=complex)
+    partial[:, :, 0] = 1.9
+    assert not np.allclose(
+        plain, solver.solve_section(geom, _WL, -1.0, 1.0,
+                                    cell_neff_override=partial, **kw),
+        atol=1e-9)
+
+
+def test_fingerprint_survives_a_json_round_trip_with_nan():
+    """A NaN in the fingerprint must not make the cache permanently miss.
+
+    beef.cache.store.lookup() guards against hash collisions by comparing the
+    stored config.json to the live config. json writes a bare NaN token and
+    reads it back as float('nan') -- and NaN != NaN, so a fingerprint carrying
+    real NaNs can NEVER compare equal to its own stored copy. Every calibrated
+    run then re-solves from scratch while logging "hash match but config.json
+    differs". Measured on the first per-cell calibrated run, on all 8 ranks.
+    NaN is therefore serialized as a string sentinel.
+    """
+    import json
+    from beef.solvers.eme import _cell_neff_fingerprint
+
+    arr = np.full((1, 2, 3), np.nan, dtype=complex)
+    arr[:, :, 0] = 2.5
+    fp = _cell_neff_fingerprint(arr)
+    assert fp == json.loads(json.dumps(fp)), (
+        "fingerprint must equal its own JSON round-trip, or the cache "
+        "collision guard turns every calibrated run into a miss")
+    assert not any(isinstance(v, float) and np.isnan(v)
+                   for cell in fp for mode in cell
+                   for v in (mode if isinstance(mode, list) else [mode])
+                   if isinstance(v, float))

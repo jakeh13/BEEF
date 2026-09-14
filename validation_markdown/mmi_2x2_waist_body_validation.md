@@ -4,12 +4,41 @@ Opened **2026-08-29**, at the user's request: apply the interior-waist body
 profile (`body_waist_width`/`body_waist_length`/`body_transition_length`,
 added 2026-08-27/28 for the 1×4) to the **2×2 MMI on SOI_220**.
 
-> **This doc is a PLAN, not a gap list.** Nothing below has been simulated for
-> a waisted 2×2. Every number quoted for the *straight* 2×2 is **MEASURED** and
-> cited to `resolved/mmi_2x2_validation.md`; everything about what a *waisted*
-> 2×2 does is **ARGUED** and is a prediction to be checked. It converts to a
-> normal gap list against the [four checks](README.md#the-four-checks) once a
-> design point exists and the scripts run.
+> ## ✅ STATUS 2026-09-14 — the device is VALIDATED. Read this before anything below.
+>
+> **Design point: `Ww = 2.24, Lw = 6.0, Lt = 5.0, L = 22.0` — 31.00 µm total,
+> 16.2 % shorter than the 37.00 µm straight control.**
+> Full-device FDTD (51 wl, res 40): IL **0.2010 dB** · imbalance **0.0124** ·
+> phase mean-dev **0.267°** · MAX-dev **0.447°** · min total T 0.9548.
+> It passes all four criteria **under both the mean AND the max phase reading**,
+> so it does not depend on the mean-vs-max ambiguity in the pre-registered text
+> — the ambiguity that decided, and killed, the original winner.
+>
+> **The original 29.50 µm / 20.3 % headline is RETRACTED** (fails on both
+> settled taper bases and on full-device FDTD; also never hybrid-buildable at
+> s = 0.25 µm). The 30.50 µm interim point passes the mean reading but FAILS
+> the max one.
+>
+> Grid re-scored at a settled basis and verified stable across two independent
+> bases (660/668 verdicts agree, 70 passers). The 1×4's waist failure does
+> **not** reproduce here: this device works.
+>
+> **Method status (separate from the design claim).** The hybrid FDTD/EME
+> cascade reproduces full-device FDTD to **0.76 % on the bar port** at the
+> design point — the calibrated straight device's quality, on a body that
+> cannot be β-calibrated. A **cross-port deficit of ~1–2 %** persists on both
+> geometries tested; five hypotheses for it were measured and four falsified
+> (see "FIVE HYPOTHESES TESTED"). **None of this bears on the design claim** —
+> check 4 is single-domain brute force and uses no EME.
+>
+> ---
+>
+> *(original framing, kept for provenance)* **This doc opened as a PLAN, not a
+> gap list.** At the time nothing had been simulated for a waisted 2×2: every
+> number for the *straight* 2×2 was **MEASURED** and cited to
+> `resolved/mmi_2x2_validation.md`, while everything about a *waisted* 2×2 was
+> **ARGUED**, a prediction to be checked. It has since converted to a normal
+> gap list against the [four checks](README.md#the-four-checks).
 >
 > **Read `mmi_1x4_tapered_body_validation.md` first.** The same profile was
 > tried on the 1×4 and **failed outright** — twice closed, on three Ww values,
@@ -17,6 +46,96 @@ added 2026-08-27/28 for the 1×4) to the **2×2 MMI on SOI_220**.
 > length. This plan exists because the 2×2 differs in the specific ways that
 > would discriminate *why* it failed, not because the 1×4 result is being
 > ignored.
+
+
+---
+
+## 🤝 HANDOFF — state as of 2026-09-14
+
+**NOTHING IS RUNNING.** No queued or running SLURM jobs for this device, no
+background processes. Anything in the queue under this account belongs to the
+1×4 C-band and 4×4 calibration studies, not to this one. A new session can
+start clean.
+
+### Where to pick up — open items, highest value first
+
+1. **Non-uniform ramp cells — the one experiment that would close the method
+   question.** The staircase attribution (each EME cell boundary sheds ~2 % of
+   |E|², so MORE cells means MORE spurious loss) is supported by correlation,
+   not causation. `EMESolver` already accepts `region_cell_lengths=`, measured
+   INERT when it was added, so the test is cheap: at a FIXED total cell count,
+   redistribute cells toward where the width changes fastest and see whether IL
+   moves. If it does, placement matters and there is a real fix; if it does
+   not, the error is purely per-boundary count. Either answer is publishable
+   and it needs no new FDTD.
+
+2. **The CROSS-port deficit is the remaining method error, and it is narrow.**
+   ~1–2 % absolute on BOTH geometries tested, while the bar port reaches 0.76 %
+   on the design point. It is NOT the parity shortcut (removing it made things
+   worse), NOT the mode count, NOT C_TRANS convergence, and only marginally β
+   (calibration moved it 0.0171 → 0.0153). Anything new should target the cross
+   path specifically rather than re-testing the four falsified hypotheses —
+   see "FIVE HYPOTHESES TESTED" before spending compute.
+
+3. **Optional: extend the calibrated comparison to all 11 wavelengths.** Only
+   band centre was run with per-cell β calibration. Mostly confirmatory now
+   that the mechanism is understood (uniform offset cancels in a bar−cross
+   difference), so low priority.
+
+### What a new session must NOT redo
+
+- ❌ Do not re-run the C_TRANS ladder hoping for convergence. Measured to ct32
+  on two mode bases; IL diverges by construction. **C_TRANS is an OPTIMUM, not
+  a floor.**
+- ❌ Do not raise `N_MODES` above 10 on this body. The 2.24 µm waist supports
+  exactly 10 distinct modes; N=11 is an EXACT duplicate (overlap 1.000000).
+  14 was inherited from the 2.8 µm face and cost a 15× runtime penalty.
+- ❌ Do not quote the 29.50 µm / 20.3 % headline. Retracted — fails on two
+  settled bases and on full-device FDTD, and was never hybrid-buildable.
+- ❌ Do not trust `MMI2X2_HY_REUSE=0` output produced before 2026-09-13. That
+  branch returned a copy of the BAR result.
+
+### Traps this study paid for — apply them, do not rediscover them
+
+- **Filename collisions, eight instances.** An output name must carry every
+  parameter the result depends on, **geometry first**. The most recent: the
+  hybrid comparison was keyed on `res/ct/nm` only, so merging a second design
+  point silently overwrote the first.
+- **Read the reference's own `config.json`; never assume a script default
+  reproduces it.** Cost 4h15m of 48-rank time — the check-4 references are at
+  `decay_tol=1e-05`, the script default is `1e-11`, which is below the
+  reachable floor and never converges.
+- **Bit-identical output from a changed parameter is a BUG SIGNAL**, not a
+  small effect. That is how the dead seam-modes knob was found.
+- **One geometry cannot characterise a method.** The "systematic bar-high /
+  cross-low bias" held across N_MODES, C_TRANS, parity and calibration
+  variations — all on one body — and reversed sign on the first new body tried.
+- **Divide per-rank log counts by the rank count** before treating them as a
+  measurement.
+
+### Key artifacts
+
+| what | where |
+|---|---|
+| all outputs for this device | `example_output/mmi_2x2_tapered/` |
+| two-geometry comparison figure | `spectra_hybrid_vs_fdtd_two_geometries.png` |
+| per-geometry spectra | `spectra_*_hybrid_vs_fdtd_Ww2.24_Lw6_Lt{5,6}_L{22,21.5}.png` |
+| stitched hybrid field + its replay cache | `hybrid_stitched_res40/` (`recon_cache_*.npz` re-renders in seconds, no re-solve) |
+| β(width) calibration curve | `beta_width_curve_res40_nm10_nwl11_nw9.json` |
+| full-device FDTD references | `check4_*.json`, `smatrix_waisted_*.pkl` |
+| re-scored grid rows | `example_output/verification/mmi_2x2_waist_free/free_sweep_rows_*_nt{7,13,21}_tc*_nb15_*.jsonl` |
+
+### Library changes landed this session (shared — other studies depend on them)
+
+`EMESolver.solve_section(cell_neff_override=...)` and
+`HybridSolver(cell_neff_fn=...)` add **per-cell β calibration for TAPERED
+bodies**, which previously could not be calibrated at all. Backward
+compatibility is *tested*: the new cache-fingerprint key is added only when the
+override is non-None, with a test asserting an uncalibrated config does not
+contain it — otherwise every cached `solve_section` entry in the repo would
+have been invalidated, including the FDTD sections the modal-mux, 1×4 and 4×4
+studies depend on. Full suite **814 passed**; 13 new tests in
+`tests/test_eme_cell_neff_override.py`.
 
 ---
 
@@ -720,6 +839,207 @@ IL, by contrast, is still creeping (cells 25→30 moves −0.008 dB, modes 13→
 13×30, still **+0.118 dB** high, so 5b part 1's unexplained loss offset
 stands.
 
+#### 📋 THE HYBRID-vs-FDTD GAP: FIVE HYPOTHESES TESTED, 2026-09-08 .. 09-12
+
+Consolidated so a reader does not have to reconstruct the sequence. Each row
+was a real measurement, not an argument, and four of five were falsified.
+
+| # | hypothesis | test | verdict |
+|---|---|---|---|
+| 1 | rank-deficient interface basis (`N_MODES=14` on a 2.24 µm waist) | re-ran the whole ct4..ct32 ladder at the rank-clean `N_MODES=10` | ❌ **identical ladder** — IL 0.2415 at ct32 on both bases, agreeing to ~0.004 dB. Real defect (15× runtime penalty) but not the cause. |
+| 2 | `C_TRANS` not converged | ladder to ct32 on two bases | ❌ **it is the STAIRCASE** — IL diverges because each added cell is another artificial step. C_TRANS has an OPTIMUM, not a floor. |
+| 3 | `MODE_SIGNS` parity shortcut (cross port derived, not simulated) | `MMI2X2_HY_REUSE=0`, both arms actually solved | ❌ **made it WORSE** — imbalance 0.0339 → 0.0460 against FDTD's 0.0168. The shortcut was masking error, not causing it. |
+| 4 | interface mode count starved at the FDTD↔EME seams | `interface_modes = [14,10,10,10,10,14]` | ❌ **bit-identical output** — and the reason is structural: section 1 has `n_out = interface_modes[1] = 10`, so the extra seam modes are discarded at the very next interface. The corrected experiment (14 everywhere) is just the nm14 run, which gives imbalance 0.0333 — still 2× FDTD. |
+| 5 | uncalibrated body β | built per-cell calibration (below) and ran it | ⚠️ **PARTIAL** — improves all three axes but closes only ~11–27% of the gap. |
+
+##### ⚠ Two traps inside those tests, both worth more than the tests themselves
+
+**`MMI2X2_HY_REUSE=0` had NEVER produced a valid cross result on this device.**
+The branch set `cross_kwargs = {0: {"input_idx": 0}, OUT: {"output_idx": 0}}`
+— excite the BOTTOM arm, read the BOTTOM output — which on a y-mirror-symmetric
+device is the BAR path reflected. It burned 1896 s of real FDTD and returned an
+exact copy of bar (`T_bar == T_cross` to 4 dp, imbalance 0.0000, phase −0.001°).
+Correcting only the `input_idx` then hits a hard refusal from the library:
+
+```
+ValueError: mirror_pairs[6]=0: center_at mismatch at x=10.85 vs
+mirrored x=-10.85: -0.75 vs 0.75 um
+```
+
+because a plain x-mirror maps output onto input WITHOUT flipping y, and is only
+legal when both ports share a y. So `input_idx=0` was not a typo — it was the
+only way to keep that mirror legal, and it silently changed WHICH QUANTITY was
+computed. The honest configuration is no mirror at all (`mirror_pairs={}`),
+solving the output section directly. The script's own docstring offers
+`SYMMETRIC_MODE_REUSE=0` as the way to "remove the assumption"; anyone who took
+it up before this fix got a silently wrong answer.
+
+**A knob that looks wired up but is discarded downstream.** The seam-modes test
+produced bit-identical coefficients, which was the tell — genuine physics
+rarely reproduces to the last digit. Checking `_mode_lists()` showed the extra
+modes are truncated at the adjacent interface. **Bit-identical output from a
+changed parameter means the parameter did not take effect**; treat it as a bug
+signal, never as "the effect is small".
+
+#### ✅ PER-CELL β CALIBRATION FOR A TAPERED BODY — new capability, 2026-09-11/12
+
+`calibrate_body_neff` is what closed the engine-agreement gap on every
+UNIFORM-body device here, and it is hard-refused for a tapered one for two
+independent reasons:
+
+1. **Mechanically** it takes `solve_section()`'s `neff_override` fast path,
+   which builds a DIAGONAL `exp(2jπ·n_eff·L/λ)` and *skips the mode solve and
+   `compute_s_matrix()` outright*. Diagonal means NO mode mixing — exact for a
+   slab, and it deletes the entire physics of a taper.
+2. **Practically** an intermediate ramp width has no neighbouring FDTD section
+   to take β from, and `section_mode_beta()` measures β by fitting dφ/dL — a
+   0.75 µm ramp slice is far too short to fit a slope on.
+
+**Both are now solved.** `EMESolver.solve_section(cell_neff_override=...)` and
+`HybridSolver(cell_neff_fn=...)` keep the multi-cell solve and every interface
+S-matrix and substitute n_eff ONLY in the propagation within each cell. The
+split is exact: interface overlaps integrate the mode FIELDS, propagation uses
+n_eff, so calibrating one cannot disturb the other. β comes from a measured
+β(width) curve (`measure_beta_width_curve.py`, 9 widths 2.24–2.80 µm on uniform
+`UniformCrossSection` strips at the hybrid's own FDTD settings), interpolated
+per cell by `beta_width_curve.py` — legitimate because each EME cell IS a
+uniform strip.
+
+**The offset being corrected is large, and independently confirms the 4×4's
+finding.** FDTD minus mode-solver n_eff at res 40:
+
+| width | modes 0–4 |
+|---|---|
+| 2.24 µm | +0.0417 … +0.0481 |
+| 2.80 µm | +0.0417 … +0.0445 |
+
+against the 4×4 study's **+0.0462** — a different device, wavelength (1.5475 vs
+1.31) and material. **Grid dispersion is a property of the METHOD at a given
+resolution, not of one device.**
+
+**But the benefit here is modest, and the reason is quantitative.** At band
+centre, calibrated vs uncalibrated vs FDTD:
+
+| | uncalibrated | calibrated | full FDTD |
+|---|---|---|---|
+| excess loss dB | 0.1875 | 0.1877 | 0.2178 |
+| imbalance | 0.0339 | **0.0321** | 0.0168 |
+| phase ° | −90.953 | **−91.144** | −91.661 |
+
+Every axis improves (phase gap 0.708 → 0.517°, imbalance 0.0171 → 0.0153) but
+none closes. The offset is nearly UNIFORM across modes — spread only ~0.0006
+among the dominant modes 0–2 — and these metrics are DIFFERENCES between bar
+and cross, where a uniform offset cancels. Combined with a short 21.5 µm body,
+a large correction yields a small net change. Expect the opposite where the 4×4
+saw it: long bodies, absolute phase.
+
+##### Two implementation traps, both regression-tested
+
+- **NaN in a cache fingerprint makes the cache miss forever.** `json` writes a
+  bare `NaN` and reads it back as `float('nan')`, and `NaN != NaN`, so
+  `store.lookup()`'s `cached_config != config` collision guard can never match.
+  Measured: the first calibrated run logged "hash match … but config.json
+  differs" on all 8 ranks. NaN is now a string sentinel.
+- **Mode IDENTITY is not stable across a β(width) curve.** The solver sorts by
+  n_eff, so crossing modes swap indices — m6/m7 exchange between w=2.66 and
+  2.73 µm here, and m8/m9 are near-degenerate at 2.45. Interpolating such a
+  mode blends two physical modes. `well_ordered_modes()` detects this and
+  leaves those modes uncalibrated via NaN rather than forcing all-or-nothing.
+  It selects **modes 0–4 (99.70 % of the power)**; the 0.47 % remainder keeps
+  its solved n_eff.
+
+⚠ Backward compatibility is *tested*, not asserted: the new fingerprint key is
+added ONLY when the override is non-None, with a test proving an uncalibrated
+config does not contain it. Otherwise every cached `solve_section` entry in the
+repo — the expensive FDTD sections the modal-mux, 1×4 and 4×4 studies depend on
+— would have been invalidated at once. Full suite: **814 passed**.
+
+#### ✅ HYBRID MEASURED ON A SECOND GEOMETRY 2026-09-13 — job 13153984, and it CORRECTS an earlier over-generalisation
+
+Every hybrid-vs-FDTD conclusion in this file up to now came from ONE body
+(`Lw6 Lt6 L21.5`). The confirmed 31.00 µm design point gives a second,
+independent geometry, which is what separates "a property of the METHOD" from
+"a property of that body". Same config both times (nm10, ct8, res 40, 11 wl):
+
+| | NEW `Lw6 Lt5 L22.0` | incumbent `Lw6 Lt6 L21.5` |
+|---|---|---|
+| mean \|ΔT\| bar | **0.76 %** | 2.91 % |
+| mean \|ΔT\| cross | 3.17 % | 3.32 % |
+| bar bias range | −0.0087 … **+0.0041** | **+0.0090 … +0.0186** |
+| cross bias range | −0.0201 … −0.0078 | −0.0214 … −0.0083 |
+| Δ split | +0.36 … +0.99 % | +1.02 … +1.74 % |
+| Δ IL dB | +0.0436 | −0.0109 |
+
+❌ **The "systematic bar-high / cross-low bias" recorded earlier does NOT
+generalise.** On the new geometry the bar residual straddles zero; only the
+CROSS deficit reproduces, at nearly identical magnitude on both bodies. The
+correct statement is therefore narrower: **the hybrid under-delivers to the
+cross port by ~1–2 % absolute on both geometries, while the bar port's error
+is geometry-dependent.** That the bar excess reversed sign between two bodies
+is exactly why one geometry was not enough to characterise the method.
+
+✅ **The new geometry's bar port is essentially at the calibrated straight
+device's quality** (0.76 % against that device's 0.62 %/0.59 %), on a body
+that cannot be β-calibrated at all.
+
+The cross deficit is also the component that survived the other tests: it did
+not improve when the parity shortcut was removed (simulating the cross port
+properly made it WORSE — 0.0460 vs 0.0339 imbalance), and per-cell β
+calibration moved it only from +0.0171 to +0.0153. So the cross path is where
+the remaining method error lives, and it is not the parity vector, not the
+mode count, and only marginally β.
+
+⚠ Consistent with — but not proof of — the staircase attribution: the new body
+has a SHORTER ramp (Lt=5.0 vs 6.0) at the same C_TRANS=8, hence shorter cells
+and smaller per-boundary steps. Establishing that causally needs the
+non-uniform-cell test (`EMESolver(region_cell_lengths=...)`) at fixed cell
+count, which has not been run.
+
+⚠ **Eighth filename collision, same class as the rest.** The comparison output
+was named `hybrid_vs_fdtd_res{RES}_ct{C_TRANS}_nm{N_MODES}.json` — no
+geometry — so merging the new device silently OVERWROTE the incumbent's
+result. Both recovered by re-merging their (geometry-tagged) shards; the name
+now carries `Ww/Lw/Lt/L`, and so do the plot filenames and titles.
+
+#### ✅✅ CHECK 4 CONFIRMS A NEW DESIGN POINT 2026-09-12 — job 13124560, and it passes BOTH phase readings
+
+Full-device FDTD (51 wl, res 40, decay_tol 1e-05 — identical config to the two
+references already on disk) on step 6's best-margin re-scored candidate:
+
+| candidate | µm | IL dB | imb | mean-dev° | MAX-dev° | saving | verdict |
+|---|---|---|---|---|---|---|---|
+| **NEW `Lw6 Lt5 L22.0`** | 31.00 | **0.2010** | **0.0124** | **0.2674** | **0.4474** | 16.2% | ✅ **PASS on BOTH readings** |
+| incumbent `Lw6 Lt6 L21.5` | 30.50 | 0.2178 | 0.0168 | 1.9110 | 2.5644 | 17.6% | PASS mean / ❌ FAIL max |
+| step 6's original `Lw8 Lt6 L20.5` | 29.50 | 0.2036 | 0.0976 | 2.0994 | 2.3230 | 20.3% | ❌ FAIL |
+
+**The new point is better on EVERY axis simultaneously** — lower loss
+(−0.0168 dB), better imbalance (−0.0043), higher minimum total transmission
+(0.9548 vs 0.9511), and **5.7× the phase margin** — for 0.5 µm more length.
+
+📌 **It also dissolves the criterion ambiguity that has run through this whole
+study.** The pre-registered text says MAX-over-band phase deviation while
+`score()` applies the band MEAN, and 4 of 56 passers flipped between the two
+readings (see the phase-criterion note). The incumbent sits exactly in that
+crack: 1.911° mean (pass) against 2.564° max (fail). **The new point passes
+both with room to spare — 0.267° mean, 0.447° max, against a 2.0° budget.**
+A design that does not depend on which reading governs is worth 1.4
+percentage points of length saving.
+
+**EME and FDTD agree on the margin.** Step 6 predicted 0.022° (mean, at
+nt21/tc30); FDTD measures 0.267°. Both are an order of magnitude inside the
+budget, so the two engines agree this candidate is well-centred — unlike the
+original 29.50 µm winner, where EME's `N_TAPER=7` reading (1.696°) and FDTD
+(2.099°) disagreed across the threshold and the EME value turned out to be
+basis luck.
+
+⚠ **Method note, recorded because it cost 4h15m of 48-rank time.** The first
+submission (job 13119819) used the script's `decay_tol` DEFAULT of 1e-11,
+having assumed it matched the references. It does not — both references were
+measured at **1e-05**, which is in each one's own `config.json`. 1e-11 is
+below this study's measured hard floor, so that run was still time-stepping at
+t=739 with no decay in sight when it was cancelled. **Read the reference's
+stored config; do not assume a script default reproduces it.**
+
 #### ✅ STEP 6 RE-SCORED 2026-09-10 — job 13061906, 8/8 tasks, 668/668 points, no faults
 
 Full grid re-scored at the settled basis **N_TAPER=13 / TAPER_CELLS=30 /
@@ -1171,6 +1491,10 @@ the whole grid, with each component as a fraction of its pre-registered budget:
 **29.50 µm vs the 37.00 µm control is −7.50 µm, 20.3%.** The stop rule does
 **not** trigger; the deliverable is a design point, not a negative.
 
+> ❌ **RETRACTED 2026-09-12.** This 20.3 % figure belongs to a point that fails
+> on both settled taper bases and on full-device FDTD. The delivered saving is
+> **16.2 % (31.00 µm)**. See the STATUS block at the top of this file.
+
 ⚠ **No point in this grid has broad headroom** — every one of the top six uses
 78–88% of *some* budget. And the two most attractive points are both
 **constraint-boundary, not interior**: the 29.50 µm winner has `s = 0.25`
@@ -1212,6 +1536,13 @@ converted a failing point into a comfortable-looking one.
 
 **The 20.3% length saving is unaffected by which reading governs.**
 
+> ❌ **RETRACTED 2026-09-12 — and this claim is the one that aged worst.** The
+> reading did not merely pick a different 29.50 µm point; on a SETTLED taper
+> basis both 29.50 µm candidates fail outright, so the saving was never
+> reading-independent — it was basis-dependent, and the basis was wrong. The
+> delivered design point (`Lw6 Lt5 L22.0`, 31.00 µm, 16.2 %) is genuinely
+> reading-independent: 0.267° mean and 0.447° max, both far inside 2.0°.
+
 > **Shortest passer surviving BOTH readings: `Ww = 2.24, Lw = 10.0, Lt = 5.0,
 > L = 20.500` → 29.50 µm total** — IL 0.4255 dB, imb 0.1095, max-phase-dev
 > **1.516°**. Same 29.50 µm as the mean-reading winner: the strict reading
@@ -1226,12 +1557,28 @@ displaced winner, sits on the stub floor at `s = 0.25`.
 `score()` has always applied, so the 56-passer set and its ranking stand
 unchanged, and the design point is the shortest passer under it:
 
-> ### ⚠️ SUPERSEDED BY STEP 5b (2026-09-02) — SCORED ON AN UNCONVERGED TAPER BASIS
-> Step 5b (job 12780420) measured `N_TAPER=7`, the value every number below was
-> produced at, as **not converged**, and the phase criterion **passes only at
-> 7** — failing at 5, 9, 11 and 13. Check 4's full-device FDTD agrees (2.099°).
-> The point below is retained as the record of what step 6 concluded; it is
-> **not** a validated design point. See step 5b for the full table.
+> ### ❌ RETRACTED 2026-09-12 — THIS POINT FAILS. The design point is now `Lw = 6.0, Lt = 5.0, L = 22.0` (31.00 µm).
+> Retained only as the record of what step 6 originally concluded. Do not quote
+> the 20.3 % headline below; it does not survive.
+>
+> **Why it fails, by three independent routes:**
+> * **Re-scored grid** (jobs 13061906 / 13065614) at BOTH settled taper bases:
+>   mean-dev **2.227°** at nt13/tc30 and **2.160°** at nt21/tc30, against a
+>   2.0° budget. The two bases agree on 660/668 verdicts, so this is not a
+>   basis artifact.
+> * **Full-device FDTD** (check 4): mean-dev **2.099°**, MAX-dev 2.323°.
+> * **Step 5b's 2-D basis map**: FAILS at every one of 13 settled
+>   `(N_TAPER, TAPER_CELLS)` points, 2.05–2.30°. Its original 1.696° at
+>   `N_TAPER=7` is the sole outlier in the whole map — basis luck, not margin.
+>
+> It was also never hybrid-buildable: `s = 0.25 µm` is below the
+> `s ≥ body_stub + dpml = 0.75 µm` floor.
+>
+> **The replacement is measured, not inferred** — see "CHECK 4 CONFIRMS A NEW
+> DESIGN POINT": `Ww2.24 Lw6.0 Lt5.0 L22.0`, 31.00 µm (16.2 % shorter),
+> IL 0.2010 dB · imbalance 0.0124 · mean-dev **0.267°** · MAX-dev **0.447°**,
+> i.e. it passes on BOTH phase readings and so does not depend on the
+> mean-vs-max ambiguity that decided this one.
 >
 > ### 📌 DESIGN POINT (as scored at N_TAPER=7) — `Ww = 2.24, Lw = 8.0, Lt = 6.0, L = 20.5` (stub 0.25)
 > **29.50 µm total vs the 37.00 µm straight control — 7.50 µm shorter, 20.3%.**

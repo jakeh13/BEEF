@@ -7,6 +7,23 @@
 > residuals below before quoting any number from this device.** They are
 > stated here rather than left at line ~1869 so they travel with the doc.
 >
+> **Update 2026-09-05 → 2026-09-13, see "✅ 9d RESULT" below.** The
+> `interface_modes` sweep this header's own to-do list called a multi-week
+> commitment was run, after a library fix (`monitor_size` pin) made it a
+> 25–32 s/count sweep instead. Result: the **hybrid's own error against the
+> FDTD reference** (a different question from Residual 1's EME-vs-hybrid
+> disagreement, which is untouched and still open) splits into two —
+> **blue half (1.50–1.55 µm) is now solved** by raising `interface_modes`
+> to 22–24 (worst per-port error 5.99%→0.62%, mechanism confirmed: the
+> single TE input excites only even lateral orders, wasting most of a
+> 12-mode basis); **red half (1.56–1.60 µm) is untouched**, physically
+> insensitive to mode count. `body_stub` cut position was independently
+> ruled out as a lever (0.07% effect, all 4 ports, gated at 0.12% against
+> the shipped result). A C-band resim at 21 points confirms the FDTD
+> reference has no hidden pathology and resolves real beat structure the
+> coarse grid was aliasing by luck; the matching hybrid resim is still
+> running.
+>
 > **What is closed.** Steps 1–7 (nitride Sellmeier entry, `MaterialStack`
 > core/clad generalization, cache fingerprint, cross-section design,
 > body design, two example scripts, wiring) and **all four checks**:
@@ -73,9 +90,12 @@
 >   mid-pack among the silicon rows (73× / 99× / 151× / 395×). **Threshold
 >   deliberately NOT changed** — re-calibrating a gate after seeing it fail is
 >   the wrong reflex; it needs a decision, not a patch.
-> - Step 9d (`interface_modes` sweep) — scoped, not run; needs a ~3-day
->   prewarm per mode count, and the truncation refutation removed its
->   motivation.
+> - ~~Step 9d (`interface_modes` sweep) — scoped, not run~~ **RUN
+>   2026-09-05 → 2026-09-13, see "✅ 9d RESULT" below.** The "~3-day prewarm
+>   per mode count" cost was real for the EME-side truncation question this
+>   header refuted, but for the hybrid's own error against FDTD, a
+>   `monitor_size` pin made the sweep 25–32 s/count once a 24-mode ceiling
+>   was prewarmed once.
 > - Step 9b (output-side mirror reuse) — proposed; needs a cache-keyed
 >   `MirrorSpec` variant (`beef.MirrorSpec` is x-mirror; this device needs
 >   transverse-across-`solve()`).
@@ -2012,6 +2032,137 @@ scheduling decision, not a technical one.
 
 `N_MODES` is now env-overridable (`MMI1X4_N_MODES`), **default unchanged**,
 so the sweep can be driven without editing the script when it is run.
+
+### ✅ 9d RESULT — the sweep was finally run, 2026-09-05 → 2026-09-13
+
+**⚠ Scope, read first.** This settles the **hybrid's own error against the
+whole-device FDTD reference**. It does **not** touch Residual 1 (the
+EME-vs-hybrid split-shape/total-T disagreement in the RESOLVED header
+above) — that comparison's own truncation test (the free 3-engine ladder)
+stands unchanged and unrefuted. The two questions are orthogonal: this
+section is about interface completeness on the **hybrid** side only.
+
+**The blocker was the `monitor_size` pin, not compute.** Added
+`monitor_center=0.0`/`monitor_size=FDTD_SIM_WIDTH` to sections 0 and 2 (never
+the body — `_calibrated_neff` forwards those exact keys out of the body's own
+kwargs into the β calibration, so pinning it there would rehash and re-pay
+that calibration too) in both `mmi_1x4_hybrid.py` and
+`_prewarm_mmi_1x4_hybrid.py` (`MMI1X4_PIN_MONITOR`, default on). This is what
+`solve_section()`'s own `family_config` gate needs (`monitor_size is not
+None`) to build the mode-count "superset" cache family at all — without it,
+job 12260083 and a repeat this session (12797780) both confirmed a downward
+probe starts time-stepping instead of slicing. With the pin, a 24-mode
+prewarm (jobs 12963023/13019844/13020152/13019542, 4 branches, ~1 day each
+after retries — see Lustre note below) made every smaller count from 8 up
+free: the full ladder 8/10/12/14/16/18/20/22/24 (job 13058948) ran in
+**25–32 seconds per mode count**, verified bit-identical (0.000% deviation)
+against an independently-computed 12-mode run.
+
+**Mechanism, confirmed directly from cached per-mode power, not inferred.**
+The single centred input excites TE only, and within TE only **even**
+lateral orders — odd orders are antisymmetric, zero by parity; TM modes are
+zero by polarization mismatch. At 16 modes the power-carrying indices are
+exactly `[0, 2, 4, 6, 8, 15]` (0.357/0.291/0.191/0.099/0.040/0.013);
+`interface_modes=12` was spending 7 of 12 slots on modes carrying ~1e-11.
+This also refutes the standing prediction it inherited: item 9d's own
+"more truncation ⇒ less disagreement" framing (from the EME-side ladder)
+does NOT hold for hybrid-vs-FDTD — here, less truncation strictly helps.
+
+**Convergence — two real plateaus, at irregular counts, not every 4.**
+A two-family (TE + TM) n_eff ladder fit off the 16-mode data correctly
+predicted TE10 at index 15 and TE12 at index 21 (power 0.0034) — confirmed
+directly, not just fit. 18–20 and 22–24 are bit-identical to each other
+because no new mode exists in that gap:
+
+| interface_modes | mean per-port err vs FDTD | worst | blue-band worst (≤1.55 µm) |
+|---|---|---|---|
+| 12 (production, calibrated) | 2.78% | 5.99% | 5.99% |
+| 12, uncalibrated | 2.98% | 5.89% | 5.89% |
+| 16 | 1.65% | 4.40% | 1.59% |
+| 18–20 | 0.99% | 2.64% | 1.59% |
+| **22–24** | **0.69%** | **2.39%** | **0.62%** |
+
+**The error is now two separable problems, one solved.** Blue half
+(1.50–1.55 µm): fixed by mode count, under the 1% target at 22–24 modes
+(0.62% worst, down from 5.89–5.99%). Red half (1.56–1.60 µm): **completely
+insensitive to mode count** — 16/18/20/22/24 are bit-identical there because
+the modes that would help (TE10 at 1.56 µm) are physically cut off past that
+wavelength. That residual (3.1–4.4%) needs a different mechanism, plausibly
+connected to Residual 1's own opposite-spectral-slope finding — not
+re-investigated here.
+
+**Calibration re-examined across the full band, not just band centre —
+result sharpens, doesn't reverse, 9a.** Uncalibrated has the smaller
+worst-per-port error at 8 of 11 wavelengths; calibrated wins only at the red
+end (1.58–1.60) by a wide enough margin to still win on the *mean* (2.78%
+vs 2.98%). Split shape is essentially unmoved by calibration either way
+(~0.0166–0.0173 vs FDTD's ~0.0025 at band centre, calibrated or not). Net:
+calibration is not earning its keep over most of the band; kept as the
+default pending a decision, not because the data supports it.
+
+**The `body_stub` cut-position axis — ruled out, all four ports, gate
+passed.** New script `mmi_1x4_body_stub_sweep.py`
+(`examples/verification/python/`) walks the interface cut 0.25→1.00 µm using
+`measure_margins` (one FDTD run per section puts all 6 depths on separate
+monitors in the same simulation — 5 runs total, not 5×6) and reconstructs
+the cascade with the calibrated β reused across all depths (the body's
+per-mode β is a property of the uniform 12 µm slab, identical at every cut
+depth — only the propagated length changes). **Gate**: production
+`body_stub=0.25` reconstructed to `[0.22832, 0.24497, 0.24496, 0.22833]`
+vs the shipped `[0.22804, 0.24468, 0.24467, 0.22805]` (job 12227591), worst
+deviation **0.12%** against a 2% bar — validates both the reconstruction and,
+independently, `fdtd.py`'s measure-side `PortSpec` LOW/HIGH convention,
+which the library's own docstring flagged as unverified until this run.
+**Result: dead lever.** Across the full 0.25→1.00 µm range, total T varies
+0.0097% and split shape 0.0686% — against the then-5.9% error being chased.
+Not the mechanism.
+
+**A C-band (1.530–1.565 µm, 21 pt, 1.75 nm spacing) resim was run to pin the
+TE10 cutoff precisely** — the original 11-point 1.50–1.60 grid (10 nm
+spacing) straddled it by luck, not resolution. `MMI1X4_FDTD_WL_MIN/MAX/NWL`
+and matching `MMI1X4_HPREWARM_WL_MIN/MAX` added (both default to the
+original 1.50/1.60/11, additive). **Whole-device FDTD reference: ✅
+COMPLETE (job 13092669, 2d13h)** — smooth, monotonic total T through the
+whole window (no hidden pathology the coarse grid was aliasing), but real
+oscillatory structure in split shape: a genuine bump–dip–bump beat pattern
+(local peak ≈1.545 µm, dip ≈1.55 µm, global peak ≈1.5597 µm) that the
+11-point grid happened to sample close enough to both peaks and the
+intervening dip to look smooth — a different phase offset could have missed
+it. **Hybrid-side resim: still running** (job 13169522, 24 modes,
+uncalibrated, resubmitted with a 6-day budget after a first attempt
+(13092670) TIMED OUT at 2d12h with **nothing cached** — confirmed via a
+direct `cache_only=True` probe, `CacheMissError` on all 4 branches, not
+assumed; the true per-branch cost at this mode count/wavelength combination
+is still unmeasured). Update this row once it lands.
+
+**Two operational findings worth carrying forward, independent of this
+device.**
+
+1. `solve_section()`'s cache write is all-or-nothing — `save_run()` fires
+   once, only after the full result array is assembled and returned. There
+   is no incremental persistence. A crash or walltime kill at 99% loses the
+   **entire** call, not a resumable fraction. This cost two real multi-day
+   losses this session (see next point, and the C-band hybrid TIMEOUT
+   above) and should be assumed by default for any long `solve_section()`
+   call, not rediscovered per device.
+2. A recurring `os.getcwd() FileNotFoundError` inside meow's import
+   (`meow_MEEP/src/meow/materials.py`'s `_validate_path`), confirmed via
+   `dmesg` as a real Lustre client error, hit this campaign **3 separate
+   times** across 2 different job families, on **7 different compute
+   nodes** — not a single bad node. The 24-mode uncalibrated prewarm
+   recovered via per-branch resubmits (no compute lost — each failure hit
+   before that branch's own expensive calibration/output stage). The
+   16-mode **calibrated** prewarm was not so lucky: it failed **twice**,
+   both times after the entire ~16-run diagonal-only calibration had
+   completed and was mid-decomposition on the very last band — i.e., at
+   effectively 99% done — losing ~3 days of compute each time, with
+   nothing recoverable per finding 1. **That confirmation was dropped**
+   (not re-attempted a third time) rather than accept a third multi-day
+   exposure to the same all-or-nothing failure mode for a result that was
+   already trending "mildly harmful," consistent with 9a's own finding at
+   12 modes. Neither instance was escalated to PACE support; if this
+   recurs on a future long single-rank meep/meow job, escalate rather than
+   retry a third time blind.
 
 ### ✅ CHECK 3 — resolution convergence, RESOLVED 2026-08-24 (job 12275175)
 

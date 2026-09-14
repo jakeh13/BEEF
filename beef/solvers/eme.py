@@ -67,8 +67,23 @@ def _cell_neff_fingerprint(cell_neff_override: Optional[np.ndarray]):
         raise ValueError(
             f"cell_neff_override must be [n_wavelengths, n_cells, n_modes]; "
             f"got shape {arr.shape}")
-    return [[[[round(float(np.real(v)), 9), round(float(np.imag(v)), 9)]
-              for v in mode_row] for mode_row in cell_row] for cell_row in arr]
+    # NaN is serialized as the STRING "nan", not a float NaN.
+    #
+    # json.dumps happily writes a bare NaN token and json.load reads it back as
+    # float('nan') -- but NaN != NaN, so beef.cache.store.lookup()'s
+    # `cached_config != config` guard then NEVER matches and every calibrated
+    # run re-solves from scratch. Measured: the first per-cell calibrated run
+    # logged "hash match ... but config.json differs" on all 8 ranks, because
+    # modes left uncalibrated carry NaN by design. A string sentinel compares
+    # equal to itself and keeps the fingerprint faithful.
+    def _fp(v):
+        re_, im_ = float(np.real(v)), float(np.imag(v))
+        if np.isnan(re_):
+            return "nan"
+        return [round(re_, 9), round(im_, 9)]
+
+    return [[[_fp(v) for v in mode_row] for mode_row in cell_row]
+            for cell_row in arr]
 
 
 # Tolerance for the diagonal-reconstruction self-check in
@@ -872,10 +887,28 @@ class EMESolver:
                     # Modes are rebuilt rather than mutated because meow's Mode
                     # is immutable; `meow.mode.normalize()` constructs new ones
                     # the same way.
+                    # NaN means "leave this mode's solved n_eff alone".
+                    #
+                    # Needed because mode IDENTITY is not always stable across
+                    # the widths a calibration curve is measured on: the
+                    # eigensolver sorts by n_eff, so two modes that cross as
+                    # the width changes swap indices, and an interpolated beta
+                    # for such a mode blends two different physical modes.
+                    # Measured on the waisted 2x2's beta(width) curve -- modes
+                    # 6/7 swap between w=2.66 and 2.73 um. Those modes carried
+                    # 0.16% of the power, so calibrating the well-ordered ones
+                    # and leaving the rest on the solver's own n_eff is both
+                    # safer and near-lossless. All-or-nothing would have forced
+                    # a choice between a known-wrong beta and no calibration.
+                    def _sub(m, value):
+                        if np.isnan(np.real(value)):
+                            return m
+                        return type(m)(neff=complex(value), cs=m.cs,
+                                       Ex=m.Ex, Ey=m.Ey, Ez=m.Ez,
+                                       Hx=m.Hx, Hy=m.Hy, Hz=m.Hz)
+
                     modes = [
-                        [type(m)(neff=complex(_cno[wl_idx, ci, mi]), cs=m.cs,
-                                 Ex=m.Ex, Ey=m.Ey, Ez=m.Ez,
-                                 Hx=m.Hx, Hy=m.Hy, Hz=m.Hz)
+                        [_sub(m, _cno[wl_idx, ci, mi])
                          for mi, m in enumerate(cell_modes)]
                         for ci, cell_modes in enumerate(modes)
                     ]

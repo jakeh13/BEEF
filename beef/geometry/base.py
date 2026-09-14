@@ -109,6 +109,64 @@ def polygons_to_prisms(vertex_lists, si_medium, wg_height: Optional[float] = Non
     ]
 
 
+def polygons_to_material_grid(
+    vertex_lists,
+    oxide_medium,
+    si_medium,
+    cell_size_xy: Tuple[float, float],
+    grid_resolution: float,
+    wg_height: Optional[float] = None,
+):
+    """meep MaterialGrid (rasterized) alternative to polygons_to_prisms()'s
+    analytic Prisms, for isolating geometry-construction method as a
+    variable independent of everything else the solver does.
+
+    Exists because reproducing the modal multiplexer manuscript's own
+    reference FDTD script (mux_sim_test.py, a standalone, non-beef
+    script built from the actual archived reference-generation code)
+    found that its meep-native, gdstk.inside()-rasterized MaterialGrid
+    construction reproduces the paper's numbers to ~0.02-0.03 dB, while
+    this repo's own analytic-Prism construction (polygons_to_prisms())
+    leaves a 0.77/1.85 dB shortfall on the same device, same resolution,
+    same eps_averaging, same dispersion model -- see
+    modal_multiplexer_validation.md gap 9 item 6. This function lets
+    that same device be rebuilt through beef's own polygons() with only
+    the construction method swapped, to test whether the correlation
+    holds on beef's own geometry (not just the reference script's) and,
+    eventually, isolate which part of the rasterization pipeline matters.
+
+    grid_resolution is the MaterialGrid's own internal rasterization
+    density (pixels/µm) -- independent of, and per the reference script
+    several times finer than, the FDTD Yee-grid `resolution` passed to
+    `mp.Simulation`. meep's own subpixel averaging (`eps_averaging=True`)
+    then interpolates this fine mask down onto the coarser Yee grid,
+    exactly as it does for an analytic Prism boundary.
+    """
+    import gdstk
+    import numpy as np
+    import meep as mp
+
+    Sx, Sy = cell_size_xy
+    Nx = max(int(round(Sx * grid_resolution)), 1)
+    Ny = max(int(round(Sy * grid_resolution)), 1)
+    x = np.linspace(-Sx / 2, Sx / 2, Nx)
+    y = np.linspace(-Sy / 2, Sy / 2, Ny)
+    X, Y = np.meshgrid(x, y)
+    query_points = np.vstack((X.flatten(), Y.flatten())).T
+
+    gdstk_polygons = [gdstk.Polygon(verts) for verts in vertex_lists]
+    mask = np.array(gdstk.inside(query_points, gdstk_polygons)).reshape((Ny, Nx)).T
+
+    h = mp.inf if wg_height is None else wg_height
+    design_grid = mp.MaterialGrid(
+        grid_size=mp.Vector3(Nx, Ny, 1),
+        medium1=oxide_medium,
+        medium2=si_medium,
+        weights=mask.astype(float).flatten(),
+    )
+    return [mp.Block(center=mp.Vector3(), size=mp.Vector3(Sx, Sy, h), material=design_grid)]
+
+
 class DeviceGeometry(ABC):
     """Abstract base for all BEEF device geometries.
 
@@ -168,6 +226,25 @@ class DeviceGeometry(ABC):
         return polygons_to_prisms(
             self.polygons(stub_length=stub_length).get((2, 0), []),
             si_medium, wg_height=wg_height,
+        )
+
+    def to_meep_material_grid(
+        self,
+        oxide_medium,
+        si_medium,
+        cell_size_xy: Tuple[float, float],
+        grid_resolution: float,
+        stub_length: float = 0.0,
+        wg_height: Optional[float] = None,
+    ):
+        """Convert waveguide polygons to a rasterized meep MaterialGrid,
+        the same device geometry to_meep_prisms() builds analytically.
+        See polygons_to_material_grid() for why this exists.
+        """
+        return polygons_to_material_grid(
+            self.polygons(stub_length=stub_length).get((2, 0), []),
+            oxide_medium, si_medium, cell_size_xy, grid_resolution,
+            wg_height=wg_height,
         )
 
     # ------------------------------------------------------------------

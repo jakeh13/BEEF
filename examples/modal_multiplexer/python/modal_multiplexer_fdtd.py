@@ -195,6 +195,61 @@ DISPERSIVE = os.environ.get("MUX_FDTD_DISPERSIVE", "true") == "true"
                     # unexplored candidate for the residual 0.77/1.85 dB
                     # gap. Override: MUX_FDTD_DISPERSIVE=false to test it.
 
+GEOMETRY_MODE = os.environ.get("MUX_FDTD_GEOMETRY_MODE", "prism")
+                    # ADDED 2026-09-12, same methodology-experiment pattern
+                    # as DISPERSIVE above. Default "prism" is this file's
+                    # original, unchanged behavior (FDTDSolver's own
+                    # analytic-Prism construction). "materialgrid" swaps in
+                    # FDTDSolver's new rasterized mp.MaterialGrid path
+                    # (beef/geometry/base.py's polygons_to_material_grid())
+                    # -- built to test whether the standalone, non-beef
+                    # mux_sim_test.py reproduction of the manuscript's own
+                    # reference FDTD script (which uses exactly this
+                    # rasterized construction and closed the 0.77/1.85 dB
+                    # gap to ~0.02-0.03 dB there) does so BECAUSE of the
+                    # construction method, on THIS device's own beef
+                    # geometry, not something specific to that standalone
+                    # script. See modal_multiplexer_validation.md gap 9
+                    # item 6/7. Override: MUX_FDTD_GEOMETRY_MODE=materialgrid.
+
+DESIGN_GRID_FACTOR = float(os.environ.get("MUX_FDTD_DESIGN_GRID_FACTOR", "6.0"))
+                    # ADDED 2026-09-13, only used when GEOMETRY_MODE=
+                    # "materialgrid". 6.0 (default) matches mux_sim_test.py's
+                    # own `resolution = 6 * sim_res` -- copied wholesale from
+                    # that script without any convergence check of its own on
+                    # THIS device's finer branch-taper geometry. Item 7's real
+                    # res-40 result (job 13120046) confirmed the construction
+                    # method closes most of gap 9's shortfall but OVERSHOOTS
+                    # the paper by 0.26/0.53 dB (opposite sign from the
+                    # original 0.77/1.85 dB shortfall) rather than matching
+                    # it near-exactly the way mux_sim_test.py did. This sweep
+                    # tests whether that residual shrinks toward zero as the
+                    # MaterialGrid's own internal rasterization density
+                    # changes (grid-quantization artifact, should converge)
+                    # or stays roughly constant across factors (points at
+                    # meep's eps-averaging kernel itself, not quantization,
+                    # as the source of the residual). See
+                    # modal_multiplexer_validation.md gap 9 item 8. Override:
+                    # MUX_FDTD_DESIGN_GRID_FACTOR=<float>.
+
+EPS_AVERAGING = os.environ.get("MUX_FDTD_EPS_AVERAGING", "true") == "true"
+                    # ADDED 2026-09-13. Item 8's design_grid_resolution_
+                    # factor sweep (3.0/6.0/12.0, res=10) converged by 6.0 --
+                    # ruling out rasterization DENSITY as the source of item
+                    # 7's residual 0.26/0.53 dB overshoot. This flag tests
+                    # the other half of that item's hypothesis directly:
+                    # eps_averaging=False disables meep's own subpixel-
+                    # smoothing KERNEL entirely (both geometry_mode="prism"
+                    # and "materialgrid" pass this straight to
+                    # mp.Simulation(eps_averaging=...) -- see FDTDSolver.
+                    # __init__). If the residual shrinks/vanishes with
+                    # eps_averaging=False on BOTH geometry modes together,
+                    # that confirms the averaging kernel itself (not
+                    # anything Prism/MaterialGrid-specific) as the
+                    # remaining mechanism. Default True is unchanged
+                    # production behavior. Override:
+                    # MUX_FDTD_EPS_AVERAGING=false.
+
 WL_MIN = 1.26       # O-band, same grid as modal_multiplexer_hybrid.py so a
 WL_MAX = 1.36       # future comparison script needs no reconciliation beyond
 N_WL = 11           # port naming (both already use top/mid/bot).
@@ -358,6 +413,16 @@ print(f"minimum_run_time = {MIN_RUN_TIME:.0f} (new 2026-08-08, guards against "
 print(f"dispersive = {DISPERSIVE} (default True unchanged; False matches "
       f"archive/mux_sim/*.py's frozen-band Si -- see module docstring/"
       f"DISPERSIVE comment, modal_multiplexer_validation.md gap 9)")
+print(f"geometry_mode = {GEOMETRY_MODE!r}" +
+      (f", design_grid_resolution_factor = {DESIGN_GRID_FACTOR:.1f} "
+       f"(design grid = {RESOLUTION * DESIGN_GRID_FACTOR:.0f} px/um)"
+       if GEOMETRY_MODE == "materialgrid" else " (default, unchanged Prism "
+       "construction)") +
+      f" -- see module docstring/GEOMETRY_MODE comment, "
+      f"modal_multiplexer_validation.md gap 9 item 6/7/8")
+print(f"eps_averaging = {EPS_AVERAGING} (default True unchanged -- see "
+      f"module docstring/EPS_AVERAGING comment, "
+      f"modal_multiplexer_validation.md gap 9 item 9)")
 
 # top -> mid -> bot, same index convention as modal_multiplexer_hybrid.py's
 # PORTS / the legacy master's PORT_DEFS (0=top, 1=mid, 2=bot).
@@ -394,6 +459,9 @@ solver = FDTDSolver(
     decay_tol=DECAY_TOL,
     minimum_run_time=MIN_RUN_TIME,
     dispersive=DISPERSIVE,
+    geometry_mode=GEOMETRY_MODE,
+    design_grid_resolution_factor=DESIGN_GRID_FACTOR,
+    eps_averaging=EPS_AVERAGING,
 )
 
 # ---------------------------------------------------------------------------

@@ -24,12 +24,17 @@ from beef import SMatrix
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _OUT = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..",
                                     "example_output"))
+# Geometry-parameterised: two design points now have hybrid legs (the 30.50 um
+# incumbent and the 31.00 um confirmed point), and they must not be confused.
+_WW = os.environ.get("MMI2X2_PLOT_WW", "2.24")
+_LW = os.environ.get("MMI2X2_PLOT_LW", "6")
+_LT = os.environ.get("MMI2X2_PLOT_LT", "6")
+_L  = os.environ.get("MMI2X2_PLOT_L",  "21.5")
+_NM = os.environ.get("MMI2X2_PLOT_NM", "10")
+_GEO = f"Ww{_WW}_Lw{_LW}_Lt{_LT}_L{_L}"
 HYB = os.path.join(_OUT, "mmi_2x2_tapered",
-                   # nm-tagged since 2026-09-10; the untagged name used to be
-                   # overwritten by whichever N_MODES merged last.
-                   f"hybrid_vs_fdtd_res40_ct8_nm{os.environ.get('MMI2X2_PLOT_NM', '10')}.json")
-FDTD = os.path.join(_OUT, "mmi_2x2_tapered",
-                    "smatrix_waisted_Ww2.24_Lw6_Lt6_L21.5.pkl")
+                   f"hybrid_vs_fdtd_{_GEO}_res40_ct8_nm{_NM}.json")
+FDTD = os.path.join(_OUT, "mmi_2x2_tapered", f"smatrix_waisted_{_GEO}.pkl")
 outdir = os.path.join(_OUT, "mmi_2x2_tapered")
 
 d = json.load(open(HYB))
@@ -59,7 +64,8 @@ ax[0].plot(wl_h, Tb_h + Tc_h, "^", color="C2", ms=6, mfc="white", mew=1.6,
            label="total — hybrid")
 ax[0].axhline(0.5, color="0.6", ls=":", lw=1)
 ax[0].set_ylabel("transmission")
-ax[0].set_title("Waisted 2×2 MMI (30.50 µm design point)\n"
+ax[0].set_title(f"Waisted 2×2 MMI — Ww{_WW} Lw{_LW} Lt{_LT} L{_L} "
+                f"({float(_L)+9.0:.2f} µm total)\n"
                 "hybrid FDTD/EME cascade vs full-device FDTD  —  "
                 "no body-β calibration (refused for a waisted body)",
                 fontsize=10)
@@ -76,7 +82,7 @@ ax[1].set_ylabel("hybrid − FDTD")
 ax[1].legend(fontsize=8)
 ax[1].grid(alpha=0.3)
 plt.tight_layout()
-p1 = os.path.join(outdir, "spectra_transmission_hybrid_vs_fdtd.png")
+p1 = os.path.join(outdir, f"spectra_transmission_hybrid_vs_fdtd_{_GEO}.png")
 plt.savefig(p1, dpi=160)
 plt.close()
 print(f"written -> {p1}")
@@ -91,7 +97,8 @@ ax[0].plot(wl_h, 100 * sr_h, "o", color="C3", ms=6, mfc="white", mew=1.6,
            label="hybrid")
 ax[0].axhline(50, color="0.6", ls=":", lw=1, label="ideal 50/50")
 ax[0].set_ylabel("bar fraction  T_bar/(T_bar+T_cross)  [%]")
-ax[0].set_title("Splitting ratio — waisted 2×2, hybrid vs full-device FDTD",
+ax[0].set_title(f"Splitting ratio — waisted 2×2 Lw{_LW} Lt{_LT} L{_L} "
+                f"({float(_L)+9.0:.2f} µm), hybrid vs full-device FDTD",
                 fontsize=10)
 ax[0].legend(fontsize=8)
 ax[0].grid(alpha=0.3)
@@ -101,7 +108,7 @@ ax[1].set_xlabel("wavelength (µm)")
 ax[1].set_ylabel("Δ split [%]")
 ax[1].grid(alpha=0.3)
 plt.tight_layout()
-p2 = os.path.join(outdir, "spectra_splitting_ratio_hybrid_vs_fdtd.png")
+p2 = os.path.join(outdir, f"spectra_splitting_ratio_hybrid_vs_fdtd_{_GEO}.png")
 plt.savefig(p2, dpi=160)
 plt.close()
 print(f"written -> {p2}")

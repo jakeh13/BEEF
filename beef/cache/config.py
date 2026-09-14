@@ -52,6 +52,15 @@ _METHOD_ATTRS: Dict[Tuple[str, str], Tuple[str, ...]] = {
         "decay_tol", "minimum_run_time", "decay_method", "energy_decay_dt",
         "source_bandwidth_factor",
         "eps_averaging", "subpixel_tol", "subpixel_maxeval",
+        # geometry_mode added 2026-09-12 with FDTDSolver's new "materialgrid"
+        # experimental geometry-construction path (modal_multiplexer_
+        # validation.md gap 9 item 6/7) -- without it here, a "materialgrid"
+        # solve() and an otherwise-identical "prism" solve() fingerprint
+        # IDENTICALLY (this whitelist, not vars(solver), is what save_dir's
+        # cache actually hashes) and would silently return each other's
+        # cached result. design_grid_resolution_factor only matters when
+        # geometry_mode="materialgrid" but is cheap to always include.
+        "geometry_mode", "design_grid_resolution_factor",
     ),
     ("FDTDSolver", "solve_section"): (
         "res", "sim_width", "sim_height", "three_d", "dpml", "source_margin",
