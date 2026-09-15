@@ -1100,3 +1100,60 @@ opt-in override to force forward excitation — plus 8 excites instead of 1
   ⚠ **Its title overstates coverage**: it reads "stitched hybrid field map"
   but covers input + body only, **81%** of the device (x = −3.25 → +2.00 of
   −3.25 → +3.25). Retitle to "input + body".
+
+### Whole-device map assembled — 2026-09-14, job 13189964 (22:05, 8 ranks)
+
+**100% coverage.** The output section's forward excitation needed NO library
+change: `fdtd.py:3232` already does `reverse = False if override else
+layout.reverse`, so passing any `excite_port` PortSpec forces forward launch.
+`PortSpec(axis="x", sign=+1, center=0.0, width=5.0)` (sign=+1 binds an EXCITE
+port to the LOW edge = the body side) turned `reverse=True, n_excite=1` into
+`reverse=False, n_excite=8`, verified with `section_fdtd_layout()` before
+spending the runs. 8 captures, superposed with the body's arriving amplitudes
+a_k = c_k·exp(2j·pi·n_eff_k·L/wl).
+
+Figure: `fields/whole_device_res40_1.310um.png`.
+
+| check | result |
+|---|---|
+| coverage | x −3.25 → +3.25, **100%** |
+| output lobes at the port end | **\|y\| = 0.510 µm** vs ports at 0.500 |
+| branch balance | **1.000** (reverse-excited capture gave 1899) |
+| body/output seam step | 1.23× |
+
+### 🔴 TWO CLAIMS OF MINE THAT DID NOT SURVIVE — recorded so they are not reused
+
+**(1) "The 50/50 branch check validates the superposition." It does not.**
+This device is symmetric and only EVEN body modes are excited, so ANY even-mode
+combination produces a symmetric output. Ratio 1.000 confirms parity survives
+end to end — real, but it cannot detect a wrong relative weighting between
+modes 0/2/4. A necessary check presented as a sufficient one.
+
+**(2) "∫|E|²dy grows 10.5× along a passive section, so the amplitude is
+demonstrably wrong." OVER-CLAIMED — that quantity is not power.**
+The captures are a single z-SLICE through the core. The body modes are
+orthogonal under the full 2-D (y,z) integral, NOT under a 1-D y-cut, so
+cross-terms survive and the slice integral has no conservation law — the same
+1-D-vs-2-D distinction `body_mode_weights()` documents after a 1-D projection
+returned captured power 1.5857. The output section also tapers into two narrow
+guides, so its local mode shape changes along x. Growth in that metric is
+therefore not evidence of a defect.
+
+**The fix built on (2) was tested and FAILED, which is what exposed (1) and
+(2).** `fix_mmi1x2_output_normalisation.py` renormalised each E^(k) so its
+entry plane equals phi_k, cancelling meep's per-band source convention.
+Growth moved only **10.51× → 9.57×**. Cause: the apparent "36292× spread" in
+per-band amplitudes is entirely modes 6–7, which couple at ~1e-4 and carry no
+power (a_k ≈ 0 by parity). The modes that matter — 0, 2, 4 — span just
+**1.2×** (7.150 / 8.198 / 6.755), so per-mode normalisation could never have
+been a 10× effect.
+
+**Current honest status of the output panel: NOT validated.** Parity (1.000)
+and lobe position (0.510 vs 0.500) are checked; the amplitude is neither
+confirmed nor refuted, and the growth is undiagnosed.
+
+**The check that would settle it** — and which remains Step 4 proper — is to
+integrate the reconstructed output to a transfer coefficient and compare
+against the hybrid's own validated **0.3749** per port at 1.31 µm (Step 0,
+job 12674181). That is a conserved quantity with a trusted reference, unlike
+any slice metric invented for the purpose.

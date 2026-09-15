@@ -105,6 +105,41 @@ FDTD_PHASE = {
                 out8=[-78.42020657, -120.39693215, -146.83156673]),
 }
 
+# 2026-09-15: MMI4X4_FDTDREF swaps in a DIFFERENT full-device FDTD reference.
+#
+# WHY THIS WAS ADDED. The CALPATH override above deliberately holds the
+# reference fixed, "which is what isolates the calibration's own
+# contribution" -- correct for asking whether a better calibration helps
+# against a FIXED target. But it is exactly wrong for the MATCHED-resolution
+# question, because this device's own validation established that a
+# calibration measures what a PARTICULAR discretisation propagates: a res=60
+# calibration scored against this res=40 reference made agreement 18x WORSE
+# (out8 1.9/1.8/2.2 -> 11.6/25.0/39.0 deg), and that degradation was predicted
+# with no fitting from the res40->res60 calibrated-n_eff difference of
+# 0.009594. Testing whether matching them RESTORES agreement requires varying
+# both, so the reference has to be swappable too.
+#
+# The res=60 reference is example_output/mmi_4x4_90hybrid/fdtd_reference_res60.npz
+# (jobs 13193430/31/32, matched partners for the res=60 calibration from job
+# 13110658). Default is unchanged: the hardcoded res=40 values above, so every
+# existing invocation reproduces exactly.
+_FDTDREF = os.environ.get("MMI4X4_FDTDREF")
+if _FDTDREF:
+    _ref = np.load(_FDTDREF)
+    _missing = [f"L{L:.2f}_{a}_phase" for L in TARGET_LENGTHS for a in PORT_NAMES
+                if f"L{L:.2f}_{a}_phase" not in _ref.files]
+    if _missing:
+        raise SystemExit(
+            f"MMI4X4_FDTDREF={_FDTDREF} lacks {len(_missing)} required keys "
+            f"(first: {_missing[0]}). It must cover every length in "
+            f"TARGET_LENGTHS={TARGET_LENGTHS}.")
+    FDTD_PHASE = {L: {a: list(_ref[f"L{L:.2f}_{a}_phase"]) for a in PORT_NAMES}
+                  for L in TARGET_LENGTHS}
+    _PRODUCTION = False      # never overwrite the production result
+    print(f"[FDTDREF] using {_FDTDREF} "
+          f"(res={float(_ref['res']) if 'res' in _ref.files else '?'}) "
+          f"instead of the hardcoded res=40 reference")
+
 
 def make_mmi(mm_length):
     return MMI(

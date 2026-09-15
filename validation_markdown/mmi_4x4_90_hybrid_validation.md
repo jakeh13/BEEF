@@ -6091,3 +6091,190 @@ rather than left to contend with other users. `MMI4X4_LENGTHS` was added so a
 non-16 basis cannot request a length whose input sections were never
 pre-solved — `M_in` is fetched `cache_only`, so that would fail rather than
 silently start a multi-hour FDTD in the wrong place.
+
+---
+
+### 🔬 KNOB 4 REOPENED — it was a two-point delta, not a convergence test (job 13197102, 2026-09-14)
+
+**The gap.** Job 13110659 measured the reference's phase shift between
+`decay_tol` 1e-4 and 1e-5 and reported 0.029° power-weighted, concluding the
+1.35° target is not floor-limited. That is **two points**. A single pair of
+rungs bounds the step between them and cannot distinguish "the phase has
+converged" from "the phase is still drifting and both rungs are early" — and
+the entire "knobs 1–3 are worth spending on" decision rests on it. The
+amplitude side of this question got a real convergence curve on 2026-08-25
+(1e-2 → 5e-5, six points); the phase side never did.
+
+**Can the tolerance go tighter than 1e-5? Unknown, and the assumption in force
+is borrowed from a different geometry.** The practical ceiling of ~1e-5 comes
+from an estimated floor of ~5e-6 at res=40 — but that floor was measured on
+the **84 µm full device**, not on this L=15 probe. What is actually established
+about the floor is that it is **spatial**: resolution-dependent (1.68e-4 at
+res=20), invariant under a 2× timestep change (0.01%), and invariant under
+`dpml` 0.5→1.5 (≤1%). A much smaller domain is therefore not bound by the
+84 µm number, and the 1x2 MMI at 6.5 µm reached 1.06e-13 with **no turnaround
+at all**. So tolerances below 1e-5 may well be reachable at L=15. Nobody has
+looked.
+
+**One run answers both, because DFT monitors accumulate.** Decomposing the
+monitors at time *t* returns exactly what a run stopped at *t* would have
+returned, so a single densely-sampled run IS the phase-vs-`decay_tol` curve —
+the same mechanism that produced the amplitude table, collapsing a ladder of
+runs to one job.
+
+**The library was throwing the phase away.** `solve(snapshot_every=)` recorded
+`{t, energy, energy_ratio, T}` and the complex coefficient never reached the
+CSV, even though `snap` held it the whole time. `beef/solvers/fdtd.py` now also
+writes `ph_out{i}_wl{j}` = `arg(S)` in degrees, **appended after** every `T`
+column — both tolcurve plotters select by name on `startswith("T_out")`, and a
+positional reader keeps the same leading fields, so old CSVs stay readable by
+new code and new CSVs by old. Verified on a 2-D smoke solve against the
+returned `SMatrix`: phase agrees to **<0.01°** on every arm and wavelength, `T`
+columns unchanged. Not in the cache fingerprint (a method argument, never
+stored on `self`), so a snapshotted run still shares a cache entry with a plain
+one. `MMI4X4_FDTD_SNAP_EVERY` exposes it on `mmi_4x4_90hybrid_fdtd.py`, one CSV
+per driven port (the writer appends, so a shared path would interleave two
+runs into one unreadable file). Production path re-checked: with the variable
+unset, `snapshot_every=None` and `output_dir` is byte-identical to before.
+
+| job | what | budget | batch file |
+|---|---|---|---|
+| **13197102** | L=15 top-port, `decay_tol=1e-9`, snapshots every 50 t-units | 15 h | `run_mmi_4x4_90hybrid_fdtd_tolcurve.batch` |
+
+**`decay_tol=1e-9` is set below what the run can reach ON PURPOSE**, and a
+**timeout is the expected outcome, not a failure** — the stopping point is not
+what is being measured. Samples append as they are taken, so a walled run keeps
+every sample it wrote. If the energy instead floors and turns around (this
+device's measured res=20 signature: 5.16e-3 → 51.9 → 2.14e8), **that turnaround
+is the floor measurement** — read it off `energy_ratio` and discard every
+sample after it. Standing directive applies: if it times out, report and wait,
+do not auto-resubmit.
+
+Output lands in `mmi_4x4_90hybrid_fdtd_L15.00_p4_tol1e-09/tolcurve_p4_port4.csv`
+— distinct from the reference (13069784, `_L15.00_p4`) and from knob 4
+(13110659, `_L15.00_p4_tol1e-05`). `decay_tol` is in the cache fingerprint, so
+this both cannot be served to a production request and cannot be served *from*
+one, which is what guarantees it time-steps rather than returning instantly.
+
+**What this can change.** If the phase curve is flat well before 1e-5, knob 4's
+conclusion stands on real evidence instead of one interval and the matter is
+closed. If it is still drifting at 1e-5, the 0.029° bound is an underestimate,
+the reference is less settled than assumed, and the ~2° hybrid-vs-FDTD residual
+is partly the reference's own — which would reframe knobs 2 and 5 and the
+calibration-length candidate alike, since all three are being scored against
+that reference.
+
+Submitted against `gts-sr108-gedc_main`: `gts-sr108-ece` is down to 0.82
+available (it is what is holding task 3 of the 1x4 prewarm array in
+`AssocGrpBillingMinutes`) and `gts-sr108` to 10.50.
+
+### ✅ MATCHED res=60 comparison — 2026-09-15, jobs 13193430/31/32
+
+The res=60 calibration (job 13110658) was unusable because no res=60 reference
+existed to pair it with. Those three references now exist:
+
+| L (µm) | job | wall | stopped at | res=40 twin stopped at |
+|---|---|---|---|---|
+| 5 | 13193430 | 4:11:16 | t=280.08 (33610 steps) | 280.18 |
+| 10 | 13193431 | 3:44:12 | t=360.12 (43214) | 380.24 |
+| 15 | 13193432 | 6:44:49 | t=540.19 (64823) | 560.35 |
+
+All three decayed slightly EARLIER in physical time than their res=40 twins
+(−0.03 / −5.3 / −3.6%), so finer resolution did not lengthen propagation here.
+Reference saved as `example_output/mmi_4x4_90hybrid/fdtd_reference_res60.npz`.
+`mmi_4x4_90hybrid_calib2_phase_check.py` gained an **`MMI4X4_FDTDREF`**
+override (additive; the default reproduces the hardcoded res=40 values
+exactly) because its existing `CALPATH` override deliberately holds the
+reference fixed — right for isolating the calibration, wrong for a matched
+test.
+
+#### The rule is CONFIRMED — on the length-SCALING term
+
+| configuration | out8 L=5 / 10 / 15 | slope |
+|---|---|---|
+| res60 cal + res40 ref (mismatched) | 11.6 / 25.0 / 39.0 | **+2.74 °/µm** |
+| **res60 cal + res60 ref (MATCHED)** | **20.0 / 20.0 / 18.4** | **−0.16 °/µm** |
+| res40 cal + res40 ref (baseline) | 1.9 / 1.8 / 2.2 | +0.03 °/µm |
+
+Matching the resolutions flattened the slope **17×**. The β-mismatch term the
+previous section predicted and measured is gone.
+
+#### 🔴 But it exposed a LENGTH-INDEPENDENT ~19.4° offset
+
+Power-weighted, matched res=60: **19.41°** pooled (5.39% of 360°, 21.6% of
+90°) versus **2.12°** at matched res=40.
+
+**Quantitatively explained by the taper sections still being res=40.** The
+hybrid's M_in/M_out are cached at res 40 while the reference is now res 60, and
+a fixed path length with a Δn error gives a constant phase:
+
+> 360 × Δn(res40→res60) × L_taper/λ = 360 × 0.009594 × (2 × 4.0)/1.31 = **21.1°**
+
+Observed **19.41°**, ratio 0.92, no fitting — the same predictive form the
+original mismatch used.
+
+**EACH UNMATCHED COMPONENT HAS ITS OWN SIGNATURE**, which makes this
+diagnosable rather than mysterious:
+
+| unmatched component | signature |
+|---|---|
+| body calibration | error **scales with length** (Δβ·L) |
+| taper sections | error **constant with length** (fixed path) |
+
+#### What this does and does not answer
+
+**Does NOT yet answer** whether the 2.12° res=40 residual is
+resolution-limited. A fully matched res=60 comparison needs res=60 M_in/M_out
+as well; until then the 19.41° is dominated by a known, predicted taper
+mismatch and says nothing about convergence.
+
+**Next step, costed**: re-solve the input/output sections at res 60
+(`mmi_4x4_90hybrid_input_presolve.py` at `MMI4X4_FDTD_RES=60`). Only then does
+"res=60 everywhere vs res=40 everywhere" become a real convergence datum.
+res=80 remains blocked behind a res=80 calibration that does not exist.
+
+### 🟢 RESOLUTION CONVERGENCE ANSWERED — and the absolute metric was the wrong one
+
+Prompted by the question "is the phase relative to the input or to the other
+outputs?" — the weighted metric differences **absolute per-arm phase(S)**. A
+90° hybrid is specified on the **quadrature relationship between outputs**, so
+a phase common to all four arms is physically meaningless (it depends on
+arbitrary reference-plane placement and cancels in every spec quantity).
+
+Recomputing both configurations with each arm referenced to out8:
+
+| configuration | absolute (wtd) | **relative / quadrature (wtd)** |
+|---|---|---|
+| res=40 matched (baseline) | 2.12° | **0.21°** |
+| res=60 matched | 19.41° | **0.21°** |
+
+**THE RELATIVE ERROR IS IDENTICAL AT BOTH RESOLUTIONS — 0.21°.** In the metric
+the device actually operates on, the hybrid-vs-FDTD phase agreement is
+**already converged at res=40**; res=60 moves it by nothing measurable.
+
+0.21° is **0.23% of the 90° quadrature spacing** — it passes even the strict
+1.5%-of-90° reading (1.35°) by 6×, the target the absolute metric reported as
+NOT met (2.36%).
+
+**The 19.41° at res=60 is pure common-mode**: the per-wavelength offsets are
+19–22° and uniform across all four arms at every length. The earlier
+attribution to res=40 tapers against a res=60 reference was CORRECT about
+origin (predicted 21.1°, observed 19.41°, ratio 0.92) and WRONG about
+importance — it is a global phase.
+
+**Consequences:**
+- The proposed res=60 input-section presolve is **withdrawn as unnecessary**;
+  it would chase a term that cannot affect device function.
+- **res=80 is likewise unnecessary** for this metric, which removes the
+  blocker that no res=80 calibration exists.
+- The length-scaling term still matters and calibration is still mandatory —
+  that term is NOT common-mode (it is a genuine Δβ·L per-arm error, and at the
+  159.30 µm production length the uncalibrated Δn≈0.0458 is >4500° of drift).
+
+⚠ **METHODOLOGICAL: `mmi_4x4_90hybrid_weighted_phase_metric.py` should report
+the relative-phase reading alongside the absolute one.** Its docstring is
+already careful to power-weight so noise arms cannot dominate — the same care
+is needed for common-mode phase, which at res=60 inflated the score **90×**
+(19.41° vs 0.21°) without any change in device behaviour. Compare
+[[criterion-text-vs-code-phase-mean-max]]: this repo has already been bitten
+once by a phase criterion whose stated and computed quantities differed.

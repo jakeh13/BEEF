@@ -52,12 +52,127 @@ added 2026-08-27/28 for the 1×4) to the **2×2 MMI on SOI_220**.
 
 ## 🤝 HANDOFF — state as of 2026-09-14
 
-**NOTHING IS RUNNING.** No queued or running SLURM jobs for this device, no
-background processes. Anything in the queue under this account belongs to the
-1×4 C-band and 4×4 calibration studies, not to this one. A new session can
-start clean.
+**NOTHING IS RUNNING. The ALT cascade has LANDED and been merged — see item 0
+below and the "ALT cascade" section further down for the result.** Array
+`13200430_0..10` (submitted 2026-09-14 15:50, 11 tasks, 24 CPUs,
+`gts-sr108-gedc_main`) is COMPLETED on all 11 tasks, 2h41m–3h33m each. It had
+replaced array 13198943, cancelled at 30 min once the ramp-tolerance sweep
+showed its 1e-05 ramps were the wrong setting; no 13198943 shards survive, so
+nothing is mixed. Two later single-task jobs (13204932_5, 13204958_4) were
+submitted by a second session unaware this array was already running — both
+hit cache, took 25 s, and changed nothing.
+
+**THE RESULT IS A NEGATIVE ONE: removing the staircase did NOT reduce the
+method error.** It trades bar against cross (bar 0.76 % -> 5.76 % of mean T,
+cross 3.17 % -> 1.20 %), and IL, imbalance and phase MAX-dev all move AWAY
+from full-device FDTD. Read the "ALT cascade" section before spending
+anything further on the staircase hypothesis.
+
+*(Superseded: this block read "NOTHING IS RUNNING" earlier on 2026-09-14, and
+that was true of the two SHIPPED examples — both are finished and verified,
+see "The device now ships as a normal example". The alt cascade is a method
+experiment opened afterwards.)* Everything else in the queue under this
+account belongs to the 1×4 C-band and 4×4 calibration studies, not to this
+device.
 
 ### Where to pick up — open items, highest value first
+
+0. **✅ LANDED, and it REFUTES the hypothesis it was built to test — the ALT
+   cascade, FDTD ramps instead of an EME staircase. Array `13200430_0..10`
+   COMPLETED (11 tasks, one wavelength each, 24 CPUs,
+   `gts-sr108-gedc_main`, 2h41m–3h33m per task), having replaced the
+   cancelled 13198943. Merged; see the "ALT cascade" section for the table.**
+   Removing the staircase did not reduce the disagreement with full-device
+   FDTD — it moved error from the cross port to the bar port. The ramp
+   interior's discretisation is therefore NOT the dominant error term, and
+   the next test is the seam basis (`N_FACE` 10 -> 14), not the ramps. This
+   supersedes item 1 below as the direct attack on the same question: rather
+   than redistributing staircase cells, it REMOVES the staircase.
+
+   `examples/mmi_2x2_tapered/python/mmi_2x2_hybrid_alt.py` cascades
+   `[fdtd, eme, fdtd, eme, fdtd, eme, fdtd]` — the two width ramps go to
+   FDTD, every remaining EME region is uniform and therefore exactly one
+   cell. Ramp 4 is a plain `mirror_pairs={4: 2}` (legal: both ramps are
+   on-axis body sections, unlike the output port, which needs `MirrorSpec`
+   for its y-flip) so only ONE ramp is ever simulated.
+
+   **TODO, in order:**
+
+   - [ ] **Wait for all 11 tasks, then merge.**
+         `make -C BEEF/examples mmi_2x2_tapered_hybrid_alt_merge`. Seconds,
+         no MPI. It REFUSES a partial merge rather than silently comparing on
+         fewer wavelengths than the reference.
+   - [ ] **Read the head-to-head the merge prints**: alt vs the EME-staircase
+         sibling, both against the SAME full-device FDTD
+         (`smatrix_waisted_Ww2.24_Lw6_Lt5_L22.pkl`). The sibling's numbers to
+         beat: IL 0.2446 (FDTD 0.2010), imbalance 0.0259 (FDTD 0.0124),
+         phase −88.522° (FDTD −89.482°), max|dT| bar 0.0087 / cross 0.0201.
+   - [ ] **Score the actual hypothesis.** The staircase predicts the IL
+         OVERSHOOT specifically. If alt's IL lands at ~0.2010 while the
+         sibling's sits at 0.2446, the staircase is confirmed as the
+         mechanism and `C_TRANS` being an optimum-not-a-floor is explained.
+         If alt's IL overshoots too, the staircase is REFUTED and the error
+         lives in the seams or the interface basis instead — which would also
+         re-open the cross-port deficit (item 2) as a seam problem.
+   - [ ] **Check the cross port separately.** The sibling's bar reaches
+         0.76 % but cross sits at ~3 %. Bar and cross share the entire body
+         cascade and differ only in the output port, so if alt moves bar but
+         not cross, that localises the remaining deficit to the seam rather
+         than the body — the conclusion item 2 has been unable to reach.
+
+   **⚠ TRAPS, all of them already paid for:**
+
+   - **❌ RETRACTED: "1e-11 is unreachable on the ramp."** That claim was
+     made here earlier on 2026-09-14 from a stalled res-12, 2-mode smoke run
+     and the ramps were defaulted to 1e-05 on the strength of it. A proper
+     sweep of the ramp section then FALSIFIED it — 1e-11 converges fine, and
+     the cancelled array 13198943 was relaunched as 13200430 with both
+     tolerances at 1e-11. Measured, same section, tolerance swept, transfer
+     matrix diffed between consecutive rows:
+
+     | decay_tol | seconds | max\|dM\| vs previous |
+     |---|---|---|
+     | 1e-04 | 424 | — |
+     | 1e-05 | 632 | 8.4e-04 |
+     | 1e-06 | 869 | 8.5e-06 |
+     | 1e-07 | 436 | 5.7e-07 |
+     | 1e-09 | 476 | 7.3e-07 |
+     | 1e-11 | 650 | 3.8e-10 |
+
+     Two results, both the opposite of the obvious guess. **1e-11 IS
+     reachable** — the hard-floor result in this repo is for an 84 µm 4×4
+     body, and a 7 µm section is nowhere near that regime, so the floor was
+     borrowed when `decay-tol-has-a-hard-floor` explicitly says it is
+     PER-GEOMETRY and must not be. And **cost is FLAT in the tolerance**
+     (424 s at 1e-04 vs 650 s at 1e-11) and non-monotonic in between: the
+     stopping condition is dominated by the field physically leaving the
+     section, not by the threshold. A looser tolerance therefore buys nothing
+     and costs 8.4e-04 of accuracy.
+
+     **The general lesson, which is the reusable part: a stalled run at a
+     COARSE resolution is not evidence about the tolerance.** Diagnose a
+     stop-condition question at the resolution you intend to run, or sweep it
+     on the real section — do not extrapolate a floor from a smoke run.
+   - **Do NOT loosen the PORT tolerance to match.** Ports at 1e-11 keeps
+     section 0 byte-identical in config to the sibling's, so it is served
+     from `example_sim_cache/` and the port leg costs nothing. Changing it
+     would both spend that compute again and add a second difference
+     alongside the one being measured.
+   - **Check `squeue` for a running `beef_mmi_2x2_tapered_alt` before
+     submitting.** A duplicate task 5 (job 13198990) was submitted by a
+     second session on 2026-09-14 and cancelled. Two jobs on one shard path
+     is wasted compute, not corruption — the shard write is temp-file +
+     atomic rename.
+   - **The variant is deliberately NOT in `MMI_2X2_TAPERED_EXAMPLES`**, so
+     `make all` does not pull it in — same precedent as
+     `modal_multiplexer_fdtd` and `mmi_2x2_hybrid_gds`. It is a method
+     experiment, not routine device output.
+
+   **Cost, so the next person can budget it:** ~11 FDTD runs per wavelength
+   (1 port, cached and free, + N_MODES=10 ramp) against the sibling's 1.
+   Unlike the sibling this IS worth real MPI ranks — it is dominated by FDTD
+   time-stepping (~98 % scaling here), not by MPB mode solves, which meep
+   runs redundantly on every rank.
 
 1. **Non-uniform ramp cells — the one experiment that would close the method
    question.** The staircase attribution (each EME cell boundary sheds ~2 % of
@@ -113,11 +228,120 @@ start clean.
 - **Divide per-rank log counts by the rank count** before treating them as a
   measurement.
 
+### The device now ships as a normal example (2026-09-14)
+
+It previously existed only as study scripts under `examples/verification/`.
+It is now a first-class device folder alongside the straight 2×2, with the
+same two methods and the same notebook+script pairing every other device has:
+
+| | |
+|---|---|
+| scripts | `examples/mmi_2x2_tapered/python/{mmi_2x2_fdtd,mmi_2x2_hybrid}.py` |
+| notebooks | `examples/mmi_2x2_tapered/notebooks/{mmi_2x2_fdtd,mmi_2x2_hybrid}.ipynb` |
+| outputs | `example_output/mmi_2x2_tapered/{mmi_2x2_fdtd,mmi_2x2_hybrid}/` |
+| make targets | `mmi_2x2_tapered_fdtd`, `mmi_2x2_tapered_hybrid`, `mmi_2x2_tapered_hybrid_merge` |
+| batch | `batch/run_mmi_2x2_tapered_examples.batch` (array 0-11: task 0 = FDTD, 1-11 = one hybrid wavelength each) |
+
+**Both were re-run from the new scripts and reproduce the study's own numbers
+BIT-IDENTICALLY** (Δ = 0.00e+00 on max|dT| bar/cross, excess loss, imbalance,
+phase mean and MAX dev), because every section solve hit `example_sim_cache/`:
+the whole-device FDTD in 0.7 s and all 11 hybrid wavelengths in 109 s of solve
+against the ~15 h they originally cost. Two things make that reuse work, and
+both are load-bearing rather than incidental:
+
+- The FDTD example runs at **`decay_tol=1e-05`**, the tolerance every stored
+  reference for this geometry was produced at. The straight device's script
+  default (1e-11) is below the reachable floor here, so it would both miss
+  every cached entry and never converge.
+- The hybrid solves **one wavelength per invocation**. The `solve_section`
+  cache key contains the whole wavelength array, so an 11-wavelength call and
+  eleven 1-wavelength calls are different entries; a single 11-wl call would
+  have re-solved everything from scratch.
+
+⚠ Two naming traps are now encoded in the scripts rather than only in this
+doc. `MMI.total_length` is **not** the criterion's `total_device_length` — it
+omits the 0.5 µm access stub at each end, so scoring it reports 18.9 % shorter
+instead of the real 16.2 %. And the hybrid loads its reference by
+geometry-tagged name, so the FDTD script writes `smatrix_waisted_<geo>.pkl`
+alongside the plain `smatrix.pkl`.
+
+### ALT cascade — FDTD ramps instead of an EME staircase (2026-09-14)
+
+`examples/mmi_2x2_tapered/{python,notebooks}/mmi_2x2_hybrid_alt.*`, output in
+`example_output/mmi_2x2_tapered/mmi_2x2_hybrid_alt/`, driven by
+`batch/run_mmi_2x2_tapered_alt.batch`. Cascade
+`[fdtd, eme, fdtd, eme, fdtd, eme, fdtd]` — the two width ramps go to FDTD,
+every remaining EME region is uniform and takes exactly one cell, so the
+staircase is GONE rather than merely refined. Second ramp is a plain
+`mirror_pairs={4: 2}` (both are on-axis body sections, so no MirrorSpec is
+needed, unlike the output port). Each FDTD ramp is extended by
+`FDTD_STUB = 1.0 µm` of uniform waveguide at both ends and the neighbouring
+EME regions are shortened by the same amount; the script asserts the seven
+sections still tile the device to 30.00 µm and that every seam sits on a
+uniform cross-section.
+
+**THE HYPOTHESIS IT WAS BUILT TO TEST IS NOT SUPPORTED.** The staircase was
+the leading suspect for this device's method error (IL overshoots FDTD and
+climbs with cell count — C_TRANS an OPTIMUM, not a floor). Removing it
+entirely did **not** reduce the disagreement:
+
+| vs full-device FDTD | ALT (FDTD ramps) | sibling (EME staircase) | full FDTD |
+|---|---|---|---|
+| max\|dT\| bar | **0.0364** | 0.0087 | — |
+| max\|dT\| cross | **0.0106** | 0.0201 | — |
+| mean \|dT\| bar, % of T | **5.76 %** | 0.76 % | — |
+| mean \|dT\| cross, % of T | **1.20 %** | 3.17 % | — |
+| excess loss (dB) | 0.3500 | 0.2446 | 0.2010 |
+| imbalance | 0.0317 | 0.0259 | 0.0124 |
+| phase mean (deg) | −90.3345 | −88.5220 | −89.4822 |
+| phase MAX-dev (deg) | 1.8396 | 1.3732 | 0.4474 |
+
+It **trades the two ports against each other**: bar gets ~4x WORSE while
+cross roughly HALVES. That cross number matters — the ~1–2 % cross-port
+deficit is this study's standing open item, and five hypotheses were measured
+against it with four falsified. This is the first change that has moved it,
+and it moved it by removing the staircase, while simultaneously wrecking bar.
+Net: IL, imbalance and phase MAX-dev all move AWAY from FDTD.
+
+**Reading:** the ramp interior's discretisation is not the dominant error
+term. A bar-vs-cross trade of this shape points at the FDTD↔EME SEAM
+PROJECTION rather than at the propagation — the same signature the sibling's
+own notes attribute to a truncated seam basis over-coupling the symmetric
+(bar) combination.
+
+⚠ **The obvious next test, and it is cheap relative to this one.** This run
+used `N_FACE = N_WAIST = 10`. The waist genuinely supports only 10 distinct
+modes, but the **2.80 µm face supports ~14**, and in this cascade a ramp
+section's input face IS a 2.80 µm seam. So the bar degradation may be a
+starved seam basis rather than anything about FDTD ramps. `N_FACE` is already
+a separate knob (`MMI2X2T_ALT_NFACE`) for exactly this; sweep it 10 -> 14
+before concluding anything about the method. Do NOT raise `N_WAIST` — beyond
+10 it returns exact duplicates.
+
+**Cost, measured:** 98 123 s of solve summed over the 11 wavelength shards
+(~27 core-hours), ~11 FDTD runs per wavelength against the sibling's 1,
+because `solve_section()` needs one FDTD run per excited mode and a ramp
+carries N_MODES on both faces. Deliberately kept OUT of
+`MMI_2X2_TAPERED_EXAMPLES` so `make all` does not pull it in.
+
+**A `decay_tol` correction this produced.** A stalled-looking smoke run was
+first blamed on the known hard floor. Sweeping the tolerance on the exact
+ramp section (res 12, 2 modes, 1 wl) refuted that: 1e-04 424 s, 1e-05 632 s,
+1e-06 869 s, 1e-07 436 s, 1e-09 476 s, **1e-11 650 s and converged**, with
+max|dM| between consecutive rows falling to 3.8e-10. 1e-11 IS reachable on a
+7 µm section, and **cost is flat — even non-monotonic — in the tolerance**,
+because the stop condition is dominated by the field physically leaving the
+section rather than by the threshold. A looser tolerance buys nothing and
+costs 8.4e-04 of accuracy. The hard floor is a property of the 84 µm device it
+was measured on, not of this one: **it is per-geometry, do not borrow it.**
+
 ### Key artifacts
 
 | what | where |
 |---|---|
 | all outputs for this device | `example_output/mmi_2x2_tapered/` |
+| the two shipped examples | `mmi_2x2_fdtd/`, `mmi_2x2_hybrid/` (see the section above) |
+| ALT cascade (FDTD ramps) | `mmi_2x2_hybrid_alt/` — negative result, see the section above |
 | two-geometry comparison figure | `spectra_hybrid_vs_fdtd_two_geometries.png` |
 | per-geometry spectra | `spectra_*_hybrid_vs_fdtd_Ww2.24_Lw6_Lt{5,6}_L{22,21.5}.png` |
 | stitched hybrid field + its replay cache | `hybrid_stitched_res40/` (`recon_cache_*.npz` re-renders in seconds, no re-solve) |

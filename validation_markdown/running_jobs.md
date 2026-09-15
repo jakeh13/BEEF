@@ -1,13 +1,257 @@
 # Active SLURM jobs — snapshot
 
-> **TWO independent handoffs are live in this file, written by two different
+> **THREE independent handoffs are live in this file, written by different
 > sessions on 2026-09-14. Read the one for your device:**
 > * **1×4 SiN300** — immediately below. One array job RUNNING (13169522).
 > * **4×4 90° hybrid** — under the THIRTY-FIRST SNAPSHOT further down.
->   Nothing running; the campaign has landed and the device now meets spec.
+>   **One job RUNNING (13197102)**, the reopened knob-4 convergence curve;
+>   a timeout on it is expected, not a failure. Campaign otherwise landed.
+> * **2×2, straight + waisted** — immediately after this block. The two
+>   shipped examples are DONE and verified; the ALT cascade (FDTD ramps)
+>   array 13200430 COMPLETED but its result is **INVALID** (non-passive ramp matrix) — see below.
 >
 > Each says "no other job of mine is running" — true from that session's own
 > scope, not a statement about the whole queue.
+
+> ## ⛔ 2×2 ALT CASCADE — 2026-09-14, array 13200430 COMPLETED but the
+> ## RESULT IS INVALID. Do not quote its numbers.
+>
+> All 11 tasks COMPLETED cleanly (~3 h each, 110884 s of solve summed) and
+> the merge produced a full comparison. **The comparison is not a
+> measurement**: the FDTD ramp section's transfer matrix is numerically
+> broken, and the cascade output still looks plausible, which is exactly what
+> makes it dangerous.
+>
+> **The evidence, from the cached ramp matrix at band centre** (10 modes,
+> section x=[-9.0, -2.0]; `sum|M|^2 = 8.8714`):
+>
+> | band | power out when excited | power in when measured | |
+> |---|---|---|---|
+> | 1-5 | 0.97-1.00 | 0.99-1.00 | ok |
+> | **6** | **0.0095** | 0.9529 | flux-calibrated fallback |
+> | **7** | **0.0146** | 0.9516 | flux-calibrated fallback |
+> | 8 | 0.9532 | 0.9953 | ok |
+> | **9** | **1.9505** | 0.9952 | ⛔ **>1: NON-PASSIVE** |
+> | **10** | 0.9949 | **0.0036** | flux-calibrated fallback |
+>
+> Exciting band 9 returns ~2x the input power, which is impossible for a
+> passive section. Bands 6 and 7 lose essentially all of it. Band 10 receives
+> essentially nothing.
+>
+> **These are NOT negligible modes.** The three flagged bands carry **11.5 %
+> of the excited power and 21.5 % of the measured power**. The usual excuse
+> for a large relative mismatch — that it is a ~1e-6 mode, as recorded in
+> `mode-signs-gate-on-strong-modes` — does not apply.
+>
+> **Where it comes from.** Every task logged the same warning:
+> `solve_section: excite band N normalization mismatch between
+> get_eigenmode_coefficients() and get_fluxes() (max 100.0%) for section
+> x=[-9.0000, -2.0000] — likely a near-degenerate excited mode; falling back
+> to flux-calibrated normalization`. 792 instances / 24 ranks = 3 per task,
+> on bands 6, 7 and 10, in every one of the 11 wavelengths. (Divide per-rank
+> log counts by the rank count before reading them — see
+> `divide-log-counts-by-mpi-rank-count`.) The flux-calibrated fallback
+> recovers a magnitude but evidently not a consistent one here.
+>
+> **Suspected cause, NOT confirmed.** The ramp spans 2.80 µm to 2.24 µm. The
+> 2.80 µm face supports ~14 modes and the 2.24 µm waist exactly 10, so
+> requesting 10 at BOTH ends asks the face for modes 6-10 in a region where
+> they are near-degenerate with each other — precisely the condition the
+> warning names. `N_FACE` is already a separate knob from `N_MODES` in the
+> script for this reason; it was simply left equal.
+>
+> **What to do next, in order:**
+> 1. Diagnose at ONE wavelength, not 11 — the ramp section alone, sweeping
+>    `MMI2X2T_ALT_NFACE` (try 8, 12, 14) and checking column power for
+>    passivity. Cheap relative to the array.
+> 2. Only once every column sums to <= 1 is the alt-vs-sibling comparison
+>    worth re-running.
+> 3. Do NOT sweep FDTD_STUB first. It was the pre-registered suspect, but
+>    passivity violation is a mode-basis failure, not a geometry one.
+>
+> **For the record, the numbers the invalid run produced** (so nobody
+> re-derives them thinking they are new): alt vs sibling vs full FDTD —
+> IL 0.3500 / 0.2446 / 0.2010; imbalance 0.0317 / 0.0259 / 0.0124;
+> phase -90.3345 / -88.5220 / -89.4822; max|dT| bar 0.0364 / 0.0087;
+> max|dT| cross 0.0106 / 0.0201. The cross-port improvement is the only
+> thing that would have been interesting, and it is exactly the kind of
+> thing a broken normalization can manufacture.
+>
+> *(original block, kept for provenance)*
+>
+> ## 🏃 2×2 ALT CASCADE — 2026-09-14, array 13200430 RUNNING (11 tasks)
+>
+> **`batch/run_mmi_2x2_tapered_alt.batch`**, array 0-10, one WAVELENGTH per
+> task, 24 ranks each, `-t 1440`, `gts-sr108-gedc_main`. All 11 started
+> immediately. **13198943 was an earlier submission of the same thing at
+> `RAMP_DECAY_TOL=1e-05`; it was CANCELLED 30 min in (no shards written) once
+> the tolerance sweep came back — see the decay_tol block below.** Merge when the array is COMPLETED:
+> `make -C BEEF/examples mmi_2x2_tapered_hybrid_alt_merge`.
+>
+> **What it is:** `examples/mmi_2x2_tapered/python/mmi_2x2_hybrid_alt.py` —
+> the same waisted 2×2 at the same design point, cascaded
+> `[fdtd, eme, fdtd, eme, fdtd, eme, fdtd]` instead of `[fdtd, eme×5, fdtd]`.
+> The two width RAMPS are solved by FDTD rather than an EME staircase;
+> everything else is held fixed, so the difference against the sibling
+> `mmi_2x2_hybrid` IS the measurement. Motivation: the staircase is the
+> leading suspect for the sibling's method error (its IL overshoots
+> full-device FDTD and CLIMBS with cell count, so C_TRANS is an optimum
+> rather than a floor — not how a converging discretisation behaves).
+>
+> ⚠ **~11 FDTD runs per wavelength, against the sibling's 1.**
+> `solve_section()` needs one run per excited mode and a ramp carries
+> N_MODES on both faces, so the ramp alone is 10 runs. Ramp 2 is solved;
+> ramp 4 is a plain `mirror_pairs={4: 2}` (legal — both are on-axis body
+> sections) and the output port stays `MirrorSpec`-derived, so neither is
+> simulated. 24 ranks is deliberate and is the OPPOSITE of the sibling's
+> resourcing: this job is FDTD-stepping-bound (~98 % scaling), not
+> MPB-bound (rank-redundant).
+>
+> ⚠ **`decay_tol`: the ramp keeps 1e-11, and the FIRST ANSWER HERE WAS WRONG.**
+> A stalled smoke run was attributed to this device's known decay_tol hard
+> floor (1e-11 unreachable on an 84 µm 4×4: floors, then diverges) and the
+> ramps were dropped to 1e-05 on that reasoning. The sweep then measured the
+> opposite, on the exact ramp section [-9.0, -2.0] (res 12, 2 modes, 1 wl),
+> diffing the transfer matrix between consecutive tolerances:
+>
+> | decay_tol | seconds | max\|dM\| vs previous |
+> |---|---|---|
+> | 1e-04 | 424 | — |
+> | 1e-05 | 632 | 8.4e-04 |
+> | 1e-06 | 869 | 8.5e-06 |
+> | 1e-07 | 436 | 5.7e-07 |
+> | 1e-09 | 476 | 7.3e-07 |
+> | **1e-11** | **650** | **3.8e-10** |
+>
+> 1e-11 IS reachable on a 7 µm section — nowhere near the 84 µm regime — and
+> **cost is FLAT in the tolerance** (424 s to 869 s, non-monotonic), because
+> the stop is dominated by the field physically leaving the section rather
+> than by the threshold. A looser tolerance buys nothing and costs 8.4e-04.
+> Both ports and ramps therefore run at 1e-11; `RAMP_DECAY_TOL` stays a
+> separate knob because ramp and port are different problems, NOT because
+> this one needed a different value. The table is reproduced in the script.
+>
+> ⚠ **UNRESOLVED — near-degenerate normalization on the ramp.** The sweep
+> logged 12 instances of
+> `solve_section: excite band N normalization mismatch between
+> get_eigenmode_coefficients() and get_fluxes() (max 42.0%) ... falling back
+> to flux-calibrated normalization`, on bands 1 and 2 of section
+> x=[-9.0, -2.0]. That is the near-degenerate path from the 2026-08-09
+> shared-library fix. It fired at res 12 with 2 modes; whether it fires at
+> res 40 with 10 modes, and how much it moves the answer, is NOT known. It is
+> a plausible confounder for the whole alt-vs-sibling comparison, so grep the
+> task logs for "normalization mismatch" BEFORE reading the merged numbers at
+> face value.
+>
+> ⚠ **A concurrent session edited `beef/solvers/fdtd.py` four minutes before
+> this was submitted** (phase columns added to the `snapshot_every` CSV
+> writer). Judged inert for this job — it touches `solve()`'s snapshot path,
+> not `solve_section()`, which is all this script uses, and snapshot args
+> are explicitly outside the cache fingerprint. The live tree imported clean
+> at submit time. But a PENDING job imports the library when it STARTS, so
+> if these tasks fail on an import or an attribute error, suspect that file
+> first.
+>
+> **On completion:** `make -C BEEF/examples mmi_2x2_tapered_hybrid_alt_merge`
+> (seconds, no MPI). It refuses a partial merge.
+>
+> ⚠ **CHECK `squeue` FOR AN EXISTING `beef_mmi_2x2_tapered_alt` BEFORE
+> SUBMITTING THIS ARRAY.** Two sessions have now each submitted it
+> independently (a duplicate task 5, job 13198990, was submitted by one and
+> cancelled). Two jobs writing the same shard path is wasted compute rather
+> than corruption — the shard write is temp-file plus atomic rename — but it
+> is still two jobs.
+>
+> *(A second session wrote its own copy of this block while the array was
+> being set up. The copies were consolidated here on 2026-09-14; the only
+> substantive difference was the decay_tol paragraph above, which that copy
+> still carried in its pre-sweep form. Nothing else was dropped.)*
+>
+> **Open:** the FDTD_STUB = 1.0 µm choice is defensible (seams land in
+> uniform material with dpml clearance, four bounds checked, sections tile
+> the device to 1e-9) but it was NOT swept. If the alt result disagrees with
+> full-device FDTD, sweep `MMI2X2T_ALT_STUB` before blaming the cascade.
+
+
+> ## ✅ 2×2 (straight + WAISTED, shipped examples) — 2026-09-14, DONE.
+>
+> **BOTH JOBS COMPLETED, and BOTH reproduced their previous output exactly.**
+> `13189623_1` COMPLETED in 01:52:56, `13189859_2` in 00:05:03. Every file
+> byte-identical to the pre-run copy; `max|delta| = 0.000e+00` on T_bar and
+> T_cross across all 51 FDTD wavelengths and across the hybrid's 201 × 11
+> grid. Band centre, before and after: `T_bar 0.455993`, `T_cross 0.520670`,
+> `total 0.976664`.
+>
+> **What the FDTD run actually bought, confirmed by probe:** the same
+> `cache_only=True` check that read MISS before it now reads HIT. So the
+> prediction from the fingerprint diff held — the two keys added on
+> 2026-09-12 are inert here, and the 48-core re-run purchased a cache entry
+> reachable under the new fingerprint, not a correction. Anyone re-running
+> `examples/mmi_2x2/python/mmi_2x2_fdtd.py` today gets it from cache.
+>
+> ⚠ **Other devices whose stored `FDTDSolver.solve()` entries predate
+> 2026-09-12 are still in the pre-re-run state** — they will miss and
+> resimulate on next use. This was only fixed for the straight 2×2 because
+> that is what was asked for; it is not a repo-wide sweep.
+>
+> ---
+>
+> *(as submitted)*
+>
+> **Job 13189623_1** — `sbatch --array=1 --account=gts-sr108-gedc_main
+> batch/run_mmi_2x2_examples.batch`. Array index 1 is `mmi_2x2_fdtd` in that
+> script's own `EXAMPLES=(mmi_2x2_eme mmi_2x2_fdtd mmi_2x2_hybrid)`, so this
+> re-runs ONLY the STRAIGHT device's whole-device FDTD. 2 nodes × 24, `-t 300`.
+>
+> ⚠ **Account overridden to `gts-sr108-gedc_main`.** The batch file hard-codes
+> `gts-sr108-ece`, which is currently out of balance — its jobs sit at
+> `AssocGrpBillingMinutes`. Check `sshare` before reusing that file; do not
+> assume the hard-coded account is spendable.
+>
+> ⚠ **That script `rm -rf`s `example_output/mmi_2x2/mmi_2x2_fdtd` before
+> running.** The pre-run copy was saved outside the repo first. Baseline to
+> compare the re-run against, at band centre: `T_bar 0.455993`,
+> `T_cross 0.520670`, `total 0.976664`.
+>
+> **Why it is being re-run at all, and why this is NOT a correctness worry.**
+> Its cached entry is a MEASURED cache miss: `beef/cache/config.py` gained
+> `geometry_mode` and `design_grid_resolution_factor` in the
+> `("FDTDSolver","solve")` allowlist on 2026-09-12, and the stored entry
+> predates them. A field-by-field diff of the fingerprint the current code
+> builds against the stored one shows those two keys are the ONLY difference —
+> geometry polygons, call kwargs and every other solver attribute are
+> identical, and both new keys are inert here (`geometry_mode="prism"` is the
+> old behaviour). So the numbers are expected to come back unchanged; the run
+> buys a cache entry reachable under the new fingerprint, not a correction.
+>
+> **Job 13189859_2** — the same batch file at array index 2, i.e. the STRAIGHT
+> `mmi_2x2_hybrid`, same account override.
+>
+> Its CASCADE needed no job and is already confirmed: re-run on the login node
+> 2026-09-14, it reproduced the Aug-31 output BIT-IDENTICALLY — byte-identical
+> `smatrix_hybrid.pkl`, `hybrid_results.png`, `mm_length_sweep.{npz,png}` and
+> `geometry_hybrid.png`, with `max|delta| = 0.000e+00` across the whole
+> 201 × 11 grid. `solve_section`'s allowlist was not touched by the 2026-09-12
+> commit, so its cache still hits.
+>
+> ⚠ **What that login-node run did NOT cover: step 8**, the
+> `plot_hybrid_body_fields()` body-field reconstruction. It was still in that
+> step at 30 min and was killed by the wrapper's own timeout (exit 124). No
+> damage — it never reached the write, so `fields/hybrid_body_mmi2x2_body_L28.0.png`
+> is untouched Aug-31 output — but it is therefore the one part of this device
+> NOT re-verified against the current library. That step is a fresh mode solve
+> plus a diagnostic plot; it does not feed the S-matrix. 13189859_2 exists to
+> close it on a compute node rather than repeat a 30-minute login-node solve.
+>
+> Note that this job, like 13189623_1, `rm -rf`s its own output subfolder
+> first. The pre-run copy was saved outside the repo.
+>
+> **The WAISTED 2×2 is DONE and needs no job**, despite being the more
+> expensive device: both examples reproduce the study's stored numbers
+> bit-identically from cache (whole-device FDTD 0.7 s; all 11 hybrid
+> wavelengths 109 s against the ~15 h they originally cost). See
+> `mmi_2x2_waist_body_validation.md`, "The device now ships as a normal
+> example".
 
 > ## 🏃 HANDOFF — ONE JOB CURRENTLY RUNNING, 2026-09-14
 >
@@ -68,10 +312,40 @@ snapshot (2026-09-01), not reverified this pass.
 > a historical log, newest first. Do not read an older snapshot's own claim
 > as a live statement.
 
-## 4×4 90° hybrid — NOTHING OF THIS DEVICE'S IS RUNNING
+## 4×4 90° hybrid — ONE JOB RUNNING (13197102), submitted 2026-09-14
 
-The whole calibration / weighted-phase campaign has landed. All COMPLETED,
-none failed:
+> **Supersedes the "nothing running" line below**, which was true when this
+> section was written earlier the same day.
+
+**Job 13197102** (`beef_mmi4x4_tolcurve`, 15 h, 24 ranks, 1 node, account
+`gts-sr108-gedc_main`). Reopens knob 4: job 13110659 bounded the FDTD
+reference's phase noise from **two points** (`decay_tol` 1e-4 vs 1e-5), which
+is a delta between consecutive rungs, not a convergence test. This is the
+convergence curve — L=15 top-port at `decay_tol=1e-9`, snapshotting every 50
+meep time units, which because DFT monitors accumulate yields the whole
+phase-vs-`decay_tol` curve from one run.
+
+⚠️ **A TIMEOUT IS THE EXPECTED OUTCOME, NOT A FAILURE.** `1e-9` is set below
+what the run can reach deliberately; the stopping point is not what is being
+measured. Samples append as they are taken, so a walled run keeps everything it
+wrote and the CSV is readable *while the job is in flight*:
+
+    example_output/mmi_4x4_90hybrid/mmi_4x4_90hybrid_fdtd_L15.00_p4_tol1e-09/tolcurve_p4_port4.csv
+
+If `energy_ratio` floors and then GROWS (this device's measured res=20
+signature: 5.16e-3 → 51.9 → 2.14e8), that turnaround is itself the second
+wanted result — the floor at this domain size, which is unmeasured; the ~5e-6
+figure everything assumes was measured on the 84 µm full device, not at L=15.
+Discard every sample after the turnaround. **Do not auto-resubmit on timeout —
+report and wait.**
+
+Library note: `beef/solvers/fdtd.py`'s snapshot writer now also emits
+`ph_out{i}_wl{j}` (`arg(S)`, degrees), appended after the `T` columns. Both
+tolcurve plotters select by name, so old and new CSVs stay mutually readable.
+Verified against the returned `SMatrix` to <0.01°. Fires only when
+`snapshot_every` is set, so it cannot reach any other queued job.
+
+### The rest of the campaign — all COMPLETED, none failed
 
 | job | what | elapsed | outcome |
 |---|---|---|---|

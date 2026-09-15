@@ -15,6 +15,20 @@ endif
 # SLURM_ARRAY_TASK_ID selects a name positionally).
 MMI_1X2_EXAMPLES = mmi_1x2_eme mmi_1x2_fdtd mmi_1x2_hybrid
 MMI_2X2_EXAMPLES = mmi_2x2_eme mmi_2x2_fdtd mmi_2x2_hybrid
+# The WAISTED 2x2 (validation_markdown/mmi_2x2_waist_body_validation.md,
+# VALIDATED 2026-09-14). Its own device folder, examples/mmi_2x2_tapered/,
+# holding the same two methods as the straight device. Target names carry
+# the `_tapered_` infix because make targets share one namespace, while the
+# scripts and their example_output/ subfolders are named for the METHOD
+# (mmi_2x2_fdtd / mmi_2x2_hybrid) inside the per-device folder, exactly as
+# the straight device's are.
+# ⚠ the HYBRID entry here is the SHARDED one, deliberately. Running that
+# script once over all 11 wavelengths is a full cache MISS (~15 h): the
+# solve_section cache key contains the whole wavelength array, so an 11-wl
+# call and eleven 1-wl calls are different entries, and only the latter reuse
+# what example_sim_cache/ already holds. `make all` must not silently cost 15
+# hours, so the aggregate targets go through mmi_2x2_tapered_hybrid_all.
+MMI_2X2_TAPERED_EXAMPLES = mmi_2x2_tapered_eme mmi_2x2_tapered_fdtd mmi_2x2_tapered_hybrid_all
 # mmi_1x4_fdtd is deliberately NOT here -- mm_length=206 (216 with tapers)
 # makes single-domain whole-device FDTD impractical; this device ships as
 # EME + hybrid only (see validation_markdown/mmi_1x4_sin300_validation.md
@@ -30,8 +44,8 @@ MODAL_MULTIPLEXER_EXAMPLES = modal_multiplexer_hybrid
 # live array.
 RING_RESONATOR_EXAMPLES = ring_resonator_hybrid ring_resonator_hybrid_cascaded
 
-EXAMPLES = $(MMI_1X2_EXAMPLES) $(MMI_2X2_EXAMPLES) $(MMI_1X4_EXAMPLES) $(DIRECTIONAL_COUPLER_EXAMPLES) $(MODAL_MULTIPLEXER_EXAMPLES) $(RING_RESONATOR_EXAMPLES)
-DEVICES = mmi_1x2 mmi_2x2 mmi_1x4 directional_coupler modal_multiplexer ring_resonator
+EXAMPLES = $(MMI_1X2_EXAMPLES) $(MMI_2X2_EXAMPLES) $(MMI_2X2_TAPERED_EXAMPLES) $(MMI_1X4_EXAMPLES) $(DIRECTIONAL_COUPLER_EXAMPLES) $(MODAL_MULTIPLEXER_EXAMPLES) $(RING_RESONATOR_EXAMPLES)
+DEVICES = mmi_1x2 mmi_2x2 mmi_2x2_tapered mmi_1x4 directional_coupler modal_multiplexer ring_resonator
 
 # The five directional-coupler sweep drivers (brute-force FDTD coupling-
 # length, N_MODES, mesh-resolution x2, body-stub) moved to
@@ -50,7 +64,7 @@ DEVICES = mmi_1x2 mmi_2x2 mmi_1x4 directional_coupler modal_multiplexer ring_res
 # examples/verification/ once those items are signed off.
 VERIFICATION = verify_items_1_2 verify_cache_multirank verify_item_5_ground_truth verify_item_6_engine_agreement hcg_reflection_convergence
 
-.PHONY: all $(DEVICES) $(EXAMPLES) $(VERIFICATION) clean clean_verification
+.PHONY: all $(DEVICES) $(EXAMPLES) $(VERIFICATION) mmi_2x2_tapered_hybrid mmi_2x2_tapered_hybrid_merge mmi_2x2_tapered_hybrid_alt mmi_2x2_tapered_hybrid_alt_merge mmi_2x2_tapered_hybrid_alt_all clean clean_verification
 
 all: $(EXAMPLES)
 
@@ -58,6 +72,7 @@ all: $(EXAMPLES)
 # the same lists concurrently via SLURM job arrays instead).
 mmi_1x2: $(MMI_1X2_EXAMPLES)
 mmi_2x2: $(MMI_2X2_EXAMPLES)
+mmi_2x2_tapered: $(MMI_2X2_TAPERED_EXAMPLES)
 mmi_1x4: $(MMI_1X4_EXAMPLES)
 directional_coupler: $(DIRECTIONAL_COUPLER_EXAMPLES)
 modal_multiplexer: $(MODAL_MULTIPLEXER_EXAMPLES)
@@ -80,6 +95,75 @@ mmi_2x2_fdtd:
 
 mmi_2x2_hybrid:
 	$(runner) $(my_python) mmi_2x2/python/mmi_2x2_hybrid.py
+
+# --- waisted 2x2 ----------------------------------------------------------
+# Pure EME: no FDTD anywhere, so it is the cheap one -- minutes, against hours
+# for the whole-device FDTD and ~27 core-hours for the FDTD-ramp cascade. Its
+# body is NINE regions (wg|taper|stub|ramp|waist|ramp|stub|taper|wg) rather
+# than the straight device's five, because a waisted body is three different
+# things; the layout is the one the step-6 design sweep scored the grid on.
+mmi_2x2_tapered_eme:
+	$(runner) $(my_python) mmi_2x2_tapered/python/mmi_2x2_eme.py
+
+mmi_2x2_tapered_fdtd:
+	$(runner) $(my_python) mmi_2x2_tapered/python/mmi_2x2_fdtd.py
+
+# The hybrid runs ONE WAVELENGTH PER INVOCATION and then merges: MPB does not
+# scale with MPI ranks (meep solves the eigenproblem redundantly on every
+# rank), so the parallelism has to live at the job level. MMI2X2T_HY_WLIDX
+# selects the shard; MMI2X2T_HY_MERGE=1 combines them once all 11 have landed.
+# See batch/run_mmi_2x2_tapered_examples.batch, which drives the whole thing
+# as a SLURM array (task 0 = FDTD, tasks 1-11 = one wavelength each).
+MMI2X2T_HY_WLIDX ?=
+mmi_2x2_tapered_hybrid:
+	MMI2X2T_HY_WLIDX=$(MMI2X2T_HY_WLIDX) $(runner) $(my_python) mmi_2x2_tapered/python/mmi_2x2_hybrid.py
+
+mmi_2x2_tapered_hybrid_merge:
+	MMI2X2T_HY_MERGE=1 $(my_python) mmi_2x2_tapered/python/mmi_2x2_hybrid.py
+
+# --- ALT cascade: the width ramps go to FDTD instead of an EME staircase ---
+# [fdtd, eme, fdtd, eme, fdtd, eme, fdtd] instead of [fdtd, eme x5, fdtd].
+#
+# ⚠ DELIBERATELY NOT in MMI_2X2_TAPERED_EXAMPLES, so `make all` and
+# `make mmi_2x2_tapered` do NOT pull it in -- same reasoning as
+# modal_multiplexer_fdtd and mmi_2x2_hybrid_gds above. FDTDSolver.solve_section()
+# needs one FDTD run per excited mode and a ramp section carries N_MODES on
+# both faces, so this variant costs ~11 FDTD runs per wavelength against the
+# EME-body cascade's 1. It is a method experiment, not part of the device's
+# routine output.
+#
+# Unlike the EME-body hybrid, this one IS worth real MPI ranks: it is
+# dominated by FDTD time-stepping (~98% scaling here), not by MPB mode solves
+# (which meep runs redundantly on every rank).
+MMI2X2T_ALT_WLIDX ?=
+mmi_2x2_tapered_hybrid_alt:
+	MMI2X2T_ALT_WLIDX=$(MMI2X2T_ALT_WLIDX) $(runner) $(my_python) mmi_2x2_tapered/python/mmi_2x2_hybrid_alt.py
+
+mmi_2x2_tapered_hybrid_alt_merge:
+	MMI2X2T_ALT_MERGE=1 $(my_python) mmi_2x2_tapered/python/mmi_2x2_hybrid_alt.py
+
+# Every wavelength then the merge. Sequential -- on the cluster submit
+# batch/run_mmi_2x2_tapered_alt.batch instead, which runs them concurrently.
+MMI2X2T_ALT_NWL ?= 11
+mmi_2x2_tapered_hybrid_alt_all:
+	@k=0; while [ $$k -lt $(MMI2X2T_ALT_NWL) ]; do \
+		$(MAKE) --no-print-directory mmi_2x2_tapered_hybrid_alt MMI2X2T_ALT_WLIDX=$$k || exit 1; \
+		k=$$((k+1)); \
+	done
+	@$(MAKE) --no-print-directory mmi_2x2_tapered_hybrid_alt_merge
+
+# Every wavelength, then the merge -- the whole hybrid leg in one target, and
+# the one that `make mmi_2x2_tapered` / `make all` actually use. Sequential
+# here because a plain `make` has no job scheduler; on the cluster, submit
+# batch/run_mmi_2x2_tapered_examples.batch instead, which runs the same 11
+# wavelengths as concurrent array tasks.
+MMI2X2T_HY_NWL ?= 11
+mmi_2x2_tapered_hybrid_all:
+	@k=0; while [ $$k -lt $(MMI2X2T_HY_NWL) ]; do \
+		$(MAKE) --no-print-directory mmi_2x2_tapered_hybrid MMI2X2T_HY_WLIDX=$$k || exit 1; \
+		k=$$((k+1)); \
+	done
+	@$(MAKE) --no-print-directory mmi_2x2_tapered_hybrid_merge
 
 mmi_2x2_hybrid_gds:
 	$(runner) $(my_python) mmi_2x2/python/mmi_2x2_hybrid_gds.py

@@ -1269,11 +1269,15 @@ class FDTDSolver:
                 cache_only docstring for the full semantics (identical here).
             snapshot_every: if set, decompose the monitors every this many
                 meep time units DURING the run and record
-                {t, energy, energy_ratio, T} to ``snapshot_path``. Because
-                DFT monitors accumulate, sample t equals what a run stopped
-                at t would have returned, so one run yields a whole
+                {t, energy, energy_ratio, T, phase} to ``snapshot_path``.
+                Because DFT monitors accumulate, sample t equals what a run
+                stopped at t would have returned, so one run yields a whole
                 transmission-vs-decay-time curve instead of needing one run
-                per ``decay_tol``. Observation only: it does not alter the
+                per ``decay_tol``. BOTH |T|^2 (``T_out{i}_wl{j}``) and
+                arg(S) in degrees (``ph_out{i}_wl{j}``) are written: a
+                tolerance chosen on amplitude alone bounds nothing about
+                phase, and phase is what the hybrid-vs-FDTD comparisons on
+                this repo's devices actually turn on. Observation only: it does not alter the
                 fields, the stopping condition, or the returned SMatrix, and
                 it is NOT part of the cache fingerprint for exactly that
                 reason -- a snapshotted run and a plain one produce the same
@@ -1541,6 +1545,18 @@ class FDTDSolver:
                 T = {f"out_{i}": np.asarray(
                          snap.transmission(port=f"out_{i}", in_mode=input_mode))
                      for i in range(len(out_fluxes))}
+                # PHASE, not just power. `decay_tol` has only ever been chosen
+                # on a |T|^2 AMPLITUDE criterion in this repo (the 4x4's 1e-4
+                # was picked at 0.015 dB), which says NOTHING about arg(S) --
+                # and the hybrid-vs-FDTD comparisons this curve is used to
+                # bound are phase comparisons. The complex coefficient is
+                # already in `snap`; only the CSV was dropping it. Degrees,
+                # wrapped to (-180, 180] exactly as np.angle returns them --
+                # deliberately NOT unwrapped here, because unwrapping needs
+                # the whole series and this writer sees one sample at a time.
+                PH = {f"out_{i}": np.degrees(np.angle(np.asarray(
+                          snap.coeff(port=f"out_{i}", in_mode=input_mode))))
+                      for i in range(len(out_fluxes))}
                 # Decomposition above is collective and must run on EVERY rank.
                 # The write must not: with 8 ranks the smoke test produced a
                 # CSV with repeated headers and duplicated rows, and at 96 it
@@ -1551,18 +1567,38 @@ class FDTDSolver:
                         fresh = not os.path.exists(snapshot_path)
                         with open(snapshot_path, "a") as fh:
                             if fresh:
+                                # Phase columns are APPENDED after every T
+                                # column, never interleaved: the existing
+                                # readers (plot_mmi4x4_90hybrid_tolcurve.py,
+                                # plot_mmi1x2_tolcurve.py) select on
+                                # `startswith("T_out")` by name, and any
+                                # positional reader keeps the same first
+                                # 3+len(T) fields. Old CSVs stay readable and
+                                # new ones stay readable by old code.
                                 cols = ",".join(
                                     f"T_out{i}_wl{j}"
                                     for i in range(len(out_fluxes))
                                     for j in range(len(wavelengths))
                                 )
-                                fh.write("t,energy,energy_ratio," + cols + "\n")
+                                pcols = ",".join(
+                                    f"ph_out{i}_wl{j}"
+                                    for i in range(len(out_fluxes))
+                                    for j in range(len(wavelengths))
+                                )
+                                fh.write("t,energy,energy_ratio,"
+                                         + cols + "," + pcols + "\n")
                             vals = ",".join(
                                 f"{v:.10e}"
                                 for i in range(len(out_fluxes))
                                 for v in np.asarray(T[f"out_{i}"]).ravel()
                             )
-                            fh.write(f"{t_now:.4f},{e:.10e},{ratio:.10e},{vals}\n")
+                            pvals = ",".join(
+                                f"{v:.10e}"
+                                for i in range(len(out_fluxes))
+                                for v in np.asarray(PH[f"out_{i}"]).ravel()
+                            )
+                            fh.write(f"{t_now:.4f},{e:.10e},{ratio:.10e},"
+                                     f"{vals},{pvals}\n")
                             fh.flush()
                     except OSError:
                         logger.warning(

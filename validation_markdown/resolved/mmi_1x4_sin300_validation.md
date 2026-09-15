@@ -54,13 +54,63 @@
 > `resolved/`** (the 2×2's 0.47% Δβ, the coupler's ~5–10%). It is recorded,
 > not closed.
 >
-> ### ⚠ Residual 2 — the leading suspect was DROPPED, not investigated
+> ### ⚠ Residual 2 — RESULT 2026-09-15: staircase explains the SIGN, not the MAGNITUDE, and REFUTES itself for total T
 >
-> The remaining candidate for residual 1 is the **EME taper staircase**
+> ~~The remaining candidate for residual 1 is the **EME taper staircase**
 > (`C_TAPER=8` is the only path approximating the port tapers; FDTD meshes
 > them exactly). The convergence sweep that would test it was **never run,
 > at the user's instruction**. "Dropped" is not "excluded" — if this device
-> is ever picked back up, that sweep is the first thing to run.
+> is ever picked back up, that sweep is the first thing to run.~~ Run
+> 2026-09-14/15 (`mmi_1x4_eme_taper_staircase_convergence.py`, jobs 13184102
+> smoke + 13198858 full grid — the first submission, 13196162, was cancelled
+> by the user 11 min in and resubmitted unchanged), band centre only,
+> `C_TAPER` ∈ {8, 16, 32, 64}, everything else pinned to the split-shape
+> confound script's own case A (res=40, 20×5 domain — already established as
+> not the cause of the sign flip).
+>
+> | `C_TAPER` | total T | favours | \|outer−inner\| |
+> |---|---|---|---|
+> | 8 (published) | 0.9707 | OUTER | 7.93e-04 |
+> | 16 | 0.9807 | INNER | 2.29e-04 |
+> | 32 | 0.9858 | INNER | 7.22e-04 |
+> | 64 | 0.9884 | INNER | 9.42e-04 |
+>
+> (hybrid: total 0.9454, favours INNER by ~0.017. FDTD ref: total 0.9648,
+> favours INNER by 2.47e-03.)
+>
+> **Split-shape SIGN: the staircase is a real, measured contributor.** The
+> favoured pair flips OUTER→INNER between `C_TAPER=8` and `C_TAPER=16` and
+> stays INNER through 64 — i.e. every `C_TAPER` past the published value
+> already agrees with hybrid's *direction*, not just FDTD's. `C_TAPER=8`'s
+> OUTER call sits right next to this crossover (its own magnitude, 7.93e-04,
+> is the same order as 16's post-crossover 2.29e-04), so the published sign
+> was close to a coin flip, not a robust engine disagreement. **Split-shape
+> MAGNITUDE: staircase does not get there.** Even at `C_TAPER=64` the
+> favoured-pair gap is 9.42e-04 — ~18× smaller than hybrid's ~0.017 — and the
+> 16→32→64 sequence (2.29e-04 → 7.22e-04 → 9.42e-04) is still *growing*, not
+> obviously plateaued, so 18× is a floor on the remaining gap, not a ceiling.
+>
+> **Total T: REFUTED, same failure direction as mode truncation already
+> got.** `d(hybrid) = |T_total − 0.9454|` grows monotonically with
+> `C_TAPER` — 0.0253 → 0.0353 → 0.0404 → 0.0430 — i.e. resolving the
+> staircase moves total T *away* from both hybrid and FDTD, not toward
+> either. The successive increments (0.0100, 0.0051, 0.0026) shrink by
+> ~0.51× per doubling, clean enough for a first-order Richardson
+> extrapolate: limit ≈ 0.991, *further* from hybrid/FDTD than the published
+> `C_TAPER=8` number. So the staircase was, if anything, an accidental
+> source of loss that happened to land EME's total T closer to hybrid than a
+> fully-resolved taper would — refining it does not close Residual 1's
+> total-T gap, it widens it. Not extrapolated with a second model to confirm
+> the ≈0.991 figure; stated as an estimate, not a result.
+>
+> **Net verdict.** Residual 2's leading suspect is **half-confirmed**: it
+> explains why check 1's *sign* call was fragile (a near-crossover), but it
+> is excluded — in the wrong direction, like truncation — as the explanation
+> for the *total-T* gap, and leaves an ~18×+ unexplained MAGNITUDE gap on
+> the split even at its own best-resolved point. Residual 1 stays **open**;
+> whatever explains the total-T gap and the split magnitude is still
+> unidentified. No other untested candidate is currently known — this was
+> the last one on record.
 >
 > ### ⚠ Residual 3 — res=30 is NOT established for the EME side
 >

@@ -249,6 +249,38 @@ print(f"Geometry plot saved → {output_dir}/geometry.png")
 CAPTURE_FIELDS = os.environ.get("MMI4X4_FDTD_CAPTURE_FIELDS", "0") == "1"
 _fields_dir = os.path.join(output_dir, "fields") if CAPTURE_FIELDS else None
 
+# ---------------------------------------------------------------------------
+# MMI4X4_FDTD_SNAP_EVERY=<t> decomposes the monitors every <t> meep time units
+# and streams {t, energy, energy_ratio, |T|^2, arg(S)} to a CSV in output_dir.
+#
+# WHY. `decay_tol=1e-4` was selected on a |T|^2 AMPLITUDE criterion (0.015 dB,
+# 2026-08-25) which says NOTHING about phase, and job 13110659 then bounded the
+# reference's phase noise from exactly TWO points (1e-4 vs 1e-5) -- a delta,
+# not a convergence test. Because DFT monitors accumulate, one snapshotted run
+# yields the whole phase-vs-decay_tol curve, so the ladder of runs that would
+# otherwise be needed collapses to one. beef/solvers/fdtd.py's writer gained
+# the `ph_out{i}_wl{j}` columns for this.
+#
+# A TIMEOUT IS AN EXPECTED OUTCOME HERE, NOT A FAILURE. To see past the
+# tolerance the run would otherwise stop at, this is meant to be launched with
+# DECAY_TOL set BELOW where the run can reach, so it walls out -- and the
+# energy_ratio column then also shows where (or whether) this domain's decay
+# FLOORS, which is unmeasured at L=15 and is the thing that decides whether a
+# tolerance tighter than 1e-5 is reachable at all. Samples are appended as
+# they are taken, so a walled run keeps every sample it wrote.
+#
+# NOT part of the cache fingerprint (a method argument, deliberately not stored
+# on self -- see solve()'s docstring), so this cannot strand or poison an
+# existing cache entry. But note the converse: a run whose (geometry, res,
+# decay_tol) already has a cache entry returns WITHOUT time-stepping and writes
+# NO curve. Vary decay_tol to force a fresh solve.
+# ---------------------------------------------------------------------------
+_snap_every = os.environ.get("MMI4X4_FDTD_SNAP_EVERY", "")
+SNAP_EVERY = float(_snap_every) if _snap_every else None
+_snap_path = os.path.join(
+    output_dir, f"tolcurve_p{''.join(str(p) for p in _driven_ports)}.csv"
+) if SNAP_EVERY else None
+
 wavelengths = np.linspace(WL_MIN, WL_MAX, N_WL)
 PORT_NAMES = ["out5", "out6", "out7", "out8"]
 
@@ -260,9 +292,14 @@ print(f"Driven ports (1-based, paper numbering): {_driven_ports}"
 smat = {}
 for p in _driven_ports:
     idx = _PORT_TO_INPUT_IDX[p]
+    # One CSV per driven port: the snapshot writer APPENDS, so a shared path
+    # across ports would interleave two runs' samples into one unreadable file.
+    _sp = (_snap_path.replace(".csv", f"_port{p}.csv")
+           if _snap_path else None)
     smat_raw = solver.solve(
         mmi, wavelengths, input_idx=idx, input_mode=1, save_dir=save_dir,
         capture_fields_dir=_fields_dir,
+        snapshot_every=SNAP_EVERY, snapshot_path=_sp,
     )
     smat_raw.check_passive()
     s = SMatrix(wavelengths=wavelengths)
