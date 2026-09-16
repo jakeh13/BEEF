@@ -309,8 +309,40 @@ PROJECTION rather than at the propagation — the same signature the sibling's
 own notes attribute to a truncated seam basis over-coupling the symmetric
 (bar) combination.
 
-⚠ **The obvious next test, and it is cheap relative to this one.** This run
-used `N_FACE = N_WAIST = 10`. The waist genuinely supports only 10 distinct
+**FOLLOW-UP, 2026-09-15: the seam-basis explanation is ALSO REFUTED.**
+Array `13215682_0..10` re-ran the whole thing at `N_FACE = 14` (11 tasks,
+3h19m–4h18m each, ~790 core-hours). It changed essentially nothing:
+
+| vs full FDTD | N_FACE=14 | N_FACE=10 | sibling (EME ramps) |
+|---|---|---|---|
+| mean \|dT\| bar, % of T | 5.78 % | 5.76 % | 0.76 % |
+| mean \|dT\| cross, % of T | 1.18 % | 1.20 % | 3.17 % |
+| excess loss (dB) | 0.3513 | 0.3500 | 0.2446 |
+| imbalance | 0.0315 | 0.0317 | 0.0259 |
+| phase mean (deg) | −90.3230 | −90.3345 | −88.5220 |
+| phase MAX-dev (deg) | 1.8324 | 1.8396 | 1.3732 |
+
+Agreement to 3–4 significant figures on every quantity. Widening the 2.80 µm
+seam basis from 10 to 14 modes buys **nothing**, so the FDTD-ramp cascade's
+bar error is NOT seam-basis truncation.
+
+The 14 modes really were used: `solve_section()` excites from the fewer-mode
+side, which is the 10-mode waist face in BOTH configurations (at 10/10 the
+tie also resolves to the same side), so the extra four modes entered through
+the measurement projection rather than the excitation. They simply did not
+matter.
+
+**So two explanations for this variant's bar error are now dead** — the ramp
+staircase (the variant itself) and the seam mode count (this follow-up).
+Remaining candidates, none tested: the FDTD ramp section's own monitor
+placement/aperture, the `mirror_pairs={4: 2}` assumption for the second ramp,
+and the `FDTD_STUB` de-embedding at the two ramp seams. Note the ramps
+deliberately run WITHOUT `half_domain_aperture` (they are on-axis body
+sections with no neighbour arm to exclude) while the ports use it — that
+asymmetry is untested and is the cheapest of the three to check.
+
+⚠ **Superseded — kept for provenance.** *This run
+used `N_FACE = N_WAIST = 10`.* The waist genuinely supports only 10 distinct
 modes, but the **2.80 µm face supports ~14**, and in this cascade a ramp
 section's input face IS a 2.80 µm seam. So the bar degradation may be a
 starved seam basis rather than anything about FDTD ramps. `N_FACE` is already
@@ -335,6 +367,57 @@ section rather than by the threshold. A looser tolerance buys nothing and
 costs 8.4e-04 of accuracy. The hard floor is a property of the 84 µm device it
 was measured on, not of this one: **it is per-geometry, do not borrow it.**
 
+### Pure EME example, and a measured mode-memo result (2026-09-15)
+
+`examples/mmi_2x2_tapered/{python,notebooks}/mmi_2x2_eme.*`, output in
+`example_output/mmi_2x2_tapered/mmi_2x2_eme/`, batch
+`batch/run_mmi_2x2_tapered_eme.batch`. No FDTD anywhere. NINE regions
+(`wg|taper|stub|ramp|waist|ramp|stub|taper|wg`) on the layout the step-6
+design sweep scored the grid with, so its numbers are directly comparable to
+that grid. Every uniform region gets ONE cell (exact there); only the two
+ramps carry the `C_TRANS = 8` staircase.
+
+**Result — criterion PASS on all four, under both phase readings:**
+31.00 µm, 16.2 % shorter, IL 0.4442 dB, imbalance 0.0153, phase mean −89.5406
+(mean-dev 0.209, MAX-dev 0.722). Against whole-device FDTD: **bar 5.10 %,
+cross 3.65 %** of mean T. That places pure EME between the two hybrid
+cascades — worse than the EME-body one on bar (0.76 %), better than the
+FDTD-ramp one (5.78 %) — while having the closest PHASE of the three
+(0.058 deg from FDTD, against the hybrids' 0.84–0.96 deg).
+
+**Mode reuse: MEASURED, and it is exact.** `EMESolver.compute_modes()` is
+documented as "exposed for caching" — the library provides the hook and
+caches nothing itself. A content-addressed memo (hash of nx/ny/nz + wl + T +
+n_modes, NEVER width — width-keyed reuse was measured breaking physics on the
+1x4, totalT 0.9703 -> 0.1507) now rides in the script. A/B on job 13239336:
+
+| | memo OFF | memo ON |
+|---|---|---|
+| wall | 1285 s | **629 s** |
+| cross-sections solved | 1122 | **462** |
+| reused | 0 | **660 (59 % avoided)** |
+| max\|dS\| vs the other arm | — | **0.000e+00 on both ports** |
+
+2.0x, bit-identical. The duplicates are the two stubs, the mirrored ramp and
+taper cells, and — the big one — the entire body being identical between the
+bar and cross solves.
+
+⚠ **THE FIRST ATTEMPT AT THIS A/B WAS VACUOUS, and the trap is general.**
+Job 13238718 read 591 s -> 7 s with |dS| = 0 and looked like an 84x memo win.
+It was not: `solve()` caches the WHOLE call under `save_dir`, both arms shared
+one, and arm 2 replayed arm 1 from disk without ever reaching
+`compute_modes()`. The timing was a cache read and the |dS| comparison was a
+stored array against itself. **Any A/B of an inner-loop optimisation must give
+each arm its own empty `save_dir`** (`MMI2X2T_EME_SAVEDIR` exists for this),
+or it measures the disk cache. What exposed it was the memo counter never
+printing; the script now reports three distinct outcomes — memo disabled,
+memo active with a hit rate, and "NOT EXERCISED, this run did no mode solving
+at all" — because a silent zero counter is what let the first read stand.
+
+⚠ **It is NOT a login-node script despite having no FDTD.** A 3-wavelength run
+was OOM-killed there; 51 cells x 15 body modes through tidy3d needs real
+memory (96 G, one task). Mode solving does not scale with ranks, so `ntasks=1`.
+
 ### Key artifacts
 
 | what | where |
@@ -342,6 +425,7 @@ was measured on, not of this one: **it is per-geometry, do not borrow it.**
 | all outputs for this device | `example_output/mmi_2x2_tapered/` |
 | the two shipped examples | `mmi_2x2_fdtd/`, `mmi_2x2_hybrid/` (see the section above) |
 | ALT cascade (FDTD ramps) | `mmi_2x2_hybrid_alt/` — negative result, see the section above |
+| pure EME | `mmi_2x2_eme/` — PASS; 59 % of mode solves avoided, exactly |
 | two-geometry comparison figure | `spectra_hybrid_vs_fdtd_two_geometries.png` |
 | per-geometry spectra | `spectra_*_hybrid_vs_fdtd_Ww2.24_Lw6_Lt{5,6}_L{22,21.5}.png` |
 | stitched hybrid field + its replay cache | `hybrid_stitched_res40/` (`recon_cache_*.npz` re-renders in seconds, no re-solve) |

@@ -89,6 +89,15 @@ output_dir = os.path.join(_DEVICE_OUT, "mmi_2x2_eme")
 os.makedirs(output_dir, exist_ok=True)
 save_dir = os.path.abspath(os.path.join(
     _HERE, "..", "..", "..", "..", "example_sim_cache"))
+# ⚠ OVERRIDABLE SO THE MODE-MEMO A/B CAN BE MEASURED AT ALL. solve() caches
+# the WHOLE call under save_dir, so a second run of this script with the same
+# config is served entirely from disk and never reaches compute_modes(). A
+# memo-off/memo-on A/B sharing one save_dir therefore measures the save_dir
+# cache and not the memo, and its |dS| comparison is vacuous because both arms
+# return the same stored array. Measured 2026-09-15: arm 1 591 s, arm 2 7 s,
+# |dS| = 0 -- and the memo counters never fired at all, which is what exposed
+# it. Point each arm at its own empty directory to measure the memo.
+save_dir = os.environ.get("MMI2X2T_EME_SAVEDIR", save_dir)
 # The whole-device FDTD reference written by mmi_2x2_fdtd.py in this folder.
 FDTD_REF_DIR = os.path.join(_DEVICE_OUT, "mmi_2x2_fdtd")
 
@@ -164,7 +173,7 @@ TAPER_LENGTH = 4.0
 # Set MMI2X2T_EME_MEMO=0 to disable (used by the A/B below).
 # ---------------------------------------------------------------------------
 MEMO_ON = _env_i("MMI2X2T_EME_MEMO", 1) == 1
-_MODE_MEMO, _MEMO_STATS = {}, {"hits": 0, "misses": 0}
+_MODE_MEMO, _MEMO_STATS = {}, {"hits": 0, "misses": 0, "bypassed": 0}
 
 
 def _install_mode_memo():
@@ -181,6 +190,7 @@ def _install_mode_memo():
     @functools.wraps(orig)
     def compute_modes(self, cs, n_modes, *args, **kwargs):
         if not MEMO_ON:
+            _MEMO_STATS["bypassed"] += 1
             return orig(self, cs, n_modes, *args, **kwargs)
         try:
             k = _key(cs, n_modes)
@@ -314,11 +324,26 @@ smat = smat_bar
 smat._data.update(smat_cross._data)
 smat.check_passive()  # total output power must not exceed 1 at any wavelength
 print(f"Solved in {elapsed:.0f}s")
-_h, _m = _MEMO_STATS["hits"], _MEMO_STATS["misses"]
+# THREE distinct outcomes, and conflating them is how the first A/B attempt
+# fooled itself. Zero hits+misses means the memo never SAW a call, which is
+# either because it is switched off or because solve() served the whole call
+# from save_dir and never reached the mode solver at all — and only the
+# second of those makes the run's timing a cache-read rather than a solve.
+_h, _m, _b = (_MEMO_STATS["hits"], _MEMO_STATS["misses"],
+              _MEMO_STATS["bypassed"])
 if _h + _m:
     print(f"mode memo: {_m} cross-sections solved, {_h} reused "
           f"({100*_h/(_h+_m):.0f}% avoided) across both the bar and cross "
           f"solves and all {N_WL} wavelengths")
+elif _b:
+    print(f"mode memo: DISABLED — {_b} cross-sections solved with no reuse. "
+          f"This is the honest baseline cost; the timing above is a real "
+          f"solve.")
+else:
+    print("mode memo: NOT EXERCISED — compute_modes() was never called, so "
+          "this run did no mode solving at all and was served entirely from "
+          "save_dir's whole-call cache. Timings here are cache-read times, "
+          "NOT solve times, and an A/B built on them is vacuous.")
 
 # ---------------------------------------------------------------------------
 # 5. Scores — the four criteria this device is judged on
@@ -469,6 +494,7 @@ with open(os.path.join(output_dir, f"eme_{tag}.json"), "w") as fh:
                           "mode_memo": MEMO_ON,
                           "mode_solves": _MEMO_STATS["misses"],
                           "mode_reuses": _MEMO_STATS["hits"],
+                          "mode_bypassed": _MEMO_STATS["bypassed"],
                           "regions": {"labels": REGION_LABELS,
                                       "lengths": lengths,
                                       "num_cells": num_cells,

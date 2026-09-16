@@ -80,7 +80,28 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 # silently destroy the 3-point results that were verified on 2026-09-06 to
 # reproduce the optimiser exactly. Default stays untagged so every existing
 # path and reference keeps working.
-_NWL_ENV = int(os.environ.get("MMI4X4_HYB_NWL", 3))
+# 2026-09-15: DEFAULT RAISED 3 -> 11 over the same 1.29-1.33 um window.
+# The tag below is re-keyed to this constant, so the DEFAULT is untagged
+# (production) and any other count is tagged -- the previous 3-point
+# production output was snapshotted to
+# mmi_4x4_90hybrid_hybrid_nwl3_PRE_20260915/ first, since it is referenced by
+# prior work and the optimiser's own fitness basis.
+#
+# ⚠ TWO REAL CONSEQUENCES, both measured rather than assumed:
+#   1. COST. solve_section_length_sweep() does one eigenmode solve per
+#      wavelength, and this body is ~416 s/mode (3324.7 s for 8 modes vs
+#      874.6 s for 2, job 11693043 -- validation doc line 1508). At
+#      N_MODES=16 that is ~1.85 h PER WAVELENGTH: ~5.5 h at 3, ~20 h at 11.
+#      MPI ranks do NOT help -- MPB is rank-redundant (measured), so that is
+#      serial wall time. Only the 4 FDTD input sections scale with ranks.
+#   2. FITNESS BASIS. The old default of 3 deliberately matched the paper's
+#      Eq. 12 convention (Sec. IV, |Lambda| = 3), which is what the BO
+#      campaign used to select mm_length=159.30. Metrics computed at 11
+#      wavelengths are a DIFFERENT, denser measurement of the same geometry --
+#      better band coverage, but no longer the optimiser's own fitness basis.
+#      Set MMI4X4_HYB_NWL=3 to reproduce that basis exactly.
+_NWL_DEFAULT = 11
+_NWL_ENV = int(os.environ.get("MMI4X4_HYB_NWL", _NWL_DEFAULT))
 _MM_LENGTH_ENV = os.environ.get("MMI4X4_MM_LENGTH")
 _length_tag = "" if _MM_LENGTH_ENV is None else f"_L{float(_MM_LENGTH_ENV):.2f}"
 # MMI4X4_DRIVEN_PORTS: same override/convention as
@@ -96,7 +117,7 @@ _ports_tag = "" if set(_driven_ports) == {1, 3} else (
     "_p" + "".join(str(p) for p in _driven_ports))
 output_dir = os.path.abspath(os.path.join(
     _HERE, "..", "..", "..", "..", "example_output", "mmi_4x4_90hybrid",
-    "mmi_4x4_90hybrid_hybrid" + ("" if _NWL_ENV == 3 else f"_nwl{_NWL_ENV}") + _length_tag + _ports_tag))
+    "mmi_4x4_90hybrid_hybrid" + ("" if _NWL_ENV == _NWL_DEFAULT else f"_nwl{_NWL_ENV}") + _length_tag + _ports_tag))
 os.makedirs(output_dir, exist_ok=True)
 save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
 
@@ -114,7 +135,7 @@ RESOLUTION = 40.0
 # overrides for anyone who wants the wider sweep.
 WL_MIN = float(os.environ.get("MMI4X4_WLMIN", 1.29))
 WL_MAX = float(os.environ.get("MMI4X4_WLMAX", 1.33))
-N_WL = _NWL_ENV   # env-overridable via MMI4X4_HYB_NWL; the default 3
+N_WL = _NWL_ENV   # env-overridable via MMI4X4_HYB_NWL. Default was 3, which
                   # matches the paper's own Eq. 12 fitness convention (Sec. IV):
                   # Lambda = {1520,1550,1580 nm}, not this repo's usual 11 --
                   # this cross-section is too expensive to afford that (Step 3
@@ -527,3 +548,154 @@ else:
     fig.savefig(os.path.join(output_dir, "hybrid_results.png"), dpi=300)
     plt.close("all")
     print(f"Results plot saved → {output_dir}/hybrid_results.png")
+
+# ---------------------------------------------------------------------------
+# 8. LENGTH SWEEP -- metrics vs mm_length, out to 2.1x the nominal length.
+#
+# COSTS NO EXTRA SOLVER TIME. `M_body_grid` above is already the FULL shared
+# 20-400 um / 0.05 um grid (7601 points); section 5 slices ONE index out of it
+# and throws the rest away, and the einsum cascade there already carries a
+# leading length axis `L` purely to drop it. This block keeps that axis.
+#
+# ⚠ STRIDE THE RESULT, NEVER RE-REQUEST A SUB-GRID. From
+# mmi_4x4_90hybrid_calibrated_length_rescore.py's own hard-won note: "The
+# length-sweep cache is keyed on the REQUESTED lengths array, so a strided
+# request is a cache MISS even though every point in it was solved -- always
+# ask for the exact full grid the cached runs used and stride the returned
+# array instead." Asking solve_section_length_sweep() for a coarser grid here
+# would silently re-solve every body mode (~416 s/mode x N_MODES x n_wl).
+#
+# Purpose: find mm_lengths where SEVERAL arms carry real power. The
+# hybrid-vs-FDTD phase probes at L=5/10/15 um put 35-55% in out8 and 1e-4..1e-2
+# in out5/out6, so a power-weighted phase metric there scores essentially one
+# arm -- and a 90-degree hybrid's quadrature is a statement about arms that ALL
+# carry light. This sweep is what picks the next full-device FDTD reference
+# lengths, which cost hours each.
+# ---------------------------------------------------------------------------
+if _all13:
+    SWEEP_MAX = 2.1 * _MM_LENGTH_DEFAULT                 # 334.53 um
+    SWEEP_STEP = float(os.environ.get("MMI4X4_SWEEP_STEP", 0.25))
+    _stride = max(1, int(round(SWEEP_STEP / 0.05)))
+    _swp_L_all = _LENGTH_GRID[::_stride]
+    _keep = _swp_L_all <= SWEEP_MAX + 1e-9
+    sweep_L = _swp_L_all[_keep]
+    M_body_swp = M_body_grid[::_stride][_keep]           # [n_L, n_wl, N, N]
+    print(f"\nLength sweep: {len(sweep_L)} points, "
+          f"{sweep_L[0]:.2f}-{sweep_L[-1]:.2f} um at {SWEEP_STEP:.2f} um "
+          f"(strided from the cached grid -- no new solves)")
+
+    _sc = {}
+    for i in DRIVEN:
+        _tmp = np.einsum("Lwab,wbk->Lwak", M_body_swp, M_in[i])
+        for j in OUTPUTS:
+            _sc[(i, j)] = np.einsum("wab,Lwbk->Lwak", M_out[j], _tmp)[:, :, 0, 0]
+
+    nL, nW = len(sweep_L), len(wavelengths)
+    sw = {k: np.zeros((nL, nW)) for k in
+          ("xl1", "xl3", "cmrrI1", "cmrrI3", "cmrrQ1", "cmrrQ3",
+           "dphi6", "dphi7", "dphi8")}
+    sw_T = {j: np.zeros((nL, nW)) for j in OUTPUTS}
+    for li in range(nL):
+        _s = {}
+        for i in DRIVEN:
+            _s[i] = SMatrix(wavelengths=wavelengths)
+            for j in OUTPUTS:
+                _s[i].set(_sc[(i, j)][li], port=PORT_NAMES[j])
+        sw["xl1"][li] = _s[0].excess_loss_db(PORT_NAMES)
+        sw["xl3"][li] = _s[2].excess_loss_db(PORT_NAMES)
+        sw["cmrrI1"][li] = _s[0].cmrr_db("out5", "out8")
+        sw["cmrrI3"][li] = _s[2].cmrr_db("out5", "out8")
+        sw["cmrrQ1"][li] = _s[0].cmrr_db("out6", "out7")
+        sw["cmrrQ3"][li] = _s[2].cmrr_db("out6", "out7")
+        # Same A11 self/other order and mod-360 wrap as section 6 -- see the
+        # comment there; deviating would silently flip the sign convention.
+        _phi = {j: _s[2].cross_excitation_phase_diff_deg(_s[0], port=PORT_NAMES[j])
+                for j in OUTPUTS}
+        for j, key in ((1, "dphi6"), (2, "dphi7"), (3, "dphi8")):
+            _raw = _phi[j] - _phi[0] - (TARGET_DEG[j] - TARGET_DEG[0])
+            sw[key][li] = ((_raw + 180.0) % 360.0) - 180.0
+        for j in OUTPUTS:
+            sw_T[j][li] = np.abs(_s[0].coeff(PORT_NAMES[j])) ** 2
+
+    def _band(ax, x, grid, color, label):
+        """Mean line + min/max shading across the wavelength band."""
+        ax.plot(x, grid.mean(axis=1), color=color, lw=1.3, label=label)
+        ax.fill_between(x, grid.min(axis=1), grid.max(axis=1),
+                        color=color, alpha=0.18, lw=0)
+
+    fig, axes = plt.subplots(2, 2, figsize=(15, 9))
+    ax = axes[0, 0]
+    for g, c, lb in ((sw["cmrrI1"], "steelblue", "CMRR$_I$ p1"),
+                     (sw["cmrrI3"], "navy", "CMRR$_I$ p3"),
+                     (sw["cmrrQ1"], "darkorange", "CMRR$_Q$ p1"),
+                     (sw["cmrrQ3"], "saddlebrown", "CMRR$_Q$ p3")):
+        _band(ax, sweep_L, g, c, lb)
+    ax.axhline(20.0, color="k", ls=":", lw=1.0)
+    ax.set_ylabel("CMRR (dBe)"); ax.set_ylim(0, 60)
+    ax.set_title("CMRR vs length  (dotted = 20 dBe requirement)", fontsize=10)
+
+    ax = axes[0, 1]
+    for g, c, lb in ((sw["dphi6"], "steelblue", "Δφ$_6$"),
+                     (sw["dphi7"], "darkorange", "Δφ$_7$"),
+                     (sw["dphi8"], "seagreen", "Δφ$_8$")):
+        _band(ax, sweep_L, g, c, lb)
+    for s in (-5.0, 5.0):
+        ax.axhline(s, color="k", ls=":", lw=1.0)
+    ax.set_ylabel("Phase error (deg)"); ax.set_ylim(-60, 60)
+    ax.set_title("Phase error vs length  (dotted = ±5° spec)", fontsize=10)
+
+    ax = axes[1, 0]
+    _band(ax, sweep_L, sw["xl1"], "steelblue", "port 1")
+    _band(ax, sweep_L, sw["xl3"], "crimson", "port 3")
+    ax.set_ylabel("Excess loss (dB)"); ax.set_xlabel("mm_length (µm)")
+    ax.set_title("Excess loss vs length (Eq. 11)", fontsize=10)
+
+    ax = axes[1, 1]
+    for j, c in zip(OUTPUTS, ("steelblue", "darkorange", "seagreen", "crimson")):
+        _band(ax, sweep_L, 10 * np.log10(np.clip(sw_T[j], 1e-12, None)),
+              c, PORT_NAMES[j])
+    ax.axhline(10 * np.log10(0.25), color="k", ls="--", lw=0.9)
+    ax.set_ylabel("per-arm |T|² (dB)"); ax.set_xlabel("mm_length (µm)")
+    ax.set_ylim(-40, 2)
+    ax.set_title("Per-arm loss vs length, driven port 1\n"
+                 "(dashed = -6.02 dB, an ideal 4-way split)", fontsize=10)
+
+    for ax in axes.ravel():
+        ax.axvline(MM_LENGTH, color="magenta", ls="-", lw=1.0, alpha=0.7)
+        ax.grid(True, alpha=0.3); ax.legend(fontsize=7)
+        ax.set_xlim(sweep_L[0], sweep_L[-1])
+    plt.suptitle(
+        f"4×4 MMI 90° hybrid — metrics vs body length, {N_WL} wavelengths "
+        f"{WL_MIN}–{WL_MAX} µm   (magenta = nominal {MM_LENGTH:.2f} µm)\n"
+        "line = band mean, shaded = min/max across wavelengths.  "
+        "⚠ the SPEC is worst-case, so read the SHADED EDGE against the "
+        "dotted lines, not the mean.", fontsize=11)
+    plt.tight_layout()
+    fig.savefig(os.path.join(output_dir, "hybrid_length_sweep.png"), dpi=200)
+    plt.close("all")
+    print(f"Length-sweep plot saved → {output_dir}/hybrid_length_sweep.png")
+
+    np.savez(os.path.join(output_dir, "hybrid_length_sweep.npz"),
+             lengths=sweep_L, wavelengths=wavelengths, mm_length=MM_LENGTH,
+             **{f"sw_{k}": v for k, v in sw.items()},
+             **{f"T_{PORT_NAMES[j]}": sw_T[j] for j in OUTPUTS})
+    print(f"Length-sweep data saved → {output_dir}/hybrid_length_sweep.npz")
+
+    # THE POINT OF THE SWEEP: lengths where >=3 arms each carry >=5% of the
+    # power, so their phases are well determined and a quadrature comparison
+    # actually means something. These are the candidate FDTD reference lengths.
+    _Tstack = np.stack([sw_T[j] for j in OUTPUTS])          # [4, nL, nW]
+    _nstrong = (_Tstack.mean(axis=2) >= 0.05).sum(axis=0)   # band-mean per arm
+    _multi = sweep_L[_nstrong >= 3]
+    print(f"\nMULTI-ARM LENGTHS (>=3 arms at >=5% band-mean each): "
+          f"{len(_multi)} of {nL} points")
+    if len(_multi):
+        _runs, _s0 = [], _multi[0]
+        for a, b in zip(_multi[:-1], _multi[1:]):
+            if b - a > SWEEP_STEP * 1.5:
+                _runs.append((_s0, a)); _s0 = b
+        _runs.append((_s0, _multi[-1]))
+        for a, b in _runs:
+            print(f"  {a:8.2f} - {b:8.2f} um")
+    else:
+        print("  none -- no length in range spreads power across 3+ arms")
