@@ -584,11 +584,23 @@ if _all13:
           f"{sweep_L[0]:.2f}-{sweep_L[-1]:.2f} um at {SWEEP_STEP:.2f} um "
           f"(strided from the cached grid -- no new solves)")
 
-    _sc = {}
-    for i in DRIVEN:
+    # All FOUR excitations, not just the driven pair. The device metrics below
+    # only ever need ports 1 and 3, but the full-device FDTD references drive
+    # paper port 4 (input_idx=3), and a hybrid-vs-FDTD phase comparison has to
+    # use the SAME excitation on both sides -- port 4's arm pattern is port 1's
+    # MIRROR (out5<->out8, out6<->out7), so reading port 1 against a port-4
+    # reference would silently compare mirrored arms. The extra einsums are
+    # over already-cached matrices and cost nothing measurable.
+    _sc_all = {}
+    for i in range(4):
         _tmp = np.einsum("Lwab,wbk->Lwak", M_body_swp, M_in[i])
         for j in OUTPUTS:
-            _sc[(i, j)] = np.einsum("wab,Lwbk->Lwak", M_out[j], _tmp)[:, :, 0, 0]
+            _sc_all[(i, j)] = np.einsum("wab,Lwbk->Lwak", M_out[j], _tmp)[:, :, 0, 0]
+    _sc = {(i, j): _sc_all[(i, j)] for i in DRIVEN for j in OUTPUTS}
+    # [in, out, length, wavelength] complex -- amplitude AND phase, so a
+    # downstream comparison never has to re-run the cascade to get a phase.
+    coeff_all = np.stack([np.stack([_sc_all[(i, j)] for j in OUTPUTS])
+                          for i in range(4)])
 
     nL, nW = len(sweep_L), len(wavelengths)
     sw = {k: np.zeros((nL, nW)) for k in
@@ -678,7 +690,9 @@ if _all13:
     np.savez(os.path.join(output_dir, "hybrid_length_sweep.npz"),
              lengths=sweep_L, wavelengths=wavelengths, mm_length=MM_LENGTH,
              **{f"sw_{k}": v for k, v in sw.items()},
-             **{f"T_{PORT_NAMES[j]}": sw_T[j] for j in OUTPUTS})
+             **{f"T_{PORT_NAMES[j]}": sw_T[j] for j in OUTPUTS},
+             coeff=coeff_all, coeff_dims="[input_idx, output_idx, length, wavelength]",
+             port_names=np.array(PORT_NAMES))
     print(f"Length-sweep data saved → {output_dir}/hybrid_length_sweep.npz")
 
     # THE POINT OF THE SWEEP: lengths where >=3 arms each carry >=5% of the

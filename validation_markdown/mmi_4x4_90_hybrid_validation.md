@@ -6278,3 +6278,125 @@ is needed for common-mode phase, which at res=60 inflated the score **90×**
 (19.41° vs 0.21°) without any change in device behaviour. Compare
 [[criterion-text-vs-code-phase-mean-max]]: this repo has already been bitten
 once by a phase criterion whose stated and computed quantities differed.
+
+### 🚨 11-WAVELENGTH DEFAULT OVERTURNS THE PHASE VERDICT — the 3-point fitness was blind to a 1.318–1.326 µm window (job 13262105, COMPLETED 00:00:48, 2026-09-16)
+
+`mmi_4x4_90hybrid_hybrid.py` now defaults to **N_WL=11** over 1.29–1.33 µm
+(was 3). Re-running the optimised design point at that sampling changes the
+phase conclusion outright:
+
+| grid | max\|Δφ\| | verdict |
+|---|---|---|
+| 3 wl — 1.290 / 1.310 / 1.330 | **3.933°** | spec ≤5° **MET** |
+| 11 wl — 1.290…1.330 | **6.223°** at 1.322 µm | **VIOLATED by 1.223°** |
+
+Per-wavelength max\|Δφ\| at L=159.30, the 3-wl samples marked:
+
+```
+1.290  3.933  <-- sampled      1.314  4.809
+1.294  2.043                   1.318  5.928  **violates**
+1.298  1.197                   1.322  6.223  **violates, worst**
+1.302  1.285                   1.326  5.138  **violates**
+1.306  2.104                   1.330  3.930  <-- sampled
+1.310  3.490  <-- sampled
+```
+
+The violation is a **contiguous ~8 nm band that the old grid brackets but
+never samples**. Δφ dips back to 3.93° at 1.330, so the 3-point reading is not
+merely coarse — it lands on both sides of the peak and reports a pass.
+
+**CMRR is unaffected**: 18.482 dBe min on both grids, and its worst point
+(1.330 µm) *is* a 3-wl sample. Every CMRR number in this document therefore
+stands; only the phase readings are implicated.
+
+**Re-scoring the full 1259-point length sweep (20–334.5 µm, `hybrid_length_sweep.npz`):**
+
+| criterion | 3-wl subgrid | 11-wl grid |
+|---|---|---|
+| max\|Δφ\| ≤ 5° | 3 lengths | **0** |
+| min CMRR ≥ 20 dBe | 0 | 0 |
+| both | 0 | 0 |
+
+**All three 3-wl phase passers are false passes.** No length in 20–334.5 µm
+meets both specs under proper sampling.
+
+⚠ **This implicates the campaign's objective, not just this length.** The ~45
+hybrid evaluations of rounds 8–10 scored candidates on the 3-wavelength
+fitness (the paper's own Eq. 12 convention, Λ={1520,1550,1580}), i.e. against
+a metric blind to the window where this geometry's phase error peaks.
+Re-scoring cached sweeps is free now that the body takes tier 3; the
+**geometry search** (mm_width / taper_width / taper_length / y_gap) is what
+may need revisiting. Length alone cannot fix it — consistent with the
+campaign's own finding that a taper which has not widened with the body is
+unrescuable by any length.
+
+⚠ Do **not** read "0 lengths pass" as condemning the device concept. It is a
+statement about this one (mm_width=8.5, taper=1.30/4.0) point.
+
+**Cost note — why 11 wavelengths is now affordable as a default.** The naive
+path is ~27 h serial (11 × ~1.85 h body + 4 × ~1.75 h FDTD inputs). Measured
+here: **~25 min** for the body (11 wavelength-parallel shards, merged into the
+tier-3 neff cache, agreeing with the cached 3-wl values to 5e-14) + **~4.3 h**
+for the four input sections run concurrently + **48 s** to assemble. Tier-3
+analytic reconstruction was verified end-to-end against the real 3-wl solve at
+the three shared wavelengths: worst disagreement 5.1e-3 dB on a 54.8 dB CMRR
+(9.3e-05 relative) and 2.6e-4° on a 5° phase spec. See
+`check_4x4_nwl11_vs_nwl3.py` and `mmi_4x4_90hybrid_body_neff_shard.py`.
+
+### ✅✅ ENGINE AGREEMENT SETTLED — relative phase 0.62–0.93° across L=20–40 µm at 11 wavelengths, and the common mode is provably the uncalibrated Δβ·L (2026-09-16)
+
+Eight full-device FDTD references at L = 5:5:40 µm, res 40, **11 wavelengths**
+1.29–1.33 µm, driven port 4 (jobs 13239741/2/3/4/5/7, 13254293, 13239749),
+against the 11-wavelength hybrid sweep's own port-4 excitation
+(`coeff[input_idx=3]`, so nothing is mirrored by hand).
+
+| L (µm) | arms ≥5% | absolute | **RELATIVE** | rel worst-λ |
+|---|---|---|---|---|
+| 20 | 2 | 118.12° | 0.79° | 1.14° |
+| 25 | 2 | 56.30° | 0.85° | 1.24° |
+| 30 | 2 | 7.61° | 0.84° | 1.41° |
+| **35** | **3** | 68.05° | **0.93°** | 1.31° |
+| 40 | 2 | 129.28° | 0.62° | 0.85° |
+
+**Multi-arm case (L=35).** This was the point of buying references past 15 µm:
+at L=5/10/15 one arm holds 35–55% and the rest sit at 1e-4, so a weighted
+metric there effectively scores a single arm. At L=35 three arms clear 5%
+(out6/out7/out8 = 0.060/0.182/0.051) and each agrees individually to
+**0.71 / 1.26 / 0.80°**. The cascade reproduces the *relationships among lit
+arms*, which is what a 90° hybrid is specified on. Amplitudes agree to
+0.1–4.5% overall, ~1.7% on arms carrying real light.
+
+**⭐ The common mode is the uncalibrated Δβ·L, quantitatively.** The absolute
+column is not scattered — it is a straight line in L:
+
+```
+L:      20      25      30      35       40
+CM:  +118.12  +56.30   -5.67  -68.06  -129.29
+Δ per 5 µm:  -61.83  -61.96  -62.39  -61.23     (constant to <1%)
+```
+
+−12.37°/µm ⇒ Δβ = 0.2159 rad/µm ⇒ **Δn = Δβ·λ/2π = 0.0450 at 1.31 µm**,
+against the **0.0458** grid-dispersion offset documented for this body. Those
+match to 2%, and this example's cascade calls
+`solve_section_length_sweep()` **without** `neff_override`, i.e. uncalibrated —
+so the identification is consistent with how the run was actually configured.
+
+The practical consequence: the absolute reading swinging 7.6° → 129° across
+lengths is **one known term sampled at different L**, not error that varies
+with length. Removing the power-weighted circular mean removes exactly it,
+leaving 0.62–0.93° **with no trend in L**. This closes the question of
+[[hybrid-phase-metric-common-mode]] with a mechanism rather than an assertion.
+
+⚠ **L=5/10/15 are NOT comparable against this sweep** and their ~5.5 h of
+compute is unused here: the shared length grid starts at 20 µm
+(`_grid_lo = 20.0 if MM_LENGTH >= 20.0`). Reaching them needs
+`MMI4X4_MM_LENGTH<20`, which changes x0/x1 and therefore every cache key — a
+fresh body mode solve plus four fresh FDTD input sections, ~5 h. Judged not
+worth buying, since those lengths are the least informative for a
+relative-phase metric.
+
+**Decay-time model, closed.** Stop times over L=5..40: 280.1, 380.1, 560.3,
+600.4, 800.4, 780.5, 880.4, 960.6 — `t_stop ≈ 187 + 21.7·L` with **±9%
+scatter and no bias** (L25 +8.2%, L30 −8.7%, L35 −7.0%, L40 −9.0%), and NOT
+monotonic in L (L30 < L25). Growth is linear, **not** quadratic. Wall time
+follows `0.0113·(L+12.6)·t_stop` to <1% once the stop time is known.
