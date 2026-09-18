@@ -1,0 +1,199 @@
+{
+  "cache_schema_version": 1,
+  "call_kwargs": {
+    "excite_port": null,
+    "geometry_kwargs": {
+      "input_idx": 1
+    },
+    "measure_margin": null,
+    "measure_margins": null,
+    "measure_port": null,
+    "monitor_center": null,
+    "monitor_size": null,
+    "n_modes_in": 1,
+    "n_modes_out": 10,
+    "resolved_layout": {
+      "L": 4.75,
+      "alpha_idx": 0,
+      "kpoint": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "mea_c": 0.0,
+      "mea_w": 5.0,
+      "mea_x": 4.75,
+      "n_excite": 1,
+      "n_measure": 10,
+      "norm_x": 0.25,
+      "reverse": false,
+      "src_c": 1.25,
+      "src_width": 2.5,
+      "src_x": 0.0
+    },
+    "resolved_monitor_freqs": [
+      0.638977636
+    ],
+    "resolved_probe_wl": [
+      1.565,
+      1.565,
+      1.565
+    ],
+    "resolved_si_index": [
+      3.47650802,
+      3.47650802,
+      3.47650802
+    ],
+    "resolved_sio2_index": [
+      1.443843402,
+      1.443843402,
+      1.443843402
+    ],
+    "resolved_source_fwidth": 0.127795527,
+    "stub_left": 0.5,
+    "stub_right": 0.0,
+    "wavelengths": [
+      1.565
+    ],
+    "x0": -15.0,
+    "x1": -10.75,
+    "y0": null,
+    "y1": null
+  },
+  "geometry_class": "MMI",
+  "geometry_polygons": {
+    "1,0": [
+      [
+        [
+          0.0,
+          -2.5
+        ],
+        [
+          4.75,
+          -2.5
+        ],
+        [
+          4.75,
+          2.5
+        ],
+        [
+          0.0,
+          2.5
+        ]
+      ]
+    ],
+    "2,0": [
+      [
+        [
+          0.0,
+          -0.975
+        ],
+        [
+          0.5,
+          -0.975
+        ],
+        [
+          0.5,
+          -0.525
+        ],
+        [
+          0.0,
+          -0.525
+        ]
+      ],
+      [
+        [
+          0.0,
+          0.525
+        ],
+        [
+          0.5,
+          0.525
+        ],
+        [
+          0.5,
+          0.975
+        ],
+        [
+          0.0,
+          0.975
+        ]
+      ],
+      [
+        [
+          0.5,
+          -0.975
+        ],
+        [
+          4.5,
+          -1.4
+        ],
+        [
+          4.5,
+          -0.1
+        ],
+        [
+          0.5,
+          -0.525
+        ]
+      ],
+      [
+        [
+          0.5,
+          0.525
+        ],
+        [
+          4.5,
+          0.1
+        ],
+        [
+          4.5,
+          1.4
+        ],
+        [
+          0.5,
+          0.975
+        ]
+      ],
+      [
+        [
+          4.5,
+          -1.4
+        ],
+        [
+          4.75,
+          -1.4
+        ],
+        [
+          4.75,
+          1.4
+        ],
+        [
+          4.5,
+          1.4
+        ]
+      ]
+    ]
+  },
+  "method": "solve_section",
+  "solver_config": {
+    "decay_tol": 0.0,
+    "dpml": 0.5,
+    "eps_averaging": true,
+    "half_domain_aperture": true,
+    "material_stack": {
+      "sz": 2.0,
+      "wg_height": 0.22
+    },
+    "monitor_margin": 0.25,
+    "res": 40.0,
+    "sim_height": 1.5,
+    "sim_width": 5.0,
+    "source_bandwidth_factor": 2.0,
+    "source_margin": 0.0,
+    "subpixel_maxeval": 100000,
+    "subpixel_tol": 0.0001,
+    "three_d": true
+  },
+  "solver_type": "FDTDSolver"
+}

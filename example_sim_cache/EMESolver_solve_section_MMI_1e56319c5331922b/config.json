@@ -1,0 +1,90 @@
+{
+  "cache_schema_version": 1,
+  "call_kwargs": {
+    "geometry_kwargs": {},
+    "n_modes_in": 10,
+    "n_modes_out": 10,
+    "neff_override": null,
+    "resolved_probe_wl": [
+      1.537,
+      1.537,
+      1.537
+    ],
+    "resolved_si_index": [
+      3.478808235,
+      3.478808235,
+      3.478808235
+    ],
+    "resolved_sio2_index": [
+      1.44417904,
+      1.44417904,
+      1.44417904
+    ],
+    "stub_left": 0.0,
+    "stub_right": 0.0,
+    "wavelengths": [
+      1.537
+    ],
+    "x0": 8.0,
+    "x1": 10.75
+  },
+  "geometry_class": "MMI",
+  "geometry_polygons": {
+    "1,0": [
+      [
+        [
+          0.0,
+          -2.5
+        ],
+        [
+          2.75,
+          -2.5
+        ],
+        [
+          2.75,
+          2.5
+        ],
+        [
+          0.0,
+          2.5
+        ]
+      ]
+    ],
+    "2,0": [
+      [
+        [
+          0.0,
+          -1.4
+        ],
+        [
+          2.75,
+          -1.4
+        ],
+        [
+          2.75,
+          1.4
+        ],
+        [
+          0.0,
+          1.4
+        ]
+      ]
+    ]
+  },
+  "method": "solve_section",
+  "solver_config": {
+    "material_stack": {
+      "sz": 2.0,
+      "wg_height": 0.22
+    },
+    "mode_solver": "meep",
+    "num_cells": [
+      1
+    ],
+    "oxide_height": 1.5,
+    "oxide_width": 5.0,
+    "res": 40.0,
+    "temperature": 25.0
+  },
+  "solver_type": "EMESolver"
+}
