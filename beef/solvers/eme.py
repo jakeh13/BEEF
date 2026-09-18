@@ -12,6 +12,7 @@ from ..cache import (
     CacheMissError, build_run_config, build_whole_device_config, load_result, lookup,
     lookup_superset, save_run, update_family_pointer,
 )
+from ..cache.modes import extract_factorization, s_matrix_from_factorization
 from ..geometry.base import DeviceGeometry, assert_uniform_cross_section
 from ..materials.stack import MaterialStack, resolved_material_config, SOI_160
 from ..results.smatrix import SMatrix
@@ -94,6 +95,11 @@ _DIAGONAL_RECONSTRUCTION_TOL = 1e-6
 # Lengths per block when self-checking that reconstruction; bounds peak memory
 # since T here can be hundreds of MB and the check builds a second copy.
 _DIAGONAL_CHECK_CHUNK = 512
+# solve_length_sweep() stores the cascade factorization only if replaying it
+# reproduces that run's own amplitudes to this tolerance. Measured bit-exact
+# (max|dS| = 0) on a real multi-cell solve, so this is a guard against a future
+# meow change, not an expected error budget.
+_FACTORIZATION_REPLAY_TOL = 1e-12
 
 
 def _propagate_diagonal(neff_all: np.ndarray, wavelengths: np.ndarray, lengths: np.ndarray,
@@ -1344,6 +1350,24 @@ class EMESolver:
 
         return smat
 
+    def _amps_from_factorizations(self, facs, lengths, ref_cell_lengths,
+                                  c_start, c_stop, n_region_cells):
+        """Cascade cached factorizations over a length grid, no mode solve.
+
+        `facs` is one factorization per wavelength, in wavelength order, exactly
+        as solve_length_sweep() stores them. The swept region's cells take
+        length/n_region_cells each; every other cell keeps its reference length.
+        """
+        amps = np.zeros((len(lengths), len(facs)), dtype=complex)
+        for wl_idx, fac in enumerate(facs):
+            for k, L in enumerate(lengths):
+                cell_lengths = list(ref_cell_lengths)
+                for j in range(c_start, c_stop):
+                    cell_lengths[j] = float(L) / n_region_cells
+                S, _ = s_matrix_from_factorization(fac, cell_lengths)
+                amps[k, wl_idx] = S[0, 1]
+        return amps
+
     def solve_length_sweep(
         self,
         geometry: DeviceGeometry,
@@ -1449,6 +1473,34 @@ class EMESolver:
                     for k in range(len(lengths)):
                         results[k].set(amps[k], port=side)
                     continue
+                # Length-independent tier: the same ingredients with `lengths`
+                # DROPPED. What is stored is the cascade's factorization -- the
+                # interface S-matrices (a function of the modes alone) plus each
+                # cell's neff -- which replays mw.compute_s_matrix() at ANY length
+                # grid, so one entry serves every sweep of this device instead of
+                # one entry per grid. Verified bit-exact against a direct cascade.
+                fac_config = build_whole_device_config(
+                    self, "solve_length_sweep_factorization",
+                    dict(side=side, wavelengths=wavelengths,
+                         sweep_region=sweep_region, kwargs=kwargs,
+                         **resolved_material_config(
+                             self.material_stack, wavelengths,
+                             self._resolved_dispersive())),
+                    geometry, gds_polys,
+                )
+                fac_hit = lookup(save_dir, fac_config)
+                if fac_hit is not None:
+                    logger.info(
+                        "solve_length_sweep: factorization cache hit at %s -- "
+                        "%d length(s) cascaded with no mode solve", fac_hit, len(lengths),
+                    )
+                    amps = self._amps_from_factorizations(
+                        load_result(fac_hit), lengths, ref_cell_lengths,
+                        c_start, c_stop, n_region_cells,
+                    )
+                    for k in range(len(lengths)):
+                        results[k].set(amps[k], port=side)
+                    continue
             if cache_only:
                 raise CacheMissError(
                     f"solve_length_sweep(): cache_only=True but no cached run "
@@ -1459,10 +1511,12 @@ class EMESolver:
             cells = self._build_cells(geometry, side=side, wavelengths=wavelengths, **kwargs)
             amps = np.zeros((len(lengths), len(wavelengths)), dtype=complex)
 
+            facs = []
             for wl_idx, wl in enumerate(wavelengths):
                 env = mw.Environment(wl=float(wl), T=self.temperature)
                 css = [mw.CrossSection.from_cell(cell=c, env=env) for c in cells]
                 modes = [self.compute_modes(cs, nm) for cs, nm in zip(css, modes_per_cell)]
+                facs.append(extract_factorization(modes))
                 for k, L in enumerate(lengths):
                     cell_lengths = list(ref_cell_lengths)
                     for j in range(c_start, c_stop):
@@ -1471,8 +1525,30 @@ class EMESolver:
                     amps[k, wl_idx] = S[0, 1]
 
             if save_dir:
-                folder = save_run(save_dir, config, amps)
-                logger.info("solve_length_sweep: cache saved at %s", folder)
+                # Gate, in the same spirit as solve_section_length_sweep()'s
+                # diagonal-reconstruction check: replay the factorization about
+                # to be stored and confirm it reproduces the amplitudes this real
+                # solve just produced. Only a pass earns a cache entry, so a
+                # factorization never becomes an unverified answer.
+                fac_amps = self._amps_from_factorizations(
+                    facs, lengths, ref_cell_lengths, c_start, c_stop, n_region_cells,
+                )
+                worst = float(np.max(np.abs(fac_amps - amps))) if amps.size else 0.0
+                if fac_config is not None and worst <= _FACTORIZATION_REPLAY_TOL:
+                    folder = save_run(save_dir, fac_config, facs)
+                    logger.info(
+                        "solve_length_sweep: factorization saved at %s (replay "
+                        "verified to %.2e across %d length(s); the derived "
+                        "amplitudes are not persisted)", folder, worst, len(lengths),
+                    )
+                else:
+                    folder = save_run(save_dir, config, amps)
+                    logger.warning(
+                        "solve_length_sweep: factorization replay off by %.2e "
+                        "(tol %.1e) -- persisted the derived amplitudes at %s "
+                        "instead of a length-independent factorization",
+                        worst, _FACTORIZATION_REPLAY_TOL, folder,
+                    )
 
             for k in range(len(lengths)):
                 results[k].set(amps[k], port=side)

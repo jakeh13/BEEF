@@ -107,3 +107,67 @@ class TestPropagateDiagonalIsLengthIndependent:
         subset = fine[::7]
         T_sub = _propagate_diagonal(NEFF, WL, subset, 2, 2)
         np.testing.assert_array_equal(T_fine[::7], T_sub)
+
+
+@pytest.mark.slow
+class TestWholeDeviceSweepStoresTheFactorization:
+    """solve_length_sweep() stores the cascade factorization, not the sweep.
+
+    Real mode solves, so slow. The factorization is the interface S-matrices
+    (a function of the modes alone) plus each cell's neff; it replays
+    mw.compute_s_matrix() at any length grid, so a second, disjoint grid needs
+    no new cache entry and no new mode solve.
+    """
+
+    def _solver(self):
+        return EMESolver(num_modes=[2, 2, 2], num_cells=[1, 2, 1],
+                         lengths=[0.5, 2.0, 0.5], oxide_width=3.0,
+                         oxide_height=2.0, res=20.0, material_stack=SOI_160,
+                         mode_solver="tidy3d")
+
+    def _geom(self):
+        return Taper(length=3.0, width_start=0.7, width_end=0.9)
+
+    def test_one_entry_serves_two_disjoint_grids(self, tmp_path):
+        solver, geom = self._solver(), self._geom()
+        wl = np.array([1.55, 1.56])
+        save_dir = str(tmp_path)
+
+        a = solver.solve_length_sweep(geom, wl, np.array([1.0, 2.0, 3.0]),
+                                      ports=["through"], save_dir=save_dir)
+        entries = _entries(save_dir)
+        assert entries == [e for e in entries if "factorization" in e], (
+            f"expected only a factorization entry, got {entries}"
+        )
+
+        b = solver.solve_length_sweep(geom, wl, np.array([0.5, 1.0, 2.0, 3.0, 7.25]),
+                                      ports=["through"], save_dir=save_dir)
+        assert _entries(save_dir) == entries, (
+            "a second length grid created a new entry -- the swept lengths are "
+            "still part of a cache key"
+        )
+
+        # The lengths the two grids share must agree exactly, not approximately.
+        for ia, ib in ((0, 1), (1, 2), (2, 3)):
+            va = np.asarray(a[ia].transmission(port="through"))
+            vb = np.asarray(b[ib].transmission(port="through"))
+            np.testing.assert_array_equal(va, vb)
+
+    def test_replay_reproduces_a_direct_meow_cascade(self):
+        """The factorization's own claim, checked against meow directly."""
+        import meow as mw
+        from beef.cache.modes import extract_factorization, s_matrix_from_factorization
+
+        solver, geom = self._solver(), self._geom()
+        wl = 1.55
+        cells = solver._build_cells(geom, side="through", wavelengths=np.array([wl]))
+        env = mw.Environment(wl=wl, T=solver.temperature)
+        css = [mw.CrossSection.from_cell(cell=c, env=env) for c in cells]
+        modes = [solver.compute_modes(cs, nm)
+                 for cs, nm in zip(css, solver._modes_per_cell())]
+        fac = extract_factorization(modes)
+
+        for Ls in ([0.5, 1.0, 1.0, 0.5], [0.5, 3.7, 3.7, 0.5], [0.5, 11.25, 11.25, 0.5]):
+            S_ref, _ = mw.compute_s_matrix(modes, cells=cells, cell_lengths=Ls)
+            S_fac, _ = s_matrix_from_factorization(fac, Ls)
+            np.testing.assert_array_equal(np.asarray(S_ref), np.asarray(S_fac))

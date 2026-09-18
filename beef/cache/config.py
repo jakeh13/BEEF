@@ -117,6 +117,19 @@ _METHOD_ATTRS: Dict[Tuple[str, str], Tuple[str, ...]] = {
         "oxide_height", "res", "material_stack", "temperature", "mode_solver",
         "region_cell_lengths",
     ),
+    # The length-independent factorization solve_length_sweep() stores in place
+    # of its swept amplitudes. Same attributes as the sweep above, deliberately
+    # INCLUDING the solver's own `lengths`: what drops out is the swept
+    # `lengths` CALL argument, which is what made every grid its own entry.
+    # The solver's region lengths stay in the key because they set the
+    # reference cell lengths a replay is cascaded over -- cheap to keep, and
+    # keeping them means this tier can never be served across devices that
+    # merely happen to share a cross-section.
+    ("EMESolver", "solve_length_sweep_factorization"): (
+        "num_modes", "num_cells", "lengths", "straight_length", "oxide_width",
+        "oxide_height", "res", "material_stack", "temperature", "mode_solver",
+        "region_cell_lengths",
+    ),
 }
 
 
