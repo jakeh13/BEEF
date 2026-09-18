@@ -86,7 +86,7 @@ from beef import MMI, EMESolver, SIN_300, plot_eme_geometry, plot_performance
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_1x4", "mmi_1x4_eme"))
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_sim_cache"))
 os.makedirs(output_dir, exist_ok=True)
 
 # ---------------------------------------------------------------------------

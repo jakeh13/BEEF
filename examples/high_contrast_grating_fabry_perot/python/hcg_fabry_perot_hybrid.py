@@ -195,7 +195,7 @@ from beef.spectral import interp_complex, unwrap_is_safe
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", "..", ".."))
 _GDS_PATH = os.path.abspath(os.path.join(_HERE, "..", "..", "gds_files", "HCG_seeded_TO.gds"))
-save_dir = os.path.join(_ROOT, "example_sim_cache")
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_sim_cache"))
 
 # Every write below goes through this. From 2026-08-18 this script does real
 # FDTD (it used to be pure post-processing of two pickles) and so runs under

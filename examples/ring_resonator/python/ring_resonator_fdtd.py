@@ -194,7 +194,7 @@ _wg_height = MATERIAL_STACK.wg_height if THREE_D else None
 OUT = os.environ.get("RING_FULL_OUT") or os.path.join(
     _ROOT, "example_output", "ring_resonator", "ring_resonator_fdtd",
     ("3d" if THREE_D else "2d"), f"res_{FDTD_RESOLUTION:g}")
-CACHE = os.path.join(_ROOT, "example_sim_cache")
+CACHE = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_sim_cache"))
 
 # --- cell -----------------------------------------------------------------
 Y_TOP_STRAIGHT = Y_RING + 2 * R + L_SIDE       # far straight's centreline

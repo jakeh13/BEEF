@@ -99,7 +99,7 @@ _DEVICE_OUT = os.path.abspath(os.path.join(
 output_dir = os.path.join(_DEVICE_OUT, "mmi_2x2_hybrid")
 os.makedirs(output_dir, exist_ok=True)
 save_dir = os.path.abspath(os.path.join(
-    _HERE, "..", "..", "..", "..", "example_sim_cache"))
+    _HERE, "..", "..", "..", "example_sim_cache"))
 # The full-device FDTD reference this cascade is checked against, written by
 # mmi_2x2_fdtd.py in this same folder.
 FDTD_REF_DIR = os.path.join(_DEVICE_OUT, "mmi_2x2_fdtd")

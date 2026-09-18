@@ -1,8 +1,13 @@
 """
-Waisted 2x2 MMI Splitter — FDTD
+Tutorial: simulate the WAISTED 2x2 MMI splitter with the BEEF library using
+whole-device FDTD.
 
+Method: one meep simulation of the complete device — no EME, no decomposition,
+no reference planes. This is the reference the other two scripts in this folder
+(mmi_2x2_eme.py, mmi_2x2_hybrid.py) are checked against, and the slowest of the
+three: hours, against seconds to minutes for the pure-EME script.
 
-This is the tapered-body variant of examples/mmi_2x2. Same ports, same
+Geometry: the tapered-body variant of examples/mmi_2x2. Same ports, same
 platform, same band — the only difference is that the multimode body is not a
 uniform slab. It narrows from the 2.8 µm face to a 2.24 µm interior waist over
 a 5 µm transition on each side:
@@ -16,7 +21,7 @@ self-imaging length. The device below reaches the same 50/50 split with 90°
 quadrature in 31.00 µm total against the straight control's 37.00 µm —
 16.2 % shorter.
 
-VALIDATION STATUS (validation_markdown/mmi_2x2_waist_body_validation.md).
+VALIDATION STATUS (validation_markdown/resolved/mmi_2x2_waist_body_validation.md).
 The device is VALIDATED as of 2026-09-14, and this script IS the check that
 validated it: single-domain, whole-device FDTD is the only measurement that
 depends on neither the EME cascade nor any calibration. At the design point it
@@ -70,7 +75,7 @@ output_dir = os.path.abspath(os.path.join(
     "mmi_2x2_fdtd"))
 os.makedirs(output_dir, exist_ok=True)
 save_dir = os.path.abspath(os.path.join(
-    _HERE, "..", "..", "..", "..", "example_sim_cache"))
+    _HERE, "..", "..", "..", "example_sim_cache"))
 
 
 def _env_f(name, default):

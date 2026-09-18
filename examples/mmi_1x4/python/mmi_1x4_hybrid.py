@@ -118,7 +118,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_output", "mmi_1x4",
                                           "mmi_1x4_hybrid" + os.environ.get("MMI1X4_OUTPUT_SUFFIX", "")))
 os.makedirs(output_dir, exist_ok=True)
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters

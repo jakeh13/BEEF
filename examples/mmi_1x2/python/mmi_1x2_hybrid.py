@@ -91,7 +91,7 @@ if not CALIBRATE_BODY:
 output_dir = output_dir + os.environ.get("MMI1X2_OUT_SUFFIX", "")
 os.makedirs(output_dir, exist_ok=True)
 save_dir = os.environ.get("MMI1X2_SAVE_DIR") or os.path.abspath(
-    os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
+    os.path.join(_HERE, "..", "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters

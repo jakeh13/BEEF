@@ -119,7 +119,7 @@ output_dir = os.path.abspath(os.path.join(
     _HERE, "..", "..", "..", "..", "example_output", "mmi_4x4_90hybrid",
     "mmi_4x4_90hybrid_hybrid" + ("" if _NWL_ENV == _NWL_DEFAULT else f"_nwl{_NWL_ENV}") + _length_tag + _ports_tag))
 os.makedirs(output_dir, exist_ok=True)
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters

@@ -64,7 +64,7 @@ _GDS_PATH = os.path.abspath(os.path.join(_HERE, "..", "..", "gds_files", "HCG_se
 output_dir = os.path.abspath(os.path.join(
     _HERE, "..", "..", "..", "..", "example_output", "high_contrast_grating", "high_contrast_grating_fdtd"))
 os.makedirs(output_dir, exist_ok=True)
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # 0. Test-mode knob — HCG_TEST_MODE=1 runs in minutes (2-D, low res, few

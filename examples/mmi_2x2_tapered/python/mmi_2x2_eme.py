@@ -8,7 +8,7 @@ hours for mmi_2x2_fdtd.py and ~27 core-hours for mmi_2x2_hybrid_alt.py.
 Geometry: the validated design point — a 2.8 µm body that narrows to a
 2.24 µm interior waist and ramps back out, reaching the same 50/50 split with
 90 degree quadrature in 31.00 µm total against the straight control's 37.00 µm
-(16.2 % shorter). See validation_markdown/mmi_2x2_waist_body_validation.md.
+(16.2 % shorter). See validation_markdown/resolved/mmi_2x2_waist_body_validation.md.
 
 NINE REGIONS, NOT THE STRAIGHT DEVICE'S FIVE. `examples/mmi_2x2`'s EME script
 uses wg | taper | body | taper | wg, because there the body is one uniform
@@ -88,7 +88,7 @@ _DEVICE_OUT = os.path.abspath(os.path.join(
 output_dir = os.path.join(_DEVICE_OUT, "mmi_2x2_eme")
 os.makedirs(output_dir, exist_ok=True)
 save_dir = os.path.abspath(os.path.join(
-    _HERE, "..", "..", "..", "..", "example_sim_cache"))
+    _HERE, "..", "..", "..", "example_sim_cache"))
 # ⚠ OVERRIDABLE SO THE MODE-MEMO A/B CAN BE MEASURED AT ALL. solve() caches
 # the WHOLE call under save_dir, so a second run of this script with the same
 # config is served entirely from disk and never reaches compute_modes(). A

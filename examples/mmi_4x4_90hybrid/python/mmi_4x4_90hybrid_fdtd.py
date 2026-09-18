@@ -88,7 +88,7 @@ import matplotlib.pyplot as plt
 from beef import MMI, FDTDSolver, SMatrix, SOI_220, plot_fdtd_geometry
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters -- env-var overridable for a smoke pass.

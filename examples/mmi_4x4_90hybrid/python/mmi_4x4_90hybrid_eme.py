@@ -83,7 +83,7 @@ output_dir = os.path.abspath(os.path.join(
     _HERE, "..", "..", "..", "..", "example_output", "mmi_4x4_90hybrid",
     "mmi_4x4_90hybrid_eme" + ("" if _NWL_ENV == 3 else f"_nwl{_NWL_ENV}")))
 os.makedirs(output_dir, exist_ok=True)
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # Global simulation parameters -- RESOLUTION/N_MODES_TAPER/N_WL are env-var

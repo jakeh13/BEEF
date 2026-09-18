@@ -146,7 +146,7 @@ os.makedirs(sections_dir, exist_ok=True)
 # save_run()/load_result() directly rather than the solver-specific
 # build_run_config()/build_whole_device_config() helpers (those expect a
 # DeviceGeometry + solver instance this script doesn't have).
-save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_sim_cache"))
+save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_sim_cache"))
 
 # ---------------------------------------------------------------------------
 # 0. Test-mode knob — TEST_MODE=True runs in minutes (2-D, low res, few

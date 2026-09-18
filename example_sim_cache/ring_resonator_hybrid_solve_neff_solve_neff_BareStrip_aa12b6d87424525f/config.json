@@ -1,0 +1,71 @@
+{
+  "geometry_class": "BareStrip",
+  "geometry_polygons": {
+    "1,0": [
+      [
+        [
+          0.0,
+          -2.0
+        ],
+        [
+          1.0,
+          -2.0
+        ],
+        [
+          1.0,
+          2.0
+        ],
+        [
+          0.0,
+          2.0
+        ]
+      ]
+    ],
+    "2,0": [
+      [
+        [
+          0.0,
+          -0.225
+        ],
+        [
+          1.0,
+          -0.225
+        ],
+        [
+          1.0,
+          0.225
+        ],
+        [
+          0.0,
+          0.225
+        ]
+      ]
+    ]
+  },
+  "material_stack": {
+    "sz": 2.0,
+    "wg_height": 0.22
+  },
+  "mesh_height": 2.0,
+  "mesh_width": 4.0,
+  "method": "solve_neff",
+  "resolution": 100.0,
+  "resolved_probe_wl": [
+    1.525,
+    1.525,
+    1.525
+  ],
+  "resolved_si_index": [
+    3.479835715,
+    3.479835715,
+    3.479835715
+  ],
+  "resolved_sio2_index": [
+    1.444321886,
+    1.444321886,
+    1.444321886
+  ],
+  "solver_type": "ring_resonator_hybrid.solve_neff",
+  "waveguide_width": 0.45,
+  "wavelength": 1.525
+}
