@@ -136,9 +136,16 @@ save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "example_
 # is still a real ~2x improvement (calibration dominates total cost), just
 # not the ~3.2x a naive (30/40)^4 grid-scaling argument would predict.
 RESOLUTION = 30.0
-WL_MIN = 1.50
-WL_MAX = 1.60
-N_WL = 11
+# DEFAULTS UNCHANGED (1.50/1.60/11). Env-overridable as of 2026-09-18, mirroring
+# mmi_1x4_fdtd.py's own MMI1X4_FDTD_WL_MIN/MAX/NWL knobs (added 2026-09-11) --
+# for the C-band sub-sweep (1.530-1.565 um, 21 pts) that job 13169522/13193649's
+# 24-mode uncalibrated prewarm (validation.md item 9d) exists to feed. That
+# prewarm only warms EMESolver.compute_modes()/FDTDSolver caches under
+# save_dir -- it never calls this script, so nothing sliced the warm cache into
+# an actual transmission/S-matrix result until this override existed.
+WL_MIN = float(os.environ.get("MMI1X4_HYBRID_WL_MIN", 1.50))
+WL_MAX = float(os.environ.get("MMI1X4_HYBRID_WL_MAX", 1.60))
+N_WL = int(os.environ.get("MMI1X4_HYBRID_NWL", 11))
 
 # Propagate the EME body on the input FDTD section's own measured beta rather
 # than tidy3d's mode index -- see module docstring for why this device needs it
