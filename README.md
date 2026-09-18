@@ -13,7 +13,7 @@ BEEF's real contribution is `HybridSolver`: a generic N-section FDTD/EME cascade
 order, any count ≥ 2) with reciprocity-based excitation (minimum simulation count) and a shared
 `section_prisms/section_gds/width_at/center_at` interface that lets any geometry slot into that cascade.
 A fresh pass over the OSS photonics landscape (meep, tidy3d, gdsfactory, SAX/Simphony, FDTDX, and
-others — see `notes.md`) didn't turn up another open-source tool that does this specific thing: a
+others) didn't turn up another open-source tool that does this specific thing: a
 generic, reciprocity-based FDTD/EME cascade over an arbitrary number of sections.
 
 ## Install
@@ -74,11 +74,11 @@ from beef import (
   `CompoundGeometry`/`WaveguideRun` (concatenate several geometries into one cascade), legacy `BendGeometry`
   (90° bend for non-collinear FDTD I/O), `arc_polygon` (quarter-annulus wedge, for constant-radius bends),
   `RingResonatorCouplerSection`/`RingResonatorBendSection` (ring resonator geometry primitives — not yet
-  wired into `HybridSolver` or an example, see `validation_markdown/ring_resonator_validation.md`).
+  wired into `HybridSolver` or an example).
 - **Materials** (`beef/materials/`) — `MaterialStack` (Si/SiO2 layer stack), plus pre-built `SOI_160` /
   `SOI_220` stacks. One analytic Sellmeier model (Salzberg Si, Malitson SiO2) backs both
   engines, so an EME mode solve and an FDTD run agree on n(λ) to machine precision. The
-  FDTD still freezes one index per broadband run — see `notes.md` recommendations #5/#9.
+  FDTD still freezes one index per broadband run.
 - **Solvers** (`beef/solvers/`) — `EMESolver` (meow-based EME), `FDTDSolver` (meep-based FDTD, 2D or 3D),
   `HybridSolver` (chains FDTD and EME sections together — the core BEEF method; optionally skips
   re-solving a section declared as the x-mirror of an already-solved one via `mirror_pairs`, and can
@@ -98,22 +98,20 @@ from beef import (
   correspond, rather than trusting the index-*i*-to-index-*i* contraction blindly. Both sides'
   modes are compared on one shared mesh whose resolution defaults to the coarser of the two
   adjoining solvers' own `res` (override with `mode_correspondence_res`; raise it if a reported
-  mismatch looks like under-resolution rather than a real disagreement). See `notes.md` Solvers
-  #14 for what it does and does not currently catch on this repo's own examples.
+  mismatch looks like under-resolution rather than a real disagreement).
 - **Results** (`beef/results/`) — `SMatrix`, a unified S-parameter result type with transmission/insertion-loss
   helpers and a `check_passive()` sanity check.
 - **Network** (`beef/network/`) — general S-matrix composition via Redheffer star products: `connect()` joins
   two blocks' ports, `close_loop()` eliminates a block's own port against itself (node elimination — verified
   against the ring resonator's proven closed-form all-pass formula), `Circuit` builds a multi-block network.
-  Depends only on `SMatrix`/`numpy`; not yet wired into `HybridSolver` or any example — see `notes.md`'s
-  Network section and `validation_markdown/ring_resonator_validation.md`'s recommendation.
+  Depends only on `SMatrix`/`numpy`; not yet wired into `HybridSolver` or any example.
 - **Mode identity** (`beef/mode_identity.py`) — device- and resolution-agnostic check for whether
   `HybridSolver`'s index-*i*-to-index-*i* contraction between an FDTD interface basis and an EME
   body basis is actually valid. `field_overlap_matrix()` computes the normalized transverse
   E-field overlap between every pair of modes from the two engines (matching field *shape*, not
   the scalar n_eff, so it does not fool the way nearest-neighbor n_eff matching does when several
-  modes crowd close together — found directly on the modal multiplexer's 16-mode basis, see
-  `validation_markdown/modal_multiplexer_validation.md` gap 1); `best_correspondence()` then picks
+  modes crowd close together — found directly on the modal multiplexer's 16-mode basis);
+  `best_correspondence()` then picks
   the overlap-maximizing one-to-one assignment (Hungarian algorithm), not nearest-neighbor.
   Deliberately E-only, not the full E-x-H reciprocity overlap: meep and meow were found to report
   E and H in mutually inconsistent absolute units (~375x apart on a real solved mode, each engine
@@ -174,10 +172,8 @@ never committed — re-running an example, or
 another example that happens to solve an identical section, reuses cached
 results automatically; every example's `.py` script and its paired `.ipynb`
 notebook fingerprint identically too, so running either one hits a cache
-entry the other left behind. See the "Persistent on-disk cache" entry in
-`notes.md`'s Current library reference for the full design (including its
-one known gap: `EMESolver.solve_sweep()` doesn't support it yet, see Solver
-recommendation #1).
+entry the other left behind. One known gap: `EMESolver.solve_sweep()` does
+not support the cache yet.
 
 ## Examples
 
@@ -192,7 +188,7 @@ where a notebook version exists, a `notebooks/` subfolder (matching `.ipynb`):
 - `examples/modal_multiplexer/` — modal multiplexer (hybrid)
 - `examples/ring_resonator/` — racetrack ring resonator (hybrid: raw-meep coupler-section +
   90° bend FDTD, mode-solve neff interpolation, closed-form all-pass feedback assembly —
-  no `DeviceGeometry`/`FDTDSolver` support yet for this device, see `notes.md`)
+  no `DeviceGeometry`/`FDTDSolver` support yet for this device)
 
 Run any example directly:
 
@@ -271,9 +267,5 @@ runner) — `pip install meep` silently installs the wrong thing with no error, 
 `import meep` broken. The real MIT electromagnetics package only ships via conda-forge
 (`conda install -c conda-forge pymeep`); this is what actually provides `import meep` on this
 machine too. `pyproject.toml`'s `[fdtd]`/`[all]` extras are misleading as currently declared —
-worth fixing separately (see `notes.md`).
+worth fixing separately.
 
-## Status
-
-See `notes.md` for a capability gap analysis against meep/meow/tidy3d/gdsfactory/SAX and a
-prioritized list of candidate additions (not yet implemented).
