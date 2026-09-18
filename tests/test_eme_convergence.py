@@ -57,26 +57,24 @@ DEVICE = dict(
 
 _EXAMPLE_DIR = pathlib.Path(__file__).parent.parent / "examples" / "directional_coupler"
 _SCRIPTS = _EXAMPLE_DIR / "python"
-# The two sweep scripts moved to archive/ on 2026-07-31 (retired pending new
-# sweeping functionality -- see notes.md Misc #5), but they can still
-# silently regress on this exact bug sitting there, so the guard stays; only
-# the resolution path changes.
-_ARCHIVED_SCRIPTS = _EXAMPLE_DIR / "archive"
+# directional_coupler_hybrid_stub_sweep.py and _modes_sweep.py were guarded
+# here too. They moved to examples/directional_coupler/archive/ on 2026-07-31
+# (retired pending new sweeping functionality -- notes.md Misc #5) and then out
+# of this repo entirely on 2026-09-18, to
+# github.com/jakeh13/BEEF_archive. They are frozen there, so this bug cannot be
+# newly introduced into them, and reaching across to a sibling checkout would
+# make this suite fail on a clean clone of BEEF alone. The guard therefore
+# covers the live example only.
 _HYBRID_SCRIPTS = (
     "directional_coupler_hybrid.py",
-    "directional_coupler_hybrid_stub_sweep.py",
-    "directional_coupler_hybrid_modes_sweep.py",
 )
 
 
 def _script_source(name: str) -> str:
-    for base in (_SCRIPTS, _ARCHIVED_SCRIPTS):
-        path = base / name
-        if path.exists():
-            return path.read_text()
-    raise FileNotFoundError(
-        f"{name} not found in {_SCRIPTS} or {_ARCHIVED_SCRIPTS}"
-    )
+    path = _SCRIPTS / name
+    if not path.exists():
+        raise FileNotFoundError(f"{name} not found in {_SCRIPTS}")
+    return path.read_text()
 
 
 class TestExampleScriptsPinTheConvergedResolution:

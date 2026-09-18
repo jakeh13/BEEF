@@ -50,7 +50,11 @@ import pytest
 from beef.solvers.fdtd import monitor_freq_grid, source_fwidth
 
 _SCRIPTS = pathlib.Path(__file__).parent.parent / "examples" / "ring_resonator" / "python"
-_RING_SCRIPTS = ("ring_resonator_hybrid.py", "ring_resonator_hybrid_cascaded.py")
+# ring_resonator_hybrid_cascaded.py was guarded here too, until it moved to
+# github.com/jakeh13/BEEF_archive on 2026-09-18. Frozen there, so the defect
+# this class guards cannot be newly introduced into it; reaching across to a
+# sibling checkout would break this suite on a clean clone of BEEF alone.
+_RING_SCRIPTS = ("ring_resonator_hybrid.py",)
 
 # What both scripts declare, and what run_*_fdtd() sweeps.
 WL_MIN, WL_MAX = 1.50, 1.60

@@ -91,6 +91,9 @@ def _cell_neff_fingerprint(cell_neff_override: Optional[np.ndarray]):
 # enough to absorb meow's own solver noise, tight enough that a real ordering/
 # convention mismatch (not just floating-point jitter) always fails it.
 _DIAGONAL_RECONSTRUCTION_TOL = 1e-6
+# Lengths per block when self-checking that reconstruction; bounds peak memory
+# since T here can be hundreds of MB and the check builds a second copy.
+_DIAGONAL_CHECK_CHUNK = 512
 
 
 def _propagate_diagonal(neff_all: np.ndarray, wavelengths: np.ndarray, lengths: np.ndarray,
@@ -1100,12 +1103,12 @@ class EMESolver:
                     "%d length(s) reconstructed analytically, no new mode solve",
                     neff_hit, len(lengths),
                 )
-                T = _propagate_diagonal(neff_all, wavelengths, lengths, n_modes_out, n_modes_in)
-                folder = save_run(save_dir, config, T)
-                update_family_pointer(
-                    save_dir, family_config, (n_modes_out, n_modes_in), os.path.basename(folder),
-                )
-                return T
+                # Deliberately NOT persisted. This T was rebuilt from neff_all
+                # with no meow call at all, so writing it back would cache a
+                # free result -- and cache it under a key containing `lengths`
+                # verbatim, which is what pinned callers to one length grid and
+                # produced a 342 MB entry for a single 7601-length sweep.
+                return _propagate_diagonal(neff_all, wavelengths, lengths, n_modes_out, n_modes_in)
         if cache_only:
             raise CacheMissError(
                 f"solve_section_length_sweep(): cache_only=True but no cached "
@@ -1163,34 +1166,86 @@ class EMESolver:
                             j_in = port_map[f"left@{j}"]
                             T[L_idx, wl_idx, i, j] = S[i_out, j_in]
 
-            # Tier 3's own gate: reconstruct this cross-section's FIRST swept
-            # length purely from neff_all and compare against the real solve
-            # above. Only a pass makes neff_all eligible to serve future
-            # different-lengths calls (see docstring) — a cross-section where
-            # this somehow fails just never gets a tier-3 entry, T itself is
-            # unaffected either way.
+            # Tier 3's own gate: reconstruct purely from neff_all and compare
+            # against the real solve above. Only a pass makes neff_all eligible
+            # to serve future different-lengths calls (see docstring).
+            #
+            # ⚠ CHECKS EVERY SWEPT LENGTH, not just the first. It used to test
+            # `lengths[:1]` alone, which is the SHORTEST length and therefore
+            # the most forgiving: reconstruction error accumulates with
+            # propagation distance (it enters as exp(2j*pi*neff*L/wl), so a
+            # finite-precision neff drifts linearly in L). MEASURED on the
+            # existing cache: one real 7601-length entry
+            # (EMESolver_solve_section_length_sweep_MMI_fbdfbe7f02c20a01) sat
+            # at 7.2e-08 at L=19.5 um -- a comfortable pass -- while drifting
+            # to 1.48e-06 at L=399.5 um, with 34% of its grid over tolerance.
+            # The other 48 matched entries in that cache reconstruct to
+            # 4.5e-13 or better across their whole grid, several bit-exactly,
+            # so this is a real outlier being caught rather than a tolerance
+            # that is generally too tight. Since this method no longer
+            # persists T, a gate that passes on the shortest length would make
+            # the drifted reconstruction the only answer available.
+            #
+            # Chunked so peak memory stays bounded: T can be O(100s of MB)
+            # here, and reconstructing a full second copy to compare would
+            # double that.
             neff_cache_safe = True
             if save_dir and neff_config is not None and len(lengths) > 0:
-                T_check = _propagate_diagonal(neff_all, wavelengths, lengths[:1], n_modes_out, n_modes_in)
-                max_diff = float(np.max(np.abs(T_check[0] - T[0])))
-                if max_diff > _DIAGONAL_RECONSTRUCTION_TOL:
+                worst_diff, worst_L = 0.0, float(lengths[0])
+                for lo in range(0, len(lengths), _DIAGONAL_CHECK_CHUNK):
+                    hi = min(lo + _DIAGONAL_CHECK_CHUNK, len(lengths))
+                    T_check = _propagate_diagonal(
+                        neff_all, wavelengths, lengths[lo:hi], n_modes_out, n_modes_in)
+                    diffs = np.max(np.abs(T_check - T[lo:hi]), axis=(1, 2, 3))
+                    k = int(np.argmax(diffs))
+                    if float(diffs[k]) > worst_diff:
+                        worst_diff, worst_L = float(diffs[k]), float(lengths[lo + k])
+                if worst_diff > _DIAGONAL_RECONSTRUCTION_TOL:
                     neff_cache_safe = False
                     logger.warning(
                         "solve_section_length_sweep: diagonal-reconstruction self-check "
-                        "off by %.2e (tol %.1e) at length=%.6f um -- skipping the "
-                        "length-independent neff cache for this cross-section; T "
-                        "itself (from the real solve) is unaffected.",
-                        max_diff, _DIAGONAL_RECONSTRUCTION_TOL, float(lengths[0]),
+                        "off by %.2e (tol %.1e) at length=%.6f um of %d swept -- this "
+                        "cross-section gets no length-independent neff entry, so its "
+                        "derived transfer matrix is persisted instead.",
+                        worst_diff, _DIAGONAL_RECONSTRUCTION_TOL, worst_L, len(lengths),
+                    )
+                else:
+                    logger.info(
+                        "solve_section_length_sweep: diagonal reconstruction verified "
+                        "across all %d swept lengths, worst %.2e at L=%.6f um (tol %.1e)",
+                        len(lengths), worst_diff, worst_L, _DIAGONAL_RECONSTRUCTION_TOL,
                     )
 
         if save_dir:
-            folder = save_run(save_dir, config, T)
-            logger.info("solve_section_length_sweep: cache saved at %s", folder)
-            update_family_pointer(
-                save_dir, family_config, (n_modes_out, n_modes_in), os.path.basename(folder),
-            )
+            # Persist ONLY the length-independent primitive. T is a derived
+            # expansion: this section is single-cell by construction (Ls=[1.0]
+            # above), so its propagation S-matrix is exactly diagonal in the
+            # mode basis and _propagate_diagonal() rebuilds T at ANY length
+            # from neff_all alone -- checked against this very solve by the
+            # _DIAGONAL_RECONSTRUCTION_TOL gate above. Persisting T instead
+            # cost 342 MB for one 7601-length grid and, because `lengths` is
+            # hashed verbatim, made every other grid a full miss.
             if neff_config is not None and neff_cache_safe:
-                save_run(save_dir, neff_config, neff_all)
+                folder = save_run(save_dir, neff_config, neff_all)
+                logger.info(
+                    "solve_section_length_sweep: neff primitive saved at %s "
+                    "(%d length(s) served analytically, none persisted)",
+                    folder, len(lengths),
+                )
+            else:
+                # The diagonal reconstruction is unavailable for this
+                # cross-section, so nothing can rebuild T from neff -- persist
+                # the derived matrix so a real solve is not lost. Rare, and
+                # each occurrence is worth investigating rather than ignoring.
+                folder = save_run(save_dir, config, T)
+                update_family_pointer(
+                    save_dir, family_config, (n_modes_out, n_modes_in), os.path.basename(folder),
+                )
+                logger.warning(
+                    "solve_section_length_sweep: no length-independent neff primitive "
+                    "available (neff_cache_safe=False) -- persisted the derived %s "
+                    "transfer matrix at %s instead", T.shape, folder,
+                )
 
         return T
 
