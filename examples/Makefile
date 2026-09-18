@@ -150,10 +150,13 @@ directional_coupler_hybrid:
 	$(runner) $(my_python) directional_coupler/python/directional_coupler_hybrid.py
 
 # --- ring resonator -------------------------------------------------------
-# RING_TEST_MODE=0 forces the full-res 3-D production run (defaults to the
-# fast 2-D smoke test otherwise — see each script's own TEST_MODE docstring).
+# ⚠ the two ring scripts take DIFFERENT knobs. ring_resonator_fdtd.py does not
+# read RING_TEST_MODE at all: it takes RING_FULL_3D (default 0, i.e. 2-D) and
+# RING_FULL_RES (default 40). 2-D at res 40 is ~1.7 h; 3-D at the same
+# resolution is ~167 h, which is why 2-D is the default and why this target
+# does not force 3-D. Pass RING_FULL_3D=1 yourself if you have the allocation.
 ring_resonator_fdtd:
-	RING_TEST_MODE=0 $(runner) $(my_python) ring_resonator/python/ring_resonator_fdtd.py
+	$(runner) $(my_python) ring_resonator/python/ring_resonator_fdtd.py
 
 ring_resonator_hybrid:
 	RING_TEST_MODE=0 $(runner) $(my_python) ring_resonator/python/ring_resonator_hybrid.py

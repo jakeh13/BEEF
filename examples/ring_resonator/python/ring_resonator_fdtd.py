@@ -12,9 +12,10 @@ which assembly is right.
 Run from any directory:
     python /path/to/examples/ring_resonator/python/ring_resonator_fdtd.py
 
-Defaults to a fast 2-D smoke test; set RING_TEST_MODE=0 for the full-res 3-D
-production run (see WHY THIS DEFAULTS TO 2-D below), which is what
-`make ring_resonator_fdtd` does.
+Runs 2-D at resolution 40 by default, which is the real check this script is
+for and takes ~1.7 h. Set RING_FULL_3D=1 for the 3-D case (~167 h at the same
+resolution — see WHY THIS DEFAULTS TO 2-D below). Note this script does NOT
+read RING_TEST_MODE; that knob belongs to ring_resonator_hybrid.py.
 
 FULL DEVICE in one FDTD run — validation check 4.
 
