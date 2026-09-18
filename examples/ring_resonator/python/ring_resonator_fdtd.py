@@ -1,4 +1,22 @@
-"""Ring resonator, FULL DEVICE in one FDTD run — validation check 4.
+"""Tutorial: simulate a ring resonator with the BEEF library using whole-device
+FDTD.
+
+Geometry: a straight bus waveguide evanescently coupled to a complete
+racetrack ring, on the platform and dimensions set below.
+
+Method: one meep simulation of the whole device — no decomposition, no EME, no
+network algebra. Its counterpart, ring_resonator_hybrid.py, assembles the same
+device from separately-solved pieces; this script is the reference that says
+which assembly is right.
+
+Run from any directory:
+    python /path/to/examples/ring_resonator/python/ring_resonator_fdtd.py
+
+Defaults to a fast 2-D smoke test; set RING_TEST_MODE=0 for the full-res 3-D
+production run (see WHY THIS DEFAULTS TO 2-D below), which is what
+`make ring_resonator_fdtd` does.
+
+FULL DEVICE in one FDTD run — validation check 4.
 
 `validation_markdown/ring_resonator_validation.md` lists four checks. Three are
 now measured; this is the fourth and the only one that puts the *whole* device

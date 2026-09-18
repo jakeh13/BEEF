@@ -1,9 +1,14 @@
 """
-Waisted 2x2 MMI — FDTD/EME Hybrid Simulation
+Tutorial: simulate the WAISTED 2x2 MMI splitter with the BEEF library using a
+FDTD/EME hybrid cascade.
 
+Method: FDTD for the port sections, EME for the multimode body, stitched by
+HybridSolver. This buys most of the whole-device FDTD's accuracy at a fraction
+of its cost — but on a waisted body it is also the subtlest of this folder's
+three scripts, for the reasons below.
 
-The tapered-body counterpart of examples/mmi_2x2/python/mmi_2x2_hybrid.py.
-Same idea — FDTD for the port sections, EME for the multimode body — but the
+Geometry: the tapered-body counterpart of
+examples/mmi_2x2/python/mmi_2x2_hybrid.py. Same idea as that script, but the
 body is no longer a uniform slab, and that single change invalidates three of
 the shortcuts the straight device's hybrid takes. Read those first; they are
 the reason this script looks different rather than merely re-parameterised.
