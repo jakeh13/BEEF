@@ -1530,16 +1530,32 @@ class EMESolver:
                 # to be stored and confirm it reproduces the amplitudes this real
                 # solve just produced. Only a pass earns a cache entry, so a
                 # factorization never becomes an unverified answer.
+                #
+                # SAMPLED, unlike the diagonal check, which tests every length.
+                # The difference is deliberate. There, reconstruction is a
+                # different computation from the solve it is checked against, and
+                # its error grows with propagation distance, so only an
+                # all-lengths check is honest. Here the replay runs the SAME
+                # cascade on the same interface matrices and the same neff, so a
+                # length is either bit-exact or the factorization is broken --
+                # error cannot accumulate with L. Checking every length would
+                # double the cost of the sweep (one full cascade per length,
+                # against the diagonal check's vectorized arithmetic), which on a
+                # 101-length sweep was enough to OOM a 96 GB job.
+                probe = sorted({0, len(lengths) // 2, len(lengths) - 1})
+                probe_L = np.asarray([lengths[i] for i in probe])
                 fac_amps = self._amps_from_factorizations(
-                    facs, lengths, ref_cell_lengths, c_start, c_stop, n_region_cells,
+                    facs, probe_L, ref_cell_lengths, c_start, c_stop, n_region_cells,
                 )
-                worst = float(np.max(np.abs(fac_amps - amps))) if amps.size else 0.0
+                worst = (float(np.max(np.abs(fac_amps - amps[probe])))
+                         if amps.size else 0.0)
                 if fac_config is not None and worst <= _FACTORIZATION_REPLAY_TOL:
                     folder = save_run(save_dir, fac_config, facs)
                     logger.info(
                         "solve_length_sweep: factorization saved at %s (replay "
-                        "verified to %.2e across %d length(s); the derived "
-                        "amplitudes are not persisted)", folder, worst, len(lengths),
+                        "verified to %.2e at %d of %d length(s); the derived "
+                        "amplitudes are not persisted)",
+                        folder, worst, len(probe), len(lengths),
                     )
                 else:
                     folder = save_run(save_dir, config, amps)
