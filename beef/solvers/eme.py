@@ -1511,18 +1511,41 @@ class EMESolver:
             cells = self._build_cells(geometry, side=side, wavelengths=wavelengths, **kwargs)
             amps = np.zeros((len(lengths), len(wavelengths)), dtype=complex)
 
+            def _cell_lengths_for(L):
+                cl = list(ref_cell_lengths)
+                for j in range(c_start, c_stop):
+                    cl[j] = float(L) / n_region_cells
+                return cl
+
+            # Sweep THROUGH the factorization rather than calling
+            # mw.compute_s_matrix() per length. Both give the same numbers --
+            # measured bit-exact -- but the direct call recomputes every
+            # interface overlap from the modes on EVERY length, and the
+            # interfaces do not depend on length at all. Computing them once
+            # per wavelength instead of once per length is the difference
+            # between one cascade and len(lengths) of them: mmi_1x4_eme's
+            # 101-length sweep was running ~8 h per output branch this way.
             facs = []
+            probe = sorted({0, len(lengths) // 2, len(lengths) - 1}) if len(lengths) else []
+            gate_worst = 0.0
             for wl_idx, wl in enumerate(wavelengths):
                 env = mw.Environment(wl=float(wl), T=self.temperature)
                 css = [mw.CrossSection.from_cell(cell=c, env=env) for c in cells]
                 modes = [self.compute_modes(cs, nm) for cs, nm in zip(css, modes_per_cell)]
-                facs.append(extract_factorization(modes))
+                fac = extract_factorization(modes)
+                facs.append(fac)
                 for k, L in enumerate(lengths):
-                    cell_lengths = list(ref_cell_lengths)
-                    for j in range(c_start, c_stop):
-                        cell_lengths[j] = float(L) / n_region_cells
-                    S, _ = mw.compute_s_matrix(modes, cells=cells, cell_lengths=cell_lengths)
+                    S, _ = s_matrix_from_factorization(fac, _cell_lengths_for(L))
                     amps[k, wl_idx] = S[0, 1]
+                # The factorization now produces the answer, so the gate has to
+                # be an INDEPENDENT computation: a direct meow cascade at a few
+                # lengths, which is what the stored factorization is claiming to
+                # reproduce. Comparing the factorization against itself would
+                # verify nothing.
+                for k in probe:
+                    S_ref, _ = mw.compute_s_matrix(
+                        modes, cells=cells, cell_lengths=_cell_lengths_for(lengths[k]))
+                    gate_worst = max(gate_worst, float(abs(S_ref[0, 1] - amps[k, wl_idx])))
 
             if save_dir:
                 # Gate, in the same spirit as solve_section_length_sweep()'s
@@ -1531,24 +1554,16 @@ class EMESolver:
                 # solve just produced. Only a pass earns a cache entry, so a
                 # factorization never becomes an unverified answer.
                 #
-                # SAMPLED, unlike the diagonal check, which tests every length.
-                # The difference is deliberate. There, reconstruction is a
-                # different computation from the solve it is checked against, and
-                # its error grows with propagation distance, so only an
-                # all-lengths check is honest. Here the replay runs the SAME
-                # cascade on the same interface matrices and the same neff, so a
-                # length is either bit-exact or the factorization is broken --
-                # error cannot accumulate with L. Checking every length would
-                # double the cost of the sweep (one full cascade per length,
-                # against the diagonal check's vectorized arithmetic), which on a
-                # 101-length sweep was enough to OOM a 96 GB job.
-                probe = sorted({0, len(lengths) // 2, len(lengths) - 1})
-                probe_L = np.asarray([lengths[i] for i in probe])
-                fac_amps = self._amps_from_factorizations(
-                    facs, probe_L, ref_cell_lengths, c_start, c_stop, n_region_cells,
-                )
-                worst = (float(np.max(np.abs(fac_amps - amps[probe])))
-                         if amps.size else 0.0)
+                # gate_worst was measured above, against a direct meow cascade
+                # at `probe` lengths per wavelength. Sampled rather than
+                # exhaustive: the factorization reuses the same interface
+                # matrices and the same neff, so a length is either bit-exact or
+                # the factorization is broken outright -- error cannot
+                # accumulate with L the way the diagonal reconstruction's does,
+                # which is why THAT gate checks every length and this one does
+                # not. An exhaustive check here would also cost a second full
+                # sweep.
+                worst = gate_worst
                 if fac_config is not None and worst <= _FACTORIZATION_REPLAY_TOL:
                     folder = save_run(save_dir, fac_config, facs)
                     logger.info(
