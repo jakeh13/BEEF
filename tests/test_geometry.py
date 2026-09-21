@@ -354,7 +354,7 @@ class TestMMIBodyWaist:
     INERT to the existing suite, which it is by construction: every waist
     parameter defaults to off. It never exercised the profile itself. These
     tests close that gap and pin the contract for the 2x2 waist work
-    (validation_markdown/mmi_2x2_waist_body_validation.md step 1).
+    (validation_markdown/resolved/mmi_2x2_waist_body_validation.md step 1).
     """
 
     def _mmi_1x2(self, **kw):

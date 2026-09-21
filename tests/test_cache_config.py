@@ -644,7 +644,7 @@ class TestRegionCellLengthsFingerprint:
     """`EMESolver(region_cell_lengths=...)` — added 2026-08-29 so a region can
     be subdivided at explicit internal boundaries an even division cannot
     reach (a waisted MMI body's five segments). See
-    validation_markdown/mmi_2x2_waist_body_validation.md step 3.
+    validation_markdown/resolved/mmi_2x2_waist_body_validation.md step 3.
 
     The load-bearing test is the FIRST one: this attribute must be invisible
     at its default, or adding it would restale every EME cache entry and
