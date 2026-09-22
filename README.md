@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="BEEF logo" width="380">
+</p>
+
 # BEEF
 
 **B**ridged **E**ngine for **E**ME and **F**DTD — for photonic MMI/coupler devices.
