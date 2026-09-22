@@ -2,9 +2,6 @@
 
 **B**ridged **E**ngine for **E**ME and **F**DTD — for photonic MMI/coupler devices.
 
-> The Python package/import name was renamed to match: `pip install -e .` now gives you
-> `import beef` (previously `import feces`).
-
 BEEF is a hybrid-methodology orchestration layer on top of [meep](https://meep.readthedocs.io/) (FDTD),
 [meow](https://github.com/flaport/meow)/MPB (eigenmode expansion), and optionally
 [tidy3d](https://www.flexcompute.com/tidy3d/)'s mode solver — plus a small parametrized photonic-device
@@ -18,14 +15,52 @@ generic, reciprocity-based FDTD/EME cascade over an arbitrary number of sections
 
 ## Install
 
+Requires Python ≥3.11 (`meow` pulls in `jax` via `sax`, and `jax` no longer ships
+for 3.10). Both simulation backends need to come from somewhere other than a
+plain PyPI install — do steps 1 and 2 first, then install BEEF.
+
+**1. meow (EME backend) — from git `main`, not the latest release.**
+
 ```bash
-pip install -e .            # core (numpy, matplotlib)
-pip install -e ".[eme]"     # + meow-sim, for EMESolver
-pip install -e ".[fdtd]"    # + meep, for FDTDSolver / HybridSolver
-pip install -e ".[all]"     # both
+pip install "meow-sim @ git+https://github.com/flaport/meow.git@main"
 ```
 
-Requires Python ≥3.10.
+The newest PyPI release is `meow-sim` 0.15.0 (2026-03-15), months behind `main`.
+Install the GitHub tip, not the release.
+
+**2. meep (FDTD backend) — from conda-forge, not pip.**
+
+```bash
+conda install -c conda-forge pymeep
+# or: micromamba install -c conda-forge pymeep
+```
+
+PyPI's `meep` package is an unrelated project (a lightweight task runner).
+`pip install meep` installs that silently, with no error — it just leaves
+`import meep` broken. The MIT electromagnetics package ships only as
+conda-forge `pymeep`. Skip this step if you only need `EMESolver`.
+
+**3. BEEF itself.**
+
+```bash
+pip install -e .              # core (numpy, scipy, matplotlib)
+pip install -e ".[gds]"       # + gdstk, for GdsGeometry / load_gds_polygons
+pip install -e ".[dev]"       # + pytest
+pip install -e ".[dev,gds]"   # typical development install
+```
+
+Verify:
+
+```bash
+python -c "import beef, meow; print(beef.__name__, meow.__version__)"
+python -c "import meep; print(meep.__version__)"   # only if you did step 2
+```
+
+The `[eme]`, `[fdtd]`, and `[all]` extras declare `meow-sim` and `meep` as plain
+PyPI requirements, which is why they are not used above. With steps 1–2 already
+done, pip treats `meow-sim` as satisfied and leaves the git checkout in place, so
+`".[eme]"` is harmless — but on a clean environment it pulls the stale release,
+and `[fdtd]`/`[all]` pull the wrong `meep` entirely.
 
 ## Public API
 
@@ -260,12 +295,8 @@ the repo's Actions tab, or:
 gh workflow run slow-tests.yml
 ```
 
-**Packaging note**: this workflow installs `pymeep` from conda-forge (`mamba-org/setup-micromamba`),
-not via `pip install beef[fdtd]`/`beef[all]`. Despite `pyproject.toml` declaring `meep` as a pip
-dependency for those extras, PyPI's `meep` package is an unrelated project (a lightweight task
-runner) — `pip install meep` silently installs the wrong thing with no error, it just leaves
-`import meep` broken. The real MIT electromagnetics package only ships via conda-forge
-(`conda install -c conda-forge pymeep`); this is what actually provides `import meep` on this
-machine too. `pyproject.toml`'s `[fdtd]`/`[all]` extras are misleading as currently declared —
-worth fixing separately.
+**Packaging note**: this workflow installs `pymeep` from conda-forge
+(`mamba-org/setup-micromamba`), not via `pip install beef[fdtd]`/`beef[all]`, for the reason given
+under Install — PyPI's `meep` is an unrelated project and those extras are misleading as declared
+in `pyproject.toml`. Worth fixing separately.
 
