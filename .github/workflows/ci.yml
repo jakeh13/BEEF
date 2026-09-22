@@ -19,7 +19,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install beef + test deps
-        run: pip install -e ".[dev]"
+        # [eme] and [gds] too, not just [dev]. The fast suite exercises
+        # EMESolver and the GDS geometry paths, both of which import their
+        # backend at call time (`import meow as mw`, `import gdstk`), so with
+        # only [dev] every such test fails on ModuleNotFoundError rather than
+        # on anything real -- 2 tests since 2026-08-29, 9 by 2026-09-21.
+        # [fdtd] is deliberately excluded: meep is not pip-installable (see
+        # README), and the tests that need it are marked slow and deselected.
+        run: pip install -e ".[dev,eme,gds]"
 
       - name: Run fast test suite
         run: pytest tests/ -v -m "not slow"
