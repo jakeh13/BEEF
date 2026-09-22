@@ -10,7 +10,12 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        # 3.10 dropped 2026-09-22. meow pulls in jax via sax, jax no longer
+        # ships for 3.10, so pip backtracks to meow-sim 0.12.0 + klujax
+        # 0.4.3 and lands on a sax/klujax pair that cannot import:
+        # "module 'klujax' has no attribute 'coo_mul_vec'". 3.11 and 3.12
+        # both pass 759/759 on the same commit.
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
