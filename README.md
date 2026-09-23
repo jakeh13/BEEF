@@ -8,8 +8,7 @@
 
 BEEF is a hybrid-methodology orchestration layer on top of [meep](https://meep.readthedocs.io/) (FDTD),
 [meow](https://github.com/flaport/meow)/MPB (eigenmode expansion), and optionally
-[tidy3d](https://www.flexcompute.com/tidy3d/)'s mode solver — plus a small parametrized photonic-device
-geometry library. It is not a competing raw solver; meep/meow/tidy3d do the actual field/mode math.
+[tidy3d](https://www.flexcompute.com/tidy3d/)'s mode solver, it is not a competing raw solver; meep/meow/tidy3d do the actual field/mode math.
 BEEF's real contribution is `HybridSolver`: a generic N-section FDTD/EME cascade (any solver type, any
 order, any count ≥ 2) with reciprocity-based excitation (minimum simulation count) and a shared
 `section_prisms/section_gds/width_at/center_at` interface that lets any geometry slot into that cascade.
