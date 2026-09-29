@@ -1,17 +1,52 @@
 [build-system]
-requires = ["setuptools>=61"]
+# >=77 for PEP 639 license expression support (license = "Apache-2.0" as an
+# SPDX string plus license-files). Older setuptools rejects those two keys.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "beef"
 version = "0.1.0"
-description = "BEEF (Bridged Engine for EME and FDTD) for photonic MMI devices"
+description = "Bridged Engine for EME and FDTD - hybrid FDTD/EME cascades for integrated photonic devices"
+readme = "README.md"
 requires-python = ">=3.11"   # jax (via meow -> sax) no longer supports 3.10
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [
+    { name = "Jacob M. Hiesener" },
+    { name = "Stephen E. Ralph", email = "stephen.ralph@ece.gatech.edu" },
+]
+keywords = [
+    "photonics",
+    "integrated-photonics",
+    "electromagnetics",
+    "simulation",
+    "fdtd",
+    "eme",
+    "meep",
+]
+# No "License :: OSI Approved :: ..." classifier on purpose: PEP 639 forbids
+# pairing a license expression with a license classifier, and setuptools>=77
+# errors if both are present.
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 dependencies = [
     "numpy",
     "matplotlib",
     "scipy",
 ]
+
+[project.urls]
+Repository = "https://github.com/jakeh13/BEEF"
+Changelog = "https://github.com/jakeh13/BEEF/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 eme = ["meow-sim"]

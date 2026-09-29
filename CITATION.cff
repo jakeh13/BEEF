@@ -1,0 +1,46 @@
+cff-version: 1.2.0
+message: "If you use BEEF in your research, please cite the paper below."
+title: "BEEF: Bridged Engine for EME and FDTD"
+abstract: >-
+  A Python framework that partitions an integrated photonic device into
+  sections, simulates each with whichever of eigenmode expansion (EME) or
+  finite-difference time-domain (FDTD) best suits its geometry, and cascades
+  the per-section responses into a simulation of the full device.
+type: software
+authors:
+  - given-names: "Jacob M."
+    family-names: Hiesener
+    affiliation: "School of Electrical and Computer Engineering, Georgia Institute of Technology"
+    # orcid: "https://orcid.org/0000-0000-0000-0000"
+  - given-names: "Stephen E."
+    family-names: Ralph
+    email: stephen.ralph@ece.gatech.edu
+    affiliation: "School of Electrical and Computer Engineering, Georgia Institute of Technology"
+    # orcid: "https://orcid.org/0000-0000-0000-0000"
+version: "0.1.0"
+license: Apache-2.0
+repository-code: "https://github.com/jakeh13/BEEF"
+keywords:
+  - photonics
+  - integrated-photonics
+  - electromagnetics
+  - simulation
+  - FDTD
+  - EME
+  - eigenmode expansion
+  - Meep
+  - Python
+preferred-citation:
+  type: article
+  title: "BEEF: A Hybrid Integrated Photonic Simulation Framework"
+  authors:
+    - given-names: "Jacob M."
+      family-names: Hiesener
+      affiliation: "School of Electrical and Computer Engineering, Georgia Institute of Technology"
+    - given-names: "Stephen E."
+      family-names: Ralph
+      email: stephen.ralph@ece.gatech.edu
+      affiliation: "School of Electrical and Computer Engineering, Georgia Institute of Technology"
+  journal: "Computer Physics Communications"
+  year: 2026
+  status: submitted

@@ -1,0 +1,31 @@
+BEEF — Bridged Engine for EME and FDTD
+Copyright 2026 Georgia Tech Research Corporation
+
+This software was developed at the School of Electrical and Computer
+Engineering, Georgia Institute of Technology, by Jacob M. Hiesener and
+Stephen E. Ralph.
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file for the
+full terms.
+
+---
+
+Third-party dependencies
+
+BEEF is an orchestration layer. It calls the packages below at runtime but
+does not bundle, embed, or redistribute any of them; each is installed
+separately by the user under its own license.
+
+  Meep (FDTD)              GPL-2.0-or-later   https://github.com/NanoComp/meep
+  MEOW (EME)               Apache-2.0         https://github.com/gdsfactory/meow
+  Tidy3D (mode solver)     LGPL-2.1           https://github.com/flexcompute/tidy3d
+  NumPy, SciPy, Matplotlib BSD-3-Clause
+  gdstk (GDSII import)     BSL-1.0            https://github.com/heitzmann/gdstk
+
+Meep is licensed under the GNU General Public License, version 2 or (at the
+user's option) any later version. BEEF imports Meep only when the FDTD or
+hybrid solvers are used — the dependency is optional, the import is deferred
+to call time, and no Meep source or binary is distributed with BEEF. Users
+obtain Meep themselves from conda-forge (`pymeep`). A user who chooses to
+redistribute a combined work that includes Meep is responsible for satisfying
+the GPL's terms for that combination.

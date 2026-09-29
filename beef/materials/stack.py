@@ -1,8 +1,8 @@
 """MaterialStack: single source of truth for waveguide core/cladding layer
 definitions.
 
-Replaces the duplicated stack_extrusions_GF() and meep_material_from_meow()
-calls scattered across every master and sweep script.
+Replaces the per-script layer-extrusion and meow-to-meep material-conversion
+helpers that were duplicated across every master and sweep script.
 
 Originally Si-core/SiO2-clad only; generalized 2026-08-03 to any core/clad
 pair in `_SELLMEIER` via `core_kind`/`clad_kind`
