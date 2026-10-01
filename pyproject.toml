@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "beef"
-version = "0.1.0"
+dynamic = ["version"]        # single source of truth: beef/__init__.py
 description = "Bridged Engine for EME and FDTD - hybrid FDTD/EME cascades for integrated photonic devices"
 readme = "README.md"
 requires-python = ">=3.11"   # jax (via meow -> sax) no longer supports 3.10
@@ -54,6 +54,12 @@ fdtd = ["meep"]
 gds = ["gdstk"]
 all = ["meow-sim", "meep", "gdstk"]
 dev = ["pytest"]
+
+# Read the version from beef.__version__ so it is declared in exactly one
+# place. setuptools parses the assignment statically; the package is not
+# imported at build time.
+[tool.setuptools.dynamic]
+version = { attr = "beef.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["."]
