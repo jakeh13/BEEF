@@ -59,6 +59,11 @@ dev = ["pytest"]
 where = ["."]
 include = ["beef*"]
 
+# PEP 561 marker. Without this entry the file exists in the tree but is left
+# out of the wheel, and type checkers go on treating beef as untyped.
+[tool.setuptools.package-data]
+beef = ["py.typed"]
+
 [tool.pytest.ini_options]
 markers = [
     "slow: golden-value integration tests that run a real (reduced-res) meep/meow simulation",
