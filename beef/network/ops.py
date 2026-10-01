@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """connect() / close_loop(): Redheffer star product and self-loop elimination.
 
 Free functions rather than methods — connect() in particular takes two peer

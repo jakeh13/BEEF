@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 from .calibration import (
     plot_beta_calibration, plot_beta_calibration_fits,
     plot_beta_calibration_geometry, plot_beta_calibration_merged_geometry,

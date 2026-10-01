@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """Circuit: stateful multi-block network builder on top of connect()/close_loop().
 
 Matches ParallelSweep (beef/sweep/parallel.py) as this repo's existing

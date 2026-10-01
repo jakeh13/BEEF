@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """Stitch a hybrid cascade's FDTD section fields and EME body field into one
 continuous device-frame map.
 

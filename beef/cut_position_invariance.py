@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """Cut-position invariance: the authoritative, device-agnostic hybrid
 correspondence check.
 

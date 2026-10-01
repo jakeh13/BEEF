@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """MaterialStack: single source of truth for waveguide core/cladding layer
 definitions.
 

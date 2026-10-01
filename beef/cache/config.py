@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """build_run_config(): fingerprint one solve_section()-style call into a
 JSON-safe dict, for the persistent save-folder cache (see beef/cache/__init__.py).
 """

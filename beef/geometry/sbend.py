@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """Lateral S-bend waveguide — a standalone DeviceGeometry, usable on its own
 or as the building block DirectionalCoupler composes for each of its 4 arms.
 

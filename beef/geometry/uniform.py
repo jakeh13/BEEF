@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """UniformCrossSection: N parallel straight strips, constant along x.
 
 Why this exists. The ring resonator's EME half builds its two cross-sections

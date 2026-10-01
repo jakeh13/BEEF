@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """Unified N-input / M-output multimode interferometer geometry."""
 from __future__ import annotations
 

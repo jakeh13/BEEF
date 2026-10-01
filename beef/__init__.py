@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """BEEF — Bridged Engine for EME and FDTD.
 
 Core public API:

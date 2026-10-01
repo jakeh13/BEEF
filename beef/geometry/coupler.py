@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """Directional coupler geometry: two waveguides brought into proximity over a
 straight coupling length, connected to widely-separated access waveguides by
 lateral S-bends on each side.

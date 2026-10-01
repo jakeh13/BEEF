@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """Top-down device geometry plots — one function per solver type.
 
 plot_eme_geometry() / plot_fdtd_geometry() / plot_hybrid_geometry() each draw
