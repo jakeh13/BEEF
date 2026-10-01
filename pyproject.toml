@@ -1,6 +1,6 @@
 [build-system]
-# >=77 for PEP 639 license expression support (license = "Apache-2.0" as an
-# SPDX string plus license-files). Older setuptools rejects those two keys.
+# >=77 for PEP 639 license expression support (license = "MIT" as an SPDX
+# string plus license-files). Older setuptools rejects those two keys.
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
@@ -10,8 +10,8 @@ version = "0.1.0"
 description = "Bridged Engine for EME and FDTD - hybrid FDTD/EME cascades for integrated photonic devices"
 readme = "README.md"
 requires-python = ">=3.11"   # jax (via meow -> sax) no longer supports 3.10
-license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [
     { name = "Jacob M. Hiesener" },
     { name = "Stephen E. Ralph", email = "stephen.ralph@ece.gatech.edu" },
