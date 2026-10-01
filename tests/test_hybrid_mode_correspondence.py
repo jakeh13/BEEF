@@ -1,5 +1,5 @@
 """Fast, meep/meow-free tests for HybridSolver's check_mode_correspondence
-guard (validation_markdown/modal_multiplexer_validation.md gaps 1/6).
+guard.
 
 meow is faked out entirely (a minimal sys.modules stand-in exposing only
 Mesh2D, mirroring tests/test_duplicate_band_guard.py's fake-meep pattern) so
@@ -192,8 +192,8 @@ class TestGuidedModeFilter:
     engines' radiation modes overlap ~0 however well the real basis
     corresponds. Measured on the modal multiplexer: including them drove the
     reported worst overlap to 0.0000 purely from bands 13-15, while the 13
-    guided bands were unaffected. validation_markdown/README.md's "Finding 1"
-    records that EVERY interface basis in this repo carries at least one
+    guided bands were unaffected. EVERY interface basis in this repo
+    carries at least one
     unguided mode, so without this filter the check false-alarms everywhere.
     """
 

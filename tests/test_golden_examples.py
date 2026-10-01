@@ -1,13 +1,13 @@
-"""Slow golden-value integration tests (notes.md rec #1b).
+"""Slow golden-value integration tests.
 
 Each test builds the same device geometry (same physical dimensions) as the
 corresponding example in examples/, but at reduced simulation resolution/
 wavelength count/mode count, runs a real meep/meow simulation, and checks the
 resulting transmission per port against a recorded reference within a loose
 tolerance. These are regression guards against real correctness bugs (sign
-flips, wrong port routing, aperture/normalization mistakes — see notes.md's
-"Current library reference" for examples found and fixed by earlier
-sessions), not physical-accuracy validation, so the tolerance is generous.
+flips, wrong port routing, aperture/normalization mistakes, several of which
+were found and fixed this way), not physical-accuracy validation, so the
+tolerance is generous.
 
 The _run_*() functions below (one per target) are the actual build+simulate
 logic; each is reused verbatim by scripts/generate_golden_values.py to

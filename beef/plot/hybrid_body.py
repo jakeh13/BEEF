@@ -1,8 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """Field reconstruction for a HybridSolver cascade's EME body section.
 
 Why this is separate from ``plot_eme_fields()``, which already plots EME
-fields. Two reasons, both measured on the 1x2 MMI
-(``validation_markdown/hybrid_field_extraction_validation.md`` step 1):
+fields. Two reasons, both measured on the 1x2 MMI:
 
 1. **``plot_eme_fields()`` labels in meow's frame, not the device's.** It hands
    its component string straight to ``mw.propagate_modes()`` with no remap,

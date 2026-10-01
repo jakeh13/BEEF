@@ -25,11 +25,17 @@ plain PyPI install — do steps 1 and 2 first, then install BEEF.
 **1. meow (EME backend) — from git `main`, not the latest release.**
 
 ```bash
-pip install "meow-sim @ git+https://github.com/flaport/meow.git@main"
+pip install "meow-sim @ git+https://github.com/gdsfactory/meow.git@b6ba461"
 ```
 
-The newest PyPI release is `meow-sim` 0.15.0 (2026-03-15), months behind `main`.
-Install the GitHub tip, not the release.
+BEEF's default `mode_solver="meep"` calls `meow.compute_modes_meep`, which was
+merged upstream on 2026-09-16 and is **not in any release**: the newest PyPI
+`meow-sim` is 0.15.0 (2026-03-15), so `pip install meow-sim` gives a package
+where BEEF's default path fails on import. Install from git.
+
+The commit above is pinned on purpose, so this environment stays reproducible;
+`@main` also works if you want the tip. (`flaport/meow` is the same project —
+it now redirects to `gdsfactory/meow`.)
 
 **2. meep (FDTD backend) — from conda-forge, not pip.**
 
@@ -204,10 +210,9 @@ smat = solver.solve(mmi, wavelengths, port="top", input_mode=1, save_dir="sim_ca
 Each cache entry gets its own subfolder (named by a hash of the fingerprint)
 holding `config.json` (human-readable), `result.pkl`, and a `geometry.png`
 preview. `examples/` wires every applicable example up to a shared
-`example_sim_cache/` directory this way — a sibling of `BEEF/` and
-`example_output/`, i.e. outside the repo, so multi-GB simulation results are
-never committed — re-running an example, or
-another example that happens to solve an identical section, reuses cached
+`example_sim_cache/` directory this way — committed at the repo root, so a
+fresh clone can replay the shipped examples without re-simulating — re-running
+an example, or another example that happens to solve an identical section, reuses cached
 results automatically; every example's `.py` script and its paired `.ipynb`
 notebook fingerprint identically too, so running either one hits a cache
 entry the other left behind. One known gap: `EMESolver.solve_sweep()` does
@@ -219,14 +224,25 @@ See `examples/` — one folder per device, each with a `python/` subfolder (`.py
 where a notebook version exists, a `notebooks/` subfolder (matching `.ipynb`):
 
 - `examples/mmi_1x2/` — 1×2 MMI splitter (EME, FDTD, hybrid)
+- `examples/mmi_1x4/` — 1×4 MMI splitter on 300 nm SiN (EME, FDTD, hybrid) — exercises the
+  generalized `core_kind`/`clad_kind` material stacks
 - `examples/mmi_2x2/` — 2×2 MMI splitter (EME, FDTD, hybrid) — a genuine multi-input device,
   exercising `MMI`'s `input_idx`/`input_indices` support
+- `examples/mmi_2x2_tapered/` — waisted 2×2 MMI splitter (EME, FDTD, hybrid), the per-port
+  `MMIPort` taper specs applied to a non-uniform body
+- `examples/mmi_4x4_90hybrid/` — 4×4 MMI 90° optical hybrid (EME, FDTD, hybrid) — the
+  167.3 µm device that full-device FDTD cannot reach in practice
 - `examples/directional_coupler/` — directional coupler (FDTD, FDTD length sweep, hybrid, even/odd
   supermode coupling-length analysis)
-- `examples/modal_multiplexer/` — modal multiplexer (hybrid)
+- `examples/high_contrast_grating/` — high-contrast-grating waveguide mirror (FDTD only, no EME
+  or `HybridSolver`)
+- `examples/high_contrast_grating_fabry_perot/` — HCG Fabry–Perot cavity tapped mid-cavity by a
+  directional coupler (hybrid)
 - `examples/ring_resonator/` — racetrack ring resonator (hybrid: raw-meep coupler-section +
   90° bend FDTD, mode-solve neff interpolation, closed-form all-pass feedback assembly —
   no `DeviceGeometry`/`FDTDSolver` support yet for this device)
+
+Every folder ships `.py` scripts; all but `mmi_1x4` also ship matching notebooks.
 
 Run any example directly:
 
@@ -290,8 +306,8 @@ avoid this; results are unaffected either way, it's purely a finalize-time crash
 
 `.github/workflows/slow-tests.yml` runs the 4 golden targets as a 4-way parallel matrix (one job
 per target, ~96 min wall-clock for the slowest instead of ~3hr serial) — manual trigger only
-(`workflow_dispatch`), not on every push: the repo is public so Actions minutes are free, but
-there's no value in paying the wall-clock cost on every PR for tests this coarse. Trigger it from
+(`workflow_dispatch`), not on every push: there's no value in paying the wall-clock cost on
+every PR for tests this coarse. Trigger it from
 the repo's Actions tab, or:
 
 ```bash
@@ -303,3 +319,19 @@ gh workflow run slow-tests.yml
 under Install — PyPI's `meep` is an unrelated project and those extras are misleading as declared
 in `pyproject.toml`. Worth fixing separately.
 
+
+## Citing BEEF
+
+If you use BEEF in published work, please cite the paper. `CITATION.cff` in
+this repository carries the machine-readable version, which GitHub renders as
+a "Cite this repository" button.
+
+## License
+
+BEEF is released under the MIT License — see [`LICENSE`](LICENSE).
+
+BEEF is an orchestration layer: it calls Meep, MEOW, and the rest at run time
+but does not bundle or redistribute any of them, and each is installed
+separately by the user under its own license.
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists them, and explains how
+BEEF's MIT license sits alongside Meep's GPL-2.0-or-later.

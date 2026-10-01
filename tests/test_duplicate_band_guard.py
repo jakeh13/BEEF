@@ -1,6 +1,5 @@
 """Fast, meep-free unit tests for FDTDSolver._iter_distinct_bands() -- the
-duplicate-eigenmode guard (validation_markdown/modal_multiplexer_validation.md
-gap 6).
+duplicate-eigenmode guard.
 
 meep is faked out entirely (a minimal stand-in module registered in
 sys.modules, not the real package) so this exercises the guard's own retry/

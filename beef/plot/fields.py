@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """EME field visualization.
 
 Migrated from engine/plotting/meow.py with updated signature (output_dir replaces hp).

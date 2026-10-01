@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """Offset-translation helpers for composing DeviceGeometry sub-instances
 end-to-end along x (MMI's per-port Tapers, DirectionalCoupler's SBend arms,
 CompoundGeometry's segment stitching all use these)."""

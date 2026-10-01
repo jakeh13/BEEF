@@ -151,8 +151,8 @@ class TestBestCorrespondence:
 
 
 class TestOverlapDiagnostics:
-    """The layer-1 upgrade from "test the diagonal" to "test the matrix"
-    (validation_markdown/fdtd_vs_EME_mode_validation.md). If two bases span
+    """The layer-1 upgrade from "test the diagonal" to "test the matrix".
+    If two bases span
     the same subspace and correspond, eta is close to a PERMUTATION matrix;
     the matched diagonal alone tests a strict subset of that and is blind to
     a mode present in one basis and missing from the other."""

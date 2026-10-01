@@ -1,7 +1,7 @@
 """Tutorial: 4x4 MMI 90-degree optical hybrid -- pure EME simulation (BEEF
 method, no FDTD).
 
-validation_markdown/mmi_4x4_90_hybrid_validation.md Step 6a. Same device as
+Same device as
 mmi_4x4_90hybrid_hybrid.py (see that script's own module docstring for the
 paper reference and the full first-pass-design caveats: N_MODES=8 is a
 coarse first pass, taper_width/taper_length are MMI's own class defaults,
@@ -113,8 +113,7 @@ N_MODES_TAPER = int(os.environ.get("MMI4X4_EME_NMODES_TAPER", 12))   # was 4 (PL
 # ---------------------------------------------------------------------------
 # Geometry -- the OPTIMISED design point, not Step 2's first pass.
 # Result of the (mm_width, y_gap, taper_width, taper_length, mm_length)
-# campaign documented in validation_markdown/mmi_4x4_90_hybrid_validation.md
-# (~45 hybrid-path evaluations, rounds 8-10, 2026-08-28..09-05). Measured at
+# campaign of ~45 hybrid-path evaluations, rounds 8-10, 2026-08-28..09-05). Measured at
 # this point over 1.29-1.33 um: max|dphi| = 3.933 deg (spec <=5, MET),
 # min CMRR = 18.482 dBe (spec >=20, 1.52 short), excess loss 2.706 dB,
 # imbalance 1.972 dB. Superseded first pass, for the record: mm_width=6.0,
@@ -187,8 +186,8 @@ N_CELLS_TAPER = int(os.environ.get("MMI4X4_EME_NCELLS_TAPER", 30))
 # num_cells=15 measurably under-converged (a fixed-num_cells staircase's
 # per-step width-jump doesn't depend on taper_length, so the discretization
 # itself -- not physical taper length -- was the dominant loss driver;
-# see validation_markdown/mmi_4x4_90_hybrid_validation.md's "Excess-loss
-# investigation" section). 30, not the 60-100 the convergence check used,
+# measured in a dedicated excess-loss investigation). 30, not the 60-100
+# the convergence check used,
 # per the user's own direction ("err on the lower side as 60 cells is a
 # lot") -- captures roughly half the measured 15->100 gain at a 2x cost
 # step instead of 4-7x. Scoped to THIS script only: the hybrid/body-sweep

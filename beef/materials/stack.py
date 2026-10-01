@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """MaterialStack: single source of truth for waveguide core/cladding layer
 definitions.
 
@@ -5,8 +7,7 @@ Replaces the per-script layer-extrusion and meow-to-meep material-conversion
 helpers that were duplicated across every master and sweep script.
 
 Originally Si-core/SiO2-clad only; generalized 2026-08-03 to any core/clad
-pair in `_SELLMEIER` via `core_kind`/`clad_kind`
-(`validation_markdown/mmi_1x4_sin300_validation.md` step 2). `SOI_160`/
+pair in `_SELLMEIER` via `core_kind`/`clad_kind`. `SOI_160`/
 `SOI_220` are unaffected (still Si/SiO2, still the codebase's default); `si_*`
 method names on `MaterialStack` are now aliases for the generalized `core_*`
 names, kept so no existing caller had to change.
@@ -58,8 +59,7 @@ import numpy as np
 # where the table had only two samples between 1.45 and 1.65 um.
 #
 # ---------------------------------------------------------------------------
-# SILICON NITRIDE, added 2026-08-03 for the 300 nm SiN platform
-# (`validation_markdown/mmi_1x4_sin300_validation.md` step 1).
+# SILICON NITRIDE, added 2026-08-03 for the 300 nm SiN platform.
 #
 # ⚠ THREE nitride models ship with meep and ONLY `Si3N4_NIR` is usable here.
 # Reaching for the one called plainly `Si3N4` because of its name is a silent
@@ -209,8 +209,8 @@ def reparam_lorentz(kind: str, wl_band, lam0: Optional[float] = None):
     Returns ``(eps_inf, sigma, max_abs_dn)`` -- the last being the worst
     refractive-index error against the exact Sellmeier model across the band.
 
-    **Why a re-fit rather than an algebraic split.** Item 8 / `notes.md` #5
-    prescribe "move the bulk of the permittivity into eps_inf". Algebraically
+    **Why a re-fit rather than an algebraic split.** The obvious approach is
+    to "move the bulk of the permittivity into eps_inf". Algebraically
     ``s*wl^2/(wl^2 - li^2) = s + s*li^2/(wl^2 - li^2)``, and that leading `s`
     is exactly what belongs in eps_inf -- but the remainder has an ``li^2``
     numerator, while meep's `LorentzianSusceptibility` is
@@ -228,8 +228,7 @@ def reparam_lorentz(kind: str, wl_band, lam0: Optional[float] = None):
     per-run quantity -- see `MaterialStack.si_medium()`.
 
     Reproduced end to end, with the tables, by
-    `examples/verification/python/verify_item_8_reparameterisation.py`
-    (`validation_markdown/material_model_validation.md` work item 1).
+    `examples/verification/python/verify_item_8_reparameterisation.py`.
     """
     wl = np.atleast_1d(np.asarray(wl_band, dtype=float))
     if lam0 is None:
@@ -381,8 +380,7 @@ class MaterialStack:
         core_kind: key into `_SELLMEIER` for the core material. Default `"si"`
             preserves every existing stack's behaviour exactly.
 
-            Added 2026-08-03 (`validation_markdown/mmi_1x4_sin300_validation.md`
-            step 2) so a non-silicon core — nitride, so far — can reuse this
+            Added 2026-08-03 so a non-silicon core — nitride, so far — can reuse this
             class instead of a parallel one. Threaded through
             `extrusion_rules_at()`, `si_index()`/`si_medium()` (now aliases,
             see below) and `_medium()`'s dispersive dispatch.
@@ -521,8 +519,7 @@ class MaterialStack:
         `epsilon diagonal = (1,1,1)`, no dielectric contrast at the Si/SiO2
         interface, and subpixel smoothing does nothing. Losing it costs 0.0496
         in n_eff at res 40, against the ~0.002 the dispersion was worth: a 25x
-        adverse trade on the same quantity. `notes.md` recommendation #9
-        predicted exactly this before the attempt.
+        adverse trade on the same quantity, predicted before the attempt.
 
         The fix is not to abandon dispersion but to re-parameterise it so ε∞
         carries the bulk of the permittivity and the susceptibilities carry only
@@ -712,8 +709,7 @@ def resolved_material_config(material_stack, wavelengths: np.ndarray,
 SOI_160 = MaterialStack(wg_height=0.16, sz=2.0)   # 160 nm Si (default in this codebase)
 SOI_220 = MaterialStack(wg_height=0.22, sz=2.0)   # 220 nm Si (standard commercial SOI)
 
-# 300 nm Si3N4 on SiO2. Added 2026-08-03 for the 1x4 MMI build
-# (`validation_markdown/mmi_1x4_sin300_validation.md` step 2).
+# 300 nm Si3N4 on SiO2. Added 2026-08-03 for the 1x4 MMI build.
 #
 # sz=5.0 MEASURED 2026-08-03 (step 4, job 11660166): converged (|dn_eff| < 1e-4
 # going sz 4.0->5.0) at the actual design width, 1.1 um -- NOT the placeholder

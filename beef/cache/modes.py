@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """The length-independent factorization of an EME cascade.
 
 meow's S-matrix factors cleanly into two parts (see

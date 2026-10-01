@@ -130,7 +130,7 @@ def test_old_bandwidth_would_be_flagged_as_starved(caplog):
 
 
 def test_solver_exposes_the_knob():
-    """It is a real parameter, not a module constant — notes.md Solver #9's
-    complaint about physics knobs living in defaults nothing can see."""
+    """It is a real parameter, not a module constant: physics knobs must not
+    live in defaults nothing can see."""
     assert FDTDSolver().source_bandwidth_factor == 2.0
     assert FDTDSolver(source_bandwidth_factor=3.0).source_bandwidth_factor == 3.0

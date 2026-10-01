@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """HybridSolver: generic N-section cascade combining any mix of solvers.
 
 Any solver type — FDTDSolver, EMESolver, or a custom class — can occupy any
@@ -135,8 +137,7 @@ class MirrorSpec:
 
     This is what keeps the whole two-excitation response coming from ONE
     FDTD simulation through the supported API, rather than only through a
-    hand-rolled einsum -- see
-    validation_markdown/resolved/multi_excitation_cascade_validation.md step 3.
+    hand-rolled einsum.
 
     Attributes:
         section: index of the section whose matrix is reused. Must be < the
@@ -230,8 +231,7 @@ class HybridSolver:
             lets a device whose two excitations are transverse mirror images
             — the 2x2 MMI's bar and cross paths — get its whole response from
             a single FDTD simulation through solve()/solve_length_sweep()
-            rather than a hand-rolled einsum. See `MirrorSpec` and
-            validation_markdown/resolved/multi_excitation_cascade_validation.md.
+            rather than a hand-rolled einsum. See `MirrorSpec`.
 
             Both forms are re-validated geometrically on every solve() call;
             the MirrorSpec form adds a second check (the partner's two
@@ -366,7 +366,6 @@ class HybridSolver:
             actual comparison passes cleanly on a real meep/meow FDTD<->EME
             interface where it CAN run (a uniform `WaveguideRun` section).
             Found two real bugs this way on the modal multiplexer
-            (validation_markdown/modal_multiplexer_validation.md gaps 1/6)
             when run by hand via
             examples/verification/python/audit_interface_modes.py; this
             wires the same check into HybridSolver itself.
@@ -872,9 +871,8 @@ class HybridSolver:
         # engine's own discretization, so two engines' radiation modes are
         # essentially unrelated and overlap ~0 no matter how well the real
         # basis corresponds. Skipping this filter makes the check
-        # false-alarm on every device in the repo -- validation_markdown/
-        # README.md's "Finding 1" records that EVERY interface basis here
-        # contains at least one unguided mode. Measured on the modal
+        # false-alarm on every device in the repo: EVERY interface basis
+        # here contains at least one unguided mode. Measured on the modal
         # multiplexer: without the filter, worst diagonal overlap 0.0000,
         # driven entirely by bands 13-15 (n_eff 1.434/1.413/1.388 against a
         # 1.4468 cladding index); the 13 guided bands are unaffected.
@@ -969,8 +967,7 @@ class HybridSolver:
         # basis" (truncation -- eta has no partner for it at all) from "the
         # modes are all present but mis-ordered". The diagonal alone cannot
         # draw that distinction, and the two have completely different fixes.
-        # See beef.mode_identity.overlap_diagnostics() and
-        # validation_markdown/fdtd_vs_EME_mode_validation.md layer 1.
+        # See beef.mode_identity.overlap_diagnostics().
         diag = overlap_diagnostics(eta)
         identity = list(range(n_modes))
         checked = diag["correspondence"][:n_modes]
@@ -1061,8 +1058,7 @@ class HybridSolver:
                 f"The per-mode SHAPE of this failure is the diagnostic -- high "
                 f"modes degrading means under-resolution, one row collapsing means "
                 f"a missing mode, all rows high on wrong columns means a pure "
-                f"re-ordering. See validation_markdown/"
-                f"fdtd_vs_EME_mode_validation.md."
+                f"re-ordering."
             )
             if self.mode_correspondence_action == "raise":
                 raise RuntimeError(message)
@@ -1217,7 +1213,7 @@ class HybridSolver:
         broadband FDTD section froze its index at band centre while an EME body
         re-solved per wavelength, so the two disagreed by up to 0.008 in n_Si
         across the O-band — a real, silent, pre-existing mismatch, not one this
-        flag introduced (`validation_markdown/resolved/material_model_validation.md`).
+        flag introduced.
         Since dispersion became the default on the FDTD side (2026-08-01) the
         shipped configuration passes: the FDTD's re-parameterised band fit sits
         within ~1e-3 of exact Sellmeier against this check's 2e-3 tolerance. The

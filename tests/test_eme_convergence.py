@@ -59,7 +59,7 @@ _EXAMPLE_DIR = pathlib.Path(__file__).parent.parent / "examples" / "directional_
 _SCRIPTS = _EXAMPLE_DIR / "python"
 # directional_coupler_hybrid_stub_sweep.py and _modes_sweep.py were guarded
 # here too. They moved to examples/directional_coupler/archive/ on 2026-07-31
-# (retired pending new sweeping functionality -- notes.md Misc #5) and then out
+# (retired pending new sweeping functionality) and then out
 # of this repo entirely on 2026-09-18, to
 # github.com/jakeh13/BEEF_archive. They are frozen there, so this bug cannot be
 # newly introduced into them, and reaching across to a sibling checkout would

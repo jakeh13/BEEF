@@ -19,8 +19,7 @@ read RING_TEST_MODE; that knob belongs to ring_resonator_hybrid.py.
 
 FULL DEVICE in one FDTD run — validation check 4.
 
-`validation_markdown/ring_resonator_validation.md` lists four checks. Three are
-now measured; this is the fourth and the only one that puts the *whole* device
+The ring's validation plan lists four checks. Three are now measured; this is the fourth and the only one that puts the *whole* device
 against a reference rather than testing a piece of the decomposition. It is the
 check the route disagreement actually needs: the monolithic and cascaded
 routes are two ways of ASSEMBLING the same device from parts, and no comparison
@@ -74,13 +73,16 @@ a multi-day allocation or checkpoint/restart. 2-D at res 40 is under 2 hours.
 `RING_FULL_3D=1` builds the 3-D case anyway for whoever has the allocation; it
 is not disabled, just not the default.
 
-**2-D is still a real check.** Both ring scripts take `RING_THREE_D=0`, which
-drops to 2-D and changes nothing else, so this compares at MATCHED physics.
-(`RING_TEST_MODE=1` would NOT do: it moves five knobs at once, including an
-`N_WL_DENSE` already known to be grid-limited, so a disagreement against it
-would be uninterpretable. `RING_THREE_D` was split out of `TEST_MODE` on
-2026-08-03 for exactly this.) It does not validate the 3-D numbers the device
-ships, and this script's verdict says so rather than implying otherwise.
+**2-D is still a real check.** Both ring scripts can drop to 2-D without
+changing anything else, so they compare at MATCHED physics -- but they spell
+it differently: this script takes `RING_FULL_3D=0` (its default, alongside
+`RING_FULL_RES`/`RING_FULL_TMAX`), while `ring_resonator_hybrid.py` takes
+`RING_THREE_D=0`. (`RING_TEST_MODE=1` would NOT do: it moves five knobs at
+once, including an `N_WL_DENSE` already known to be grid-limited, so a
+disagreement against it would be uninterpretable. `RING_THREE_D` was split out
+of `TEST_MODE` on 2026-08-03 for exactly this.) It does not validate the 3-D
+numbers the device ships, and this script's verdict says so rather than
+implying otherwise.
 
 THE OBSERVABLE IS GROUP DELAY, NOT AMPLITUDE DIPS
 --------------------------------------------------

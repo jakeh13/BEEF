@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """Linear-width waveguide taper — a standalone DeviceGeometry, usable on its
 own or as the building block MMI composes for each port."""
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 from .base import Solver
 from .eme import EMESolver
 from .fdtd import FDTDSolver, PortSpec

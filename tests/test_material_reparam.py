@@ -1,6 +1,5 @@
 """Tests for the eps_inf re-parameterisation of the Sellmeier model.
 
-`validation_markdown/material_model_validation.md` step 2 / work items 1-3.
 These are meep-free except where a `Medium` is actually built.
 
 The property under test throughout: turning dispersion on must be an *opt-in*
@@ -45,8 +44,8 @@ class TestSellmeierMatchesMeepLibrary:
     `meep.materials.Si` / `fused_quartz` to 4e-16" — but until 2026-08-03
     **nothing tested it**. The whole point of holding the coefficients locally
     is that meow and meep are driven from one source; if a transcription is off,
-    both engines are consistently wrong together and every check in
-    `validation_markdown/` is measuring the wrong material in agreement.
+    both engines are consistently wrong together and every validation check
+    is measuring the wrong material in agreement.
 
     Added with the `si3n4` entry (nitride step 1) and deliberately written to
     cover all three, not just the new one: the guard the new material needed was
@@ -68,8 +67,8 @@ class TestSellmeierMatchesMeepLibrary:
     <1e-12 here).
 
     **Deliberately not fixed, and the reason is cache economics, not doubt.**
-    8.35e-11 in n is ~7 orders of magnitude below the ~1e-3 effects every check
-    in `validation_markdown/` is built to resolve — it is physically nothing.
+    8.35e-11 in n is ~7 orders of magnitude below the ~1e-3 effects every
+    validation check is built to resolve — it is physically nothing.
     But correcting it MOVES THE CACHE FINGERPRINT: measured, three entries shift
     in their 9th decimal (`resolved_si_index` at 1.70 um, and
     `resolved_si_reparam`'s eps_inf on BOTH the C- and O-band), which would
@@ -220,8 +219,7 @@ class TestNitrideReparam:
 
 
 class TestNonDefaultCoreClad:
-    """`MaterialStack(core_kind=..., clad_kind=...)` — step 2 of
-    `validation_markdown/mmi_1x4_sin300_validation.md`.
+    """`MaterialStack(core_kind=..., clad_kind=...)`.
 
     The class was hardwired Si-core/SiO2-clad in four places before
     2026-08-03: `_SELLMEIER` lookups in `extrusion_rules_at()`, the dispatch in

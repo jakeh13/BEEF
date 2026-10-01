@@ -1,7 +1,7 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """Stitch a hybrid cascade's FDTD section fields and EME body field into one
 continuous device-frame map.
-
-Step 3 of ``validation_markdown/hybrid_field_extraction_validation.md``.
 
 WHAT THIS FIXES ABOUT STEP 1. ``plot_hybrid_body_fields()`` reconstructs the
 body from an APPROXIMATE launch (a Gaussian standing in for whatever the

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """Persistent save-folder cache for FDTDSolver/EMESolver solves.
 
 build_run_config() (config.py) fingerprints a solve_section()/

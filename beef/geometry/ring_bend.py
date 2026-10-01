@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """RingResonatorBendSection: standalone 90-degree bend, x-normal in /
 y-normal out, the loss/phase-reference sub-simulation reused by mirror
 symmetry for both far corners of a racetrack ring.

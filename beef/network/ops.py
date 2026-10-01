@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """connect() / close_loop(): Redheffer star product and self-loop elimination.
 
 Free functions rather than methods — connect() in particular takes two peer
@@ -351,7 +353,6 @@ def close_loop_pair(
     `a_{ring_R}` and `b_{ring_L}` unconnected. Closing the pair in both
     directions eliminates both ports cleanly and leaves a well-posed block --
     for the ring's physical 4-port form, `bus_L`/`bus_R`.
-    See validation_markdown/ring_resonator_validation.md, wiring item 1.
 
     With E the remaining ports, F = loop_ab, R = loop_ba, the two port
     relations substituted into the block give a single 2n-by-2n system per

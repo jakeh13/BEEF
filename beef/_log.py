@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """Rank-aware logging for the `beef` logger.
 
 Every rank of an `srun -n 48` job runs the whole solve redundantly, so every

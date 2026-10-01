@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """SMatrixBlock: dense multi-port S-parameter block for network composition.
 
 Data model for beef.network's Redheffer-star-product composition layer

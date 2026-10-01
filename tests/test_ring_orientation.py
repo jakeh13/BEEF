@@ -1,5 +1,5 @@
 """Real-meep verification for beef.solvers.fdtd.PortSpec's y-normal port
-support (validation_markdown/ring_resonator_validation.md prerequisite (a)).
+support.
 
 Marked @pytest.mark.slow, matching this repo's existing convention for
 real-meep checks (tests/test_engine_agreement.py, test_eme_convergence.py,
@@ -168,7 +168,7 @@ def _bend_setup():
            "real check is examples/verification/python/"
            "verify_ring_bend_reciprocity_3d.py. strict=True so that if this "
            "ever passes, the tolerance or the physics changed and someone "
-           "should look. See validation_markdown/ring_resonator_validation.md.",
+           "should look.",
 )
 def test_bend_y_normal_excite_matches_reciprocity():
     """y-normal EXCITE (+ flux-calibrated normalization) against the x-normal

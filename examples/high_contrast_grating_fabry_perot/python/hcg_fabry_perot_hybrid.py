@@ -1,6 +1,5 @@
 """Tutorial: the HCG Fabry-Perot resonator -- two HCG mirrors terminating a
-cavity, tapped in the middle by a directional coupler --
-validation_markdown/high_contrast_grating_fabry_perot_validation.md, step 4.
+cavity, tapped in the middle by a directional coupler.
 
 This is the first script to actually cascade three INDEPENDENTLY solved
 devices via beef.network.Circuit rather than composing sections within one
@@ -79,9 +78,8 @@ which is the pre-calibration baseline this device's whole rewrite was
 measured against. Note the asymmetry in what that costs. Turning the ARM
 calibration off makes the run CHEAPER (one MPB sweep replaces an FDTD fit).
 Turning the BODY calibration off makes it DEARER: `neff_override=None` gives
-EMESolver nothing to propagate on, so the diagonal fast path documented in
-validation_markdown/calibrate_body_neff_mode_solve_skip_validation.md is
-gone and the real eigenmode solve runs.
+EMESolver nothing to propagate on, so the diagonal fast path is gone and
+the real eigenmode solve runs.
 
 ARM_RESOLUTION defaults to 80, matching the HCG MIRROR's res rather than the
 coupler's res 40 -- the user's explicit call. There is no single device resolution to
@@ -206,7 +204,7 @@ save_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "example_sim_ca
 MASTER = is_master()
 
 # cache_only: demand a cache hit instead of falling back to simulating.
-# The companion notebook sets this (see notes.md Solvers item 6) so a
+# The companion notebook sets this so a
 # documentation re-render can never kick off a multi-hour FDTD run; the
 # script defaults it off so it can populate the cache in the first place.
 CACHE_ONLY = bool(int(os.environ.get("HCGFP_CACHE_ONLY", "0")))
@@ -548,8 +546,7 @@ if CALIBRATE_BODY:
           f"delta_n_eff {body_neff[_i, 0] - body_neff[_i, 1]:.6f}   <- body propagates on this")
 
 # With neff_override the transfer matrix is diagonal and determined entirely
-# by that array, so EMESolver skips the eigenmode solve outright (see
-# validation_markdown/calibrate_body_neff_mode_solve_skip_validation.md).
+# by that array, so EMESolver skips the eigenmode solve outright.
 M_body = dc_eme.solve_section(
     dc, wl, boundaries[1], boundaries[2],
     n_modes_in=N_MODES, n_modes_out=N_MODES,
@@ -743,8 +740,7 @@ if max_R_diff > 1e-8 or max_T_diff > 1e-8:
         f"Circuit assembly and the closed form disagree by more than "
         f"floating-point precision (max|dR|={max_R_diff:.2e}, "
         f"max|dT|={max_T_diff:.2e}) -- a wiring or port-labeling bug, not a "
-        f"physical result. See validation_markdown/"
-        f"high_contrast_grating_fabry_perot_validation.md step 4."
+        f"physical result."
     )
 print("Circuit and closed-form agree to floating-point precision.")
 

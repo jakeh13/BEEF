@@ -47,8 +47,7 @@ so both excitations still come from ONE FDTD simulation, now through the
 supported API, and both declarations are re-validated against the geometry
 on every call. `calibrate_kwargs` carries the interface-monitor pin to the
 β calibration WITHOUT putting it in the body section's own kwargs — see the
-comment there; it is what keeps the EME body's cached result valid. See
-validation_markdown/resolved/multi_excitation_cascade_validation.md step 4.
+comment there; it is what keeps the EME body's cached result valid.
 
 Coupling-length sweep — the classic directional-coupler "beat length"
 characterization — without any additional FDTD or EME simulations:
@@ -313,8 +312,7 @@ body_solver = EMESolver(
 #    Step 5's numeric sweep now runs THROUGH these solvers rather than around
 #    them: the cross path's "one arm's transpose against the other arm's
 #    excitation" is declared as a MirrorSpec instead of hand-rolled. See the
-#    module docstring and
-#    validation_markdown/resolved/multi_excitation_cascade_validation.md step 4.
+#    module docstring.
 # ---------------------------------------------------------------------------
 half_body = dc.coupling_length / 2
 half_total = dc.total_length / 2

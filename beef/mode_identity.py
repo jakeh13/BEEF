@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """Field-overlap mode correspondence: a device- and resolution-agnostic
 alternative to nearest-neighbour n_eff matching.
 
@@ -11,8 +13,7 @@ neighbour in the other engine's n_eff list. That works when the modes are
 well separated, but it is fundamentally a 1-D scalar heuristic: on a wide
 multimode cross-section several higher-order modes can crowd together in
 n_eff closely enough that nearest-neighbour picks the wrong pairing outright
-— observed directly on the modal multiplexer's 16-mode basis
-(``validation_markdown/modal_multiplexer_validation.md`` gap 1), where meep
+— observed directly on the modal multiplexer's 16-mode basis, where meep
 bands 8, 9 and 10 all nearest-matched to the SAME meow band. It is also only
 meaningful at matched resolution (a resolution change shifts n_eff by more
 than the mode spacing, faking a reorder — see ``test_mode_identity.py``'s own

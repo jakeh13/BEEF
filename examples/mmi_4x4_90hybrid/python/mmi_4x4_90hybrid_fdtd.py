@@ -1,8 +1,7 @@
 """Tutorial: 4x4 MMI 90-degree optical hybrid -- full single-domain FDTD
 reference simulation (BEEF method).
 
-validation_markdown/mmi_4x4_90_hybrid_validation.md Step 6b (check 4's own
-full-device reference). Same device as mmi_4x4_90hybrid_hybrid.py/
+The full-device reference. Same device as mmi_4x4_90hybrid_hybrid.py/
 mmi_4x4_90hybrid_eme.py -- see mmi_4x4_90hybrid_hybrid.py's own module
 docstring for the paper reference and design caveats. RE-DERIVED 2026-08-14
 to the current settled geometry (ΔL=-2.75, mm_length=78.9396, was -1.50/
@@ -112,8 +111,7 @@ N_WL = int(os.environ.get("MMI4X4_FDTD_NWL", 3))   # matches the paper's own Eq.
 # ---------------------------------------------------------------------------
 # Geometry -- the OPTIMISED design point, not Step 2's first pass.
 # Result of the (mm_width, y_gap, taper_width, taper_length, mm_length)
-# campaign documented in validation_markdown/mmi_4x4_90_hybrid_validation.md
-# (~45 hybrid-path evaluations, rounds 8-10, 2026-08-28..09-05). Measured at
+# campaign of ~45 hybrid-path evaluations, rounds 8-10, 2026-08-28..09-05). Measured at
 # this point over 1.29-1.33 um: max|dphi| = 3.933 deg (spec <=5, MET),
 # min CMRR = 18.482 dBe (spec >=20, 1.52 short), excess loss 2.706 dB,
 # imbalance 1.972 dB. Superseded first pass, for the record: mm_width=6.0,

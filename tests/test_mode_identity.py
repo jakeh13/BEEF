@@ -37,8 +37,8 @@ TWO THINGS THIS TURNED UP
    same-resolution comparison is valid, and `assert_modes_correspond()` below
    takes both arrays from one resolution for that reason.
 
-STATUS, 2026-07-30 (`validation_markdown/fdtd_vs_EME_mode_validation.md` item
-10) -- **`assert_modes_correspond()` below is re-scoped, not retired.** It
+STATUS, 2026-07-30 -- **`assert_modes_correspond()` below is re-scoped, not
+retired.** It
 predates `beef.mode_identity`'s transverse-E field-overlap machinery
 (`field_overlap_matrix()`/`best_correspondence()`/`overlap_diagnostics()`,
 also reachable at runtime via `HybridSolver(check_mode_correspondence=True)`),

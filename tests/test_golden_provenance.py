@@ -2,7 +2,7 @@
 
 Added 2026-08-01. Until then `tests/golden/*.json` held `wavelengths` and
 `transmission` and nothing else, so **staleness could not be read off the
-file** — only inferred from `validation_markdown/`. Those four fixtures have
+file** — only inferred from the validation record. Those four fixtures have
 been invalidated four separate times (the Sellmeier switch, `N_MODES` 12→8 on
 the 1×2, the λ₀ re-parameterisation, and the dispersion default flipping on)
 and none of those events changed anything in the file.

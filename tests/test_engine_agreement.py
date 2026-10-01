@@ -1,4 +1,4 @@
-"""FDTD/EME engine agreement on a uniform coupled pair (notes.md Solver #9).
+"""FDTD/EME engine agreement on a uniform coupled pair.
 
 THE KNOWN FAILURE
 -----------------

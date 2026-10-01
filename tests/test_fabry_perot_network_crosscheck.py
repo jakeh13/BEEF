@@ -1,7 +1,5 @@
 """beef.network.Circuit against a hand-derived Fabry-Perot-with-DC-tap
-closed form -- validation_markdown/high_contrast_grating_fabry_perot_
-validation.md, step 5 (closed-form sanity check) and step 4 (Circuit
-wiring), verified BEFORE any real device numbers exist.
+closed form, verified BEFORE any real device numbers exist.
 
 Topology (that doc's diagram): a finite Fabry-Perot cavity between two
 1-port mirrors (the HCG), tapped in the middle by a genuine 4-port
@@ -42,10 +40,8 @@ WAVELENGTHS = np.linspace(1.53, 1.57, 5)
 
 
 def _dc_block(t, k, wavelengths=WAVELENGTHS):
-    """Synthetic 4-port directional coupler, ports (L, R, I, O) matching
-    validation_markdown/high_contrast_grating_fabry_perot_validation.md
-    step 4's naming (through_left, through_right, input_reflection,
-    output). Zero self-terms (no back-reflection at any port) and the
+    """Synthetic 4-port directional coupler, ports (L, R, I, O) named
+    through_left, through_right, input_reflection, output. Zero self-terms (no back-reflection at any port) and the
     standard symmetric-coupler cross structure: L<->R and I<->O direct
     ("through", amplitude t), L<->O and R<->I diagonal ("cross",
     amplitude k) -- the same structure directional_coupler_hybrid.py's own

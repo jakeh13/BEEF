@@ -1,6 +1,7 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """Cut-position invariance: the authoritative, device-agnostic hybrid
-correspondence check (``validation_markdown/fdtd_vs_EME_mode_validation.md``
-layer 3, item 7).
+correspondence check.
 
 A correctly-decomposed hybrid chain's S-matrix cannot depend on WHERE along a
 uniform stretch of geometry the FDTD/EME interface is cut — the physical

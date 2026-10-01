@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """SMatrix: unified S-parameter result type.
 
 Replaces the inconsistent dict-keyed results (different tuple arity per sim type)
@@ -136,8 +138,7 @@ class SMatrix:
     # ------------------------------------------------------------------
     # Coherent-receiver metrics.
     #
-    # Added for the 4x4 MMI 90-degree hybrid (validation_markdown/
-    # mmi_4x4_90_hybrid_validation.md, finding A8): every existing helper
+    # Added for the 4x4 MMI 90-degree hybrid: every existing helper
     # above reads only |coeff|^2 (power). imbalance_db/excess_loss_db/
     # cmrr_db are still power-only and generalize cleanly to a single
     # SMatrix (one input excitation, several output ports). Phase error

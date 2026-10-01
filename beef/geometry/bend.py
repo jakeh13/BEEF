@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """BendGeometry: 90° bend GDS for non-collinear FDTD I/O ports.
 
 Migrated from engine/helpers/meep.py::create_bend_gds_for_meep.

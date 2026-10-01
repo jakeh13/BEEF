@@ -353,8 +353,7 @@ class TestMMIBodyWaist:
     time -- "780 passed, 0 failed" -- only established that the feature is
     INERT to the existing suite, which it is by construction: every waist
     parameter defaults to off. It never exercised the profile itself. These
-    tests close that gap and pin the contract for the 2x2 waist work
-    (validation_markdown/resolved/mmi_2x2_waist_body_validation.md step 1).
+    tests close that gap and pin the contract for the 2x2 waist work.
     """
 
     def _mmi_1x2(self, **kw):
@@ -482,8 +481,7 @@ class TestMMIBodyWaist:
 
     def test_the_real_1x4_waist_profile(self):
         """The 1x4 SiN device the waist was added for (production constants,
-        mmi_1x4_waist_profile_sweep.py). Its results are recorded in
-        validation_markdown/mmi_1x4_tapered_body_validation.md."""
+        mmi_1x4_waist_profile_sweep.py)."""
         m = MMI(n_inputs=1, n_outputs=4, mm_length=36.91, mm_width=12.0,
                 waveguide_width=1.1, taper_length=5.0, taper_width=2.2,
                 waveguide_offset=3.1, waveguide_height=0.30,
@@ -500,8 +498,7 @@ class TestMMIBodyWaist:
         assert m.width_at(half) == pytest.approx(12.0)
 
     def test_the_real_2x2_waist_profile_and_its_zero_face_headroom(self):
-        """The 2x2 SOI device (validation_markdown/
-        mmi_2x2_waist_body_validation.md). Constants are the production
+        """The 2x2 SOI device. Constants are the production
         straight 2x2's (mmi_2x2_hybrid.py), which is already fully resolved.
 
         The load-bearing assertion is the SECOND one: this device's two port
@@ -682,8 +679,7 @@ class TestCompoundGeometrySourceApertureClamps:
 
 
 class TestCompoundGeometryStubIsAppliedExactlyOnce:
-    """Regression guards for a real stub double-application bug (notes.md
-    Geometry item 6).
+    """Regression guards for a real stub double-application bug.
 
     `_overlaps()` expands the query window by the stubs itself
     (`lo, hi = x0-stub_left, x1+stub_right`) before clipping each segment's
@@ -762,7 +758,7 @@ class TestCompoundGeometryStubIsAppliedExactlyOnce:
 
 
 class TestCompoundGeometryMMIFrameOffset:
-    """Regression guard for notes.md Geometry item 7: CompoundGeometry assumed
+    """Regression guard: CompoundGeometry assumed
     every segment's local frame is centered on its own bbox
     (`(seg_lo + seg_hi) / 2`), but MMI's frame is centered on the MM body
     instead -- the two only coincide when
@@ -815,7 +811,7 @@ class TestCompoundGeometryMMIFrameOffset:
 
 
 class TestCompoundGeometryPolygonsStub:
-    """Regression guard for notes.md Geometry item 8, part 2: `polygons(
+    """Regression guard: `polygons(
     stub_length>0)` used to raise `NotImplementedError` unconditionally,
     on the premise that an arbitrary segment type has no single well-defined
     port width to extend. That premise was wrong -- `_end_ports()` already

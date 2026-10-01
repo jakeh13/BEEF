@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """Spectral resampling of complex coefficients onto a dense wavelength grid.
 
 Why this is a library function and not three lines inline

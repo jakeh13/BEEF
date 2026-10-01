@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Georgia Tech Research Corporation
 """build_run_config(): fingerprint one solve_section()-style call into a
 JSON-safe dict, for the persistent save-folder cache (see beef/cache/__init__.py).
 """
@@ -22,9 +24,8 @@ _PRECISION = 9
 # already-tracked ingredients) — every existing cache entry's hash changes,
 # so old entries are simply never matched again (not read, not deleted) and
 # get transparently resimulated/re-saved under the new hash on next use. Not
-# tied to beef.__version__ (currently static, see High-level recommendation
-# #3 in notes.md) — a plain hand-bumped counter is the cheaper, more robust
-# half of Solver recommendation #4's two complementary fixes; the other half
+# tied to beef.__version__ (currently static) — a plain hand-bumped counter is
+# the cheaper, more robust half of two complementary fixes; the other half
 # (fingerprinting fully-resolved positions, not just their ingredients) is
 # handled per-method where it applies — see FDTDSolver.solve_section()'s use
 # of SectionFDTDLayout in its call_kwargs.

@@ -1,0 +1,37 @@
+# Third-party notices
+
+BEEF — Bridged Engine for EME and FDTD
+Copyright (c) 2026 Georgia Tech Research Corporation
+
+Developed at the School of Electrical and Computer Engineering, Georgia
+Institute of Technology, by Jacob M. Hiesener and Stephen E. Ralph.
+BEEF itself is released under the MIT License; see `LICENSE`.
+
+## Dependencies
+
+BEEF is an orchestration layer. It calls the packages below at run time but
+does not bundle, embed, or redistribute any of them; each is installed
+separately by the user under its own license.
+
+| Package | License | Project |
+| --- | --- | --- |
+| Meep (FDTD) | GPL-2.0-or-later | https://github.com/NanoComp/meep |
+| MEOW (EME) | Apache-2.0 | https://github.com/gdsfactory/meow |
+| Tidy3D (mode solver) | LGPL-2.1 | https://github.com/flexcompute/tidy3d |
+| NumPy | BSD-3-Clause | https://github.com/numpy/numpy |
+| SciPy | BSD-3-Clause | https://github.com/scipy/scipy |
+| Matplotlib | PSF-based (BSD-compatible) | https://github.com/matplotlib/matplotlib |
+| gdstk (GDSII import) | BSL-1.0 | https://github.com/heitzmann/gdstk |
+
+## Note on Meep and the GPL
+
+Meep is licensed under the GNU General Public License, version 2 or (at the
+user's option) any later version. BEEF imports Meep only when the FDTD or
+hybrid solvers are used: the dependency is optional, the import is deferred to
+call time, and no Meep source or binary is distributed with BEEF. Users obtain
+Meep themselves from conda-forge (`pymeep`).
+
+A user who chooses to redistribute a combined work that includes Meep is
+responsible for satisfying the GPL's terms for that combination. BEEF's own
+MIT license is compatible with the GPL, so such a combination may be
+distributed under the GPL.
