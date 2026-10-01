@@ -19,8 +19,7 @@ read RING_TEST_MODE; that knob belongs to ring_resonator_hybrid.py.
 
 FULL DEVICE in one FDTD run — validation check 4.
 
-`validation_markdown/ring_resonator_validation.md` lists four checks. Three are
-now measured; this is the fourth and the only one that puts the *whole* device
+The ring's validation plan lists four checks. Three are now measured; this is the fourth and the only one that puts the *whole* device
 against a reference rather than testing a piece of the decomposition. It is the
 check the route disagreement actually needs: the monolithic and cascaded
 routes are two ways of ASSEMBLING the same device from parts, and no comparison

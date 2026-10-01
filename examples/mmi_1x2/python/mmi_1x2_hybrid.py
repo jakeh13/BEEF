@@ -55,7 +55,7 @@ output_dir = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", "exampl
 #
 # (Its first attempt, 11589770, failed a phase-fit guard. That was a real
 # library bug -- a 2*pi turn-count error in beta_from_phases, fixed the same
-# day, notes.md Solvers item 20 -- not a limit of this device.)
+# day -- not a limit of this device.)
 #
 # ON by default since 2026-08-17 -- the default flipped, the measurement above
 # did not. Calibration still does NOT close this device's gap (9.11% -> 7.30%);
@@ -226,7 +226,7 @@ _fdtd_common = dict(
 )
 
 N_MODES = 8   # modes carried at the two input/output <-> body interfaces.
-              # Was 12: validation_markdown/mmi_1x2_validation.md gap 3 found
+              # Was 12: a measured mode-correspondence gap found
               # meep and meow return bands 8/9 in non-identity correspondence
               # (meep resolves them degenerate to 2.5e-13, meow 6.19e-3
               # apart) because the top of the 12-mode basis piles up near the

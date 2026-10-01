@@ -1,5 +1,5 @@
 """Tutorial: 1x4 MMI splitter on 300 nm Si3N4 -- whole-device FDTD (BEEF
-method). validation_markdown/mmi_1x4_sin300_validation.md step 8 check 4.
+method).
 
 RE-OPENED 2026-08-19. This script was originally drafted (job history:
 example_output/mmi_1x4/mmi_1x4_fdtd/geometry.png, a structural-validation

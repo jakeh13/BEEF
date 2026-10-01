@@ -150,7 +150,7 @@ class CompoundGeometry(DeviceGeometry):
         segment's output side) — the interior join between segments never
         gets a stub, matching every leaf geometry's own `polygons()`.
 
-        Fixed 2026-08-04 (notes.md Geometry item 8, part 2). Previously
+        Fixed 2026-08-04. Previously
         raised `NotImplementedError` for stub_length > 0, on the belief that
         an arbitrary segment type (e.g. a multi-port `WaveguideRun`) has no
         single well-defined port width to extend. That premise was wrong,

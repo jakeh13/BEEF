@@ -24,9 +24,9 @@ Why this device needs raw meep, not FDTDSolver/HybridSolver:
     rotation helper anywhere in beef/geometry/_compose.py (translation
     only). So this example hand-builds the two FDTD simulations directly
     with meep, the same way examples/directional_coupler/directional_coupler_mode.py
-    hand-builds a meow cross-section without going through EMESolver. See
-    notes.md's Geometry/Solver recommendations for what a first-class
-    RingResonator DeviceGeometry + y-normal FDTDSolver support would need.
+    hand-builds a meow cross-section without going through EMESolver. A
+    first-class RingResonator DeviceGeometry plus y-normal FDTDSolver support
+    would remove the need for both.
 
 Why this is a feedback-loop sum, not a HybridSolver matrix chain:
     Every other *_hybrid.py example threads light through a straight
@@ -61,8 +61,8 @@ Wavelength strategy:
     interpolation (linear real/imag interpolation would badly distort the
     fast-winding propagation phase), neff via a degree-2 polynomial fit
     (piecewise-linear neff would put an artificial kink in dphi/dlambda at
-    every solve node, corrupting resonance positions). See notes.md's new
-    Solver recommendation for making this a proper library-level API.
+    every solve node, corrupting resonance positions). Worth promoting to a
+    proper library-level API.
 
 Assembly (closed-form all-pass resonator, NOT a HybridSolver cascade):
     phi = 2*pi*neff(lambda)*L_outer/lambda        # L_outer = 2 side straights (short

@@ -246,8 +246,8 @@ class TestTheSpacingPrecondition:
     def test_the_actual_default_is_span_independent(self):
         """Spacing is capped by β, not by how big the body happens to be, and
         all three lengths must still fit inside the body once each length's
-        own dpml-padded solve_section() window is accounted for (notes.md
-        Solvers item 15 — see TestSectionModeBetaDpmlClearance below)."""
+        own dpml-padded solve_section() window is accounted for (see
+        TestSectionModeBetaDpmlClearance below)."""
         cap = self._max_safe_spacing(BETA_FDTD[0]) / 2.0
         dpml = 0.5
         for span in (4.0, 30.0, 300.0):
@@ -267,7 +267,7 @@ class TestTheSpacingPrecondition:
 
 
 class TestSectionModeBetaDpmlClearance:
-    """Regression guard for notes.md Solvers item 15: the default fit-length
+    """Regression guard: the default fit-length
     spacing carried no ``-2*dpml`` clearance, unlike ``seed_span`` two lines
     above it in ``section_mode_beta()`` — so for a short uniform body the
     longest fit length's own dpml-padded ``solve_section()`` window overran

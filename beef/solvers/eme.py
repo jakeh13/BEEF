@@ -298,8 +298,7 @@ class EMESolver:
         hybrid A/B can hold the material model fixed and frozen on both sides,
         separating "dispersion changed the answer" from "the two engines were
         modelling different materials all along" — which today they are, by up
-        to 0.008 in n_Si across the O-band
-        (`validation_markdown/material_model_validation.md`).
+        to 0.008 in n_Si across the O-band.
 
         **The two engines' defaults now agree, as of 2026-08-01.** They did
         not before: the stack defaulted to False, so `FDTDSolver`'s `None`
@@ -455,16 +454,14 @@ class EMESolver:
         16 modes at res 40, meow's own modes 10 and 11 came back as the
         identical eigenvector (self-overlap 1.0000 exactly, row completeness
         2.0003 — that one mode counted twice). It is the same failure class
-        `FDTDSolver._iter_distinct_bands()` was built for
-        (`validation_markdown/modal_multiplexer_validation.md` gap 6), on the
-        other engine, where nothing was checking for it. The cost is a
+        `FDTDSolver._iter_distinct_bands()` was built for, on the other
+        engine, where nothing was checking for it. The cost is a
         rank-deficient basis: one of the `num_modes` channels is a copy of
         another, and whatever mode the duplicate displaced is missing from the
         basis entirely — strictly worse than a re-ordering, and silent.
 
         Found by `beef.mode_identity.self_overlap_diagnostics()`, the
-        same-engine control this now reuses to detect it. See
-        `validation_markdown/fdtd_vs_EME_mode_validation.md` item 0.
+        same-engine control this now reuses to detect it.
         """
         if not self.guard_duplicate_modes:
             return self._solve_modes_raw(cross_section, num_modes)
@@ -529,9 +526,7 @@ class EMESolver:
                         "EMESolver.compute_modes: meow mode %d duplicates already-"
                         "accepted mode %d (self-overlap %.6f > %.2f) -- skipping it "
                         "and reaching further up the spectrum. A rank-deficient "
-                        "basis would silently drop one channel of the %d requested. "
-                        "See validation_markdown/fdtd_vs_EME_mode_validation.md "
-                        "item 0.",
+                        "basis would silently drop one channel of the %d requested.",
                         j, dup_of, eta[dup_of, j], _DUP_MODE_OVERLAP_THRESHOLD,
                         num_modes,
                     )
@@ -553,8 +548,7 @@ class EMESolver:
                 f"EMESolver.compute_modes: could not find {num_modes} distinct "
                 f"modes within {attempts[-1]} solved modes at "
                 f"this cross-section -- meow returned more duplicates than this "
-                f"guard tolerates (kept {len(kept)}). See validation_markdown/"
-                f"fdtd_vs_EME_mode_validation.md item 0."
+                f"guard tolerates (kept {len(kept)})."
             )
         return [raw[j] for j in kept]
 
@@ -789,9 +783,7 @@ class EMESolver:
         # neff right after the solve anyway (calibrate_body_neff), that
         # diagonal is determined entirely by neff_override, never by the
         # field profile -- so the eigenmode solve and mw.compute_s_matrix()
-        # are skipped outright rather than run and discarded. See
-        # validation_markdown/calibrate_body_neff_mode_solve_skip_validation.md
-        # step 2 (gated on that doc's step 1/5 before this is the default).
+        # are skipped outright rather than run and discarded.
         if neff_override is not None:
             # The diagonal form above is a CONSEQUENCE of the single-cell
             # build, not a property of neff_override -- so the gate has to be
@@ -1128,10 +1120,9 @@ class EMESolver:
         # _propagate_diagonal() tier 3 already trusts (validated against a
         # real solve every time it populates that cache, see
         # _DIAGONAL_RECONSTRUCTION_TOL above) instead of solving for modes
-        # whose neff gets overwritten immediately after anyway. See
-        # validation_markdown/resolved/
-        # calibrate_body_neff_mode_solve_skip_validation.md — same argument
-        # as solve_section()'s fast path, extended here to the length sweep.
+        # whose neff gets overwritten immediately after anyway — same
+        # argument as solve_section()'s fast path, extended here to the
+        # length sweep.
         if neff_override is not None:
             neff_all = np.asarray(neff_override, dtype=complex)
             T = _propagate_diagonal(neff_all, wavelengths, lengths, n_modes_out, n_modes_in)

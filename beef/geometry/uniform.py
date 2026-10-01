@@ -8,8 +8,7 @@ ring_resonator_hybrid_cascaded.py). Neither goes through a DeviceGeometry, and
 `RingResonatorCouplerSection.to_gds_eme()` deliberately raises: it covers the
 mixed-orientation coupler section, never a cross-section.
 
-The consequence, recorded as validation_markdown/ring_resonator_validation.md
-checks 1 and 2: there is **no geometry object both engines can consume**, so
+The consequence: there is **no geometry object both engines can consume**, so
 "engine agreement" and "mode identity" are not merely unrun, they are
 unrunnable — you cannot compare an EMESolver against an FDTDSolver on a
 geometry only one of them can see. This class is that shared object for the

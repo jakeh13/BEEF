@@ -2,8 +2,8 @@
 FDTDSolver()/EMESolver() are constructed (cheap, pure Python) but
 solve_section()/solve() are never called — those do `import meep`/`import
 meow` unconditionally, even down the cache_only=True short-circuit path, so
-calling them here would break CI (pip-installed, no meep — see notes.md's
-Testing section). The FDTDSolver.solve_section()-shaped resolved_layout
+calling them here would break CI (pip-installed, no meep). The
+FDTDSolver.solve_section()-shaped resolved_layout
 behavior is instead exercised via section_fdtd_layout() + build_run_config()
 directly — the same two functions solve_section() itself calls, just without
 going through the method that imports meep."""
@@ -112,7 +112,7 @@ class TestRealSolverAllowlists:
     ])
     def test_fdtd_is_sensitive_to_subpixel_smoothing(self, method, kwargs):
         """These reach mp.Simulation and move n_eff at the second decimal
-        (notes.md Solver #9). They were on meep's implicit defaults and
+        They were on meep's implicit defaults and
         invisible to the hash, so two solvers that would simulate differently
         shared one cache entry."""
         a = FDTDSolver()
@@ -499,8 +499,8 @@ class TestOneDispersionModelForBothEngines:
 
         So `si_medium()` returns a plain index Medium, and this pins that. If
         someone re-enables dispersion, they must re-parameterise so eps_inf
-        carries the bulk of the permittivity, and re-run the resolution sweeps
-        -- notes.md recommendation #9."""
+        carries the bulk of the permittivity, and re-run the resolution
+        sweeps."""
         pytest.importorskip("meep")  # this test builds a real mp.Medium; fast CI has no meep
         from beef.materials import SOI_220
 
@@ -643,8 +643,7 @@ class TestDefaultOmittedAttrs:
 class TestRegionCellLengthsFingerprint:
     """`EMESolver(region_cell_lengths=...)` — added 2026-08-29 so a region can
     be subdivided at explicit internal boundaries an even division cannot
-    reach (a waisted MMI body's five segments). See
-    validation_markdown/resolved/mmi_2x2_waist_body_validation.md step 3.
+    reach (a waisted MMI body's five segments).
 
     The load-bearing test is the FIRST one: this attribute must be invisible
     at its default, or adding it would restale every EME cache entry and

@@ -1,7 +1,5 @@
 """Tutorial: 1x4 MMI splitter on 300 nm Si3N4 -- EME simulation (BEEF method).
 
-validation_markdown/mmi_1x4_sin300_validation.md step 6b.
-
 Geometry: single-mode-ish 1.1 um input waveguide -> MMI body -> four 1.1 um
 output waveguides. 300 nm Si3N4 core on SiO2 (SIN_300).
 
@@ -252,7 +250,7 @@ print(f"Performance plot saved -> {output_dir}/performance.png")
 # ---------------------------------------------------------------------------
 # 7. Multimode-length sweep plot -- band-mean transmission per output +
 #    max-min spread across the 4 outputs vs mm_length. Same metric/format as
-#    validation_markdown/mmi_1x4_sin300_validation.md step 5's own sweep
+#    the body-length sweep
 #    (mmi_1x4_sin_body_length_sweep.py) and mmi_1x4_hybrid.py's own matching
 #    sweep plot, folded into this script rather than living only in
 #    verification/, since it comes free from step 4's own solve_length_sweep()

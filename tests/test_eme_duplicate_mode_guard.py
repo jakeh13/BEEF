@@ -1,5 +1,5 @@
 """Fast, meow-free unit tests for EMESolver.compute_modes()'s duplicate-mode
-guard (validation_markdown/fdtd_vs_EME_mode_validation.md item 0).
+guard.
 
 meow is never imported: `_solve_modes_raw()` is monkeypatched to return
 synthetic mode objects, so this exercises the guard's own detection/skip logic

@@ -49,8 +49,7 @@ carrying the parity vector:
 
 so the whole two-excitation response still comes from ONE FDTD simulation,
 now through the supported API. Both declarations are re-validated
-geometrically on every call, which the hand-rolled einsum never was. See
-validation_markdown/resolved/multi_excitation_cascade_validation.md steps 2-4.
+geometrically on every call, which the hand-rolled einsum never was.
 
 Run:
     python /path/to/examples/mmi_2x2/python/mmi_2x2_hybrid.py
@@ -476,8 +475,7 @@ print(f"Length-sweep plot saved → {output_dir}/mm_length_sweep.png")
 #
 # plot_hybrid_body_fields() reconstructs the EME BODY section's field in the
 # DEVICE frame from one mode solve -- no FDTD field capture, no cascade cache,
-# and it does NOT re-enter the cascade above. See
-# validation_markdown/hybrid_field_extraction_validation.md.
+# and it does NOT re-enter the cascade above.
 #
 # WHY IT APPLIES HERE. The reconstruction assumes a UNIFORM body
 # cross-section, which makes the calibrated body transfer matrix a pure

@@ -1,5 +1,5 @@
 """Regression tests for solve_reflection()'s pre-flight layout guard
-(validation_markdown/high_contrast_grating_validation.md step 10 item 6).
+guard.
 
 Locks down the two real, silent bugs this method has already shipped with
 once each: source_margin/monitor_margin are measured from the PML inner

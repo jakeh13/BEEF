@@ -1,8 +1,7 @@
 """Tutorial: 4x4 MMI 90-degree optical hybrid -- FDTD/EME hybrid simulation
 (BEEF method).
 
-validation_markdown/mmi_4x4_90_hybrid_validation.md Step 6c. Reproduces the
-device topology of Yasui, Sugisaka & Hirayama, "Structural Optimization of
+Reproduces the device topology of Yasui, Sugisaka & Hirayama, "Structural Optimization of
 an Optical 90 Degree Hybrid Based on a Weakly-guided 4x4 Multimode
 Interference Coupler...", ACES Journal 36(5), 2021 -- on 220 nm SOI at
 O-band instead of the paper's own weakly-guided silica/C-band, so the
@@ -151,8 +150,7 @@ OUTPUT_METHOD = "fdtd"   # never actually run -- mirror reuse
 # ---------------------------------------------------------------------------
 # Geometry -- the OPTIMISED design point, not Step 2's first pass.
 # Result of the (mm_width, y_gap, taper_width, taper_length, mm_length)
-# campaign documented in validation_markdown/mmi_4x4_90_hybrid_validation.md
-# (~45 hybrid-path evaluations, rounds 8-10, 2026-08-28..09-05). Measured at
+# campaign of ~45 hybrid-path evaluations, rounds 8-10, 2026-08-28..09-05). Measured at
 # this point over 1.29-1.33 um: max|dphi| = 3.933 deg (spec <=5, MET),
 # min CMRR = 18.482 dBe (spec >=20, 1.52 short), excess loss 2.706 dB,
 # imbalance 1.972 dB. Superseded first pass, for the record: mm_width=6.0,
@@ -224,7 +222,6 @@ _fdtd_common = dict(
     three_d=True,
     material_stack=SOI_220,
     decay_tol=1e-4,   # was 1e-11 -- MEASURED UNREACHABLE (see
-               # validation_markdown/mmi_1x2_decay_tol_measurement.md:
                # the residual floors then diverges). 1e-4 with energy
                # decay was measured sufficient for this device at
                # 0.015 dB, and is what every campaign point used.

@@ -95,8 +95,7 @@ class GdsGeometry(DeviceGeometry):
     to consult — which is both the point and the source of this class's two
     stated limitations: the cut-validity check is sampled rather than exact
     (see `_check_cut`), and branch selection is positional (see
-    `_branch_at`). See
-    validation_markdown/resolved/gds_geometry_hybrid_cascade_validation.md.
+    `_branch_at`).
     """
 
     def __init__(
@@ -243,8 +242,7 @@ class GdsGeometry(DeviceGeometry):
         straight stub) — the far/right edge is an arbitrary cut through a
         freeform region with no well-defined width_at() there, so extending
         it the same way would draw a waveguide where none physically exists.
-        See A3/step 8 in validation_markdown/high_contrast_grating_validation.md
-        for why this matters: without this extension, the input waveguide
+        Why this matters: without this extension, the input waveguide
         ends in mid-air short of (or right at) the PML, and that clean-cut
         Si/oxide facet reflects part of the guided mode right there —
         contaminating exactly the reflection measurement

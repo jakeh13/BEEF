@@ -1,8 +1,6 @@
 """Tutorial: 1x4 MMI splitter on 300 nm Si3N4 -- FDTD/EME hybrid simulation
 (BEEF method).
 
-validation_markdown/mmi_1x4_sin300_validation.md step 6d.
-
 HybridSolver chains three sections -- [input] -> [body] -> [output] -- each
 independently FDTD or EME (mmi_1x2_hybrid.py's/mmi_2x2_hybrid.py's pattern:
 INPUT_METHOD = OUTPUT_METHOD = "fdtd", BODY_METHOD = "eme"). The MMI body is
@@ -553,7 +551,7 @@ print(f"Results plot saved -> {output_dir}/hybrid_results.png")
 # ---------------------------------------------------------------------------
 # 7. Multimode-length sweep plot -- band-mean transmission per output +
 #    max-min spread across the 4 outputs vs mm_length, same metric/format as
-#    validation_markdown/mmi_1x4_sin300_validation.md step 5's own sweep
+#    the body-length sweep
 #    (mmi_1x4_sin_body_length_sweep.py) and this session's
 #    mmi_1x4_hybrid_body_length_sweep.py verification script, now folded
 #    into the real device script rather than living only in verification/.

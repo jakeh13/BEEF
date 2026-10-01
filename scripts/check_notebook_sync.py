@@ -1,4 +1,4 @@
-"""Audit each example's .ipynb against its .py — notes.md Solvers item 6.
+"""Audit each example's .ipynb against its .py.
 
 Notebooks here are hand-mirrored copies of the scripts, differing only in
 `CACHE_ONLY = True`, ASCII-ised units, and `plt.show()` in place of `savefig`.

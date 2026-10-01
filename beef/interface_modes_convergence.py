@@ -1,5 +1,4 @@
-"""`interface_modes` convergence: the device-agnostic completeness check
-(``validation_markdown/fdtd_vs_EME_mode_validation.md`` layer 2, item 6).
+"""`interface_modes` convergence: the device-agnostic completeness check.
 
 `HybridSolver.solve()` contracts index *i* of one section's output basis
 against index *i* of the next section's input basis, truncated to

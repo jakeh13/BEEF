@@ -8,7 +8,7 @@ hours for mmi_2x2_fdtd.py and ~27 core-hours for mmi_2x2_hybrid_alt.py.
 Geometry: the validated design point — a 2.8 µm body that narrows to a
 2.24 µm interior waist and ramps back out, reaching the same 50/50 split with
 90 degree quadrature in 31.00 µm total against the straight control's 37.00 µm
-(16.2 % shorter). See validation_markdown/resolved/mmi_2x2_waist_body_validation.md.
+(16.2 % shorter).
 
 NINE REGIONS, NOT THE STRAIGHT DEVICE'S FIVE. `examples/mmi_2x2`'s EME script
 uses wg | taper | body | taper | wg, because there the body is one uniform

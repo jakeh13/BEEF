@@ -1,6 +1,5 @@
-"""Step 1 of validation_markdown/resolved/multi_excitation_cascade_validation.md —
-the equivalence harness that pins the 2x2's hand-rolled cascade before
-steps 2-4 replace it.
+"""The equivalence harness that pins the 2x2's hand-rolled cascade before
+its replacement.
 
 No meep/meow import anywhere: the composition algebra is pure numpy, which
 is the whole point of doing this before touching the examples.

@@ -12,8 +12,7 @@ Core public API:
         GdsGeometry, load_gds_polygons — import polygons from an on-disk .gds file
         arc_polygon                — quarter-annulus wedge, for constant-radius bends
         RingResonatorCouplerSection, RingResonatorBendSection — ring resonator geometry
-                                      primitives (not yet wired to HybridSolver — see
-                                      validation_markdown/ring_resonator_validation.md)
+                                      primitives (not yet wired to HybridSolver)
 
     Materials:
         MaterialStack              — core/clad layer definitions (any pair in
@@ -21,8 +20,7 @@ Core public API:
                                       by default via core_kind/clad_kind)
         SOI_160, SOI_220           — pre-built Si/SiO2 stacks for common platforms
         SIN_300                    — pre-built 300 nm Si3N4/SiO2 stack (sz=5.0 measured
-                                      converged, job 11660166; see
-                                      validation_markdown/mmi_1x4_sin300_validation.md)
+                                      converged, job 11660166)
 
     Solvers:
         EMESolver                  — meow-based eigenmode expansion

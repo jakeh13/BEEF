@@ -1,7 +1,5 @@
 """The 4x4 90-degree hybrid's design-point constants must not drift apart.
 
-validation_markdown/mmi_4x4_90_hybrid_validation.md, 2026-08-22.
-
 WHY THIS EXISTS. `DELTA_L`, `N_MODES_BODY` and `N_MODES_TAPER` are copied by
 hand into a dozen scripts and notebooks for this device. On 2026-08-09 the
 body-mode redo (N_MODES_BODY 8->16, which moved the optimum to DELTA_L=-2.75)

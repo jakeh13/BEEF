@@ -27,8 +27,8 @@ _KPOINT_SEED_NEFF = 2.5
 
 # --- _iter_distinct_bands()'s duplicate-eigenmode guard ---------------------
 #
-# See validation_markdown/modal_multiplexer_validation.md gap 6: sim.get_eigenmode()
-# can return the SAME eigenvector for two different requested band_num values.
+# sim.get_eigenmode() can return the SAME eigenvector for two different
+# requested band_num values.
 # Measured directly on the reproduction case: true duplicates overlap at
 # 0.9999999999+; every genuinely distinct band pair on the same cross-section
 # overlapped <= 0.1257. 0.9 sits with wide margin on both sides of that gap.
@@ -37,9 +37,8 @@ _DUP_BAND_OVERLAP_THRESHOLD = 0.9
 # any caller-requested field grid, since it only needs to distinguish "same
 # eigenvector" from "different eigenvector". FIXED-COUNT until 2026-09-11
 # (16x8, chosen once, never revisited): confirmed a FALSE-POSITIVE generator
-# on a wide multimode cross-section -- validation_markdown/
-# mmi_4x4_90_hybrid_validation.md Step 8 Check 2 (mm_width=8.5 um, 16 modes
-# requested). 16 samples across a real caller's full monitor width (e.g.
+# on a wide multimode cross-section (mm_width=8.5 um, 16 modes requested).
+# 16 samples across a real caller's full monitor width (e.g.
 # 11.5 um there) is ~0.72 um spacing, well past Nyquist for that
 # cross-section's higher-order mode lobes -- confirmed directly: a same-run
 # comparison against a fine 231x41 (0.05 um-spaced) grid on the IDENTICAL
@@ -64,8 +63,7 @@ _DUP_BAND_MAX_EXTRA = 8
 
 # --- solve_section() excite-normalization mismatch guard -------------------
 #
-# See validation_markdown/modal_multiplexer_validation.md gap 7: the connector
-# section's excited bands 1-2 (Δn_eff=0.0148, near-degenerate) produced
+# The connector section's excited bands 1-2 (Δn_eff=0.0148, near-degenerate) produced
 # transfer-matrix columns 10-20x too large -- get_eigenmode_coefficients()'s
 # alpha at the norm-flux plane silently undercounted launched power for those
 # two bands specifically, while mp.get_fluxes() (a direct field integral, not
@@ -567,8 +565,7 @@ def _point_in_polygon(x: float, y: float, poly) -> bool:
 def check_reflection_layout(core_polygons, src_x: float, mon_x: float, y0: float,
                             extend_input_waveguide: bool, domain_x_edge: float) -> None:
     """Guard against the two real, silent bugs `solve_reflection()` has
-    already shipped with once each (validation_markdown/
-    high_contrast_grating_validation.md step 10 item 6): `source_margin`/
+    already shipped with once each: `source_margin`/
     `monitor_margin` are measured from the PML inner edge, not from the
     geometry's own edge, so a source/monitor position that looks reasonable
     in isolation can still land in bare oxide once `edge_clearance` (or any
@@ -1022,7 +1019,7 @@ class FDTDSolver:
             smoothing controls, passed straight through to mp.Simulation. The
             defaults are meep's own, so behaviour is unchanged; they are
             constructor parameters rather than implicit defaults because they
-            move n_eff at the second decimal (notes.md Solver #9) and anything
+            move n_eff at the second decimal, and anything
             that moves the physical result has to be visible to the cache
             fingerprint. Turning eps_averaging off is the usual first check
             when a result looks resolution-sensitive.
@@ -2141,8 +2138,7 @@ class FDTDSolver:
         already-yielded one.
 
         Guards a real meep/MPB failure mode, found auditing the modal
-        multiplexer's 16-mode interface basis (see
-        validation_markdown/modal_multiplexer_validation.md gap 6):
+        multiplexer's 16-mode interface basis:
         ``sim.get_eigenmode()`` can return the SAME eigenvector for two
         different requested `band_num` values when they sit close together
         in frequency — confirmed directly (self-overlap 0.9999999999 between
@@ -2167,8 +2163,7 @@ class FDTDSolver:
         **2026-09-11 — grid now targets a fixed SPACING
         (`_DUP_BAND_DIAG_SPACING`), not a fixed COUNT.** The original fixed
         16×8 count aliased on a wide multimode cross-section (mm_width=
-        8.5 µm, 16 modes requested — validation_markdown/
-        mmi_4x4_90_hybrid_validation.md Step 8 Check 2): 16 samples across
+        8.5 µm, 16 modes requested): 16 samples across
         an 11.5 µm real monitor width is ~0.72 µm spacing, well past
         Nyquist for that device's higher-order mode lobes, and a same-run
         comparison against a fine 0.05 µm grid on the SAME live eigenmodes
@@ -2248,8 +2243,7 @@ class FDTDSolver:
                     f"FDTDSolver: could not find {n_modes} distinct eigenmodes "
                     f"within {max_band_num} band_num attempts at this cross-"
                     f"section -- meep/MPB returned a duplicate more times than "
-                    f"this guard tolerates. See validation_markdown/"
-                    f"modal_multiplexer_validation.md gap 6."
+                    f"this guard tolerates."
                 )
             seed_neff = last_raw_neff if last_raw_neff is not None else _KPOINT_SEED_NEFF
             em = sim.get_eigenmode(
@@ -2283,8 +2277,7 @@ class FDTDSolver:
                     logger.warning(
                         "FDTDSolver: meep band_num=%d duplicates an already-"
                         "accepted eigenmode (overlap %.6f > %.2f threshold) -- "
-                        "skipping and trying the next band_num. See "
-                        "validation_markdown/modal_multiplexer_validation.md gap 6.",
+                        "skipping and trying the next band_num.",
                         band_num, worst, _DUP_BAND_OVERLAP_THRESHOLD,
                     )
                     continue
@@ -2316,8 +2309,7 @@ class FDTDSolver:
         modes can sit close enough together that nearest-n_eff matching
         against meow picks the wrong pairing outright — observed directly on
         the modal multiplexer's 16-mode basis, where bands 8, 9 and 10 all
-        nearest-matched to the same meow band (see
-        validation_markdown/modal_multiplexer_validation.md gap 1). Comparing
+        nearest-matched to the same meow band. Comparing
         field *shape* instead of the propagation constant resolves that
         ambiguity and, unlike n_eff matching, does not require the two
         engines/resolutions to already agree numerically to work — see
@@ -2370,8 +2362,8 @@ class FDTDSolver:
         f = 1.0 / wl_center
         n_clad = self.material_stack.sio2_index(wl_center)
         # _iter_distinct_bands() guards against get_eigenmode() returning the
-        # same eigenvector for two different band numbers (see its docstring
-        # / validation_markdown/modal_multiplexer_validation.md gap 6).
+        # same eigenvector for two different band numbers (see its
+        # docstring).
         for band, em in enumerate(
             self._iter_distinct_bands(sim, where, f, mea_c, mea_w, n_modes, n_clad), start=1
         ):
@@ -2484,9 +2476,8 @@ class FDTDSolver:
                 β from ONE shared-domain `solve_section_multi_length()` call
                 instead of `len(lengths)` independent `solve_section()` runs —
                 validated equivalent to float-noise precision (β agrees to
-                ~0.0003%, both guards' margins unaffected), see
-                `validation_markdown/section_mode_beta_multi_monitor_
-                validation.md` steps 4-6. Both post-fit guards below (and
+                ~0.0003%, both guards' margins unaffected). Both post-fit
+                guards below (and
                 Guard 2, above) apply identically either way, since they read
                 `phases` after it is filled, not how it was filled.
 

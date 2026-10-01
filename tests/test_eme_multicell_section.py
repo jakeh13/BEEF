@@ -1,5 +1,5 @@
 """Real-meow verification for EMESolver.solve_section()'s multi-cell body
-support (validation_markdown/mmi_1x4_tapered_body_validation.md step 3).
+support.
 
 The two tests below raise before any geometry/mesh work or eigensolve --
 meow is imported by solve_section() itself (unconditionally, at its top) but

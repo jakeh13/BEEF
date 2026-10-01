@@ -21,8 +21,7 @@ self-imaging length. The device below reaches the same 50/50 split with 90°
 quadrature in 31.00 µm total against the straight control's 37.00 µm —
 16.2 % shorter.
 
-VALIDATION STATUS (validation_markdown/resolved/mmi_2x2_waist_body_validation.md).
-The device is VALIDATED as of 2026-09-14, and this script IS the check that
+VALIDATION STATUS. The device is VALIDATED as of 2026-09-14, and this script IS the check that
 validated it: single-domain, whole-device FDTD is the only measurement that
 depends on neither the EME cascade nor any calibration. At the design point it
 measures IL 0.2010 dB, imbalance 0.0124, phase mean-dev 0.267° and MAX-dev
@@ -241,8 +240,8 @@ T_total = T_bar + T_cross
 # scored automatically rather than eyeballed. They are frozen: a threshold
 # chosen after seeing the results is not a criterion.
 #
-# The control is the STRAIGHT 2x2 — all four checks passed, device resolved
-# (validation_markdown/resolved/mmi_2x2_validation.md) — so any deviation here
+# The control is the STRAIGHT 2x2 — all four checks passed, device
+# resolved — so any deviation here
 # is attributable to the waist rather than to an unvalidated baseline. Two of
 # the three thresholds are defined RELATIVE to that control's own measured
 # performance (loss: control + 0.1 dB; imbalance: 2x control), which is why

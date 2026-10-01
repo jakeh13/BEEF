@@ -9,8 +9,7 @@ Geometry:
       concentric high-index-contrast Si arcs in oxide.
     - SOI platform: 160 nm Si on SiO2 (SOI_160).
     - This is a ONE-PORT device: there is no second waveguide on the far
-      side to measure transmission into (confirmed by inspecting the GDS —
-      see validation_markdown/high_contrast_grating_validation.md step 1).
+      side to measure transmission into (confirmed by inspecting the GDS).
       An HCG built this way works as a broadband mirror: light sent in from
       the access waveguide is meant to come back out the SAME port.
 
@@ -81,8 +80,8 @@ CORE_LAYERS = [(2, 0)]
 # Global simulation parameters
 # ---------------------------------------------------------------------------
 RESOLUTION = float(os.environ.get("HCG_FDTD_RES", 15.0 if TEST_MODE else 60.0))  # pts/um; MEASURED
-    # (validation_markdown/high_contrast_grating_validation.md step 8, RE-MEASURED 2026-08-04 after the
-    # waveguide-extension-through-PML fix -- see extend_input_waveguide below): single-wavelength
+    # (RE-MEASURED 2026-08-04 after the waveguide-extension-through-PML fix
+    # -- see extend_input_waveguide below): single-wavelength
     # (1.569 um, the paper's own reported peak) resolution sweep 10-60 gives R = 0.4468/0.7030/0.8164/
     # 0.8757/0.9081/0.9323/0.9450/0.9592/0.9697 -- systematically LOWER than the pre-fix sweep at every
     # point (that sweep had a spurious facet-reflection artifact inflating R; removing it also means the
