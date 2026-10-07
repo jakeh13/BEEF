@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Georgia Tech Research Corporation
 """Plots for `FDTDSolver.section_mode_beta_details()`'s β calibration.
 

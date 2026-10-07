@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Georgia Tech Research Corporation
 """Solver protocol: common interface for EME, FDTD, and Hybrid solvers."""
 from __future__ import annotations

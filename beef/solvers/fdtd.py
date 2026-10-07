@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Georgia Tech Research Corporation
 """FDTDSolver: meep-based FDTD solver for MMI and related photonic devices."""
 from __future__ import annotations

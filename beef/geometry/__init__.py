@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Georgia Tech Research Corporation
 from .base import DeviceGeometry
 from .mmi import MMI, MMIPort

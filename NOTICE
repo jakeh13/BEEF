@@ -5,7 +5,7 @@ Copyright (c) 2026 Georgia Tech Research Corporation
 
 Developed at the School of Electrical and Computer Engineering, Georgia
 Institute of Technology, by Jacob M. Hiesener and Stephen E. Ralph.
-BEEF itself is released under the MIT License; see `LICENSE`.
+BEEF itself is released under the Apache License, Version 2.0; see `LICENSE`.
 
 ## Dependencies
 
@@ -32,6 +32,6 @@ call time, and no Meep source or binary is distributed with BEEF. Users obtain
 Meep themselves from conda-forge (`pymeep`).
 
 A user who chooses to redistribute a combined work that includes Meep is
-responsible for satisfying the GPL's terms for that combination. BEEF's own
-MIT license is compatible with the GPL, so such a combination may be
-distributed under the GPL.
+responsible for satisfying the GPL's terms for that combination. Apache-2.0 is
+incompatible with GPL-2.0-only, but Meep is GPL-2.0-**or-later**: a combiner
+takes the "or later" option to GPLv3, with which Apache-2.0 is compatible.

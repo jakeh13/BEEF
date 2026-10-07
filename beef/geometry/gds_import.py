@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Georgia Tech Research Corporation
 """GDS file import: load raw polygons from an on-disk .gds layout and wrap
 them as a DeviceGeometry for EME.

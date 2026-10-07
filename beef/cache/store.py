@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Georgia Tech Research Corporation
 """On-disk lookup/save for the persistent solve_section() cache (see
 beef/cache/__init__.py). Each matching config gets its own subfolder, named

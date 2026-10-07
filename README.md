@@ -328,10 +328,10 @@ a "Cite this repository" button.
 
 ## License
 
-BEEF is released under the MIT License — see [`LICENSE`](LICENSE).
+BEEF is released under the Apache License, Version 2.0 — see [`LICENSE`](LICENSE).
 
 BEEF is an orchestration layer: it calls Meep, MEOW, and the rest at run time
 but does not bundle or redistribute any of them, and each is installed
 separately by the user under its own license.
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists them, and explains how
-BEEF's MIT license sits alongside Meep's GPL-2.0-or-later.
+[`NOTICE`](NOTICE) lists them, and explains how BEEF's Apache-2.0 license
+sits alongside Meep's GPL-2.0-or-later.

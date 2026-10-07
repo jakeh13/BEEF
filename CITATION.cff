@@ -18,7 +18,7 @@ authors:
     affiliation: "School of Electrical and Computer Engineering, Georgia Institute of Technology"
     # orcid: "https://orcid.org/0000-0000-0000-0000"
 version: "0.1.0"
-license: MIT
+license: Apache-2.0
 repository-code: "https://github.com/jakeh13/BEEF"
 keywords:
   - photonics

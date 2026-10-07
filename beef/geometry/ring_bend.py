@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Georgia Tech Research Corporation
 """RingResonatorBendSection: standalone 90-degree bend, x-normal in /
 y-normal out, the loss/phase-reference sub-simulation reused by mirror

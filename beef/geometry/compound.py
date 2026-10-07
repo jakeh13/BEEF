@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Georgia Tech Research Corporation
 """CompoundGeometry: concatenates DeviceGeometry devices (and plain waveguide
 connectors) end-to-end along x into a single DeviceGeometry.
