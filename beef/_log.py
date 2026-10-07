@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Georgia Tech Research Corporation
+# Copyright 2026 Georgia Tech Research Corporation
 """Rank-aware logging for the `beef` logger.
 
 Every rank of an `srun -n 48` job runs the whole solve redundantly, so every

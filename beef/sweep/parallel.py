@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Georgia Tech Research Corporation
+# Copyright 2026 Georgia Tech Research Corporation
 """ParallelSweep: generic parallel parameter sweep over any BEEF solver.
 
 Replaces the device-specific sweep scripts (mmi_2x2_sweep_parallel_efficient.py, etc.)

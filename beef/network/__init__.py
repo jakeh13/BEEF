@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Georgia Tech Research Corporation
+# Copyright 2026 Georgia Tech Research Corporation
 """beef.network: general S-matrix network composition (Redheffer star products).
 
 See beef/network/ops.py's module docstring for the core math, and the

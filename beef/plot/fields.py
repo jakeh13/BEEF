@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Georgia Tech Research Corporation
+# Copyright 2026 Georgia Tech Research Corporation
 """EME field visualization.
 
 Migrated from engine/plotting/meow.py with updated signature (output_dir replaces hp).

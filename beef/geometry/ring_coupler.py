@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Georgia Tech Research Corporation
+# Copyright 2026 Georgia Tech Research Corporation
 """RingResonatorCouplerSection: bus + one near-bend + ring stub, the
 FDTD-relevant piece of a racetrack ring resonator's coupling region.
 

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Georgia Tech Research Corporation
+# Copyright 2026 Georgia Tech Research Corporation
 """Field reconstruction for a HybridSolver cascade's EME body section.
 
 Why this is separate from ``plot_eme_fields()``, which already plots EME

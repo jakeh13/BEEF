@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Georgia Tech Research Corporation
+# Copyright 2026 Georgia Tech Research Corporation
 """Field-overlap mode correspondence: a device- and resolution-agnostic
 alternative to nearest-neighbour n_eff matching.
 

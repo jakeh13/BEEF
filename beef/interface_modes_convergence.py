@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Georgia Tech Research Corporation
+# Copyright 2026 Georgia Tech Research Corporation
 """`interface_modes` convergence: the device-agnostic completeness check.
 
 `HybridSolver.solve()` contracts index *i* of one section's output basis

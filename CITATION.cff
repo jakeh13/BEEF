@@ -11,12 +11,12 @@ authors:
   - given-names: "Jacob M."
     family-names: Hiesener
     affiliation: "School of Electrical and Computer Engineering, Georgia Institute of Technology"
-    # orcid: "https://orcid.org/0000-0000-0000-0000"
+    orcid: "https://orcid.org/0009-0003-8678-8723"
   - given-names: "Stephen E."
     family-names: Ralph
     email: stephen.ralph@ece.gatech.edu
     affiliation: "School of Electrical and Computer Engineering, Georgia Institute of Technology"
-    # orcid: "https://orcid.org/0000-0000-0000-0000"
+    orcid: "https://orcid.org/0000-0001-5425-3845"
 version: "0.1.0"
 license: Apache-2.0
 repository-code: "https://github.com/jakeh13/BEEF"

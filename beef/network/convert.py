@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Georgia Tech Research Corporation
+# Copyright 2026 Georgia Tech Research Corporation
 """Conversions between beef.network's SMatrixBlock and the rest of BEEF.
 
 The only file in beef.network that imports beef.results.smatrix.SMatrix —

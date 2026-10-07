@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Georgia Tech Research Corporation
+# Copyright 2026 Georgia Tech Research Corporation
 from .base import DeviceGeometry
 from .mmi import MMI, MMIPort
 from .bend import BendGeometry

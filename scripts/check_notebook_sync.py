@@ -110,13 +110,39 @@ def _resolve(name, text):
     return _normalise(ms[-1].strip()) if ms else name
 
 
+# Differences that are deliberate, not drift. Keyed by pair name, then by
+# constant, with the reason -- so a future reader can see why the pair is
+# allowed to differ instead of finding the check quietly disabled. Only the
+# named constants are skipped; anything else in the same pair still reports.
+EXEMPT = {
+    "hcg_fabry_perot_hybrid": {
+        "RESOLUTION": "notebook runs cheaper on purpose: tutorial runtime",
+        "FDTD_RESOLUTION": "notebook runs cheaper on purpose: tutorial runtime",
+        "ARM_RESOLUTION": "notebook runs cheaper on purpose: tutorial runtime",
+        "N_WL": "notebook runs cheaper on purpose: tutorial runtime",
+    },
+}
+
+
+def _canon_bool(raw, value):
+    """`bool(int(os.environ.get("X", "1")))` and a bare `True` are one setting.
+
+    Only applied when the script side actually wrapped the value in bool(), so
+    a genuine integer constant of 1 is never silently read as True.
+    """
+    if raw.strip().startswith("bool("):
+        return "True" if value.strip().strip('"\'').lower() in ("1", "true") else "False"
+    return value
+
+
 def constants(text):
     out = {}
     for k in CONSTANTS:
         # last assignment wins -- a later one overrides whatever came before it
         ms = re.findall(rf"^{k}\s*=\s*([^\n#]+)", text, re.M)
         if ms:
-            v = _normalise(ms[-1].strip())
+            raw = ms[-1].strip()
+            v = _canon_bool(raw, _normalise(raw))
             # chase aliases transitively (N_WL -> _NWL_ENV -> _NWL_DEFAULT),
             # bounded so a self-reference cannot spin
             for _ in range(4):
@@ -144,8 +170,13 @@ def main(verbose=False):
         pc, nc = constants(ptxt), constants(ntxt)
 
         bad = []
+        exempt = EXEMPT.get(name, {})
         for k in sorted(set(pc) | set(nc)):
             if pc.get(k) != nc.get(k):
+                if k in exempt:
+                    if verbose:
+                        print(f"    (allowed) {k}: {exempt[k]}")
+                    continue
                 bad.append(f"    {k}: script={pc.get(k)!r} notebook={nc.get(k)!r}")
         for call in CALLS:
             # an actual call/kwarg use, not a mention: `name(` or `name=`

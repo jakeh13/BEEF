@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Georgia Tech Research Corporation
+# Copyright 2026 Georgia Tech Research Corporation
 """SMatrix: unified S-parameter result type.
 
 Replaces the inconsistent dict-keyed results (different tuple arity per sim type)

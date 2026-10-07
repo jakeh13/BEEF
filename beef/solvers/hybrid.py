@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Georgia Tech Research Corporation
+# Copyright 2026 Georgia Tech Research Corporation
 """HybridSolver: generic N-section cascade combining any mix of solvers.
 
 Any solver type — FDTDSolver, EMESolver, or a custom class — can occupy any

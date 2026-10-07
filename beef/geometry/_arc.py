@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Georgia Tech Research Corporation
+# Copyright 2026 Georgia Tech Research Corporation
 """Quarter-annulus wedge polygon — shared primitive for any constant-radius
 bend built from a fixed center/radius/angle-span rather than lateral
 endpoint offsets (contrast beef.geometry.sbend, whose "circular"/"euler"
