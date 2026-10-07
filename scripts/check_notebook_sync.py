@@ -88,17 +88,45 @@ def _normalise(value):
     tutorials and hard-code the default. That is a deliberate difference in
     form, not drift, so compare the DEFAULT a script would use against the
     notebook's literal.
+
+    The default is not always quoted: several scripts write
+    `float(os.environ.get("MMI4X4_WLMAX", 1.33))`. Matching only quoted
+    defaults left those comparing as raw expression text against the
+    notebook's literal, so such a pair reported drift whether or not the
+    values actually differed.
     """
-    m = re.search(r"""os\.environ\.get\(\s*["'][^"']+["']\s*,\s*["']([^"']*)["']\s*\)""", value)
-    return m.group(1) if m else value
+    m = re.search(r"""os\.environ\.get\(\s*["'][^"']+["']\s*,\s*([^()]*?)\s*\)""", value)
+    return m.group(1).strip("'\"") if m else value
+
+def _resolve(name, text):
+    """Follow a one-step alias: `MM_LENGTH = _MM_LENGTH_DEFAULT` is not drift.
+
+    Scripts hoist a default to its own name so a docstring or an assert can
+    cite it (`_MM_LENGTH_DEFAULT`, `_NWL_ENV`); notebooks inline the literal.
+    Comparing the alias against the literal reported drift on three 4x4 pairs
+    that agreed exactly.
+    """
+    ms = re.findall(rf"^{re.escape(name)}\s*=\s*([^\n#]+)", text, re.M)
+    return _normalise(ms[-1].strip()) if ms else name
+
 
 def constants(text):
     out = {}
     for k in CONSTANTS:
-        # last assignment wins — a later one overrides whatever came before it
+        # last assignment wins -- a later one overrides whatever came before it
         ms = re.findall(rf"^{k}\s*=\s*([^\n#]+)", text, re.M)
         if ms:
-            out[k] = _normalise(ms[-1].strip())
+            v = _normalise(ms[-1].strip())
+            # chase aliases transitively (N_WL -> _NWL_ENV -> _NWL_DEFAULT),
+            # bounded so a self-reference cannot spin
+            for _ in range(4):
+                if not re.fullmatch(r"_?[A-Za-z][A-Za-z0-9_]*", v) or v in ("True", "False", "None"):
+                    break
+                nxt = _resolve(v, text)
+                if nxt == v:
+                    break
+                v = nxt
+            out[k] = v
     return out
 
 def main(verbose=False):
