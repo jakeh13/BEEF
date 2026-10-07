@@ -65,11 +65,10 @@ python -c "import beef, meow; print(beef.__name__, meow.__version__)"
 python -c "import meep; print(meep.__version__)"   # only if you did step 2
 ```
 
-The `[eme]`, `[fdtd]`, and `[all]` extras declare `meow-sim` and `meep` as plain
-PyPI requirements, which is why they are not used above. With steps 1–2 already
-done, pip treats `meow-sim` as satisfied and leaves the git checkout in place, so
-`".[eme]"` is harmless — but on a clean environment it pulls the stale release,
-and `[fdtd]`/`[all]` pull the wrong `meep` entirely.
+The `[eme]` and `[all]` extras now carry the same pinned git reference as step 1,
+so `pip install -e ".[all]"` reproduces steps 1 and 3 in one command. Step 2
+stays manual: there is no `[fdtd]` extra, because `meep` cannot be expressed as
+a pip dependency at all.
 
 ## Public API
 
@@ -315,9 +314,9 @@ gh workflow run slow-tests.yml
 ```
 
 **Packaging note**: this workflow installs `pymeep` from conda-forge
-(`mamba-org/setup-micromamba`), not via `pip install beef[fdtd]`/`beef[all]`, for the reason given
-under Install — PyPI's `meep` is an unrelated project and those extras are misleading as declared
-in `pyproject.toml`. Worth fixing separately.
+(`mamba-org/setup-micromamba`) rather than through a pip extra, for the reason given under
+Install — PyPI's `meep` is an unrelated project, which is why `pyproject.toml` declares no
+`[fdtd]` extra at all.
 
 
 ## Citing BEEF

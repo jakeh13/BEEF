@@ -49,11 +49,23 @@ Repository = "https://github.com/jakeh13/BEEF"
 Changelog = "https://github.com/jakeh13/BEEF/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-eme = ["meow-sim"]
-fdtd = ["meep"]
+# meow is pinned to a git commit, not a release: BEEF's default
+# mode_solver="meep" calls meow.compute_modes_meep, merged upstream
+# 2026-09-16 and absent from meow-sim 0.15.0 (2026-03-15). A plain
+# "meow-sim" requirement resolves to that release and fails on import.
+# NOTE: a PEP 508 direct reference cannot be uploaded to PyPI. If beef is
+# ever published there, this has to become a plain version floor against
+# whatever meow release first carries compute_modes_meep.
+eme = ["meow-sim @ git+https://github.com/gdsfactory/meow.git@b6ba461"]
 gds = ["gdstk"]
-all = ["meow-sim", "meep", "gdstk"]
+all = ["meow-sim @ git+https://github.com/gdsfactory/meow.git@b6ba461", "gdstk"]
 dev = ["pytest"]
+
+# There is deliberately no [fdtd] extra. PyPI's "meep" package is an unrelated
+# project (a task runner); `pip install meep` installs it silently and leaves
+# `import meep` broken. The real MIT electromagnetics package ships only as
+# conda-forge `pymeep` and cannot be expressed as a pip dependency at all.
+# See the Install section of README.md.
 
 # Read the version from beef.__version__ so it is declared in exactly one
 # place. setuptools parses the assignment statically; the package is not

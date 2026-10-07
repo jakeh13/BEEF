@@ -29,8 +29,12 @@ jobs:
         # backend at call time (`import meow as mw`, `import gdstk`), so with
         # only [dev] every such test fails on ModuleNotFoundError rather than
         # on anything real -- 2 tests since 2026-08-29, 9 by 2026-09-21.
-        # [fdtd] is deliberately excluded: meep is not pip-installable (see
-        # README), and the tests that need it are marked slow and deselected.
+        # There is no [fdtd] extra to include: meep is not pip-installable
+        # (see README), and the tests that need it are marked slow and
+        # deselected here. [eme] now resolves meow from a pinned git commit
+        # rather than the stale PyPI release, so this job installs the same
+        # meow the README prescribes -- slower to resolve, but it is the
+        # configuration users actually get.
         run: pip install -e ".[dev,eme,gds]"
 
       - name: Run fast test suite
