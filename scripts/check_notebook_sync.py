@@ -115,12 +115,10 @@ def _resolve(name, text):
 # allowed to differ instead of finding the check quietly disabled. Only the
 # named constants are skipped; anything else in the same pair still reports.
 EXEMPT = {
-    "hcg_fabry_perot_hybrid": {
-        "RESOLUTION": "notebook runs cheaper on purpose: tutorial runtime",
-        "FDTD_RESOLUTION": "notebook runs cheaper on purpose: tutorial runtime",
-        "ARM_RESOLUTION": "notebook runs cheaper on purpose: tutorial runtime",
-        "N_WL": "notebook runs cheaper on purpose: tutorial runtime",
-    },
+    # (none at present) -- hcg_fabry_perot_hybrid's notebook was exempted here
+    # for running cheaper than its script, until the paper turned out to
+    # report the script's numbers (80 pts/um, 1 nm sampling). The shipped
+    # cache holds both configurations, so matching the paper costs nothing.
 }
 
 
