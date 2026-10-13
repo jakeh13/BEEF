@@ -1311,7 +1311,7 @@ class FDTDSolver:
                 runs a fresh simulation to capture from.
             input_idx: explicit 0-based index into ``geometry.input_ys`` to
                 excite, overriding ``port``. Added for devices with more than
-                two access ports (e.g. a 4x4 MMI),
+                two access ports (e.g. a 4x4 MMI, `mmi_4x4_90hybrid_fdtd.py`),
                 where "top"/"bot" can only ever reach the first/last entry —
                 an interior port (e.g. input_ys[2] of 4) was previously
                 unreachable through this method at all. None (default)

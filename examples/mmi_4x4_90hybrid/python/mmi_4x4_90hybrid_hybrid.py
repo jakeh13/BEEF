@@ -103,7 +103,8 @@ _NWL_DEFAULT = 11
 _NWL_ENV = int(os.environ.get("MMI4X4_HYB_NWL", _NWL_DEFAULT))
 _MM_LENGTH_ENV = os.environ.get("MMI4X4_MM_LENGTH")
 _length_tag = "" if _MM_LENGTH_ENV is None else f"_L{float(_MM_LENGTH_ENV):.2f}"
-# MMI4X4_DRIVEN_PORTS: a comma list of 1-based paper
+# MMI4X4_DRIVEN_PORTS: same override/convention as
+# mmi_4x4_90hybrid_fdtd.py's own addition -- a comma list of 1-based paper
 # port numbers, default "1,3" unchanged. Parsed early (not just at the
 # metrics section) so the output dir can be tagged by it too. Does NOT
 # change which of the 4 M_in solves run (all 4 are always needed, mirror
@@ -183,7 +184,8 @@ L_PI = 218.5954   # = 108.9195 * (8.5/6.0)**2 -- SCALED, not re-measured. L_pi/W
 #
 # MMI4X4_MM_LENGTH overrides the production 159.30 for engine-agreement
 # (Check 1) probes at a short body (<20 um) that full-device FDTD can
-# actually afford to run to full decay. Not claiming a new device optimum; self-imaging is not being
+# actually afford to run to full decay -- see mmi_4x4_90hybrid_fdtd.py's own
+# docstring. Not claiming a new device optimum; self-imaging is not being
 # targeted at these lengths.
 _MM_LENGTH_DEFAULT = 159.30
 MM_LENGTH = float(os.environ.get("MMI4X4_MM_LENGTH", _MM_LENGTH_DEFAULT))

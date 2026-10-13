@@ -32,7 +32,7 @@ MMI_2X2_EXAMPLES = mmi_2x2_eme mmi_2x2_fdtd mmi_2x2_hybrid
 # hours, so the aggregate targets go through mmi_2x2_tapered_hybrid_all.
 MMI_2X2_TAPERED_EXAMPLES = mmi_2x2_tapered_eme mmi_2x2_tapered_fdtd mmi_2x2_tapered_hybrid_all
 MMI_1X4_EXAMPLES = mmi_1x4_eme mmi_1x4_fdtd mmi_1x4_hybrid
-MMI_4X4_EXAMPLES = mmi_4x4_90hybrid_eme mmi_4x4_90hybrid_hybrid
+MMI_4X4_EXAMPLES = mmi_4x4_90hybrid_eme mmi_4x4_90hybrid_fdtd mmi_4x4_90hybrid_hybrid
 DIRECTIONAL_COUPLER_EXAMPLES = directional_coupler_fdtd directional_coupler_hybrid
 RING_RESONATOR_EXAMPLES = ring_resonator_fdtd ring_resonator_hybrid
 HCG_EXAMPLES = high_contrast_grating_fdtd hcg_fabry_perot_hybrid
@@ -135,6 +135,9 @@ mmi_1x4_hybrid:
 # recorded reason the device went unrun for so long.
 mmi_4x4_90hybrid_eme:
 	$(runner) $(my_python) mmi_4x4_90hybrid/python/mmi_4x4_90hybrid_eme.py
+
+mmi_4x4_90hybrid_fdtd:
+	$(runner) $(my_python) mmi_4x4_90hybrid/python/mmi_4x4_90hybrid_fdtd.py
 
 mmi_4x4_90hybrid_hybrid:
 	$(runner) $(my_python) mmi_4x4_90hybrid/python/mmi_4x4_90hybrid_hybrid.py
