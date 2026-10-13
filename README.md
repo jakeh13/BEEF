@@ -229,7 +229,7 @@ where a notebook version exists, a `notebooks/` subfolder (matching `.ipynb`):
   exercising `MMI`'s `input_idx`/`input_indices` support
 - `examples/mmi_2x2_tapered/` — waisted 2×2 MMI splitter (EME, FDTD, hybrid), the per-port
   `MMIPort` taper specs applied to a non-uniform body
-- `examples/mmi_4x4_90hybrid/` — 4×4 MMI 90° optical hybrid (EME, FDTD, hybrid) — the
+- `examples/mmi_4x4_90hybrid/` — 4×4 MMI 90° optical hybrid (EME, hybrid) — the
   167.3 µm device that full-device FDTD cannot reach in practice
 - `examples/directional_coupler/` — directional coupler (FDTD, FDTD length sweep, hybrid, even/odd
   supermode coupling-length analysis)
