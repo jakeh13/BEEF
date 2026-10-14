@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="docs/logo.png" alt="BEEF — Bridged Engine for EME and FDTD" width="760">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/logo-light.png">
+    <img src="docs/logo.png" alt="BEEF — Bridged Engine for EME and FDTD" width="760">
+  </picture>
 </p>
 
 # BEEF
