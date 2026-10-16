@@ -2,11 +2,9 @@
 method, no FDTD).
 
 Same device as
-mmi_4x4_90hybrid_hybrid.py (see that script's own module docstring for the
-paper reference and the full first-pass-design caveats: N_MODES=8 is a
-coarse first pass, taper_width/taper_length are MMI's own class defaults,
-never independently optimized, mm_length=80.1896 is the best point found in
-a ±10 um sweep, not a converged optimum -- A9/A11 in the validation doc).
+mmi_4x4_90hybrid_hybrid.py (see that script's module docstring for the
+paper reference, the optimised design point -- mm_width=8.5,
+taper 1.30/4.0, mm_length=159.30 -- and what it does and does not meet).
 
 Method: Eigenmode Expansion via meow, full 5-region device chain (wg_in |
 taper_in | MMI body | taper_out | wg_out), matching mmi_2x2_eme.py's own
@@ -114,9 +112,10 @@ N_MODES_TAPER = int(os.environ.get("MMI4X4_EME_NMODES_TAPER", 12))   # was 4 (PL
 # Geometry -- the OPTIMISED design point, not Step 2's first pass.
 # Result of the (mm_width, y_gap, taper_width, taper_length, mm_length)
 # campaign of ~45 hybrid-path evaluations, rounds 8-10, 2026-08-28..09-05). Measured at
-# this point over 1.29-1.33 um: max|dphi| = 3.933 deg (spec <=5, MET),
-# min CMRR = 18.482 dBe (spec >=20, 1.52 short), excess loss 2.706 dB,
-# imbalance 1.972 dB. Superseded first pass, for the record: mm_width=6.0,
+# this point on the 3-point {1.29, 1.31, 1.33} um fitness grid the campaign used:
+# max|dphi| = 3.933 deg (spec <=5, MET), min CMRR = 18.482 dBe (spec >=20, 1.52
+# short), excess loss 2.706 dB, imbalance 1.972 dB. On this script's 11-point grid
+# the phase error is 6.223 deg at 1.322 um -- the spec is NOT met there. Superseded first pass, for the record: mm_width=6.0,
 # taper_width=0.8, taper_length=1.0, mm_length=78.9396 -- which measured
 # 4.764 deg / 12.109 dBe / 4.076 dB / 5.202 dB on the same evaluator.
 #
@@ -141,7 +140,7 @@ L_PI = 218.5954   # = 108.9195 * (8.5/6.0)**2 -- SCALED, not re-measured. L_pi/W
 # length under all three selection rules tried -- the live objective,
 # phase-as-constraint, and maximise-CMRR-subject-to-phase -- so nothing is
 # being traded away by pinning it. Only 19 of 7601 lengths meet the 5 deg
-# phase spec at all, so the grid-snap assert below matters more here than it
+# phase spec on the 3-point fitness grid at all, so the grid-snap assert below matters more here than it
 # did at the first-pass point.
 MM_LENGTH = 159.30
 _LENGTH_STEP = 0.05

@@ -25,31 +25,27 @@ docstring for the general pattern. The 4-port generalization needed here:
 - The output section is NEVER separately simulated, for the same mirror-
   symmetry reason mmi_2x2_hybrid.py's own output section isn't.
 
-N_MODES=8 and the geometry parameters below are Step 1-3's settled first
-pass, NOT a converged final design:
+N_MODES=16 and the geometry below are the optimised design point of a
+~45-evaluation geometry campaign (mm_width, y_gap, taper_width,
+taper_length, mm_length):
 
-- `waveguide_width=0.35` -- the user's direct design choice (Step 1),
-  not derived from a single-mode search (no width in [0.10,0.70] um is
-  single-mode at this platform/band -- not even this repo's own shipped
-  2x2 MMI access waveguide meets that bar; see finding A10).
-- `mm_width=6.0`, `waveguide_offset=mm_width/4=1.5` -- the offset formula
-  is not arbitrary: it is EXACTLY what reproduces the paper's own Eq. 8
-  port-position formula through this codebase's plain default MMI port
-  constructor (Step 2, checked directly, not argued).
-- `mm_length=80.1896` (ΔL=-1.50 um around the paper's Eq. 7 self-imaging
-  point) -- the best point found in a ±10 um sweep (job 11708624), not a
-  converged optimum. At this point: max|Δphi_j|=8.28 deg, CMRR ranges
-  ~33 dBe at O-band centre down to ~13-19 dBe at the band edges --
-  MEETS the cited CMRR>=20dBe requirement at centre, falls short at the
-  edges; phase error (8.28 deg) is close to but does not yet meet the
-  cited |Δphi|<=5 deg bar. Carried forward as a documented, known
-  limitation (validation doc finding A11) -- refining N_MODES beyond this
-  coarse first pass, or the taper_width/taper_length placeholders below
-  (MMI's own class defaults, never independently measured), are the
-  likely next levers, not attempted here at the user's direction.
-- taper_width=0.8, taper_length=1.0 -- PLACEHOLDERS, MMI's own class
-  defaults. Geometrically checked (0.7 um taper-overlap clearance, Step 2)
-  but never independently optimized for this device.
+- `waveguide_width=0.35` -- a direct design choice, not derived from a
+  single-mode search (no width in [0.10, 0.70] um is single-mode at this
+  platform/band).
+- `mm_width=8.5`, `waveguide_offset=mm_width/4` -- the offset formula is
+  exactly what reproduces the paper's Eq. 8 port positions through the
+  default MMI port constructor.
+- `taper_width=1.30`, `taper_length=4.0` -- measured optima at this width.
+- `mm_length=159.30` (DELTA_L=-4.65 um around the paper's Eq. 7
+  self-imaging point), selected from a shared 20-400 um / 0.05 um grid.
+
+Measured at this point on the script's 11-point 1.29-1.33 um grid:
+max|dphi_j| = 6.22 deg at 1.322 um, min CMRR = 18.48 dBe (at 1.330 um),
+excess loss <= 2.71 dB, imbalance <= 1.97 dB. Against the cited
+requirements (CMRR >= 20 dBe, |dphi_j| <= 5 deg) this point meets NEITHER
+across the whole band. On the 3-point subgrid {1.29, 1.31, 1.33} the
+campaign optimised against, phase reads 3.93 deg (met): the violation sits
+in 1.318-1.326 um, between those samples.
 
 A11 (validation doc): meep/meow's own S-parameter phase convention is
 CONJUGATED relative to this paper's implicit Eq. 15 convention (phi_j =
@@ -145,14 +141,15 @@ BODY_METHOD = "eme"
 OUTPUT_METHOD = "fdtd"   # never actually run -- mirror reuse
 
 # ---------------------------------------------------------------------------
-# 1. Geometry -- Steps 1-3's settled first-pass parameters.
+# 1. Geometry -- the optimised design point (see the module docstring).
 # ---------------------------------------------------------------------------
 # Geometry -- the OPTIMISED design point, not Step 2's first pass.
 # Result of the (mm_width, y_gap, taper_width, taper_length, mm_length)
 # campaign of ~45 hybrid-path evaluations, rounds 8-10, 2026-08-28..09-05). Measured at
-# this point over 1.29-1.33 um: max|dphi| = 3.933 deg (spec <=5, MET),
-# min CMRR = 18.482 dBe (spec >=20, 1.52 short), excess loss 2.706 dB,
-# imbalance 1.972 dB. Superseded first pass, for the record: mm_width=6.0,
+# this point on the 3-point {1.29, 1.31, 1.33} um fitness grid the campaign used:
+# max|dphi| = 3.933 deg (spec <=5, MET), min CMRR = 18.482 dBe (spec >=20, 1.52
+# short), excess loss 2.706 dB, imbalance 1.972 dB. On this script's 11-point grid
+# the phase error is 6.223 deg at 1.322 um -- the spec is NOT met there. Superseded first pass, for the record: mm_width=6.0,
 # taper_width=0.8, taper_length=1.0, mm_length=78.9396 -- which measured
 # 4.764 deg / 12.109 dBe / 4.076 dB / 5.202 dB on the same evaluator.
 #
@@ -178,13 +175,12 @@ L_PI = 218.5954   # = 108.9195 * (8.5/6.0)**2 -- SCALED, not re-measured. L_pi/W
 # length under all three selection rules tried -- the live objective,
 # phase-as-constraint, and maximise-CMRR-subject-to-phase -- so nothing is
 # being traded away by pinning it. Only 19 of 7601 lengths meet the 5 deg
-# phase spec at all, so the grid-snap assert below matters more here than it
+# phase spec on the 3-point fitness grid at all, so the grid-snap assert below matters more here than it
 # did at the first-pass point.
 #
-# MMI4X4_MM_LENGTH overrides the production 159.30 for engine-agreement
-# (Check 1) probes at a short body (<20 um) that full-device FDTD can
-# actually afford to run to full decay. Not claiming a new device optimum; self-imaging is not being
-# targeted at these lengths.
+# MMI4X4_MM_LENGTH overrides the production 159.30, e.g. for a short body
+# (<20 um) that a full-device FDTD comparison can afford. Not claiming a new
+# device optimum; self-imaging is not being targeted at these lengths.
 _MM_LENGTH_DEFAULT = 159.30
 MM_LENGTH = float(os.environ.get("MMI4X4_MM_LENGTH", _MM_LENGTH_DEFAULT))
 _LENGTH_STEP = 0.05

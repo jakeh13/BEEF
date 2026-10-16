@@ -14,12 +14,13 @@ is read out of another script's example_output/*.pkl any more. The three
 physical pieces are rebuilt from their own geometry and solver settings:
 
   1. HCG mirror -- FDTDSolver.solve_reflection() on
-     examples/gds_files/HCG_seeded_TO.gds, res 60, 3-D, 21 points over
-     1.50-1.60 um. Byte-for-byte the call
-     examples/high_contrast_grating/python/high_contrast_grating_fdtd.py
-     makes, so it hits that script's own cache entry.
-  2. Directional coupler -- two FDTDSolver.solve_section() S-bend
-     excitations + a beta-CALIBRATED EMESolver body, on SOI_160 at
+     examples/gds_files/HCG_seeded_TO.gds, res 80, 3-D, 36 points over
+     1.530-1.565 um. Same geometry and solver setup as
+     examples/high_contrast_grating/python/high_contrast_grating_fdtd.py,
+     but on this device's own resolution and band, so it has its own cache
+     entry.
+  2. Directional coupler -- one FDTDSolver.solve_section() S-bend
+     excitation (the isolated arm reused via MODE_SIGNS) + a beta-CALIBRATED EMESolver body, on SOI_160 at
      duty/dc.gds's real dimensions. Same calls, same constants as
      examples/directional_coupler/python/directional_coupler_soi160_hybrid.py,
      so those hit cache too.
@@ -81,14 +82,10 @@ Turning the BODY calibration off makes it DEARER: `neff_override=None` gives
 EMESolver nothing to propagate on, so the diagonal fast path is gone and
 the real eigenmode solve runs.
 
-ARM_RESOLUTION defaults to 80, matching the HCG MIRROR's res rather than the
-coupler's res 40 -- the user's explicit call. There is no single device resolution to
-inherit here (the mirror runs at 60, the coupler at 40), and a bare strip is
-cheap enough at 60 that the arm's beta -- the dominant lever on the comb --
-is measured on the finer of the two meshes this device already uses. The
-stated cost: the arm's discretization is then NOT identical to the coupler
-body's, so a milder version of the inconsistency above survives, over 23 um
-of coupler instead of 106 um of arm. HCGFP_RES / HCGFP_DC_RES /
+ARM_RESOLUTION defaults to 80, the same as the HCG mirror and the coupler
+(RESOLUTION, FDTD_RESOLUTION and EME_RESOLUTION all default to 80), so the
+arm's beta -- the dominant lever on the comb -- is measured on the same mesh
+as the rest of the device. HCGFP_RES / HCGFP_DC_RES /
 HCGFP_ARM_RES override the three and redirect output to a res-stamped folder
 ("res80_dc40_arm80", named the way hcg_fabry_perot_length_sweep.py names its
 own), so a real convergence sweep can be run without touching this.
@@ -126,10 +123,9 @@ KNOWN OPEN GAPS, not fixed by this script (see the validation doc):
     model does not capture, per Step 1's own framing).
   - The arm beta is measured at ONE resolution per run; nothing here
     converges it. HCGFP_ARM_RES is the hook for that sweep.
-  - The resolution knobs do NOT move the wavelength grid. Pinning res to the
-    2026-08-21 C-band re-runs (80/40/80) does not by itself make those runs'
-    cache entries hit: they were measured on 1.530-1.565 um / 36 pts and this
-    script asks for 1.50-1.60 um / 11 (21 for the mirror). Probe with
+  - The resolution knobs do NOT move the wavelength grid, and both are in
+    the cache key: overriding any HCGFP_*_RES misses the shipped cache
+    entries (all at res 80 on 1.530-1.565 um / 36 pts). Probe with
     HCGFP_CACHE_ONLY=1 before spending an allocation.
 
 DENSE RESONANCE CHARACTERIZATION (section 8)
@@ -151,7 +147,7 @@ per-factor against real 601-point ground truth (<=1.3% relative error):
     M_in0/M_in1 (arm -> body-mode overlap):  ~65-69 deg/10nm  -> interpolate
     beta_body (coupler body):                ~15-16 deg/10nm  -> degree-2 fit
     n_eff_arm (connecting waveguide):        smooth           -> degree-2 fit
-    r (HCG mirror, on its own 21-pt grid):   ~7.5 deg/5nm     -> interpolate
+    r (HCG mirror):                          ~7.5 deg/5nm     -> interpolate
     coeff_through/cross (their COMBINATION): ~153 deg/10nm    -> NEVER resampled
 
 The last line is the whole reason this is done per-factor: the combined
@@ -359,10 +355,9 @@ print(f"  output -> {output_dir}")
 # ---------------------------------------------------------------------------
 # 1. The real HCG mirror -- FDTDSolver.solve_reflection(), run here.
 #
-#    Reproduces high_contrast_grating_fdtd.py's production call exactly
-#    (geometry from the same GDS, res 60, 3-D, same PML/margins/clearance,
-#    extend_input_waveguide=True), so it hits that script's own cache entry
-#    rather than re-simulating. extend_input_waveguide runs the access
+#    Same setup as high_contrast_grating_fdtd.py (geometry from the same
+#    GDS, 3-D, same PML/margins/clearance, extend_input_waveguide=True), at
+#    this device's res 80 / 36-point C-band grid. extend_input_waveguide runs the access
 #    waveguide through the PML: without it the guide ends in a clean-cut
 #    Si/oxide facet that reflects on its own, contaminating the very
 #    quantity being measured.
@@ -413,7 +408,7 @@ print(f"HCG mirror: {N_WL_HCG} pts, {wl_hcg[0]:.3f}-{wl_hcg[-1]:.3f} um in "
       f"{wl_hcg[np.argmax(R_hcg)]:.3f} um, min {R_hcg.min():.4f}")
 
 # ---------------------------------------------------------------------------
-# 2. The real directional coupler -- 2 FDTD S-bend excitations + a
+# 2. The real directional coupler -- 1 FDTD S-bend excitation + a
 #    beta-calibrated EME body, run here.
 #
 #    Same geometry and same solver constants as
@@ -948,7 +943,7 @@ for name, arr in [("M_in0", M_in0[:, :, 0]), ("M_in1", M_in1[:, :, 0])]:
                 f"trusting this interpolation."
             )
 safe_r, worst_r = unwrap_is_safe(r_hcg, margin=0.5)
-print(f"  r (HCG, 21-pt grid): safe={safe_r}  worst_step={np.degrees(worst_r):.1f} deg")
+print(f"  r (HCG): safe={safe_r}  worst_step={np.degrees(worst_r):.1f} deg")
 if not safe_r:
     raise ValueError(
         f"The HCG's r(lambda) fails unwrap_is_safe at margin=0.5 on its own "
