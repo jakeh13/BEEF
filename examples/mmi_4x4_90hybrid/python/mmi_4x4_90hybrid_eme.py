@@ -112,10 +112,11 @@ N_MODES_TAPER = int(os.environ.get("MMI4X4_EME_NMODES_TAPER", 12))   # was 4 (PL
 # Geometry -- the OPTIMISED design point, not Step 2's first pass.
 # Result of the (mm_width, y_gap, taper_width, taper_length, mm_length)
 # campaign of ~45 hybrid-path evaluations, rounds 8-10, 2026-08-28..09-05). Measured at
-# this point on the 3-point {1.29, 1.31, 1.33} um fitness grid the campaign used:
-# max|dphi| = 3.933 deg (spec <=5, MET), min CMRR = 18.482 dBe (spec >=20, 1.52
-# short), excess loss 2.706 dB, imbalance 1.972 dB. On this script's 11-point grid
-# the phase error is 6.223 deg at 1.322 um -- the spec is NOT met there. Superseded first pass, for the record: mm_width=6.0,
+# this point on the 11-point 1.29-1.33 um grid: max|dphi| = 6.223 deg at 1.322 um
+# (spec <=5, NOT met), min CMRR = 18.482 dBe (spec >=20, 1.52 short), excess loss
+# 2.706 dB, imbalance 1.972 dB -- the point meets neither spec. The campaign itself
+# scored a 3-point {1.29, 1.31, 1.33} um subsample, on which phase reads 3.933 deg;
+# the violation sits between those samples. Superseded first pass, for the record: mm_width=6.0,
 # taper_width=0.8, taper_length=1.0, mm_length=78.9396 -- which measured
 # 4.764 deg / 12.109 dBe / 4.076 dB / 5.202 dB on the same evaluator.
 #
