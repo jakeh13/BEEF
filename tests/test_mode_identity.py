@@ -55,12 +55,15 @@ authoritative answer.
 """
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pytest
 
 WL = 1.55
 RES = 40.0
 N_MODES = 6
+N_GUIDED = 5   # bands above N_CLADDING at this cross-section (table above)
 
 # meow's SiO2 at 1.55 um. A mode below this is not bound -- it is a radiation
 # mode living on the discretization, and neither engine owes the other an answer
@@ -211,8 +214,11 @@ def test_engines_agree_on_mode_identity_for_guided_modes():
     `beef.mode_identity`'s field-overlap machinery /
     `HybridSolver(check_mode_correspondence=True)`. Scoped to guided modes: a
     band below the cladding index is a radiation mode, and requiring two
-    different grids to agree on one is not a meaningful demand."""
-    meep_neff, meow_neff = _neff_both_engines()
+    different grids to agree on one is not a meaningful demand.
+
+    Requests N_GUIDED, not N_MODES: since 2026-07-31 FDTDSolver refuses to
+    return a band at or below the cladding index (see the next test)."""
+    meep_neff, meow_neff = _neff_both_engines(n_modes=N_GUIDED)
     guided = meep_neff > N_CLADDING
     assert guided.sum() >= 2, (
         f"expected at least the even/odd supermode pair to be guided, got "
@@ -224,18 +230,22 @@ def test_engines_agree_on_mode_identity_for_guided_modes():
 
 @pytest.mark.slow
 def test_the_interface_basis_contains_an_unguided_mode():
-    """N_MODES = 6 is what the directional coupler examples carry, but only 5
-    bands are above the cladding index -- so one column of every interface basis
-    is a radiation mode. Asserted rather than left as prose because it bears on
-    the right N_MODES for every hybrid example, and most sharply on the 15- and
-    16-mode MMI and multiplexer, which have never been checked at all.
+    """Only 5 bands of this cross-section are above the cladding index, so a
+    6-mode interface basis would carry a radiation mode. Asserted rather than
+    left as prose because it bears on the right N_MODES for every hybrid
+    example, and most sharply on the 15- and 16-mode MMI and multiplexer.
+
+    Since 2026-07-31 FDTDSolver enforces this itself: asking for more modes
+    than are guided raises instead of returning a radiation band. So the
+    finding is now asserted through that refusal, and the count it reports.
 
     If this starts failing, the mode count and the cross-section stopped
     matching in a way worth knowing about.
     """
-    meep_neff, _ = _neff_both_engines()
-    n_guided = int((meep_neff > N_CLADDING).sum())
-    assert n_guided < N_MODES, (
-        f"all {N_MODES} interface modes are now guided (n_eff > {N_CLADDING}): "
-        f"{meep_neff}. The item 12 finding no longer holds."
+    with pytest.raises(RuntimeError, match=r"supplies only (\d+) guided mode\(s\) of the 6") as exc:
+        _neff_both_engines(n_modes=N_MODES)
+    n_guided = int(re.search(r"supplies only (\d+) guided", str(exc.value)).group(1))
+    assert n_guided == N_GUIDED < N_MODES, (
+        f"FDTDSolver reports {n_guided} guided modes, expected {N_GUIDED} of "
+        f"{N_MODES}. The item 12 finding no longer holds."
     )
