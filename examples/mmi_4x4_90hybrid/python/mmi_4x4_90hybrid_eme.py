@@ -111,7 +111,7 @@ N_MODES_TAPER = int(os.environ.get("MMI4X4_EME_NMODES_TAPER", 12))   # was 4 (PL
 # ---------------------------------------------------------------------------
 # Geometry -- the OPTIMISED design point, not Step 2's first pass.
 # Result of the (mm_width, y_gap, taper_width, taper_length, mm_length)
-# campaign of ~45 hybrid-path evaluations, rounds 8-10, 2026-08-28..09-05). Measured at
+# campaign of ~45 hybrid-path evaluations (rounds 8-10, 2026-08-28..09-05). Measured at
 # this point on the 11-point 1.29-1.33 um grid: max|dphi| = 6.223 deg at 1.322 um
 # (spec <=5, NOT met), min CMRR = 18.482 dBe (spec >=20, 1.52 short), excess loss
 # 2.706 dB, imbalance 1.972 dB -- the point meets neither spec. The campaign itself
