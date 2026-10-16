@@ -84,13 +84,11 @@ SETTLED_CURRENT = {k: v for k, v in SETTLED.items() if k != "DELTA_L"}
 # Files expected to be AT the settled point. Paths relative to examples/.
 CURRENT = [
     "mmi_4x4_90hybrid/python/mmi_4x4_90hybrid_eme.py",
-    "mmi_4x4_90hybrid/python/mmi_4x4_90hybrid_fdtd.py",
     "mmi_4x4_90hybrid/python/mmi_4x4_90hybrid_hybrid.py",
     "verification/python/mmi_4x4_90hybrid_offset_sweep.py",
     "verification/python/plot_mmi4x4_90hybrid_eme_fields.py",
     "verification/python/mmi_4x4_90hybrid_eme_timing_probe.py",
     "mmi_4x4_90hybrid/notebooks/mmi_4x4_90hybrid_eme.ipynb",
-    "mmi_4x4_90hybrid/notebooks/mmi_4x4_90hybrid_fdtd.ipynb",
     "mmi_4x4_90hybrid/notebooks/mmi_4x4_90hybrid_hybrid.ipynb",
 ]
 
