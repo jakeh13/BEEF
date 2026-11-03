@@ -325,9 +325,27 @@ Install — PyPI's `meep` is an unrelated project, which is why `pyproject.toml`
 
 ## Citing BEEF
 
-If you use BEEF in published work, please cite the paper. `CITATION.cff` in
-this repository carries the machine-readable version, which GitHub renders as
-a "Cite this repository" button.
+If you use BEEF in published work, please cite the paper:
+
+> J. M. Hiesener and S. E. Ralph, "BEEF: A Hybrid Integrated Photonic Simulation
+> Framework," arXiv:2611.00393 [physics.optics], 2026.
+> [arxiv.org/abs/2611.00393](https://arxiv.org/abs/2611.00393)
+
+```bibtex
+@misc{hiesener2026beef,
+  title         = {{BEEF}: A Hybrid Integrated Photonic Simulation Framework},
+  author        = {Hiesener, Jacob M. and Ralph, Stephen E.},
+  year          = {2026},
+  eprint        = {2611.00393},
+  archivePrefix = {arXiv},
+  primaryClass  = {physics.optics},
+  doi           = {10.48550/arXiv.2611.00393},
+  url           = {https://arxiv.org/abs/2611.00393}
+}
+```
+
+`CITATION.cff` in this repository carries the machine-readable version, which
+GitHub renders as a "Cite this repository" button.
 
 ## License
 
